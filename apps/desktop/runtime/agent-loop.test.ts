@@ -1169,6 +1169,38 @@ test("a note the model had not read when it finished earns one more turn", async
   assert.ok(recorded.statuses.some((entry) => entry.label === "Read your note"));
 });
 
+test("a model that goes silent with tasks open is asked once to continue", async () => {
+  const SILENT: readonly TurnEvent[] = [{ kind: "completed", stopReason: "end", usage: { inputTokens: 10, outputTokens: 0 } }];
+  const task = (title: string, status: RunTask["status"]): RunTask => ({ id: title, title, status, requiresRuntimeEvidence: false });
+
+  // Open work and an empty turn: one host note, then the model carries on.
+  const controller = new AbortController();
+  const { context, recorded } = makeContext(controller);
+  context.setTasks([task("Build the track", "done"), task("Test the kart in Play mode", "active")]);
+  const resumed = gateway([SILENT, DONE("Tested it: the kart drives.")]);
+  assert.equal(await planner(resumed).run(context), "Tested it: the kart drives.");
+  assert.equal(resumed.requests.length, 2);
+  const note = resumed.requests[1].messages.at(-1);
+  assert.equal(note?.role, "user");
+  assert.match(JSON.stringify(note), /Roqer, the host: you ended your turn with no reply.*\\"Test the kart in Play mode\\"/);
+  assert.doesNotMatch(JSON.stringify(note), /Build the track/, "finished tasks are not listed");
+  assert.ok(recorded.statuses.some((entry) => entry.label === "Model stopped without a reply"));
+
+  // Asked once only: silent again, and the run ends as before.
+  const again = makeContext(new AbortController());
+  again.context.setTasks([task("Test the kart in Play mode", "active")]);
+  const twice = gateway([SILENT, SILENT]);
+  assert.equal(await planner(twice).run(again.context), "The model returned no answer for this turn.");
+  assert.equal(twice.requests.length, 2);
+
+  // Nothing open: an empty turn ends the run without a nudge.
+  const idle = makeContext(new AbortController());
+  idle.context.setTasks([task("Build the track", "done"), task("Upload", "blocked")]);
+  const quiet = gateway([SILENT]);
+  assert.equal(await planner(quiet).run(idle.context), "The model returned no answer for this turn.");
+  assert.equal(quiet.requests.length, 1);
+});
+
 test("a screenshot too large to send is reported to the person, not only to the model", async () => {
   // A PNG of a play-mode viewport clears the tool's own budget and still misses
   // the hosted one by a wide margin. Dropping it quietly leaves an agent saying

@@ -72,8 +72,8 @@ opposite corners.
 - Read the layout. It gives each finding in your script's own Blender
   coordinates, naming a piece by the size and centre your script gave it, so
   find the line that made it:
-  - a piece touching nothing else in its own object is almost always a gap:
-    move it until it meets the part it belongs to;
+  - a piece attached to nothing, in its own object or any other, is almost
+    always a gap: move it until it meets the part it belongs to;
   - separate objects passing into each other are wrong for a part that must
     move freely, and fine where one is meant to sit inside the other;
   - an object touching no other object is right for a kit set, and a gap in one

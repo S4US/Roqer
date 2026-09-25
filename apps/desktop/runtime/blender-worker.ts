@@ -437,7 +437,7 @@ def layout_facts():
             i = parent[i]
         return i
 
-    touching_objects, overlaps, complete = set(), {}, True
+    touching_objects, attached, overlaps, complete = set(), set(), {}, True
     for i in range(len(pieces)):
         if time.monotonic() - started > LAYOUT_SECONDS:
             complete = False
@@ -451,17 +451,23 @@ def layout_facts():
                 parent[find(i)] = find(j)
                 continue
             touching_objects.update((a.owner, b.owner))
+            attached.update((i, j))
             key = tuple(sorted((a.owner, b.owner)))
             if depth > TOUCH and depth > overlaps.get(key, (0,))[0]:
                 overlaps[key] = (depth, a, b)
 
     loose = []
     for owner in dict.fromkeys(piece.owner for piece in pieces):
-        groups = {}
+        groups, held = {}, set()
         for i, piece in enumerate(pieces):
             if piece.owner == owner:
                 groups.setdefault(find(i), []).append(piece)
-        ordered = sorted(groups.values(), key=lambda group: sum(len(p.faces) for p in group), reverse=True)
+                if i in attached:
+                    held.add(find(i))
+        # A group held by another object is attached, not loose: one object
+        # may hold two separate lamps, each fixed to the body.
+        ordered = sorted(groups.items(), key=lambda entry: sum(len(p.faces) for p in entry[1]), reverse=True)
+        ordered = [group for root, group in ordered[:1]] + [group for root, group in ordered[1:] if root not in held]
         for group in ordered[1:]:
             rest = [p for other in ordered if other is not group for p in other]
             gap, _ = nearest(group, rest)
@@ -641,7 +647,7 @@ export type LayoutFacts = Readonly<{
   skipped?: string;
   /** False when the time cap stopped the comparison early. */
   complete?: boolean;
-  /** Pieces that touch nothing else in their own object: almost always a gap to close. */
+  /** Pieces that touch nothing, in their own object or any other: almost always a gap to close. */
   loose: ReadonlyArray<PieceBox & Readonly<{ object: string; pieces: number; gap: number }>>;
   looseCount: number;
   /** Objects that touch no other object: expected in a kit set, a gap in one assembled model. */
@@ -1036,9 +1042,9 @@ function describeLayout(layout: LayoutFacts | undefined, bottom: number | undefi
   } else if (layout !== undefined) {
     if (layout.looseCount > 0) {
       const shown = layout.loose
-        .map((entry) => `in ${entry.object}, ${entry.pieces > 1 ? `${entry.pieces} pieces spanning ` : "a piece "}${box(entry)}, ${studs(entry.gap)} from the rest`)
+        .map((entry) => `in ${entry.object}, ${entry.pieces > 1 ? `${entry.pieces} pieces spanning ` : "a piece "}${box(entry)}, ${studs(entry.gap)} from the rest of ${entry.object}`)
         .join("; ");
-      lines.push(`${layout.looseCount === 1 ? "1 piece group touching nothing else in its own object" : `${layout.looseCount} piece groups touching nothing else in their own object`}, usually a gap to close${shown === "" ? "" : `: ${shown}${more(layout.loose.length, layout.looseCount)}`}`);
+      lines.push(`${layout.looseCount === 1 ? "1 piece group attached to nothing" : `${layout.looseCount} piece groups attached to nothing`}, usually a gap to close${shown === "" ? "" : `: ${shown}${more(layout.loose.length, layout.looseCount)}`}`);
     }
     if (layout.isolatedCount > 0) {
       lines.push(`${layout.isolatedCount === 1 ? "an object" : `${layout.isolatedCount} objects`} touching no other object (right for a kit set of separate pieces, a gap in one assembled model): ${layout.isolated

@@ -229,7 +229,7 @@ test("the layout reaches the model as facts in the script's own coordinates", as
     assert.equal(file.bottom, 0.01);
     // Each fact names a piece by the size and position the script gave it.
     assert.match(outcome.text, /in the script's Blender coordinates/);
-    assert.match(outcome.text, /4 piece groups touching nothing else in their own object, usually a gap to close: in Body, a piece 1\.60 × 0\.16 × 0\.16 at \(0\.00, -1\.52, 3\.40\), 0\.18 from the rest/);
+    assert.match(outcome.text, /4 piece groups attached to nothing, usually a gap to close: in Body, a piece 1\.60 × 0\.16 × 0\.16 at \(0\.00, -1\.52, 3\.40\), 0\.18 from the rest of Body/);
     assert.match(outcome.text, /An object touching no other object \(right for a kit set.*\): SteeringWheel, 0\.39 from Body/);
     assert.match(outcome.text, /Body and Wheel_RL by 0\.55, deepest at the Body piece 0\.14 × 3\.70 × 0\.14 at \(2\.40, 0\.10, 0\.85\)/);
     assert.match(outcome.text, /Lowest point at Z 0\.01\./, "a model on the ground gets no advice about it");
@@ -271,7 +271,7 @@ test("a clean, a skipped or a malformed layout is reported for what it is", asyn
     const layout = (malformed.data as { files: Array<{ layout?: { loose: unknown[]; isolated: unknown[]; overlaps: unknown[]; looseCount: number } }> }).files[0].layout;
     assert.deepEqual([layout?.loose.length, layout?.isolated.length, layout?.overlaps.length], [0, 0, 0], "no malformed entry survives");
     assert.equal(layout?.looseCount, 2, "the count still says pieces are loose");
-    assert.match(malformed.text, /2 piece groups touching nothing else in their own object, usually a gap to close\./);
+    assert.match(malformed.text, /2 piece groups attached to nothing, usually a gap to close\./);
     assert.match(malformed.text, /The comparison stopped at its time limit/);
 
     const none = await inspectedWorker(jobsRoot, { layout: "not an object" }).run({ script: "import bpy" });

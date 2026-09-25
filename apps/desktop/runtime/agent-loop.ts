@@ -15,6 +15,7 @@ import {
   type TurnUsage,
 } from "./model-api/turn-contract";
 
+import type { RunTask } from "../shared/tasks";
 import type { AgentDefinition } from "./agent-definition";
 import { blenderToolDefinition, parseBlenderToolInput } from "./blender-tool";
 import { BLENDER_TOOL_NAME } from "../shared/blender";
@@ -282,6 +283,12 @@ function steerBlocks(steers: readonly string[]): TurnContent[] {
   }));
 }
 
+/** What Roqer says, as the host, to a model that ended a turn silently with tasks open. */
+function silenceNote(open: readonly RunTask[]): string {
+  const titles = open.map((task) => `"${task.title}"`).join(", ");
+  return `[Roqer, the host: you ended your turn with no reply and no tool call while ${open.length === 1 ? "this task is" : "these tasks are"} still open: ${titles}. Continue the work now, or mark what cannot be finished as blocked and reply saying why.]`;
+}
+
 function boundRetainedImages(messages: TurnMessage[]): void {
   let remaining = MAX_RETAINED_IMAGE_BASE64;
   let kept = imageCount(messages[0]);
@@ -314,6 +321,9 @@ export function createAgentLoopPlanner(options: AgentLoopPlannerOptions): Planne
       const runSkillTool = createSkillToolRunner(options.skillLibrary);
       const runIconTool = createIconToolRunner(options.skillLibrary);
       const stallMs = options.stallMs ?? DEFAULT_STALL_MS;
+      // Asked at most once a run: a model that goes silent again after being
+      // asked is done, and the completion gate reports what it left open.
+      let askedAfterSilence = false;
       const tools = loopTools(options.skillLibrary, options.blender === true);
       const instructions = {
         system: options.agent.systemInstructions,
@@ -568,6 +578,16 @@ export function createAgentLoopPlanner(options: AgentLoopPlannerOptions): Planne
           // in the reply both: the timeline is where it is countable and the
           // reply is where the person who asked will actually read it.
           const answer = prose.text().trim();
+          // Silence with work still open is a model losing its place, not a
+          // finished run: some models end a turn empty in the middle of a plan.
+          // Asked once, by the host, to carry on or say what is in the way.
+          const open = context.tasks().filter((task) => task.status === "pending" || task.status === "active");
+          if (answer.length === 0 && endedEarly === undefined && open.length > 0 && !askedAfterSilence) {
+            askedAfterSilence = true;
+            messages.push({ role: "user", content: [{ kind: "text", text: silenceNote(open) }] });
+            context.status("Model stopped without a reply", "Tasks were still open, so Roqer asked it once to continue or say what is blocking them.");
+            continue;
+          }
           if (endedEarly === undefined) return answer || "The model returned no answer for this turn.";
           context.status("Turn ended early", endedEarly);
           return answer.length === 0 ? endedEarly : `${answer}\n\n${endedEarly}`;
