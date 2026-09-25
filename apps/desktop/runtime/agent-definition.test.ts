@@ -130,6 +130,7 @@ test("building skill exposes its map references through the shipped skill loader
   const resources = [...entrypoint.content.matchAll(/\]\((references\/[^)]+\.md)\)/g)]
     .map((match) => match[1]);
   assert.ok(resources.includes("references/world-intent.md"));
+  assert.ok(resources.includes("references/paths.md"));
   assert.ok(resources.includes("references/visual-repair.md"));
   assert.ok(resources.includes("references/mesh-boundary.md"));
   assert.ok(resources.includes("references/composition.md"));

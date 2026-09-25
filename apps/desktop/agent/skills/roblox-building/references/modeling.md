@@ -34,9 +34,10 @@ the wrong size, the wrong style, or arrives in one colour.
 - Build from a few strong forms. Revolve a profile for round things (a ring of
   vertices per height); extrude a footprint for
   flat-sided things; combine simple solids for assemblies.
-- Place a part that is not upright by its two ends (`roqer.box_between`,
-  `roqer.cylinder_between` in [Blender modeling](blender.md)), not by a
-  rotation angle whose direction is easy to get backwards.
+- Prefer placing a part that is not upright by its two ends
+  (`roqer.box_between`, `roqer.cylinder_between` in
+  [Blender modeling](blender.md)): the direction of a rotation angle is easy
+  to get backwards, and the ends are what the design knows.
 - For the low-poly look use 6–12 segments around a curve, flat shading, and a
   one-segment bevel on hard edges so they catch light. Never smooth-shade a
   hard-edged model: boxes and panels come out looking puffy.

@@ -52,7 +52,7 @@ get the direction of wrong, and they paint it when given a colour:
 - `roqer.paint(obj, rgba)` and `roqer.vertex_color_material()`, for parts made
   another way.
 
-Use them for any part that is not upright. Raw `bpy` is still available for
+Prefer them for any part that is not upright. Raw `bpy` is still available for
 shapes they do not cover; there, keep the model flat-shaded (no
 `shade_smooth` on hard edges) and apply a rotation only after checking its
 direction (see "Reading the result").

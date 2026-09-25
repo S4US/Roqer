@@ -43,6 +43,12 @@ scene, export into `OUTPUT_DIR`), reading Roqer's re-import and preview, and
 bringing the model into Studio through upload and insert, and rendering PNG
 icons for UI. It is distributed under the repository's MIT licence.
 
+The repository-authored `skills/roblox-building/references/paths.md` covers
+building along a line or curve: placing a part by its two ends, deriving every
+strip from one centre line, meeting straights tangentially, sizing curve
+segments to the outer chord, and checking a path from above. It is
+distributed under the repository's MIT licence.
+
 The repository-authored `skills/roblox-building/references/modeling.md` (the
 brief, shape, scale, colour and acceptance rules for any new mesh) and
 `skills/roblox-building/references/gameplay-assembly.md` (turning a model into
