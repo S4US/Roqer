@@ -93,6 +93,24 @@ test("an OpenAI-compatible turn sends the key and effort, and the right output f
   assert.equal("max_completion_tokens" in sent[1].body, false);
 });
 
+test("a model that could not form its tool call is reported as that, not as an empty answer", async () => {
+  // OpenRouter's shape for Gemini's MALFORMED_FUNCTION_CALL: an ordinary finish
+  // reason, no content, and the provider's own reason beside it.
+  const { fetch } = endpoint([
+    { frames: [json({ choices: [{ delta: {}, finish_reason: "stop", native_finish_reason: "MALFORMED_FUNCTION_CALL" }] }), "[DONE]"] },
+    { frames: [json({ choices: [{ delta: {}, finish_reason: "error", native_finish_reason: "MALFORMED_FUNCTION_CALL" }] }), "[DONE]"] },
+    { frames: [json({ choices: [{ delta: {}, finish_reason: "error", native_finish_reason: "OTHER" }] }), "[DONE]"] },
+    { frames: [json({ choices: [{ delta: { content: "Done." }, finish_reason: "stop", native_finish_reason: "STOP" }] }), "[DONE]"] },
+  ]);
+  const turns = new OpenAiChatTurns({ baseUrl: "https://openrouter.ai/api/v1", apiKey: "sk-test-1234567890", label: "OpenRouter", reasoning: false, fetch });
+  const run = () => collect(turns.streamTurn(REQUEST, new AbortController().signal));
+
+  assert.deepEqual(await run(), [{ kind: "completed", stopReason: "malformed-tool-call" }]);
+  assert.deepEqual(await run(), [{ kind: "completed", stopReason: "malformed-tool-call" }]);
+  await assert.rejects(run, /OpenRouter ended the turn with an error from the model's provider \(OTHER\)/);
+  assert.deepEqual(await run(), [{ kind: "delta", text: "Done." }, { kind: "completed", stopReason: "end" }]);
+});
+
 test("a refused request says why in the endpoint's words, with the key redacted", async () => {
   const key = "sk-test-1234567890";
   const { fetch } = endpoint([{ status: 401, body: json({ error: { message: `Incorrect API key provided: ${key}` } }) }]);

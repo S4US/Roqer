@@ -9,7 +9,9 @@ import { buildConversationPrompt } from "./conversation-prompt";
 import { COMPACTION_TRIGGER_MESSAGES } from "./agent-loop-history";
 import {
   createAgentLoopPlanner,
-  MAX_LOOP_TURNS,
+  MALFORMED_CALL_RETRIES,
+  REPEATED_CALL_TURNS,
+  REPEATED_FAILURE_TURNS,
   type AgentLoopTelemetryEvent,
   type TurnTransport,
 } from "./agent-loop";
@@ -569,20 +571,99 @@ test("a turn reports where its time went, not only how long it took", async () =
   assert.ok(first.durationMs - first.lastToolCallMs >= 40, `tail of ${first.durationMs - first.lastToolCallMs}ms`);
 });
 
-test("the loop is bounded so a model that never converges cannot keep spending", async () => {
+test("a long run that keeps making progress is not cut off at any turn count", async () => {
   const controller = new AbortController();
   const { context } = makeContext(controller);
-  const looping: TurnTransport = {
+  let turns = 0;
+  const building: TurnTransport = {
     async *streamTurn() {
-      yield { kind: "tool-call", call: { id: "c1", name: "update_task_list", arguments: { tasks: [] } } };
+      turns += 1;
+      if (turns > 150) {
+        yield* DONE("Built and tested.");
+        return;
+      }
+      // A different step every turn: work, not a loop.
+      yield { kind: "tool-call", call: { id: `c${turns}`, name: "update_task_list", arguments: { tasks: [], step: turns } } };
       yield { kind: "completed", stopReason: "tool-use" };
     },
   };
-  await assert.rejects(
-    () => planner(looping).run(context),
-    new RegExp(`${MAX_LOOP_TURNS} model turns without finishing`),
-  );
+  assert.equal(await planner(building).run(context), "Built and tested.");
+  assert.equal(turns, 151);
 });
+
+test("a model repeating the same calls is asked for a report, and nothing more runs", async () => {
+  const controller = new AbortController();
+  const { context, recorded } = makeContext(controller);
+  const requests: TurnRequest[] = [];
+  const looping: TurnTransport = {
+    async *streamTurn(request) {
+      requests.push(JSON.parse(JSON.stringify(request)) as TurnRequest);
+      if (requests.length === REPEATED_CALL_TURNS + 1) {
+        // Told to report, it answers and still asks for the same step.
+        yield { kind: "delta", text: "The kart drives; boost is untested." };
+      }
+      yield { kind: "tool-call", call: { id: `c${requests.length}`, name: "roblox_studio", arguments: { operation: "get_script_source", arguments: { instancePath: "ServerScriptService.Main" } } } };
+      yield { kind: "completed", stopReason: "tool-use" };
+    },
+  };
+
+  const answer = await planner(looping).run(context);
+
+  assert.equal(requests.length, REPEATED_CALL_TURNS + 1, "stopped after the repeats, with one turn to report");
+  assert.match(answer, /^The kart drives; boost is untested\.\n\nRoqer stopped this run because the model made the same calls 6 turns in a row\. Send "Continue"/);
+  assert.match(JSON.stringify(requests.at(-1)?.messages.at(-1)), /same calls 6 turns in a row, so Roqer is stopping this run\. Do not call any tool/);
+  assert.ok(recorded.statuses.some((entry) => entry.label === "Model is repeating itself"));
+
+  // Silent when told to report: the run ends as a failure that says why.
+  const silent = makeContext(new AbortController());
+  let calls = 0;
+  const mute: TurnTransport = {
+    async *streamTurn() {
+      calls += 1;
+      yield { kind: "tool-call", call: { id: `c${calls}`, name: "roblox_studio", arguments: { operation: "get_script_source", arguments: { instancePath: "ServerScriptService.Main" } } } };
+      yield { kind: "completed", stopReason: "tool-use" };
+    },
+  };
+  await assert.rejects(() => planner(mute).run(silent.context), /made the same calls 6 turns in a row/);
+});
+
+test("the same failing call stops sooner, and a note from the user resets the count", async () => {
+  const failing = (tool: string): McpToolOutcome => ({ ok: false, data: null, text: `${tool} failed`, httpStatus: 500, errorCode: "boom", message: "boom", durationMs: 1 });
+  const { context } = makeContext(new AbortController(), failing);
+  let turns = 0;
+  const retrying: TurnTransport = {
+    async *streamTurn() {
+      turns += 1;
+      if (turns > REPEATED_FAILURE_TURNS) {
+        yield* DONE("It keeps failing.");
+        return;
+      }
+      yield { kind: "tool-call", call: { id: `c${turns}`, name: "roblox_studio", arguments: { operation: "get_script_source", arguments: { instancePath: "ServerScriptService.Main" } } } };
+      yield { kind: "completed", stopReason: "tool-use" };
+    },
+  };
+  const answer = await planner(retrying).run(context);
+  assert.equal(turns, REPEATED_FAILURE_TURNS + 1);
+  assert.match(answer, /same failing calls 3 turns in a row/);
+
+  // With a note from the user between tries, the same failing call is a new attempt.
+  const noted = makeContext(new AbortController(), failing);
+  let attempts = 0;
+  const told: TurnTransport = {
+    async *streamTurn() {
+      attempts += 1;
+      if (attempts <= REPEATED_FAILURE_TURNS) noted.recorded.steers.push(`try ${attempts}`);
+      if (attempts > REPEATED_FAILURE_TURNS + 1) {
+        yield* DONE("Done.");
+        return;
+      }
+      yield { kind: "tool-call", call: { id: `c${attempts}`, name: "roblox_studio", arguments: { operation: "get_script_source", arguments: { instancePath: "ServerScriptService.Main" } } } };
+      yield { kind: "completed", stopReason: "tool-use" };
+    },
+  };
+  assert.equal(await planner(told).run(noted.context), "Done.");
+});
+
 
 /** A gateway that speaks once and then holds the connection open saying nothing. */
 function stallingGateway(opening: readonly TurnEvent[] = []): TurnTransport {
@@ -596,6 +677,7 @@ function stallingGateway(opening: readonly TurnEvent[] = []): TurnTransport {
     },
   };
 }
+
 
 test("a turn that makes no progress is ended rather than held open forever", async () => {
   // The transport bound measures whether the connection is alive, and the
@@ -692,7 +774,8 @@ test("a long run folds its own history and sends the host's record in its place"
           name: "roblox_studio",
           arguments: {
             operation: "get_script_source",
-            arguments: { instancePath: "game.ServerScriptService.Main" },
+            // A different script each turn: a long run of work, not a loop.
+            arguments: { instancePath: `game.ServerScriptService.Main${index}` },
           },
         },
       },
@@ -756,7 +839,8 @@ test("skill guidance can be loaded again after conversation compaction removes i
           name: "roblox_studio",
           arguments: {
             operation: "get_script_source",
-            arguments: { instancePath: "game.ServerScriptService.Main" },
+            // A different script each turn: a long run of work, not a loop.
+            arguments: { instancePath: `game.ServerScriptService.Main${index}` },
           },
         },
       },
@@ -1167,6 +1251,58 @@ test("a note the model had not read when it finished earns one more turn", async
   ]);
   assert.equal(answer, "Done: edited the client script.\n\nMoved the change to the server script.");
   assert.ok(recorded.statuses.some((entry) => entry.label === "Read your note"));
+});
+
+test("a broken tool call is retried as a smaller one, then fails saying so", async () => {
+  const BROKEN: readonly TurnEvent[] = [{ kind: "completed", stopReason: "malformed-tool-call" }];
+  const { context, recorded } = makeContext(new AbortController());
+  const recovering = gateway([BROKEN, BROKEN, DONE("Wrote the controller in two parts.")]);
+  assert.equal(await planner(recovering).run(context), "Wrote the controller in two parts.");
+  assert.match(JSON.stringify(recovering.requests[1].messages.at(-1)), /last tool call could not be formed.*smaller call/);
+  assert.ok(recorded.statuses.some((entry) => entry.label === "Model sent a broken tool call"));
+
+  const hopeless = makeContext(new AbortController());
+  const failing = gateway(Array.from({ length: MALFORMED_CALL_RETRIES + 1 }, () => BROKEN));
+  await assert.rejects(() => planner(failing).run(hopeless.context), /could not form a tool call 4 times in a row/);
+  assert.equal(failing.requests.length, MALFORMED_CALL_RETRIES + 1);
+});
+
+test("a model that ends a turn silently is asked once to continue", async () => {
+  const SILENT: readonly TurnEvent[] = [{ kind: "completed", stopReason: "end", usage: { inputTokens: 10, outputTokens: 0 } }];
+  const task = (title: string, status: RunTask["status"]): RunTask => ({ id: title, title, status, requiresRuntimeEvidence: false });
+
+  // Open work and an empty turn: one host note, then the model carries on.
+  const controller = new AbortController();
+  const { context, recorded } = makeContext(controller);
+  context.setTasks([task("Build the track", "done"), task("Test the kart in Play mode", "active")]);
+  const resumed = gateway([SILENT, DONE("Tested it: the kart drives.")]);
+  assert.equal(await planner(resumed).run(context), "Tested it: the kart drives.");
+  assert.equal(resumed.requests.length, 2);
+  const note = resumed.requests[1].messages.at(-1);
+  assert.equal(note?.role, "user");
+  assert.match(JSON.stringify(note), /Roqer, the host: you ended your turn with no reply.*\\"Test the kart in Play mode\\"/);
+  assert.doesNotMatch(JSON.stringify(note), /Build the track/, "finished tasks are not listed");
+  assert.ok(recorded.statuses.some((entry) => entry.label === "Model stopped without a reply"));
+
+  // Asked once only: silent again, and the run ends as before.
+  const again = makeContext(new AbortController());
+  again.context.setTasks([task("Test the kart in Play mode", "active")]);
+  const twice = gateway([SILENT, SILENT]);
+  assert.equal(await planner(twice).run(again.context), "The model returned no answer for this turn.");
+  assert.equal(twice.requests.length, 2);
+
+  // Silent before any plan exists: still asked once, to continue the request.
+  const early = makeContext(new AbortController());
+  const unplanned = gateway([SILENT, DONE("Here is the kart.")]);
+  assert.equal(await planner(unplanned).run(early.context), "Here is the kart.");
+  assert.match(JSON.stringify(unplanned.requests[1].messages.at(-1)), /no reply and no tool call\. Continue working on the user's request/);
+
+  // A turn that answers is never nudged, whatever is left open.
+  const answered = makeContext(new AbortController());
+  answered.context.setTasks([task("Test the kart in Play mode", "active")]);
+  const replied = gateway([DONE("I could not start a playtest.")]);
+  assert.equal(await planner(replied).run(answered.context), "I could not start a playtest.");
+  assert.equal(replied.requests.length, 1);
 });
 
 test("a screenshot too large to send is reported to the person, not only to the model", async () => {

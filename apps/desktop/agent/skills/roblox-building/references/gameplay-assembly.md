@@ -43,7 +43,11 @@ falls apart, will not equip, or cannot be used.
 
 - A seat is a `Seat` or `VehicleSeat` Part, anchored in a static prop and
   welded to the chassis in a vehicle. Its top face is where the character
-  sits; check it in a playtest.
+  sits, and the character faces the seat's `LookVector`; a `VehicleSeat`
+  also drives along it. Before welding, read the seat's `LookVector` and the
+  model's front and make them match; a seat created with no rotation faces
+  −Z, which is the model's front only if the model was built facing Blender
+  −Y (see [Modeling a mesh](modeling.md)). Check both in a playtest.
 - A vehicle is a chassis Part (the root and collision), a `VehicleSeat`,
   wheels as separate parts on `HingeConstraint`s, and the body mesh welded to
   the chassis with collision off and `Massless` on. Model wheels as separate

@@ -32,10 +32,15 @@ the wrong size, the wrong style, or arrives in one colour.
 ## Shape
 
 - Build from a few strong forms. Revolve a profile for round things (a ring of
-  vertices per height, as in the barrel example); extrude a footprint for
+  vertices per height); extrude a footprint for
   flat-sided things; combine simple solids for assemblies.
+- Prefer placing a part that is not upright by its two ends
+  (`roqer.box_between`, `roqer.cylinder_between` in
+  [Blender modeling](blender.md)): the direction of a rotation angle is easy
+  to get backwards, and the ends are what the design knows.
 - For the low-poly look use 6–12 segments around a curve, flat shading, and a
-  one-segment bevel on hard edges so they catch light.
+  one-segment bevel on hard edges so they catch light. Never smooth-shade a
+  hard-edged model: boxes and panels come out looking puffy.
 - Modifiers are not exported unless the export passes `export_apply=True`: by
   default Blender's glTF export drops them, so a bevel you can see in the
   script never reaches Roblox. Pass it on every export.
@@ -50,9 +55,13 @@ the wrong size, the wrong style, or arrives in one colour.
 - One Blender unit arrives as one stud. Model at the brief's size.
 - Model with Z up, as Blender does; the glTF export converts to Roblox's Y up,
   so the model arrives upright.
-- Stand the model on Z = 0 with its footprint centred on the origin. Which way
-  its front faces after insert is not guaranteed: read it back and turn the
-  Model in Studio if needed.
+- Stand the model on Z = 0 with its footprint centred on the origin.
+- Face the model's front toward Blender −Y, as Blender's own Front view does.
+  A point at Blender (x, y, z) arrives in Roblox at (−x, z, y), so −Y becomes
+  Roblox's forward, −Z, the direction a part's `LookVector` points and a seat
+  faces. A front modeled toward +Y arrives facing backwards. Measured from two
+  uploads, by comparing each wheel's Blender position with its position in
+  Studio.
 - After insert, set the Model's pivot to its rest point (base centre for a
   prop, grip for a tool) with `WorldPivot` or a `PrimaryPart`, so later clones
   and `PivotTo` land it correctly.

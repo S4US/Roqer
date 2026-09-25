@@ -32,7 +32,8 @@ const MAX_INSPECTED_MODELS = 3;
 const MAX_RENDERED_IMAGES = 4;
 /** Roblox stores an uploaded image at most this many pixels a side. */
 const MAX_UPLOAD_IMAGE_SIDE = 1024;
-const INSPECT_TIMEOUT_MS = 30_000;
+/** The inspection re-imports, measures the layout (itself capped at 12 s) and renders four views. */
+const INSPECT_TIMEOUT_MS = 45_000;
 const MAX_LOG_CHARACTERS = 4_000;
 const MAX_PREVIEW_BYTES = 2 * 1024 * 1024;
 /** Old jobs are cleared once they are this old; a model to upload is uploaded within the day. */
@@ -43,8 +44,166 @@ const DONE_MARKER = "ROQER_SCRIPT_DONE";
 const FAILED_MARKER = "ROQER_SCRIPT_FAILED";
 const INSPECT_MARKER = "ROQER_INSPECT ";
 
+/**
+ * Roqer's modeling helpers, loaded before the model's script as roqer.<name>.
+ * They place parts by where they start and end instead of by rotation angles,
+ * the direction of which models often get wrong, and keep joined parts
+ * flat-shaded in one vertex-colour material. Roqer's own code, not the model's.
+ */
+export const HELPERS_SCRIPT = String.raw`"""Roqer's modeling helpers, available to every Blender job as roqer.<name>.
+
+Each takes positions in Blender units (studs) and places a part by where it
+starts and ends rather than by rotation angles, builds its mesh directly
+(no selection or context), and paints it when given a colour.
+"""
+import bpy, bmesh
+from mathutils import Vector
+
+_COLOR_LAYER = "Col"
+
+
+def _vector(value, name):
+    try:
+        vector = Vector(value)
+    except (TypeError, ValueError):
+        raise ValueError(f"{name} must be three numbers, got {value!r}") from None
+    if len(vector) != 3:
+        raise ValueError(f"{name} must be three numbers, got {value!r}")
+    return vector
+
+
+def _positive(value, name):
+    if not isinstance(value, (int, float)) or value <= 0:
+        raise ValueError(f"{name} must be a positive number of studs, got {value!r}")
+    return float(value)
+
+
+def paint(obj, rgba):
+    """Colour every corner of an object's mesh; the colour travels in the GLB as vertex colour."""
+    if len(rgba) == 3:
+        rgba = (*rgba, 1.0)
+    mesh = obj.data
+    layer = mesh.color_attributes.get(_COLOR_LAYER) or mesh.color_attributes.new(_COLOR_LAYER, "BYTE_COLOR", "CORNER")
+    for corner in layer.data:
+        corner.color = rgba
+    mesh.color_attributes.active_color = layer
+    return obj
+
+
+def _object(name, bm, rgba):
+    bmesh.ops.recalc_face_normals(bm, faces=bm.faces)
+    mesh = bpy.data.meshes.new(name)
+    bm.to_mesh(mesh)
+    bm.free()
+    obj = bpy.data.objects.new(name, mesh)
+    bpy.context.scene.collection.objects.link(obj)
+    if rgba is not None:
+        paint(obj, rgba)
+    return obj
+
+
+def _frame(start, end, across):
+    """Unit vectors: along start to end, the given width direction made perpendicular, and the third."""
+    along = end - start
+    if along.length < 1e-6:
+        raise ValueError("start and end are the same point")
+    along = along.normalized()
+    side = across - along * across.dot(along)
+    if side.length < 1e-6:
+        side = Vector((1, 0, 0)) - along * along.x
+        if side.length < 1e-6:
+            side = Vector((0, 1, 0)) - along * along.y
+    side = side.normalized()
+    return along, side, along.cross(side).normalized()
+
+
+def box(name, size, center, rgba=None):
+    """An upright box of the given size (x, y, z), centred on center."""
+    size = _vector(size, "size")
+    for value, axis in zip(size, "xyz"):
+        _positive(value, f"size {axis}")
+    half = size / 2
+    return box_between(name, _vector(center, "center") - Vector((0, 0, half.z)), _vector(center, "center") + Vector((0, 0, half.z)),
+                       width=size.x, thickness=size.y, width_axis=(1, 0, 0), rgba=rgba)
+
+
+def box_between(name, start, end, width, thickness, width_axis=(1, 0, 0), rgba=None):
+    """A box running from start to end, width wide along width_axis and thickness deep across both.
+
+    A leaning seat back runs from its bottom edge to its top edge; a sloping panel from its low
+    end to its high end. No rotation angle to get the direction of wrong.
+    """
+    start, end = _vector(start, "start"), _vector(end, "end")
+    width, thickness = _positive(width, "width"), _positive(thickness, "thickness")
+    along, side, normal = _frame(start, end, _vector(width_axis, "width_axis"))
+    bm = bmesh.new()
+    corners = []
+    for point in (start, end):
+        for s in (-0.5, 0.5):
+            for t in (-0.5, 0.5):
+                corners.append(bm.verts.new(point + side * (s * width) + normal * (t * thickness)))
+    for ids in ((0, 1, 3, 2), (4, 6, 7, 5), (0, 4, 5, 1), (2, 3, 7, 6), (0, 2, 6, 4), (1, 5, 7, 3)):
+        bm.faces.new([corners[i] for i in ids])
+    return _object(name, bm, rgba)
+
+
+def cylinder_between(name, start, end, radius, rgba=None, vertices=12):
+    """A cylinder whose end caps sit at start and end: a bar, a pipe, a column, an axle or a wheel."""
+    start, end = _vector(start, "start"), _vector(end, "end")
+    radius = _positive(radius, "radius")
+    if not isinstance(vertices, int) or vertices < 3:
+        raise ValueError(f"vertices must be a whole number of at least 3, got {vertices!r}")
+    along, side, normal = _frame(start, end, Vector((1, 0, 0)) if abs((end - start).normalized().x) < 0.9 else Vector((0, 1, 0)))
+    import math
+    bm = bmesh.new()
+    rings = []
+    for point in (start, end):
+        rings.append([bm.verts.new(point + (side * math.cos(2 * math.pi * k / vertices) + normal * math.sin(2 * math.pi * k / vertices)) * radius)
+                      for k in range(vertices)])
+    for k in range(vertices):
+        n = (k + 1) % vertices
+        bm.faces.new((rings[0][k], rings[0][n], rings[1][n], rings[1][k]))
+    bm.faces.new(list(reversed(rings[0])))
+    bm.faces.new(rings[1])
+    return _object(name, bm, rgba)
+
+
+def vertex_color_material(name="VertexColour"):
+    """One material that shows the vertex colours; without it the glTF export leaves them out."""
+    material = bpy.data.materials.get(name)
+    if material is None:
+        material = bpy.data.materials.new(name)
+        material.use_nodes = True
+        nodes = material.node_tree.nodes
+        colors = nodes.new("ShaderNodeVertexColor")
+        colors.layer_name = _COLOR_LAYER
+        material.node_tree.links.new(colors.outputs["Color"], nodes["Principled BSDF"].inputs["Base Color"])
+    return material
+
+
+def join(name, objects):
+    """Join parts that never move apart into one flat-shaded object with the vertex-colour material.
+
+    Keep anything that must move on its own (a wheel, a lid, a door) out of the list and join it separately.
+    """
+    objects = [obj for obj in objects if obj is not None]
+    if not objects:
+        raise ValueError("join needs at least one object")
+    first = objects[0]
+    if len(objects) > 1:
+        with bpy.context.temp_override(active_object=first, selected_editable_objects=objects, selected_objects=objects):
+            bpy.ops.object.join()
+    first.name = name
+    first.data.name = name
+    first.data.materials.clear()
+    first.data.materials.append(vertex_color_material())
+    first.data.polygons.foreach_set("use_smooth", [False] * len(first.data.polygons))
+    first.data.update()
+    return first
+`;
+
 /** Roqer's wrapper around the model's script. */
-export const RUNNER_SCRIPT = String.raw`import bpy, os, sys, traceback
+export const RUNNER_SCRIPT = String.raw`import bpy, os, sys, traceback, types
 
 job_dir = sys.argv[sys.argv.index("--") + 1]
 OUTPUT_DIR = os.path.join(job_dir, "output")
@@ -53,7 +212,12 @@ bpy.ops.wm.read_factory_settings(use_empty=True)
 script_path = os.path.join(job_dir, "script.py")
 with open(script_path, "r", encoding="utf-8") as handle:
     source = handle.read()
-namespace = {"__name__": "__main__", "__file__": script_path, "OUTPUT_DIR": OUTPUT_DIR, "bpy": bpy}
+helpers = {"__name__": "roqer"}
+with open(os.path.join(job_dir, "roqer_helpers.py"), "r", encoding="utf-8") as handle:
+    exec(compile(handle.read(), "roqer_helpers.py", "exec"), helpers)
+roqer = types.SimpleNamespace(**{name: value for name, value in helpers.items()
+                                 if callable(value) and not name.startswith("_") and getattr(value, "__module__", None) == "roqer"})
+namespace = {"__name__": "__main__", "__file__": script_path, "OUTPUT_DIR": OUTPUT_DIR, "bpy": bpy, "roqer": roqer}
 try:
     exec(compile(source, script_path, "exec"), namespace)
 except BaseException:
@@ -63,9 +227,13 @@ except BaseException:
 print("${DONE_MARKER}", flush=True)
 `;
 
-/** Roqer's own check of one exported model: measure it, then render a framed preview. */
-export const INSPECT_SCRIPT = String.raw`import bpy, os, sys, json, math
+/**
+ * Roqer's own check of one exported model: measure it, lay out how its pieces
+ * sit against each other, and render four views of it in one preview image.
+ */
+export const INSPECT_SCRIPT = String.raw`import bpy, bmesh, os, sys, json, math, time
 from mathutils import Vector
+from mathutils.bvhtree import BVHTree
 
 args = sys.argv[sys.argv.index("--") + 1:]
 model_path, preview_path = args[0], args[1]
@@ -120,10 +288,286 @@ for item in meshes[:16]:
     objects.append({"name": item.name, "size": [round(hi.x - lo.x, 2), round(hi.z - lo.z, 2), round(hi.y - lo.y, 2)]})
 stats = {"meshes": len(meshes), "triangles": triangles, "materials": sorted(materials)[:32], "preview": False,
          "colorSource": color_source, "objects": objects}
+
+# Smooth shading across hard edges: a corner whose normal leans far from its
+# face's is shaded as if the edge were rounded, which makes boxes and panels
+# look puffy. A genuinely curved surface bends each corner only slightly.
+smooth = []
+for item in meshes:
+    mesh = item.data
+    if hasattr(mesh, "corner_normals"):
+        normals = [corner.vector for corner in mesh.corner_normals]
+    else:
+        mesh.calc_normals_split()
+        normals = [loop.normal for loop in mesh.loops]
+    if not normals:
+        continue
+    bent = sum(1 for poly in mesh.polygons for i in poly.loop_indices if normals[i].dot(poly.normal) < 0.9)
+    share = bent / len(normals)
+    if share > 0.2:
+        smooth.append({"object": item.name, "share": round(share, 2)})
+stats["smoothShaded"] = smooth[:8]
+
+# Layout: how the model's pieces sit against each other, in the script's own
+# Blender coordinates. A script usually joins many primitives into one object,
+# so each object is split back into its loose pieces (after welding the
+# vertices the exporter split for flat shading) and the pieces are compared.
+TOUCH = 0.03
+MAX_PIECES = 300
+MAX_SAMPLES = 400
+LAYOUT_SECONDS = 12.0
+RAYS = [Vector(d).normalized() for d in ((0.5773, 0.5774, 0.5775), (-0.31, 0.83, 0.46), (0.71, -0.2, 0.67))]
+r2 = lambda value: round(value, 2)
+
+
+class Piece:
+    def __init__(self, owner, verts, faces, edges, closed):
+        self.owner, self.verts, self.faces, self.closed = owner, verts, faces, closed
+        self.tree = BVHTree.FromPolygons(verts, faces)
+        self.low = Vector(map(min, *verts))
+        self.high = Vector(map(max, *verts))
+        length = sum((verts[b] - verts[a]).length for a, b in edges)
+        step = max(0.08, length / MAX_SAMPLES)
+        samples = list(verts)
+        for a, b in edges:
+            count = int((verts[b] - verts[a]).length / step)
+            samples.extend(verts[a].lerp(verts[b], k / (count + 1)) for k in range(1, count + 1))
+        samples.extend(sum((verts[i] for i in face), Vector()) / len(face) for face in faces)
+        self.samples = samples[:MAX_SAMPLES * 3]
+
+    def describe(self, low=None, high=None):
+        low, high = low or self.low, high or self.high
+        size, centre = high - low, (low + high) / 2
+        return {"size": [r2(size.x), r2(size.y), r2(size.z)], "center": [r2(centre.x), r2(centre.y), r2(centre.z)]}
+
+
+def split_pieces(item):
+    bm = bmesh.new()
+    bm.from_mesh(item.data)
+    bm.transform(item.matrix_world)
+    bmesh.ops.remove_doubles(bm, verts=bm.verts, dist=1e-4)
+    bm.faces.ensure_lookup_table()
+    seen, pieces = set(), []
+    for face in bm.faces:
+        if face.index in seen:
+            continue
+        seen.add(face.index)
+        stack, part = [face], []
+        while stack:
+            current = stack.pop()
+            part.append(current)
+            for edge in current.edges:
+                for other in edge.link_faces:
+                    if other.index not in seen:
+                        seen.add(other.index)
+                        stack.append(other)
+        edges = {edge for current in part for edge in current.edges}
+        index, verts, faces = {}, [], []
+        for current in part:
+            ids = []
+            for vert in current.verts:
+                if vert.index not in index:
+                    index[vert.index] = len(verts)
+                    verts.append(vert.co.copy())
+                ids.append(index[vert.index])
+            faces.append(ids)
+        pairs = [(index[edge.verts[0].index], index[edge.verts[1].index]) for edge in edges]
+        pieces.append(Piece(item.name, verts, faces, pairs, all(len(edge.link_faces) == 2 for edge in edges)))
+    bm.free()
+    return pieces
+
+
+def inside(point, piece):
+    """Ray parity over three skew directions; only a closed piece has an inside."""
+    if not piece.closed or any(point[i] < piece.low[i] - 1e-6 or point[i] > piece.high[i] + 1e-6 for i in range(3)):
+        return False
+    votes = 0
+    for direction in RAYS:
+        hits, origin = 0, point
+        while hits < 64:
+            location = piece.tree.ray_cast(origin, direction)[0]
+            if location is None:
+                break
+            hits += 1
+            origin = location + direction * 1e-5
+        votes += hits % 2
+    return votes >= 2
+
+
+def box_gap(a, b):
+    return max(0.0, max(max(a.low[i] - b.high[i], b.low[i] - a.high[i]) for i in range(3)))
+
+
+def relate(a, b):
+    """The gap between two pieces (0 when they touch) and how far one passes into the other."""
+    if box_gap(a, b) > TOUCH:
+        return math.inf, 0.0
+    gap, depth = (0.0 if a.tree.overlap(b.tree) else math.inf), 0.0
+    for first, second in ((a, b), (b, a)):
+        for point in first.samples:
+            if inside(point, second):
+                gap = 0.0
+                depth = max(depth, second.tree.find_nearest(point)[3])
+            elif gap > 0:
+                gap = min(gap, second.tree.find_nearest(point)[3])
+    return gap, depth
+
+
+def nearest(group, candidates):
+    """The smallest gap from a group of pieces to any candidate, checking the closest few by bounds."""
+    best = (math.inf, None)
+    for piece in group:
+        for other in sorted(candidates, key=lambda c: box_gap(piece, c))[:4]:
+            gap = min(other.tree.find_nearest(point)[3] for point in piece.samples)
+            if gap < best[0]:
+                best = (gap, other)
+    return best
+
+
+def layout_facts():
+    started = time.monotonic()
+    pieces = [piece for item in meshes for piece in split_pieces(item)]
+    if len(pieces) > MAX_PIECES:
+        return {"pieces": len(pieces), "skipped": f"more than {MAX_PIECES} separate pieces"}
+    parent = list(range(len(pieces)))
+
+    def find(i):
+        while parent[i] != i:
+            parent[i] = parent[parent[i]]
+            i = parent[i]
+        return i
+
+    touching_objects, attached, overlaps, complete = set(), set(), {}, True
+    for i in range(len(pieces)):
+        if time.monotonic() - started > LAYOUT_SECONDS:
+            complete = False
+            break
+        for j in range(i + 1, len(pieces)):
+            a, b = pieces[i], pieces[j]
+            gap, depth = relate(a, b)
+            if gap > TOUCH:
+                continue
+            if a.owner == b.owner:
+                parent[find(i)] = find(j)
+                continue
+            touching_objects.update((a.owner, b.owner))
+            attached.update((i, j))
+            key = tuple(sorted((a.owner, b.owner)))
+            if depth > TOUCH and depth > overlaps.get(key, (0,))[0]:
+                overlaps[key] = (depth, a, b)
+
+    loose = []
+    for owner in dict.fromkeys(piece.owner for piece in pieces):
+        groups, held = {}, set()
+        for i, piece in enumerate(pieces):
+            if piece.owner == owner:
+                groups.setdefault(find(i), []).append(piece)
+                if i in attached:
+                    held.add(find(i))
+        # A group held by another object is attached, not loose: one object
+        # may hold two separate lamps, each fixed to the body.
+        ordered = sorted(groups.items(), key=lambda entry: sum(len(p.faces) for p in entry[1]), reverse=True)
+        ordered = [group for root, group in ordered[:1]] + [group for root, group in ordered[1:] if root not in held]
+        for group in ordered[1:]:
+            rest = [p for other in ordered if other is not group for p in other]
+            gap, _ = nearest(group, rest)
+            low = Vector(map(min, *[p.low for p in group])) if len(group) > 1 else group[0].low
+            high = Vector(map(max, *[p.high for p in group])) if len(group) > 1 else group[0].high
+            loose.append({"object": owner, "pieces": len(group), **group[0].describe(low, high), "gap": r2(gap)})
+
+    isolated = []
+    owners = list(dict.fromkeys(piece.owner for piece in pieces))
+    if len(owners) > 1:
+        for owner in owners:
+            if owner in touching_objects:
+                continue
+            gap, other = nearest([p for p in pieces if p.owner == owner], [p for p in pieces if p.owner != owner])
+            isolated.append({"object": owner, "gap": r2(gap), "nearest": other.owner if other is not None else None})
+
+    crossing = sorted(overlaps.values(), key=lambda entry: entry[0], reverse=True)
+    return {
+        "pieces": len(pieces),
+        "complete": complete,
+        "loose": sorted(loose, key=lambda entry: -entry["gap"])[:8],
+        "looseCount": len(loose),
+        "isolated": isolated[:8],
+        "isolatedCount": len(isolated),
+        "overlaps": [{"objects": [a.owner, b.owner], "depth": r2(depth), "piece": {"object": a.owner, **a.describe()}}
+                     for depth, a, b in crossing[:8]],
+        "overlapCount": len(crossing),
+    }
+
+
+# Four views in one image, so a mistake one angle hides shows in another and no
+# view depends on which way the model faces: side and top (orthographic), then
+# two opposite three-quarter views.
+PANEL_W, PANEL_H = 512, 384
+VIEWS = [("ORTHO", (1.0, 0.0, 0.0)), ("ORTHO", (0.0, 0.0, 1.0)), ("PERSP", (1.0, -1.2, 0.8)), ("PERSP", (-1.0, 1.2, 0.8))]
+
+
+def render_views(size, center):
+    import numpy
+    world = bpy.data.worlds.new("RoqerPreviewWorld")
+    world.color = (0.93, 0.93, 0.93)
+    scene.world = world
+    scene.render.engine = "BLENDER_WORKBENCH"
+    shading = scene.display.shading
+    shading.light = "STUDIO"
+    shading.color_type = {"vertex": "VERTEX", "texture": "TEXTURE"}.get(color_source, "MATERIAL")
+    shading.show_object_outline = True
+    shading.object_outline_color = (0.05, 0.05, 0.05)
+    scene.render.resolution_x = PANEL_W
+    scene.render.resolution_y = PANEL_H
+    scene.render.resolution_percentage = 100
+    scene.render.image_settings.file_format = "PNG"
+    scene.render.image_settings.color_mode = "RGBA"
+    camera = bpy.data.objects.new("RoqerPreviewCamera", bpy.data.cameras.new("RoqerPreviewCamera"))
+    scene.collection.objects.link(camera)
+    scene.camera = camera
+    radius = max(size.length / 2, 0.01)
+    sheet = numpy.ones((PANEL_H * 2, PANEL_W * 2, 4), dtype=numpy.float32)
+    for index, (kind, toward) in enumerate(VIEWS):
+        direction = Vector(toward).normalized()
+        camera.data.type = kind
+        if kind == "ORTHO":
+            across = (size.y, size.z) if direction.x else (size.x, size.y)
+            camera.data.ortho_scale = max(across[0], across[1] * PANEL_W / PANEL_H, 0.01) * 1.12
+            distance = radius * 2 + 1
+        else:
+            distance = radius / math.sin(camera.data.angle / 2) * 1.05
+        camera.location = center + direction * distance
+        camera.data.clip_end = distance * 4
+        camera.rotation_euler = (0, 0, 0) if direction.z > 0.99 else (-direction).to_track_quat("-Z", "Y").to_euler()
+        path = f"{preview_path}.{index}.png"
+        scene.render.filepath = path
+        bpy.ops.render.render(write_still=True)
+        image = bpy.data.images.load(path)
+        pixels = numpy.empty(PANEL_W * PANEL_H * 4, dtype=numpy.float32)
+        image.pixels.foreach_get(pixels)
+        bpy.data.images.remove(image)
+        os.remove(path)
+        # Image rows run bottom to top: the first row of views sits in the upper half.
+        row = PANEL_H if index < 2 else 0
+        column = PANEL_W * (index % 2)
+        sheet[row:row + PANEL_H, column:column + PANEL_W] = pixels.reshape(PANEL_H, PANEL_W, 4)
+    sheet[PANEL_H - 1:PANEL_H + 1, :, :3] = 0.55
+    sheet[:, PANEL_W - 1:PANEL_W + 1, :3] = 0.55
+    sheet[:, :, 3] = 1.0
+    output = bpy.data.images.new("RoqerPreview", PANEL_W * 2, PANEL_H * 2, alpha=True)
+    output.pixels.foreach_set(sheet.ravel())
+    output.filepath_raw = preview_path
+    output.file_format = "PNG"
+    output.save()
+
+
 if meshes:
     size = high - low
     stats["size"] = [round(size.x, 4), round(size.y, 4), round(size.z, 4)]
     stats["min"] = [round(low.x, 4), round(low.y, 4), round(low.z, 4)]
+    try:
+        stats["layout"] = layout_facts()
+    except Exception as error:
+        stats["layout"] = {"skipped": str(error)[:200]}
     # Workbench draws a material's viewport colour, which importers leave grey;
     # copy each principled base colour across so the preview shows real colours.
     for material in bpy.data.materials:
@@ -132,25 +576,8 @@ if meshes:
                 if node.type == "BSDF_PRINCIPLED":
                     material.diffuse_color = tuple(node.inputs["Base Color"].default_value)
                     break
-    center = (low + high) / 2
-    radius = max(size.length / 2, 0.01)
-    camera = bpy.data.objects.new("RoqerPreviewCamera", bpy.data.cameras.new("RoqerPreviewCamera"))
-    scene.collection.objects.link(camera)
-    direction = Vector((1.0, -1.2, 0.8)).normalized()
-    distance = radius / math.sin(camera.data.angle / 2) * 1.1
-    camera.location = center + direction * distance
-    camera.rotation_euler = (center - camera.location).to_track_quat("-Z", "Y").to_euler()
-    camera.data.clip_end = distance * 4
-    scene.camera = camera
-    scene.render.engine = "BLENDER_WORKBENCH"
-    scene.display.shading.light = "STUDIO"
-    scene.display.shading.color_type = {"vertex": "VERTEX", "texture": "TEXTURE"}.get(color_source, "MATERIAL")
-    scene.render.resolution_x = 512
-    scene.render.resolution_y = 384
-    scene.render.image_settings.file_format = "PNG"
-    scene.render.filepath = preview_path
     try:
-        bpy.ops.render.render(write_still=True)
+        render_views(size, (low + high) / 2)
         stats["preview"] = os.path.exists(preview_path)
     except Exception as error:
         stats["previewError"] = str(error)[:200]
@@ -197,7 +624,38 @@ export type InspectedFile = Readonly<{
   colorSource?: "texture" | "vertex" | "material";
   /** Each mesh object's name and size in studs (Roblox axes), for splitting a kit set. */
   objects?: ReadonlyArray<Readonly<{ name: string; size: readonly number[] }>>;
+  /** Where the model's lowest point sits, in Blender units: 0 stands it on the ground. */
+  bottom?: number;
+  /** How the model's pieces sit against each other, in the script's Blender coordinates. */
+  layout?: LayoutFacts;
+  /** Objects shaded smooth across hard edges, with the share of their corners bent that way. */
+  smoothShaded?: ReadonlyArray<Readonly<{ object: string; share: number }>>;
   inspectionError?: string;
+}>;
+
+/** A piece or group of pieces, by its size and centre in Blender coordinates (X, Y, Z up). */
+export type PieceBox = Readonly<{ size: readonly number[]; center: readonly number[] }>;
+
+/**
+ * Facts about how an exported model's pieces sit, measured by Roqer's own
+ * inspection. A script usually joins many primitives into one object, so each
+ * object is split back into its loose pieces before they are compared.
+ */
+export type LayoutFacts = Readonly<{
+  pieces: number;
+  /** Why the layout was not measured, when it was not. */
+  skipped?: string;
+  /** False when the time cap stopped the comparison early. */
+  complete?: boolean;
+  /** Pieces that touch nothing, in their own object or any other: almost always a gap to close. */
+  loose: ReadonlyArray<PieceBox & Readonly<{ object: string; pieces: number; gap: number }>>;
+  looseCount: number;
+  /** Objects that touch no other object: expected in a kit set, a gap in one assembled model. */
+  isolated: ReadonlyArray<Readonly<{ object: string; gap: number; nearest: string | null }>>;
+  isolatedCount: number;
+  /** Separate objects that pass into each other, deepest first, with the deepest piece of the first. */
+  overlaps: ReadonlyArray<Readonly<{ objects: readonly [string, string]; depth: number; piece: PieceBox }>>;
+  overlapCount: number;
 }>;
 
 export type RenderedImage = Readonly<{
@@ -298,6 +756,7 @@ export class BlenderWorker {
       await fs.mkdir(outputDirectory, { recursive: true });
       await fs.writeFile(path.join(jobDirectory, "script.py"), script, "utf8");
       await fs.writeFile(path.join(jobDirectory, "roqer_runner.py"), RUNNER_SCRIPT, "utf8");
+      await fs.writeFile(path.join(jobDirectory, "roqer_helpers.py"), HELPERS_SCRIPT, "utf8");
       await fs.writeFile(path.join(jobDirectory, "roqer_inspect.py"), INSPECT_SCRIPT, "utf8");
     } catch {
       return failure("Roqer could not prepare a folder for the Blender job.", "job_setup_failed", started, this.now);
@@ -394,6 +853,13 @@ export class BlenderWorker {
             ? [{ name: object.name, size: object.size as number[] }]
             : [];
         }) : undefined,
+        bottom: Array.isArray(stats.min) && typeof stats.min[2] === "number" ? stats.min[2] : undefined,
+        layout: parseLayout(stats.layout),
+        smoothShaded: Array.isArray(stats.smoothShaded)
+          ? stats.smoothShaded.slice(0, MAX_LAYOUT_ENTRIES).flatMap((entry: unknown) => isRecord(entry) && typeof entry.object === "string" && isNumber(entry.share)
+            ? [{ object: entry.object, share: entry.share }]
+            : [])
+          : undefined,
       });
       if (stats.preview === true) {
         const png = await fs.readFile(preview).catch(() => undefined);
@@ -411,8 +877,9 @@ export class BlenderWorker {
         ...files.map(describeFile),
         ...(models.length > MAX_INSPECTED_MODELS ? [`${models.length - MAX_INSPECTED_MODELS} more model files were not inspected.`] : []),
         previews > 0
-          ? "A preview render of each model is attached. Check its shape and colours against the request before uploading."
+          ? "A preview of each model is attached: four views in one image. Top left, the side seen from +X (+Y to the right); top right, the top seen from above (+Y up the image); bottom left and right, three-quarter views from the +X -Y and -X +Y corners. Check its shape and colours in every view against the request, and close any gap or overlap listed above that the design does not intend, before uploading."
           : "No preview could be rendered; judge the model by the numbers above.",
+        "In Studio a point at Blender (x, y, z) arrives at (-x, z, y): Blender -Y becomes Roblox's forward (-Z, the LookVector), so a front modeled toward +Y arrives facing backwards.",
         "To use a model in Studio: upload_asset {action: 'upload', filePath: <its path>, assetType: 'Model', displayName}, then insert_asset with the returned asset id, then read the inserted model's size back and scale it in Studio if needed.",
       );
     }
@@ -506,7 +973,96 @@ function describeFile(file: InspectedFile): string {
   const pieces = file.objects !== undefined && file.objects.length > 1
     ? `\n  objects, each arriving as its own MeshPart named after it: ${file.objects.map((object) => `${object.name} ${object.size.map((value) => value.toFixed(2)).join(" × ")}`).join("; ")}`
     : "";
-  return `- ${file.path} (${Math.max(1, Math.round(file.bytes / 1024))} KB): ${facts}${file.colorSource === undefined ? "" : `; ${COLOR_SOURCE_NOTES[file.colorSource]}`}${pieces}`;
+  const layout = file.inspectionError === undefined ? describeLayout(file.layout, file.bottom) : "";
+  const shading = file.smoothShaded !== undefined && file.smoothShaded.length > 0
+    ? `\n  shading: smooth across hard edges on ${file.smoothShaded.map((entry) => `${entry.object} (${Math.round(entry.share * 100)}% of corners)`).join(", ")}, which makes boxes and panels look puffy in Roblox. Unless the object is meant to look rounded, remove shade_smooth; roqer.join keeps what it joins flat.`
+    : "";
+  return `- ${file.path} (${Math.max(1, Math.round(file.bytes / 1024))} KB): ${facts}${file.colorSource === undefined ? "" : `; ${COLOR_SOURCE_NOTES[file.colorSource]}`}${pieces}${layout}${shading}`;
+}
+
+const MAX_LAYOUT_ENTRIES = 8;
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
+const isNumber = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value);
+const isVector = (value: unknown): value is number[] => Array.isArray(value) && value.length === 3 && value.every(isNumber);
+const count = (value: unknown, fallback: number) => isNumber(value) && value >= 0 ? Math.floor(value) : fallback;
+
+function parseBox(value: unknown): PieceBox | undefined {
+  return isRecord(value) && isVector(value.size) && isVector(value.center) ? { size: value.size, center: value.center } : undefined;
+}
+
+/** The inspection's layout facts, keeping only well-formed entries: its output is data, not trusted structure. */
+export function parseLayout(value: unknown): LayoutFacts | undefined {
+  if (!isRecord(value) || !isNumber(value.pieces)) return undefined;
+  const list = (entries: unknown) => Array.isArray(entries) ? entries.slice(0, MAX_LAYOUT_ENTRIES).filter(isRecord) : [];
+  const loose = list(value.loose).flatMap((entry) => {
+    const box = parseBox(entry);
+    return box !== undefined && typeof entry.object === "string" && isNumber(entry.gap)
+      ? [{ ...box, object: entry.object, pieces: count(entry.pieces, 1), gap: entry.gap }]
+      : [];
+  });
+  const isolated = list(value.isolated).flatMap((entry) => typeof entry.object === "string" && isNumber(entry.gap)
+    ? [{ object: entry.object, gap: entry.gap, nearest: typeof entry.nearest === "string" ? entry.nearest : null }]
+    : []);
+  const overlaps = list(value.overlaps).flatMap((entry) => {
+    const piece = parseBox(entry.piece);
+    const objects = entry.objects;
+    return piece !== undefined && isNumber(entry.depth) && Array.isArray(objects) && objects.length === 2 &&
+      typeof objects[0] === "string" && typeof objects[1] === "string"
+      ? [{ objects: [objects[0], objects[1]] as const, depth: entry.depth, piece }]
+      : [];
+  });
+  return {
+    pieces: count(value.pieces, 0),
+    ...(typeof value.skipped === "string" ? { skipped: value.skipped.slice(0, 200) } : {}),
+    ...(typeof value.complete === "boolean" ? { complete: value.complete } : {}),
+    loose,
+    looseCount: Math.max(count(value.looseCount, loose.length), loose.length),
+    isolated,
+    isolatedCount: Math.max(count(value.isolatedCount, isolated.length), isolated.length),
+    overlaps,
+    overlapCount: Math.max(count(value.overlapCount, overlaps.length), overlaps.length),
+  };
+}
+
+const studs = (value: number) => value.toFixed(2);
+const box = (piece: PieceBox) =>
+  `${piece.size.map(studs).join(" × ")} at (${piece.center.map(studs).join(", ")})`;
+const more = (shown: number, total: number) => total > shown ? `; and ${total - shown} more` : "";
+
+/**
+ * The layout in the script's own coordinates, so each fact maps back to the
+ * line that placed the piece. Facts, not verdicts: a kit set is meant to be
+ * apart, and a piece may be meant to sit inside another.
+ */
+function describeLayout(layout: LayoutFacts | undefined, bottom: number | undefined): string {
+  const lines: string[] = [];
+  if (bottom !== undefined) lines.push(`lowest point at Z ${studs(bottom)}${Math.abs(bottom) > 0.05 ? "; 0 stands it on the ground" : ""}`);
+  if (layout !== undefined && layout.skipped !== undefined) {
+    lines.push(`layout not measured (${layout.skipped}); judge it from the preview`);
+  } else if (layout !== undefined) {
+    if (layout.looseCount > 0) {
+      const shown = layout.loose
+        .map((entry) => `in ${entry.object}, ${entry.pieces > 1 ? `${entry.pieces} pieces spanning ` : "a piece "}${box(entry)}, ${studs(entry.gap)} from the rest of ${entry.object}`)
+        .join("; ");
+      lines.push(`${layout.looseCount === 1 ? "1 piece group attached to nothing" : `${layout.looseCount} piece groups attached to nothing`}, usually a gap to close${shown === "" ? "" : `: ${shown}${more(layout.loose.length, layout.looseCount)}`}`);
+    }
+    if (layout.isolatedCount > 0) {
+      lines.push(`${layout.isolatedCount === 1 ? "an object" : `${layout.isolatedCount} objects`} touching no other object (right for a kit set of separate pieces, a gap in one assembled model): ${layout.isolated
+        .map((entry) => `${entry.object}${entry.nearest === null ? "" : `, ${studs(entry.gap)} from ${entry.nearest}`}`)
+        .join("; ")}${more(layout.isolated.length, layout.isolatedCount)}`);
+    }
+    if (layout.overlapCount > 0) {
+      lines.push(`separate objects passing into each other (fine where one is meant to sit inside the other, wrong for a part that must move freely): ${layout.overlaps
+        .map((entry) => `${entry.objects[0]} and ${entry.objects[1]} by ${studs(entry.depth)}, deepest at the ${entry.objects[0]} piece ${box(entry.piece)}`)
+        .join("; ")}${more(layout.overlaps.length, layout.overlapCount)}`);
+    }
+    if (layout.looseCount === 0 && layout.isolatedCount === 0 && layout.overlapCount === 0) {
+      lines.push(layout.pieces === 1 ? "one piece" : `all ${layout.pieces} pieces connected, and no separate objects pass into each other`);
+    }
+    if (layout.complete === false) lines.push("the comparison stopped at its time limit, so pieces may be missing from these facts");
+  }
+  return lines.length === 0 ? "" : `\n  layout, in the script's Blender coordinates (X, Y, Z up; sizes and positions in studs): ${lines.map((line) => line[0].toUpperCase() + line.slice(1)).join(". ")}.`;
 }
 
 function describeImage(image: RenderedImage): string {

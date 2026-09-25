@@ -46,6 +46,7 @@ Player ~5 studs | Door 4w×7h | Ceiling 10-14 | Counter 3.5-4 | Seat 1.5 | Path 
 ### Spatial Rules
 - Named dimensions manifest, no magic numbers.
 - Offset sub-parts from anchor CFrames, not guessed world coordinates.
+- Place a part that runs between two points by its ends rather than by guessed rotation angles. For roads, tracks, rails, fences or anything else that follows a line or curve, load [Paths](references/paths.md).
 - Snap structural geometry to the world's grid and vertical step (for example 4 and 2 studs for a chunky map); use finer increments only for details or player traversal that needs them.
 - Merge adjoining cells with the same elevation/material into larger blocks. A grid is a design rule, not a requirement to create a Part for every cell.
 - Build complex CSG near origin, then `PivotTo` the destination.
