@@ -203,6 +203,10 @@ function focusViewport(requestData: Record<string, unknown>) {
 		return { error: "angleY must be between -89 and 89" };
 	}
 
+	// The camera is only borrowed: Scriptable while it is placed, then back to
+	// the type it had, so the person can move it again. Left Scriptable, the
+	// Studio viewport ignores the mouse and keys until someone resets it.
+	const previousType = camera.CameraType;
 	const [ok, err] = pcall(() => {
 		let boundsCF: CFrame;
 		let boundsSize: Vector3;
@@ -251,6 +255,9 @@ function focusViewport(requestData: Record<string, unknown>) {
 		}
 		camera.Focus = new CFrame(center);
 	});
+	pcall(() => {
+		camera.CameraType = previousType;
+	});
 
 	if (!ok) return { error: `focus failed: ${tostring(err)}` };
 
@@ -262,6 +269,7 @@ function focusViewport(requestData: Record<string, unknown>) {
 			Y: camera.CFrame.Position.Y,
 			Z: camera.CFrame.Position.Z,
 		},
+		cameraType: camera.CameraType.Name,
 	};
 }
 

@@ -1120,6 +1120,7 @@ return document:GetText()
       instance_id: instanceId,
     });
     assert(viewed.success === true && viewed.cameraPosition, 'selection view frames the smoke part');
+    assert(viewed.cameraType !== 'Scriptable', `selection view hands the camera back to the user (${viewed.cameraType})`);
 
     const opened = await client.callTool('selection', {
       action: 'open',
