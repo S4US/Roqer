@@ -1,0 +1,10 @@
+{
+  "Name": "Roqer Studio Bridge",
+  "Description": "Connects Roblox Studio to the Roqer desktop app",
+  "Author": "Roqer",
+  "Version": "1.0.0",
+  "Id": "robloxstudio-mcp-plugin",
+  "Permissions": [
+    "HTTP"
+  ]
+}

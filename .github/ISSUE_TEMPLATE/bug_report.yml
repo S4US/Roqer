@@ -1,0 +1,56 @@
+name: Bug report
+description: Something in Roqer, the MCP bridge, or the Studio plugin does not work as it should.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Security problems go through a private report instead; see [SECURITY.md](https://github.com/S4US/Roqer/security/policy).
+        Do not paste API keys, tokens, or anything from a place you cannot share.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what happened instead.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Open a new place in Studio
+        2. Ask Roqer to ...
+        3. ...
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Where
+      options:
+        - Roqer desktop app
+        - MCP bridge used from another client (Codex, Claude Code, Cursor, ...)
+        - Studio plugin
+        - Agent skills or instructions
+        - Not sure
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: The Roqer release you installed, or the commit you built from.
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: Environment
+      description: Operating system and Roblox Studio version; for Roqer, also the provider (ChatGPT, Claude, or a custom endpoint) and approval mode.
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: Relevant lines from `bridge.log` in Roqer's data folder (`%APPDATA%\Roqer` on Windows) or from Studio's Output window. Check them for anything private first.
+      render: text

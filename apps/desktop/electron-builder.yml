@@ -1,0 +1,84 @@
+# Packaging for the Roqer desktop application.
+#
+# The application ships three things: the Electron app itself, the MCP bridge it
+# starts on launch, and the Studio plugin that bridge installs. The bridge and
+# the plugin are staged by `electron/stage-server.mjs` into `resources/`, and
+# copied in below as an unpacked resource rather than into the asar archive,
+# because the bridge is spawned as a real child process and has to exist as
+# ordinary files on disk.
+# The application's permanent identity on a user's machine: Windows keys its
+# installation and its updates to this, so it must not change after a release.
+# Lowercase by convention — a bundle identifier is compared case-insensitively
+# on macOS, and mixed case in one place and not another is a trap worth avoiding.
+appId: com.s4us.roqer
+productName: Roqer
+copyright: Copyright © S4US
+
+directories:
+  output: release
+  # Not the default "build", which now holds nothing: the staged bridge lives in
+  # "resources" so the two cannot be confused.
+  buildResources: build-resources
+
+# Only what the application actually loads. The renderer bundle, the compiled
+# main and preload, and the manifest Electron reads its entry point from.
+files:
+  - dist/**/*
+  - dist-electron/**/*
+  - package.json
+
+extraResources:
+  - from: resources/mcp-server
+    to: mcp-server
+    # The explicit filter is required, not decorative: without it the bridge's
+    # own node_modules is skipped, and the packaged app ships a server that
+    # cannot resolve express or the MCP SDK. The bundle inlines the core
+    # library but leaves those as real imports.
+    filter:
+      - "**/*"
+
+# Where a packaged build looks for its updates, and where a release is uploaded.
+#
+# GitHub Releases on the project's own repository, so a release lands in the
+# same place people download it from. A release needs the installer, its
+# `.blockmap` (which lets an update download only the changed blocks), and
+# `latest.yml`; `electron-builder --publish always` uploads all three.
+#
+# The updater reads releases anonymously, so it works only while the
+# repository is public. Override with `-c.publish.*` to package against a fork.
+publish:
+  provider: github
+  owner: S4US
+  repo: Roqer
+
+win:
+  target:
+    - target: nsis
+      arch:
+        - x64
+  # The supplied multi-size Windows icon is also used by the live window and
+  # taskbar so the installed executable and running app stay identical.
+  icon: public/roqer-app-icon.ico
+
+nsis:
+  # Per-user by default, which is what matches the rest of the product: the
+  # Studio plugin folder and the app's own data are per-user, so an installer
+  # that demanded administrator rights would be asking for more than it needs.
+  perMachine: false
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: Roqer
+
+mac:
+  target:
+    - dmg
+  icon: public/roqer-app-icon.svg
+  category: public.app-category.developer-tools
+
+linux:
+  target:
+    - AppImage
+  icon: public/roqer-app-icon.svg
+  category: Development

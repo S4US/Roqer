@@ -1,0 +1,10 @@
+{
+  "source": "user-provided codex-ui-integration-handoff.zip",
+  "capturedAt": "2026-09-08",
+  "templates": {
+    "sim/wheel-spin.lua": "eb67aa347f799a00134b1989f76d1444c410835d79bb6d0d2a63a192ae716e43",
+    "studs/wheel-spin.lua": "d06fa5796c06b4937d795369b113d1a1fecbee5f7e96528375473c3ce0d0b2d8",
+    "sim/vertical-reel-roll.lua": "a75c7d09048ffd7589b057e5d443287b94b2d200320115271233041b85bbe509",
+    "studs/vertical-reel-roll.lua": "48657d9da140a61f7d7b20d5e6c3c994fe1976a66f3b94adace52501df253b37"
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "id": "studio-workbench",
+  "version": "2026-09-25.1",
+  "skillPack": {
+    "name": "roblox-brain",
+    "version": "1.2.1",
+    "commit": "479b88759d27b85bb5d34dc4f3f3c3bbc2f2e983",
+    "source": "https://github.com/TabooHarmony/roblox-brain",
+    "license": {
+      "spdx": "MIT",
+      "notice": "skills/ROBLOX-BRAIN-LICENSE.txt"
+    },
+    "customizedSkills": ["roblox-building", "roblox-studio-mcp", "roblox-ui-design"]
+  }
+}

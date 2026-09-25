@@ -1,0 +1,49 @@
+{
+  "name": "@roqer/mcp-core",
+  "version": "3.0.3",
+  "private": true,
+  "license": "MIT",
+  "author": "S4US",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/S4US/Roqer.git",
+    "directory": "packages/core"
+  },
+  "homepage": "https://github.com/S4US/Roqer#readme",
+  "bugs": {
+    "url": "https://github.com/S4US/Roqer/issues"
+  },
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "dependencies": {
+    "fzstd": "^0.1.1",
+    "saxes": "^6.0.0"
+  },
+  "scripts": {
+    "build": "tsc",
+    "test": "jest",
+    "test:watch": "jest --watch",
+    "test:coverage": "jest --coverage"
+  },
+  "devDependencies": {
+    "@modelcontextprotocol/client": "^2.0.0",
+    "@modelcontextprotocol/node": "^2.0.0",
+    "@modelcontextprotocol/server": "^2.0.0",
+    "@types/express": "^4.17.21",
+    "@types/jest": "^29.5.11",
+    "@types/node": "^20.10.0",
+    "@types/supertest": "^6.0.2",
+    "@types/ws": "^8.5.10",
+    "express": "^4.18.2",
+    "jest": "^29.7.0",
+    "node-fetch": "^3.3.2",
+    "supertest": "^6.3.3",
+    "ts-jest": "^29.1.1",
+    "typescript": "^5.3.2",
+    "ws": "^8.14.2"
+  }
+}

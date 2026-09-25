@@ -1,0 +1,979 @@
+/*
+ * Monochrome by design.
+ *
+ * Every surface, border, and piece of text is built from softened cool neutrals.
+ * There are no decorative gradients. Indigo is reserved for focus and selection;
+ * semantic colour appears only when a state needs it. The source viewer adds a
+ * restrained syntax palette so code structure remains legible in both themes.
+ *
+ * Both themes are defined entirely by the tokens below. Rules further down
+ * reference tokens rather than literal colours, which is why there is no large
+ * block of dark-theme overrides.
+ */
+
+:root {
+  font-family: "Geist Variable", "Geist", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-weight: 400;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+
+  --canvas: #f2f3f5;
+  --surface: #f7f8fa;
+  --surface-raised: #fbfbfc;
+  --surface-sunken: #e9ebef;
+  --sidebar: #e9ebef;
+  --sidebar-active: #dfe2e7;
+  --sidebar-selected: #d9dde3;
+  --sidebar-current: #d3d7de;
+  --sidebar-indicator: #858c97;
+
+  --border-subtle: #e7e9ed;
+  --border: #d9dce2;
+  --border-strong: #c2c6ce;
+
+  --ink: #24262b;
+  --ink-secondary: #4b5059;
+  --muted: #666d78;
+  --faint: #959ca8;
+
+  /* Actions remain monochrome; accent is only for focus and selection. */
+  --action: #2d3036;
+  --action-hover: #22252a;
+  --action-ink: #f5f6f8;
+  --toggle-thumb: #f7f8fa;
+  --accent: #5963c7;
+  --accent-soft: #e9ebfa;
+  --accent-border: #c8cdf0;
+
+  --success: #247a46;
+  --success-soft: #e8f2eb;
+  --success-border: #c8dece;
+  --warning: #946516;
+  --warning-soft: #f5efdf;
+  --warning-border: #e5d7ae;
+  --danger: #ad4545;
+  --danger-soft: #f5e9e7;
+  --danger-border: #e6c9c6;
+
+  --syntax-keyword: #8d4568;
+  --syntax-string: #347052;
+  --syntax-number: #8a621e;
+  --syntax-call: #3f6786;
+  --syntax-property: #4c5a7c;
+  --syntax-operator: #7a808b;
+  --syntax-comment: #858c97;
+
+  --scroll-thumb: color-mix(in srgb, var(--faint) 34%, transparent);
+  --scroll-thumb-hover: color-mix(in srgb, var(--faint) 58%, transparent);
+  --scroll-thumb-active: color-mix(in srgb, var(--faint) 82%, transparent);
+
+  --shadow-sm: 0 1px 2px rgba(31, 35, 42, .035), 0 4px 10px rgba(31, 35, 42, .025);
+  --shadow-md: 0 1px 2px rgba(31, 35, 42, .045), 0 8px 24px rgba(31, 35, 42, .06);
+  --shadow-lg: 0 18px 48px rgba(31, 35, 42, .14);
+  --scrim: rgba(24, 27, 33, .42);
+
+  /* Layout, not colour, so the dark theme leaves these alone. The width is a
+     token because the sidebar's hidden position is stated as its negative. */
+  --sidebar-width: 286px;
+  --sidebar-travel: .26s;
+  --sidebar-motion: var(--sidebar-travel) cubic-bezier(.32, .72, 0, 1);
+
+  --type-meta: 12px;
+  --type-label: 13px;
+  --type-body: 14px;
+  --type-heading: 15px;
+  --type-title: 22px;
+  --weight-regular: 400;
+  --weight-medium: 500;
+  --weight-semibold: 600;
+
+  color: var(--ink);
+  background: var(--canvas);
+}
+
+[data-theme="dark"] {
+  --canvas: #15171b;
+  --surface: #1b1e24;
+  --surface-raised: #21242b;
+  --surface-sunken: #111318;
+  --sidebar: #111318;
+  --sidebar-active: #20232a;
+  --sidebar-selected: #252930;
+  --sidebar-current: #2a2e37;
+  --sidebar-indicator: #69717e;
+
+  --border-subtle: #282c34;
+  --border: #343943;
+  --border-strong: #4a505d;
+
+  --ink: #edf0f4;
+  --ink-secondary: #c2c7d0;
+  --muted: #9299a5;
+  --faint: #68717e;
+
+  --action: #dde1e7;
+  --action-hover: #f0f2f5;
+  --action-ink: #1a1d22;
+  --toggle-thumb: #e9ecf1;
+  --accent: #9aa3ff;
+  --accent-soft: #282b42;
+  --accent-border: #464b70;
+
+  --success: #70bd88;
+  --success-soft: #1d2b21;
+  --success-border: #334b3a;
+  --warning: #d2a451;
+  --warning-soft: #2d281d;
+  --warning-border: #51452d;
+  --danger: #df8582;
+  --danger-soft: #332321;
+  --danger-border: #5b3937;
+
+  --syntax-keyword: #d78dac;
+  --syntax-string: #83c99c;
+  --syntax-number: #d8b367;
+  --syntax-call: #80add2;
+  --syntax-property: #a9b5d9;
+  --syntax-operator: #868e9c;
+  --syntax-comment: #69727f;
+
+  /* Dark surfaces swallow a faint thumb, so the same bar is mixed stronger. */
+  --scroll-thumb: color-mix(in srgb, var(--faint) 46%, transparent);
+  --scroll-thumb-hover: color-mix(in srgb, var(--faint) 74%, transparent);
+  --scroll-thumb-active: color-mix(in srgb, var(--faint) 92%, transparent);
+
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, .18), 0 5px 14px rgba(0, 0, 0, .12);
+  --shadow-md: 0 1px 2px rgba(0, 0, 0, .2), 0 10px 28px rgba(0, 0, 0, .2);
+  --shadow-lg: 0 20px 54px rgba(0, 0, 0, .4);
+  --scrim: rgba(7, 9, 13, .64);
+
+  color: var(--ink);
+  background: var(--canvas);
+}
+
+* { box-sizing: border-box; }
+html, body, #root { width: 100%; height: 100%; margin: 0; }
+/* The dark canvas, before any of the app has mounted. `data-theme` lives on the
+   shell inside React, so without this the window paints white for the frame or
+   two before the first render — a flash on every launch, on the theme that is
+   now the default. Someone who has chosen light sees their own colour as soon
+   as the shell appears. */
+body { overflow: hidden; background: #15171b; }
+button, textarea, select { font: inherit; }
+button { cursor: pointer; }
+button:focus-visible, textarea:focus-visible, select:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.sidebar button:focus-visible { outline-color: var(--sidebar-indicator); }
+
+/*
+ * Scrollbars, everywhere one appears.
+ *
+ * The platform draws a bright rail with a boxy thumb, which reads as a seam
+ * down the side of a conversation or the folder list rather than as part of the
+ * pane. These replace it with the same neutrals the borders are built from: no
+ * track at all, and a rounded thumb held off the edge by a transparent border
+ * so it floats over the content instead of framing it. It stays quiet until the
+ * pointer is on it, and a minimum length keeps a very long chat from shrinking
+ * it to a nub too small to grab.
+ *
+ * Deliberately -webkit- only. Chromium honours the standard `scrollbar-color`
+ * ahead of these rules, so setting it as well would throw away the inset and
+ * the rounding rather than act as a fallback for them.
+ */
+::-webkit-scrollbar { width: 11px; height: 11px; background: transparent; }
+::-webkit-scrollbar-track, ::-webkit-scrollbar-corner { background: transparent; }
+::-webkit-scrollbar-button { display: none; }
+::-webkit-scrollbar-thumb { min-width: 32px; min-height: 32px; background: var(--scroll-thumb); background-clip: padding-box; border: 3px solid transparent; border-radius: 99px; }
+::-webkit-scrollbar-thumb:hover { background: var(--scroll-thumb-hover); background-clip: padding-box; }
+::-webkit-scrollbar-thumb:active { background: var(--scroll-thumb-active); background-clip: padding-box; }
+
+/* Clips the sidebar while it is parked off the left edge. */
+.app-shell { display: flex; overflow: hidden; width: 100%; height: 100%; min-width: 720px; color: var(--ink); background: var(--canvas); }
+.loading-overlay { position: fixed; inset: 0; z-index: 200; display: grid; place-items: center; color: var(--muted); background: color-mix(in srgb, var(--canvas) 92%, transparent); backdrop-filter: blur(8px); }
+.loading-overlay > div { display: flex; align-items: center; gap: 10px; }
+.loading-overlay span { width: 10px; height: 10px; background: var(--muted); border-radius: 50%; animation: pulse 1.1s ease-in-out infinite; }
+.loading-overlay strong { color: var(--ink); font-size: var(--type-body); font-weight: var(--weight-medium); }
+
+.sidebar {
+  position: relative;
+  z-index: 30;
+  display: flex;
+  flex: 0 0 var(--sidebar-width);
+  flex-direction: column;
+  min-width: var(--sidebar-width);
+  color: var(--ink);
+  background: var(--sidebar);
+  border-right: 1px solid var(--border);
+  /* Docked, the sidebar leaves by walking off the left edge rather than by
+     narrowing: a negative margin hands its width back to the workspace a pixel
+     at a time while the contents keep their own width and never squash. */
+  margin-left: 0;
+  transition: margin-left var(--sidebar-motion);
+}
+.app-shell[data-sidebar="hidden"] .sidebar { margin-left: calc(-1 * var(--sidebar-width)); }
+
+.brand-row { display: flex; align-items: center; height: 76px; padding: 0 18px; border-bottom: 1px solid var(--border); }
+/* The mark carries its own colour and transparent ground, so it needs no tile
+   behind it -- a filled square would put a box around a logo that already has
+   its own silhouette. */
+.brand-mark { width: 38px; height: 38px; object-fit: contain; }
+.brand-copy { display: flex; flex-direction: column; gap: 2px; margin-left: 11px; }
+.brand-copy strong { font-size: var(--type-heading); font-weight: var(--weight-medium); letter-spacing: -.1px; }
+
+.sidebar-section-heading { display: flex; align-items: center; justify-content: space-between; padding: 24px 17px 10px 20px; color: var(--muted); font-size: var(--type-label); font-weight: var(--weight-medium); }
+.icon-button { display: inline-grid; place-items: center; width: 34px; height: 34px; padding: 0; color: var(--muted); background: transparent; border: 0; border-radius: 9px; transition: .18s ease; }
+.icon-button:hover { color: var(--ink); background: var(--surface-sunken); }
+.icon-button.dark { width: 28px; height: 28px; }
+.sidebar-close { margin-left: auto; }
+
+.new-chat-button { display: flex; align-items: center; gap: 9px; width: calc(100% - 28px); height: 45px; margin: 0 14px 18px; padding: 0 13px; color: var(--ink-secondary); background: var(--surface); border: 1px solid var(--border-subtle); border-radius: 11px; box-shadow: var(--shadow-sm); font-size: var(--type-body); font-weight: var(--weight-medium); transition: .18s ease; }
+.new-chat-button:hover { color: var(--ink); background: var(--surface-raised); border-color: var(--border); }
+.shortcut { margin-left: auto; color: var(--muted); font-size: var(--type-meta); font-weight: var(--weight-regular); }
+
+.folder-list { flex: 1; overflow-y: auto; padding: 0 9px 24px; }
+.folder-group + .folder-group { margin-top: 7px; }
+.folder-row { display: flex; align-items: center; min-height: 37px; border-radius: 9px; }
+.folder-row:hover { background: var(--sidebar-active); }
+.folder-selected { background: var(--sidebar-selected); }
+.folder-selected:hover { background: var(--sidebar-selected); }
+.folder-selected .folder-main { color: var(--ink); }
+.folder-main { display: flex; flex: 1; align-items: center; gap: 8px; min-width: 0; height: 37px; padding: 0 7px; color: var(--ink-secondary); background: transparent; border: 0; text-align: left; }
+.folder-main span { overflow: hidden; color: var(--ink); font-size: var(--type-label); font-weight: var(--weight-medium); text-overflow: ellipsis; white-space: nowrap; }
+.chat-list { margin: 4px 0 8px 18px; padding-left: 8px; border-left: 1px solid var(--border); }
+.chat-row { display: flex; align-items: center; width: 100%; border-radius: 8px; }
+.chat-row:hover { background: var(--sidebar-active); }
+.chat-selected { background: var(--sidebar-current); box-shadow: inset 2px 0 var(--sidebar-indicator); }
+.chat-selected:hover { background: var(--sidebar-current); }
+.chat-main { display: grid; flex: 1; grid-template-columns: 17px minmax(0,1fr) auto; align-items: center; gap: 8px; min-width: 0; height: 38px; padding: 0 5px 0 9px; color: var(--muted); background: transparent; border: 0; border-radius: 8px; text-align: left; }
+.chat-row:hover .chat-main, .chat-selected .chat-main { color: var(--ink); }
+/* A row's actions stay out of the way until it is pointed at or focused, so the
+ * list reads as a column of chat names rather than as a column of controls. */
+.chat-menu { flex: 0 0 auto; margin-right: 4px; opacity: 0; transition: opacity .14s ease, color .18s ease, background-color .18s ease; }
+.chat-row:hover .chat-menu, .chat-row:focus-within .chat-menu, .chat-menu.open { opacity: 1; }
+.chat-row-title { overflow: hidden; font-size: var(--type-label); font-weight: var(--weight-medium); text-overflow: ellipsis; white-space: nowrap; }
+.chat-row time { color: var(--faint); font-size: var(--type-meta); }
+/* The chat a run is in wears its state in the sidebar, so switching away never
+ * loses track of it. The mark takes the timestamp's slot: when a chat is being
+ * worked on, when it was last touched is its least useful fact. */
+.chat-run-mark { display: inline-flex; align-items: center; color: var(--muted); }
+.chat-running .chat-run-mark > svg { animation: spin .9s linear infinite; }
+.chat-needs-input .chat-run-mark { color: var(--warning); }
+.chat-needs-input .chat-run-mark > svg { animation: pulse 1.2s ease-in-out infinite; }
+.empty-folder { margin: 8px 10px 13px; color: var(--faint); font-size: var(--type-label); }
+
+.sidebar-footer { padding: 12px 14px 14px; border-top: 1px solid var(--border); }
+.subscription-card { display: grid; grid-template-columns: 27px 1fr auto; align-items: center; padding: 10px 11px; color: var(--ink-secondary); background: var(--surface); border: 1px solid var(--border-subtle); border-radius: 10px; }
+.subscription-card > svg:first-child { color: var(--muted); }
+.subscription-card div { display: flex; flex-direction: column; gap: 1px; }
+.subscription-card strong { font-size: var(--type-label); font-weight: var(--weight-medium); }
+.subscription-card span { color: var(--muted); font-size: var(--type-meta); }
+.subscription-card .runtime-badge { padding: 4px 6px; color: var(--muted); background: var(--surface-sunken); border: 1px solid var(--border-subtle); border-radius: 6px; font-size: var(--type-meta); font-weight: var(--weight-regular); }
+.settings-button { display: flex; align-items: center; gap: 10px; width: 100%; height: 40px; margin-top: 8px; padding: 0 10px; color: var(--muted); background: transparent; border: 0; border-radius: 9px; font-size: var(--type-body); font-weight: var(--weight-medium); }
+.settings-button:hover { color: var(--ink); background: var(--sidebar-active); }
+
+.workspace { position: relative; display: flex; flex: 1; flex-direction: column; min-width: 0; height: 100%; background: var(--canvas); }
+.storage-notice, .restart-notice { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; padding: 12px 24px; border-bottom: 1px solid var(--border); color: var(--ink); background: var(--surface-sunken); }
+.storage-notice > div, .restart-notice > div { flex: 1; min-width: 200px; }
+.storage-notice p, .restart-notice p { margin: 4px 0 0; font-size: var(--type-label); }
+.storage-notice button, .restart-notice button { padding: 7px 10px; border: 1px solid var(--border); border-radius: 6px; color: var(--ink); background: var(--surface-raised); }
+.attachment-notice { display: flex; justify-content: space-between; gap: 8px; padding: 10px; font-size: var(--type-label); }
+.attachment-notice button { border: 0; color: var(--ink); background: transparent; }
+.topbar { position: relative; z-index: 20; display: flex; align-items: center; height: 76px; min-height: 76px; padding: 0 24px 0 29px; background: var(--canvas); border-bottom: 1px solid var(--border); }
+.chat-heading { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.chat-heading strong { overflow: hidden; color: var(--ink); font-size: var(--type-heading); font-weight: var(--weight-semibold); letter-spacing: -.15px; text-overflow: ellipsis; white-space: nowrap; }
+.chat-heading span { color: var(--muted); font-size: var(--type-meta); font-weight: var(--weight-regular); }
+.topbar-actions { display: flex; align-items: center; gap: 8px; margin-left: auto; }
+.theme-button { color: var(--muted); background: var(--surface); border: 1px solid var(--border-subtle); }
+.theme-button:hover { color: var(--ink); background: var(--surface-sunken); }
+
+.connection-wrap { position: relative; }
+.connection-pill { display: flex; align-items: center; gap: 7px; height: 37px; padding: 0 11px; color: var(--ink-secondary); background: var(--surface); border: 1px solid var(--border-subtle); border-radius: 10px; font-size: var(--type-label); }
+.connection-pill:hover { background: var(--surface-raised); border-color: var(--border); }
+.live-dot { width: 8px; height: 8px; background: var(--success); border-radius: 50%; }
+.status-offline .live-dot { background: var(--faint); }
+.status-bridge-only .live-dot, .status-checking .live-dot { background: var(--warning); }
+.status-checking .live-dot { animation: pulse 1.2s ease-in-out infinite; }
+/* A place can be called anything, and some are called a great deal. The pill
+   keeps its shape and truncates rather than pushing the rest of the top bar
+   sideways; the popover below it shows the whole name. */
+.connection-label { max-width: 200px; overflow: hidden; font-weight: var(--weight-medium); text-overflow: ellipsis; white-space: nowrap; }
+.connection-detail { flex-shrink: 0; color: var(--muted); }
+.connection-popover { position: absolute; top: 46px; right: 0; z-index: 50; width: 280px; padding: 15px; background: var(--surface-raised); border: 1px solid var(--border-subtle); border-radius: 14px; box-shadow: var(--shadow-lg); }
+.popover-title { display: flex; align-items: center; gap: 10px; padding-bottom: 13px; border-bottom: 1px solid var(--border); }
+.popover-title > div:nth-child(2) { display: flex; flex-direction: column; }
+.popover-title strong { font-size: var(--type-body); font-weight: var(--weight-medium); }
+.popover-title span { color: var(--muted); font-size: var(--type-meta); font-weight: var(--weight-regular); }
+.studio-icon { display: grid; place-items: center; width: 35px; height: 35px; color: var(--ink); background: var(--surface-sunken); border-radius: 10px; }
+.connection-popover dl { display: grid; gap: 8px; margin: 13px 0; }
+.connection-popover dl div { display: flex; justify-content: space-between; }
+.connection-popover dt, .connection-popover dd { margin: 0; font-size: var(--type-meta); }
+.connection-popover dt { color: var(--muted); }
+.connection-popover dd { color: var(--ink); font-weight: var(--weight-medium); }
+.studio-list { display: grid; grid-template-columns: minmax(0, 1fr); gap: 6px; margin: 0 0 13px; padding: 0; list-style: none; }
+.studio-row { display: flex; align-items: center; gap: 8px; width: 100%; padding: 8px 10px; background: var(--surface-sunken); border: 1px solid var(--border); border-radius: 8px; text-align: left; }
+.studio-row:hover { border-color: var(--border-strong); }
+.studio-row-target { background: var(--surface-raised); border-color: var(--border-strong); }
+.studio-check { display: grid; place-items: center; width: 14px; color: var(--ink); }
+.studio-name { flex: 1; min-width: 0; overflow: hidden; color: var(--ink); font-size: var(--type-meta); font-weight: var(--weight-medium); text-overflow: ellipsis; white-space: nowrap; }
+.studio-meta { color: var(--muted); font-size: var(--type-meta); white-space: nowrap; }
+.popover-action { display: flex; align-items: center; justify-content: center; gap: 6px; width: 100%; height: 34px; color: var(--ink); background: var(--surface-sunken); border: 1px solid var(--border); border-radius: 8px; font-size: var(--type-label); font-weight: var(--weight-medium); }
+.popover-action:hover { border-color: var(--border-strong); }
+/* The way back in. It has nothing to do while the sidebar is present, so rather
+   than popping into an already-settled topbar it opens up in step with the
+   sidebar leaving -- widening from nothing as the space it needs appears.
+   Hidden visibility, not zero width alone, keeps it off the focus order. */
+.menu-button { width: 0; margin-right: 0; overflow: hidden; opacity: 0; visibility: hidden; transition: width var(--sidebar-motion), margin-right var(--sidebar-motion), opacity .16s ease, visibility 0s linear var(--sidebar-travel); }
+.app-shell[data-sidebar="hidden"] .menu-button { width: 34px; margin-right: 8px; opacity: 1; visibility: visible; transition: width var(--sidebar-motion), margin-right var(--sidebar-motion), opacity .18s ease .1s, visibility 0s; }
+
+.conversation-scroll { flex: 1; min-height: 0; overflow-y: auto; scroll-behavior: smooth; }
+.conversation { width: min(900px, calc(100% - 72px)); min-height: 100%; margin: 0 auto; padding: 30px 0 210px; }
+.conversation-history { display: flex; justify-content: center; margin: 0 0 24px; }
+.conversation-history button { height: 32px; padding: 0 13px; color: var(--muted); background: var(--surface-raised); border: 1px solid var(--border-subtle); border-radius: 999px; font-size: var(--type-label); font-weight: var(--weight-medium); }
+.conversation-history button:hover { color: var(--ink); border-color: var(--border-strong); }
+/* A worked transcript, not a conversation between two people: no avatars, no
+ * names, no per-message clock. The one thing that stays addressed to a speaker
+ * is the prompt — a bubble on the right, because it is the one thing the user
+ * wrote. What the agent produced runs full width beneath it as a document. */
+/* Content arrives rather than appearing, and only the two blocks a person
+ * actually watches land are animated: their own message, and the run that
+ * answers it. The recorded answer that replaces a finished run is the same
+ * content in the same place, so animating that swap would read as a flicker. */
+.user-message, .mock-run { animation: enter .22s cubic-bezier(.22, .8, .26, 1) both; }
+.message + .message { margin-top: 28px; }
+.message { content-visibility: auto; contain-intrinsic-block-size: auto 240px; }
+.user-message { display: flex; flex-direction: column; align-items: flex-end; }
+.user-message + .assistant-message { margin-top: 15px; }
+/* pre-wrap: what someone typed, including their line breaks, is what shows. */
+.user-prompt { width: fit-content; max-width: 640px; margin: 0; padding: 11px 15px; color: var(--ink-secondary); background: var(--surface-raised); border: 1px solid var(--border-subtle); border-radius: 14px 14px 4px 14px; box-shadow: var(--shadow-sm); font-size: var(--type-body); line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; }
+.run-tag { margin: 0 0 12px; }
+.message-content > p { margin: 5px 0 17px; color: var(--ink-secondary); font-size: var(--type-body); line-height: 1.7; }
+
+.activity-card, .approval-card, .completed-run-card { overflow: hidden; margin-top: 12px; background: var(--surface-raised); border: 1px solid var(--border-subtle); border-radius: 13px; box-shadow: var(--shadow-sm); }
+.activity-card { display: flex; gap: 11px; padding: 13px; }
+.card-icon { display: grid; place-items: center; flex: 0 0 auto; width: 32px; height: 32px; border-radius: 9px; }
+.card-icon.code { color: var(--ink); background: var(--surface-sunken); }
+.card-icon.success { color: var(--success); background: var(--success-soft); }
+.card-icon.warning { color: var(--warning); background: var(--warning-soft); }
+.card-icon.working { color: var(--ink); background: var(--surface-sunken); }
+.activity-main { flex: 1; min-width: 0; }
+.activity-title { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 24px; }
+.activity-title strong { color: var(--ink); font-size: var(--type-label); font-weight: var(--weight-medium); }
+.activity-title > span { color: var(--muted); font-size: var(--type-meta); }
+
+/* The file header of the editor panel: a title bar, not a toolbar. One 42px row,
+ * so it reads as the panel's title without competing with the code beneath it.
+ * The filename takes whatever width the actions leave. */
+.diff-header { display: flex; align-items: center; justify-content: space-between; gap: 10px; width: 100%; min-height: 42px; padding: 0 9px 0 12px; }
+.diff-file { display: flex; align-items: center; gap: 8px; flex: 1 1 auto; min-width: 0; color: var(--muted); }
+.diff-file > svg { flex: 0 0 auto; }
+.diff-file code { overflow: hidden; color: var(--ink); font: var(--weight-medium) 12.5px "Geist Mono Variable", monospace; text-overflow: ellipsis; white-space: nowrap; }
+.diff-actions { display: flex; align-items: center; gap: 8px; flex: 0 0 auto; }
+.diff-summary { display: flex; align-items: center; gap: 6px; flex: 0 0 auto; }
+.diff-summary > span { font: var(--weight-medium) var(--type-meta) "Geist Mono Variable", monospace; }
+/* What a file written more than once shows instead of a line count, since no
+ * single count describes several writes to the same file. */
+.diff-writes { flex: 0 0 auto; color: var(--muted); font: var(--weight-medium) var(--type-meta) "Geist Mono Variable", monospace; white-space: nowrap; }
+/* The one action on the panel, so it is a button people can see rather than a
+ * ghost that only appears on hover. */
+.open-studio-action { display: inline-flex; align-items: center; gap: 6px; height: 26px; padding: 0 9px; color: var(--ink); background: var(--surface-raised); border: 1px solid var(--border-strong); border-radius: 6px; font-size: 11.5px; font-weight: var(--weight-medium); white-space: nowrap; }
+.open-studio-action > svg { color: var(--muted); }
+.open-studio-action:hover:not(:disabled) { background: var(--surface-sunken); box-shadow: var(--shadow-sm); }
+.open-studio-action:disabled { cursor: wait; opacity: .7; }
+.open-studio-action.state-opened { color: var(--success); border-color: var(--success-border); }
+.open-studio-action.state-error { color: var(--danger); border-color: var(--danger-border); }
+.open-studio-action.state-opened > svg, .open-studio-action.state-error > svg { color: inherit; }
+.diff-collapse { display: grid; place-items: center; flex: 0 0 auto; width: 24px; height: 24px; color: var(--faint); background: transparent; border: 0; border-radius: 5px; }
+.diff-collapse:hover { color: var(--ink); background: var(--surface-sunken); }
+.diff-collapse > svg { transition: transform .16s ease; }
+.diff-collapse[aria-expanded="false"] > svg { transform: rotate(-90deg); }
+
+
+.composer-dock { position: absolute; right: 0; bottom: 0; left: 0; z-index: 15; padding: 28px 36px 15px; background: linear-gradient(to bottom, transparent, var(--canvas) 24%, var(--canvas) 100%); }
+/* The pending approval sits in the dock, not in the transcript: it is the one
+ * thing the run cannot continue without, so it stays in front of the reader
+ * while activity keeps scrolling behind it. */
+.approval-dock { width: min(900px, 100%); margin: 0 auto 10px; animation: enter .18s cubic-bezier(.22, .8, .26, 1) both; }
+.approval-dock .approval-card { margin-top: 0; box-shadow: var(--shadow-md); }
+/* The model working, said in the composer for as long as it is true: top-left,
+ * on the input's own left padding, and quiet enough to sit above a message
+ * being typed. It replaces nothing the reader needs — Activity names the
+ * operation in flight, and this covers the gaps between them. */
+.composer-status { display: flex; align-items: center; gap: 6px; padding: 12px 18px 0; color: var(--muted); font-size: var(--type-meta); animation: fade .18s ease both; }
+.composer-status > svg { flex: 0 0 auto; animation: spin .9s linear infinite; }
+/* The one run, seen from a chat that is not the one it is in. The composer is
+ * disabled everywhere while it works, so this is what stands in for the box:
+ * where the run is, whether it is waiting, and the two things that can be done
+ * about it from here. */
+.run-elsewhere { gap: 8px; }
+.run-elsewhere > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.run-elsewhere strong { color: var(--ink); font-weight: var(--weight-medium); }
+.run-elsewhere.needs-input { color: var(--warning); }
+.run-elsewhere.needs-input > svg { animation: pulse 1.2s ease-in-out infinite; }
+.run-elsewhere button { padding: 2px 7px; color: var(--ink-secondary); background: transparent; border: 1px solid var(--border); border-radius: 6px; font-size: var(--type-meta); }
+.run-elsewhere button:first-of-type { margin-left: 4px; }
+.run-elsewhere button:hover { color: var(--ink); background: var(--surface-raised); }
+.composer-card .composer-status + textarea { padding-top: 8px; }
+.composer-card { width: min(900px, 100%); margin: 0 auto; background: var(--surface-raised); border: 1px solid var(--border-subtle); border-radius: 16px; box-shadow: var(--shadow-md); transition: border-color .18s ease, box-shadow .18s ease; }
+.composer-card:focus-within { border-color: var(--accent-border); box-shadow: var(--shadow-md); }
+.composer-card textarea:focus-visible { outline: 0; }
+.composer-card textarea { display: block; width: 100%; min-height: 67px; max-height: 130px; padding: 17px 18px 9px; color: var(--ink); background: transparent; border: 0; outline: 0; resize: none; font-size: var(--type-body); line-height: 1.55; }
+.composer-card textarea::placeholder { color: var(--faint); }
+.composer-toolbar { display: flex; align-items: center; min-height: 48px; padding: 5px 8px 7px 10px; }
+.attach-button { display: grid; place-items: center; width: 31px; height: 31px; color: var(--muted); background: transparent; border: 0; border-radius: 8px; }
+.attach-button:hover { color: var(--ink); background: var(--surface-sunken); }
+.toolbar-divider { width: 1px; height: 22px; margin: 0 7px; background: var(--border); }
+.select-control { position: relative; flex: 0 0 auto; height: 31px; color: var(--muted); background: transparent; border: 1px solid transparent; border-radius: 8px; }
+.select-control:hover:not(.disabled) { color: var(--ink-secondary); background: var(--surface-sunken); }
+.select-control.open, .select-control.open:hover { color: var(--ink-secondary); background: color-mix(in srgb, var(--surface-sunken) 55%, var(--surface-raised)); }
+.select-trigger { display: flex; align-items: center; gap: 6px; height: 100%; padding: 0 7px; color: inherit; background: transparent; border: 0; border-radius: inherit; white-space: nowrap; }
+.select-trigger:focus-visible { outline-offset: 1px; }
+.select-leading { display: inline-flex; flex: 0 0 auto; }
+.select-value { color: var(--ink-secondary); font-size: var(--type-label); font-weight: var(--weight-medium); }
+.select-chevron { flex: 0 0 auto; margin-left: 4px; color: var(--muted); transition: transform .16s ease; }
+.select-control.open .select-chevron { transform: rotate(180deg); }
+.select-control.disabled { opacity: .62; }
+.select-control.disabled .select-trigger { cursor: default; }
+.select-menu { position: absolute; bottom: calc(100% + 7px); left: 0; z-index: 60; min-width: max(154px, 100%); padding: 4px; color: var(--ink-secondary); background: var(--surface-raised); border: 1px solid var(--border-subtle); border-radius: 9px; box-shadow: var(--shadow-lg); }
+.select-option { display: grid; grid-template-columns: 16px minmax(0,1fr); align-items: center; gap: 6px; width: 100%; min-height: 32px; padding: 0 8px 0 6px; color: var(--ink-secondary); background: transparent; border: 0; border-radius: 6px; font-size: var(--type-label); font-weight: var(--weight-medium); text-align: left; white-space: nowrap; }
+.select-option:hover, .select-option:focus-visible { color: var(--ink); background: var(--accent-soft); outline: 0; }
+.select-option.selected { color: var(--accent); background: var(--accent-soft); }
+.select-option-check { opacity: 0; }
+.select-option.selected .select-option-check { opacity: 1; }
+/* The row never wraps, so without this a long label runs out of its column.
+   The grid column can shrink; the text has to be told to stop. */
+.select-option-label { overflow: hidden; text-overflow: ellipsis; }
+.select-menu { max-width: min(340px, 80vw); }
+
+/* Row menus sit in the body rather than in the row that opened them, so they
+ * are positioned against the viewport and cannot be clipped by a scrolling
+ * pane. The trigger keeps its pressed look while its menu is open, which is the
+ * only thing tying the two together once they are in different stacking
+ * contexts. */
+.row-menu { position: fixed; z-index: 120; min-width: 172px; padding: 4px; background: var(--surface-raised); border: 1px solid var(--border-subtle); border-radius: 10px; box-shadow: var(--shadow-lg); }
+.row-menu-item { display: flex; align-items: center; gap: 9px; width: 100%; min-height: 32px; padding: 0 9px; color: var(--ink-secondary); background: transparent; border: 0; border-radius: 6px; font-size: var(--type-label); font-weight: var(--weight-medium); text-align: left; white-space: nowrap; }
+.row-menu-item > svg { flex: 0 0 auto; color: var(--muted); }
+.row-menu-item:hover:not(:disabled), .row-menu-item:focus-visible { color: var(--ink); background: var(--surface-sunken); outline: 0; }
+.row-menu-item:hover:not(:disabled) > svg, .row-menu-item:focus-visible > svg { color: var(--ink); }
+.row-menu-item.danger, .row-menu-item.danger > svg { color: var(--danger); }
+.row-menu-item.danger:hover:not(:disabled), .row-menu-item.danger:focus-visible { color: var(--danger); background: var(--danger-soft); }
+.row-menu-item.danger:hover:not(:disabled) > svg, .row-menu-item.danger:focus-visible > svg { color: var(--danger); }
+.row-menu-item:disabled, .row-menu-item:disabled > svg { color: var(--faint); cursor: default; }
+.row-menu-trigger.open { color: var(--ink); background: var(--surface-sunken); }
+.sidebar .row-menu-trigger.open { background: var(--sidebar-current); }
+.select-control.approval { margin-left: 2px; }
+.select-control.approval.auto { background: transparent; border-color: transparent; }
+.select-control.approval.auto:hover { background: var(--surface-sunken); border-color: transparent; }
+.select-control.approval.auto .select-leading { color: var(--success); }
+/* Full auto is the only mode that runs unrecoverable actions without asking, so
+ * the control carries the warning colour the whole time it is selected. */
+.select-control.approval.full-auto { background: transparent; border-color: transparent; }
+.select-control.approval.full-auto:hover { background: var(--surface-sunken); border-color: transparent; }
+.select-control.approval.full-auto .select-leading, .select-control.approval.full-auto .select-value { color: var(--warning); }
+.playtest-toggle { display: flex; align-items: center; gap: 5px; height: 31px; margin-left: 5px; padding: 0 8px; color: var(--muted); background: transparent; border: 1px solid transparent; border-radius: 8px; font-size: var(--type-label); font-weight: var(--weight-medium); }
+.playtest-toggle:hover { color: var(--ink-secondary); background: var(--surface-sunken); }
+.playtest-toggle.enabled { color: var(--ink-secondary); background: transparent; border-color: transparent; }
+.playtest-toggle.enabled > svg { color: var(--success); }
+.toggle-track { position: relative; width: 23px; height: 13px; margin-left: 2px; background: var(--border-strong); border-radius: 999px; }
+.toggle-track span { position: absolute; top: 2px; left: 2px; width: 9px; height: 9px; background: var(--toggle-thumb); border-radius: 50%; box-shadow: 0 1px 2px rgba(0,0,0,.2); transition: .2s ease; }
+.playtest-toggle.enabled .toggle-track { background: var(--success); }
+.playtest-toggle.enabled .toggle-track span { transform: translateX(10px); }
+.playtest-toggle:disabled { cursor: default; opacity: .62; }
+.toolbar-spacer { flex: 1; }
+.send-button { display: grid; place-items: center; width: 36px; height: 36px; color: var(--action-ink); background: var(--action); border: 0; border-radius: 10px; transition: .18s ease; }
+.send-button:hover { background: var(--action-hover); }
+.send-button:disabled { cursor: default; opacity: .35; }
+.send-button.stop { color: var(--danger); background: var(--danger-soft); border: 1px solid var(--danger-border); }
+.attachment-row { display: flex; flex-wrap: wrap; gap: 7px; padding: 10px 10px 0; }
+.attachment-chip { display: grid; grid-template-columns: 27px 1fr 22px; align-items: center; width: fit-content; min-width: 250px; padding: 7px 7px 7px 9px; color: var(--muted); background: var(--surface-sunken); border: 1px solid var(--border); border-radius: 9px; }
+.attachment-chip div { display: flex; flex-direction: column; }
+.attachment-chip strong { color: var(--ink); font-size: var(--type-label); font-weight: var(--weight-medium); }
+.attachment-chip span { color: var(--muted); font-size: var(--type-meta); }
+.attachment-chip button { display: grid; place-items: center; width: 21px; height: 21px; padding: 0; color: var(--muted); background: transparent; border: 0; border-radius: 6px; }
+.message-attachments { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 7px; }
+.message-attachments span { display: inline-flex; align-items: center; gap: 5px; padding: 5px 7px; color: var(--ink-secondary); background: var(--surface-sunken); border: 1px solid var(--border); border-radius: 7px; font-size: var(--type-meta); font-weight: var(--weight-regular); }
+.message-attachment-image { max-width: 260px; max-height: 190px; object-fit: contain; background: var(--surface-sunken); border: 1px solid var(--border); border-radius: 9px; }
+.attachment-thumbnail { width: 27px; height: 27px; object-fit: cover; border-radius: 5px; }
+.composer-card.dropping { border-color: var(--accent-border); }
+.composer-drop-hint { padding: 10px 12px 0; color: var(--muted); font-size: var(--type-label); }
+
+.empty-conversation { display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 430px; text-align: center; }
+.empty-illustration { display: grid; place-items: center; width: 58px; height: 58px; color: var(--action-ink); background: var(--action); border-radius: 18px; }
+.empty-conversation h1 { margin: 18px 0 8px; color: var(--ink); font-size: var(--type-title); font-weight: var(--weight-semibold); letter-spacing: -.55px; }
+.empty-conversation > p { width: min(500px, 90%); margin: 0; color: var(--muted); font-size: var(--type-body); line-height: 1.6; }
+.suggestion-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 9px; width: min(680px, 100%); margin-top: 25px; }
+.suggestion-grid button { display: flex; align-items: flex-start; gap: 8px; min-height: 64px; padding: 12px; color: var(--ink-secondary); background: var(--surface-raised); border: 1px solid var(--border-subtle); border-radius: 11px; box-shadow: var(--shadow-sm); text-align: left; font-size: var(--type-label); font-weight: var(--weight-medium); line-height: 1.4; transition: .18s ease; }
+.suggestion-grid button:hover { color: var(--ink); border-color: var(--border-strong); box-shadow: var(--shadow-md); transform: translateY(-1px); }
+.suggestion-grid svg { flex: 0 0 auto; color: var(--muted); }
+
+/* A live run continues the prompt above it, so it is spaced like a recorded
+ * answer rather than fenced off behind a rule. */
+.mock-run { margin-top: 15px; }
+/* Every block of a live run lands the way the run itself did: the plan when it
+ * is planned, Activity at the first step, the answer as it starts, the outcome
+ * when it ends. They arrive minutes apart, so each one needs its own entrance
+ * rather than inheriting the container's. The dots are the exception — they
+ * have a fade of their own to collapse into. Only a live run: a recorded one
+ * arrives whole, with the message that carries it. */
+.mock-run .message-content > *:not(.typing-indicator) { animation: enter .22s cubic-bezier(.22, .8, .26, 1) both; }
+/* The end of a run is the one block that lands outside the live view. The
+ * moment a run completes, its live block is retired and the recorded message
+ * takes its place in the same commit, so the outcome a reader sees is the
+ * recorded one — and the record as a whole is deliberately not animated,
+ * because its Activity and its answer were already on screen a frame earlier.
+ * The outcome is the part that is genuinely new, so it arrives on its own. */
+.completed-run-card, .applied-status { animation: enter .22s cubic-bezier(.22, .8, .26, 1) both; }
+/* Waiting for the answer, on the answer's own left edge. It collapses rather
+ * than unmounting, so real content fades in over it instead of replacing it in
+ * one frame. */
+.typing-indicator { display: flex; align-items: center; gap: 5px; height: 21px; overflow: hidden; opacity: 1; transition: height .18s ease, opacity .16s ease; }
+.typing-indicator.done { height: 0; opacity: 0; }
+.typing-indicator span { flex: 0 0 auto; width: 5px; height: 5px; background: var(--muted); border-radius: 50%; animation: typing 1.3s ease-in-out infinite; }
+.typing-indicator span:nth-child(2) { animation-delay: .17s; }
+.typing-indicator span:nth-child(3) { animation-delay: .34s; }
+/* What the model is doing while it does it. Quiet enough to sit under an
+ * answer that has not arrived, and never louder than the reply it precedes. */
+.waiting-notice { display: flex; flex-direction: column; gap: 3px; }
+.waiting-line { display: flex; align-items: baseline; gap: 8px; margin: 0; color: var(--muted); font-size: 13px; }
+/* Tabular figures so a ticking counter does not shuffle the label beside it. */
+.waiting-elapsed { font-variant-numeric: tabular-nums; opacity: .8; }
+.waiting-detail { margin: 0; color: var(--muted); font-size: 12px; opacity: .85; }
+.working-label { display: flex; align-items: center; gap: 5px; color: var(--muted) !important; }
+.working-label i { width: 6px; height: 6px; background: var(--ink); border-radius: 50%; animation: pulse 1.2s ease-in-out infinite; }
+@keyframes pulse { 50% { opacity: .45; transform: scale(.8); } }
+@keyframes spin { to { transform: rotate(360deg); } }
+@keyframes enter { from { opacity: 0; transform: translateY(6px); } }
+@keyframes fade { from { opacity: 0; } }
+@keyframes typing { 0%, 62%, 100% { opacity: .32; transform: translateY(0); } 31% { opacity: 1; transform: translateY(-2px); } }
+
+.approval-card { padding: 14px; border-color: var(--warning-border); }
+.approval-heading { display: flex; align-items: center; gap: 10px; }
+.approval-heading > div:last-child { display: flex; flex-direction: column; }
+.approval-heading strong { color: var(--ink); font-size: var(--type-label); font-weight: var(--weight-medium); }
+.approval-heading span { color: var(--warning); font-size: var(--type-meta); }
+.approval-card > p { margin: 12px 0 9px; color: var(--ink-secondary); font-size: var(--type-label); }
+/* The whole script, readable before it runs; long scripts scroll inside the card. */
+.approval-script { max-height: 260px; overflow: auto; margin: 0 0 10px; padding: 10px 12px; background: var(--surface-sunken); border: 1px solid var(--border-subtle); border-radius: 8px; font-family: "Geist Mono Variable", monospace; font-size: 12px; line-height: 1.5; white-space: pre; color: var(--ink); }
+.approval-scope { display: flex; align-items: center; gap: 6px; padding: 8px; color: var(--ink-secondary); background: var(--surface-sunken); border-radius: 7px; font: var(--weight-medium) var(--type-meta) "Geist Mono Variable", monospace; }
+.approval-actions { display: flex; justify-content: flex-end; gap: 7px; margin-top: 12px; }
+.secondary-action, .primary-action, .danger-action { display: flex; align-items: center; justify-content: center; gap: 5px; height: 32px; padding: 0 11px; border-radius: 8px; font-size: var(--type-label); font-weight: var(--weight-medium); }
+.secondary-action { color: var(--ink-secondary); background: var(--surface); border: 1px solid var(--border); }
+.secondary-action:hover { border-color: var(--border-strong); }
+.primary-action { color: var(--action-ink); background: var(--action); border: 1px solid var(--action); }
+.primary-action:hover { background: var(--action-hover); }
+/* Destructive, but still monochrome company: the danger colour carries the
+ * warning rather than a filled red block competing with the heading. */
+.danger-action { color: var(--danger); background: var(--danger-soft); border: 1px solid var(--danger-border); }
+.danger-action:hover { border-color: var(--danger); }
+
+.completed-run-card { display: grid; grid-template-columns: 38px 1fr auto; align-items: center; gap: 11px; padding: 14px; border-color: var(--success-border); }
+.completion-mark { display: grid; place-items: center; width: 38px; height: 38px; color: var(--success); background: var(--success-soft); border: 1px solid var(--success-border); border-radius: 12px; }
+.completed-run-card div:nth-child(2) { display: flex; flex-direction: column; }
+.completed-run-card strong { color: var(--ink); font-size: var(--type-label); font-weight: var(--weight-medium); }
+.completed-run-card p { margin: 3px 0 0; color: var(--muted); font-size: var(--type-meta); }
+.completed-run-card > span { padding: 5px 8px; color: var(--success); background: var(--success-soft); border-radius: 99px; font-size: var(--type-meta); font-weight: var(--weight-medium); }
+/* What the completion gate found missing. Listed, not summarised: "unverified"
+ * alone gives the reader nothing to go and check. */
+.gate-issues { margin: 7px 0 0; padding-left: 15px; color: var(--warning); font-size: var(--type-meta); }
+.gate-issues li { margin-top: 2px; }
+
+/* The question card is an approval card in a different hat: same surface and
+ * heading, but the choices are the model's own words, so they wrap and stack
+ * rather than sitting in a fixed two-button row. */
+.question-options { flex-wrap: wrap; justify-content: flex-start; }
+.question-options > button { max-width: 100%; }
+/* The host's option sits apart from the model's: plainer, at the end, and lit
+ * while the answer is being written below. */
+.question-escape { margin-left: auto; color: var(--muted); background: transparent; border-style: dashed; }
+.question-escape:hover { color: var(--ink); }
+.question-escape.active { color: var(--ink); border-style: solid; border-color: var(--warning); }
+
+.task-list { margin-top: 12px; padding: 11px 13px; background: var(--surface-sunken); border: 1px solid var(--border-subtle); border-radius: 11px; }
+.task-list-heading { display: flex; align-items: center; gap: 7px; color: var(--ink-secondary); font-size: var(--type-meta); }
+.task-list-heading strong { color: var(--ink); font-size: var(--type-label); font-weight: var(--weight-medium); }
+.task-list-heading span { margin-left: auto; color: var(--muted); }
+.task-list ul { margin: 9px 0 0; padding: 0; list-style: none; }
+.task-row { display: flex; align-items: center; gap: 7px; padding: 3px 0; color: var(--ink-secondary); font-size: var(--type-meta); }
+.task-row > svg { flex: 0 0 auto; color: var(--muted); }
+.task-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.task-done { color: var(--muted); }
+.task-done > svg { color: var(--success); }
+.task-done .task-title { text-decoration: line-through; }
+.task-active { color: var(--ink); }
+.task-active > svg { color: var(--action); }
+.task-blocked > svg { color: var(--danger); }
+/* The promise the completion gate will hold this task to, marked before the
+ * run ends so the caveat afterwards reads as expected rather than surprising. */
+.task-flag { flex: 0 0 auto; margin-left: auto; padding: 1px 6px; color: var(--muted); background: var(--surface); border: 1px solid var(--border-subtle); border-radius: 99px; font-size: var(--type-meta); font-style: normal; }
+
+.modal-backdrop { position: fixed; inset: 0; z-index: 100; display: grid; place-items: center; background: var(--scrim); backdrop-filter: blur(5px); }
+.settings-modal, .name-modal { width: min(480px, calc(100% - 40px)); padding: 20px; color: var(--ink); background: var(--surface-raised); border: 1px solid var(--border-subtle); border-radius: 16px; box-shadow: var(--shadow-lg); }
+.name-modal { width: min(430px, calc(100% - 40px)); }
+.name-modal > p { margin: 17px 0; color: var(--muted); font-size: var(--type-body); line-height: 1.6; }
+.name-modal > label, .endpoint-setting { display: flex; flex-direction: column; gap: 7px; }
+.name-modal label > span, .endpoint-setting > span { color: var(--muted); font-size: var(--type-label); font-weight: var(--weight-medium); }
+.name-modal input, .endpoint-setting input { width: 100%; height: 39px; padding: 0 11px; color: var(--ink); background: var(--surface-sunken); border: 1px solid var(--border); border-radius: 9px; outline: 0; font-size: var(--type-body); }
+.name-modal input:focus, .endpoint-setting input:focus { background: var(--surface); border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 20px; }
+.modal-actions button:disabled { cursor: default; opacity: .45; }
+.modal-header { display: flex; align-items: flex-start; justify-content: space-between; padding-bottom: 17px; border-bottom: 1px solid var(--border); }
+.modal-header > div { display: flex; flex-direction: column; }
+.modal-header h2 { margin: 0; color: var(--ink); font-size: 20px; font-weight: var(--weight-semibold); letter-spacing: -.3px; }
+.settings-row { display: grid; grid-template-columns: 32px minmax(0, 1fr) auto; align-items: center; gap: 12px; min-height: 60px; padding: 10px 14px; }
+.settings-row > div:nth-child(2) { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.settings-row strong { color: var(--ink); font-size: var(--type-label); font-weight: var(--weight-medium); }
+.settings-row span { color: var(--muted); font-size: var(--type-meta); line-height: 1.45; }
+.settings-actions { display: flex; align-items: center; gap: 7px; }
+.settings-icon { display: grid; place-items: center; width: 32px; height: 32px; color: var(--ink); background: var(--surface-sunken); border-radius: 9px; }
+/* Settings reads as a few subjects, each a titled card of rows. */
+.settings-section { margin-top: 18px; }
+.settings-section > h3 { margin: 0 0 7px 2px; color: var(--muted); font-size: var(--type-meta); font-weight: var(--weight-medium); letter-spacing: .2px; }
+.settings-card { overflow: hidden; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; }
+.settings-card:empty { display: none; }
+.settings-card > * + * { border-top: 1px solid var(--border); }
+.settings-card > .endpoint-setting, .settings-card > .custom-editor { padding: 14px; border-bottom: 0; }
+.settings-card > .custom-message, .settings-card > .custom-hint { margin: 0; padding: 10px 14px; }
+.settings-card > .open-cloud-check { padding: 12px 14px; border-bottom: 0; }
+/* A note that belongs to the row above it reads as part of that row. */
+.settings-card > .settings-note { margin: -4px 0 0; padding: 0 14px 12px 58px; color: var(--muted); border-top: 0; font-size: var(--type-meta); line-height: 1.5; }
+/* A connection belongs to "Your own models", so it sits under it rather than
+   beside it as another setting. */
+.settings-subrow { grid-template-columns: 20px minmax(0, 1fr) auto; min-height: 48px; padding: 7px 14px 7px 58px; border-top-style: dashed !important; }
+.settings-subicon { display: grid; place-items: center; color: var(--muted); }
+.settings-path { overflow: hidden; margin-top: 2px; color: var(--muted); font: var(--weight-regular) 11px/1.5 "Geist Mono Variable", monospace; text-overflow: ellipsis; white-space: nowrap; }
+.settings-advanced > summary { padding: 12px 14px; color: var(--muted); font-size: var(--type-label); font-weight: var(--weight-medium); cursor: pointer; list-style-position: inside; }
+.settings-advanced > summary:hover { color: var(--ink); }
+.settings-advanced > .endpoint-setting { padding: 0 14px 14px; border-bottom: 0; }
+.settings-switch { position: relative; flex: none; width: 36px; height: 20px; padding: 0; background: var(--border-strong); border: 0; border-radius: 99px; transition: background .15s ease; }
+.settings-switch::after { position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; background: #fff; border-radius: 50%; box-shadow: 0 1px 2px rgb(0 0 0 / .25); content: ""; transition: transform .15s ease; }
+.settings-switch[aria-checked="true"] { background: var(--success); }
+.settings-switch[aria-checked="true"]::after { transform: translateX(16px); }
+.settings-switch:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.settings-switch:disabled { cursor: default; opacity: .5; }
+.settings-icon.green { color: var(--success); background: var(--success-soft); }
+.status-text { color: var(--success) !important; font-weight: var(--weight-medium); }
+.neutral-status { color: var(--muted) !important; font-size: var(--type-meta) !important; font-weight: var(--weight-regular); }
+.small-button { height: 30px; padding: 0 9px; color: var(--ink); background: var(--surface-sunken); border: 1px solid var(--border); border-radius: 7px; font-size: var(--type-label); font-weight: var(--weight-medium); }
+.small-button:hover { border-color: var(--border-strong); }
+.endpoint-setting { padding: 14px 0; border-bottom: 1px solid var(--border); }
+/* Settings grows with the connections editor, so it scrolls rather than
+   running off a short window. */
+.settings-modal { width: min(580px, calc(100% - 40px)); max-height: calc(100vh - 40px); overflow-y: auto; padding-top: 0; }
+/* The title stays put while the sections scroll under it. */
+.settings-header { position: sticky; top: 0; z-index: 1; padding-top: 20px; background: var(--surface-raised); }
+.custom-editor { display: flex; flex-direction: column; gap: 11px; padding: 14px 0; border-bottom: 1px solid var(--border); }
+.custom-presets { display: flex; flex-wrap: wrap; gap: 6px; }
+.custom-field { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.custom-field.grow { flex: 1; }
+.custom-field > span, .custom-number > span { color: var(--muted); font-size: var(--type-meta); font-weight: var(--weight-medium); }
+.custom-field input, .custom-field select, .custom-import > input, .custom-number input { width: 100%; height: 34px; padding: 0 10px; color: var(--ink); background: var(--surface-sunken); border: 1px solid var(--border); border-radius: 8px; outline: 0; font-size: var(--type-label); }
+.custom-field input:focus, .custom-field select:focus, .custom-import > input:focus, .custom-number input:focus { background: var(--surface); border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.custom-field-pair { display: flex; gap: 9px; }
+.custom-key-row { display: flex; gap: 7px; align-items: center; }
+.custom-key-row input { flex: 1; }
+.custom-key-row .small-button { flex: none; }
+.custom-models-header { display: flex; align-items: center; justify-content: space-between; padding-top: 4px; }
+.custom-models-header strong { color: var(--ink); font-size: var(--type-label); font-weight: var(--weight-medium); }
+.custom-model { display: flex; flex-direction: column; gap: 8px; padding: 10px; background: var(--surface-sunken); border: 1px solid var(--border); border-radius: 10px; }
+.custom-model .custom-field input, .custom-model .custom-number input { background: var(--surface); }
+.custom-model-options { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; color: var(--ink-secondary); font-size: var(--type-meta); }
+.custom-model-options > label { display: flex; align-items: center; gap: 5px; }
+.custom-model-options .settings-actions { margin-left: auto; }
+.custom-number input { width: 92px; height: 28px; }
+.custom-import { display: flex; flex-direction: column; gap: 8px; }
+.custom-import-list { display: flex; flex-direction: column; gap: 3px; max-height: 190px; overflow-y: auto; padding: 6px 8px; background: var(--surface-sunken); border: 1px solid var(--border); border-radius: 8px; font-size: var(--type-meta); }
+.custom-import-list label { display: flex; align-items: center; gap: 6px; color: var(--ink-secondary); word-break: break-all; }
+.custom-hint { margin: 0; color: var(--muted); font-size: var(--type-meta); line-height: 1.5; }
+.custom-message { display: flex; align-items: center; gap: 5px; margin: 8px 0 0; font-size: var(--type-meta); line-height: 1.5; }
+.custom-message.ok { color: var(--success); }
+.custom-message.error { color: var(--danger); }
+.custom-message.note { color: var(--ink-secondary); }
+/* A key check reads as a short report: the verdict, what Roblox said about the
+   key, and the one action it suggests, stacked rather than squeezed side by side. */
+.open-cloud-check { flex-direction: column; align-items: flex-start; gap: 6px; padding-bottom: 12px; border-bottom: 1px solid var(--border); }
+.open-cloud-check p { margin: 0; }
+/* Only a narrow window lays the sidebar over the workspace, so only a narrow
+   window needs the ground behind it dimmed. */
+.sidebar-scrim { display: none; }
+
+/* -- Agent run timeline -------------------------------------------------- */
+.run-badge { padding: 3px 6px; color: var(--muted); background: var(--surface-sunken); border: 1px solid var(--border); border-radius: 6px; font-size: var(--type-meta); font-weight: var(--weight-regular); }
+.card-body-text { margin: 0; padding: 12px 13px; color: var(--ink-secondary); border-top: 1px solid var(--border); font-size: var(--type-label); line-height: 1.6; }
+.asset-result-link { display: inline-flex; align-items: center; gap: 6px; margin: 0 13px 12px; color: var(--accent); font-size: var(--type-label); font-weight: var(--weight-medium); text-decoration: none; }
+.asset-result-link:hover { text-decoration: underline; }
+.diff-summary .added { color: var(--success); }
+.diff-summary .removed { color: var(--danger); }
+.outcome-cancelled, .outcome-refused { border-color: var(--border); }
+.outcome-cancelled .completion-mark, .outcome-refused .completion-mark { color: var(--muted); background: var(--surface-sunken); border-color: var(--border); }
+.outcome-cancelled > span, .outcome-refused > span { color: var(--muted); background: var(--surface-sunken); }
+.outcome-failed { border-color: var(--danger-border); }
+.outcome-failed .completion-mark { color: var(--danger); background: var(--danger-soft); border-color: var(--danger-border); }
+.outcome-failed > span { color: var(--danger); background: var(--danger-soft); }
+.run-warning { display: flex; align-items: center; gap: 6px; margin: 12px 0 0 !important; color: var(--warning) !important; font-size: var(--type-meta) !important; }
+.outcome-warnings { border-color: var(--warning-border); }
+.outcome-warnings .completion-mark { color: var(--warning); background: var(--warning-soft); border-color: var(--warning-border); }
+.outcome-warnings > span { color: var(--warning); background: var(--warning-soft); }
+
+/* -- Assistant prose ------------------------------------------------------
+ * The answer, rendered from Markdown. It leads the message; the run's cards
+ * sit around it — activity above, artifacts below — so execution reads as
+ * support for the answer rather than as the answer itself.
+ */
+.markdown { color: var(--ink-secondary); font-size: var(--type-body); line-height: 1.7; }
+.markdown.result-copy { margin: 5px 0 4px; }
+/* The reply reads as the conclusion of the diff above it, not as a caption
+ * stuck to its edge, so it is given room to separate from the card. */
+.change-set + .markdown.result-copy { margin-top: 16px; }
+.markdown > :first-child { margin-top: 0; }
+.markdown > :last-child { margin-bottom: 0; }
+/* pre-wrap: a line the model chose to break stays broken. */
+.markdown p, .markdown blockquote { margin: 0 0 12px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.markdown h3, .markdown h4, .markdown h5, .markdown h6 { margin: 19px 0 8px; color: var(--ink); font-weight: var(--weight-semibold); letter-spacing: -.1px; }
+.markdown h3 { font-size: var(--type-heading); }
+.markdown h4, .markdown h5, .markdown h6 { font-size: var(--type-body); }
+.markdown ul, .markdown ol { margin: 0 0 12px; padding-left: 21px; }
+.markdown li { margin: 3px 0; overflow-wrap: anywhere; }
+.markdown li::marker { color: var(--faint); }
+.markdown blockquote { padding-left: 12px; color: var(--muted); border-left: 2px solid var(--border-strong); }
+.markdown hr { margin: 18px 0; border: 0; border-top: 1px solid var(--border); }
+.md-inline-code { padding: 1px 5px; color: var(--ink); background: var(--surface-sunken); border: 1px solid var(--border-subtle); border-radius: 5px; font: var(--weight-regular) .92em/1.4 "Geist Mono Variable", monospace; overflow-wrap: anywhere; }
+.md-code { position: relative; overflow-x: auto; margin: 0 0 14px; padding: 13px 14px; color: var(--ink); background: var(--surface-sunken); border: 1px solid var(--border-subtle); border-radius: 11px; }
+.md-code code { font: var(--weight-regular) var(--type-meta)/1.65 "Geist Mono Variable", monospace; white-space: pre; }
+.md-code-language { position: absolute; top: 8px; right: 11px; color: var(--faint); font: var(--weight-medium) 11px "Geist Mono Variable", monospace; letter-spacing: .4px; text-transform: uppercase; }
+/* Not an anchor: a reply is untrusted content, so the target is shown, not followed. */
+.md-link { color: var(--accent); cursor: help; text-decoration: underline; text-decoration-style: dotted; text-underline-offset: 2px; }
+
+/* -- The activity layer ---------------------------------------------------
+ * What the agent did, above the answer and out of its way: open and moving
+ * while the run is live, one collapsed line once it ends. Everything technical
+ * a run produced lives in here rather than in the reply.
+ */
+.activity-section { overflow: hidden; margin-top: 14px; background: var(--surface-raised); border: 1px solid var(--border-subtle); border-radius: 13px; box-shadow: var(--shadow-sm); }
+.activity-section > summary { display: flex; align-items: center; gap: 8px; min-height: 40px; padding: 0 13px; color: var(--muted); list-style: none; font-size: var(--type-meta); }
+.activity-section > summary::-webkit-details-marker { display: none; }
+.activity-section > summary:hover { background: var(--surface-sunken); }
+.activity-section > summary > svg { flex: 0 0 auto; color: var(--faint); transition: transform .16s ease; }
+.activity-section[open] > summary > svg { transform: rotate(90deg); }
+.activity-section[open] > summary { border-bottom: 1px solid var(--border); }
+.activity-section > summary strong { flex: 0 0 auto; color: var(--ink); font-size: var(--type-label); font-weight: var(--weight-medium); }
+.activity-summary { overflow: hidden; flex: 1; min-width: 0; text-overflow: ellipsis; white-space: nowrap; }
+/* What the closed section is holding back, kept beside the live line so the
+ * reader knows the size of what one click opens. */
+.activity-count { flex: 0 0 auto; color: var(--faint); }
+/* Failures and pending decisions do not fold away with the rest. */
+.section-alerts { margin: 4px 0 0; padding: 0 4px; }
+.activity-timeline { display: flex; flex-direction: column; gap: 1px; margin: 0; padding: 8px 9px 9px; list-style: none; }
+.activity-node { display: flex; flex-direction: column; }
+
+/* One row shape for every line in the layer — a phase, an operation inside it,
+ * a problem lifted out of a collapsed one — so the columns line up down the
+ * whole panel however deeply the run is nested. */
+.node-row { display: grid; grid-template-columns: 12px 15px minmax(0,1.15fr) minmax(0,1fr) auto; align-items: center; gap: 7px; min-height: 25px; padding: 0 5px; border-radius: 7px; color: var(--muted); font-size: var(--type-meta); list-style: none; }
+.node-row::-webkit-details-marker { display: none; }
+.node-caret { display: grid; place-items: center; color: var(--faint); }
+.node-status { display: grid; place-items: center; color: var(--faint); }
+.node-title { overflow: hidden; color: var(--ink-secondary); font-weight: var(--weight-medium); text-overflow: ellipsis; white-space: nowrap; }
+.node-finding { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.node-row time { color: var(--faint); font: var(--weight-medium) var(--type-meta) "Geist Mono Variable", monospace; }
+
+/* Status is carried by the icon's shape first and its colour second, so none of
+ * these rules is the only thing telling a reader what a row is doing. */
+.node-row[data-status="completed"] > .node-status { color: var(--success); }
+.node-row[data-status="failed"] > .node-status { color: var(--danger); }
+.node-row[data-status="failed"] > .node-finding { color: var(--danger); }
+.node-row[data-status="warning"] > .node-status { color: var(--warning); }
+.node-row[data-status="skipped"] > .node-status { color: var(--faint); }
+.node-row[data-status="skipped"] > .node-title { color: var(--muted); }
+.node-row[data-status="pending"] { opacity: .55; }
+/* A note is something the run remarked on, not a task it ticked off. */
+.node-row[data-kind="note"] > .node-status { color: var(--faint); }
+.node-row[data-kind="note"] > .node-title { color: var(--muted); font-weight: var(--weight-regular); }
+
+/* The one thing happening now: brighter text, and a spinner rather than the
+ * kind icon. One slow rotation, nothing else on the row moves. */
+.node-row[data-status="active"] > .node-status { color: var(--ink); }
+.node-row[data-status="active"] > .node-status > svg { animation: spin .9s linear infinite; }
+.node-row[data-status="active"] > .node-title { color: var(--ink); font-weight: var(--weight-semibold); }
+
+/* A folded phase. The caret is the only chrome it adds. */
+.activity-group > details > summary:hover { background: var(--surface-sunken); }
+.activity-group > details > summary > .node-caret { transition: transform .16s ease; }
+.activity-group > details[open] > summary > .node-caret { transform: rotate(90deg); }
+.node-children { display: flex; flex-direction: column; gap: 1px; margin: 1px 0 4px 17px; padding: 0 0 0 10px; border-left: 1px solid var(--border-subtle); list-style: none; }
+
+/* Whatever went wrong inside a group stays on screen while it is collapsed, and
+ * steps out of the way once the group is open and showing it in place. */
+.group-alerts { margin: 0 0 3px; padding: 0; list-style: none; }
+.activity-group > details[open] ~ .group-alerts { display: none; }
+
+.activity-node .card-details { border-top: 0; }
+.activity-node .card-details > summary { padding: 3px 0 3px 39px; }
+.activity-node .card-details-body { display: grid; gap: 9px; padding: 2px 0 6px 39px; }
+.evidence-note { margin: 0; color: var(--ink-secondary); font-size: var(--type-meta); line-height: 1.55; }
+.evidence-image { display: block; width: 100%; border-radius: 9px; }
+.evidence-lines { display: flex; flex-direction: column; gap: 4px; margin: 0; padding: 0; color: var(--muted); list-style: none; font: var(--weight-regular) var(--type-meta)/1.55 "Geist Mono Variable", monospace; }
+.evidence-lines li { overflow: hidden; text-overflow: ellipsis; white-space: pre; }
+
+/* -- Code artifacts -------------------------------------------------------
+ * A change to a script is shown the way an editor shows one: a single bordered
+ * panel whose chrome — a 42px file header above, a collapsed revision footer
+ * below — sits on a slightly lighter ground than the code it frames.
+ *
+ * Inside, every row is one 20px grid of three columns: a fixed-width line
+ * number, a narrow +/- marker, and the code. The first two form a gutter that
+ * stays pinned while the code scrolls under it, so a long line never drags the
+ * coordinates out of view. The gutter is a pane in its own right — darker
+ * ground, a hairline edge against the code — rather than padding that happens
+ * to hold numbers. Tint still crosses the whole row, but it is mixed into each
+ * ground separately so the gutter stays the darker of the two and a long hunk
+ * never becomes a block of red or green. Long unchanged regions arrive already
+ * folded from `shared/text-diff.ts` and are drawn as a band across the surface
+ * rather than as another code line.
+ */
+.change-set { display: grid; gap: 11px; margin-top: 15px; }
+/* min-width: 0 so the panel takes the width of the column rather than of its
+ * longest line: without it the grid item grows to fit the code and the header
+ * actions are pushed past the edge instead of the code scrolling. */
+.diff-artifact { overflow: hidden; min-width: 0; background: color-mix(in srgb, var(--surface-raised) 82%, var(--surface-sunken)); border: 1px solid var(--border); border-radius: 9px; }
+
+.code-surface {
+  --code-bg: color-mix(in srgb, var(--surface-sunken) 92%, var(--surface-raised));
+  --code-add: color-mix(in srgb, var(--success-soft) 34%, var(--code-bg));
+  --code-remove: color-mix(in srgb, var(--danger-soft) 34%, var(--code-bg));
+  overflow: auto;
+  max-height: 460px;
+  background: var(--code-bg);
+  border-top: 1px solid var(--border-subtle);
+  scrollbar-gutter: stable;
+  font: var(--weight-regular) 12.5px/22px "Geist Mono Variable", monospace;
+  font-variant-numeric: tabular-nums;
+  tab-size: 2;
+}
+.artifact-change + .artifact-change .code-surface { border-top-color: var(--border); }
+.code-lines { width: max-content; min-width: 100%; padding: 4px 0 5px; }
+
+/* One grid per line, sharing a template, so the three columns stay independent
+ * and a long code line scrolls without dragging the coordinates with it. The
+ * coordinates sit on the row's own background rather than a darker rail: a
+ * changed line then reads as one continuous band from number to code, which is
+ * what makes the panel look like an editor instead of a review table. */
+.code-line { --row: var(--code-bg); display: grid; grid-template-columns: calc(var(--gutter) + 18px) 16px minmax(max-content, 1fr); width: max-content; min-width: 100%; height: 22px; color: var(--ink-secondary); background: var(--row); }
+.code-add { --row: var(--code-add); }
+.code-remove { --row: var(--code-remove); }
+
+.code-gutter, .code-sign { position: sticky; z-index: 1; background: var(--row); user-select: none; }
+.code-gutter { left: 0; overflow: hidden; padding: 0 8px 0 10px; color: color-mix(in srgb, var(--faint) 78%, transparent); text-align: right; }
+.code-sign { left: calc(var(--gutter) + 18px); color: var(--faint); text-align: center; font-weight: var(--weight-medium); }
+.code-text { min-width: 0; padding: 0 18px 0 8px; color: inherit; font: inherit; white-space: pre; }
+.code-add .code-sign { color: var(--success); }
+.code-remove .code-sign { color: var(--danger); }
+
+.code-fold { display: flex; width: max-content; min-width: 100%; background: color-mix(in srgb, var(--surface-raised) 46%, var(--code-bg)); border-top: 1px solid var(--border-subtle); border-bottom: 1px solid var(--border-subtle); }
+.code-fold-body { position: sticky; left: 0; display: flex; align-items: center; gap: 8px; height: 22px; padding: 0 12px 0 10px; color: var(--faint); font-size: 11.5px; }
+.code-fold-mark { color: color-mix(in srgb, var(--faint) 70%, transparent); letter-spacing: .1em; }
+.code-fold-range { color: color-mix(in srgb, var(--faint) 66%, transparent); }
+.code-fold-cut { background: color-mix(in srgb, var(--warning-soft) 52%, var(--code-bg)); }
+.code-fold-cut .code-fold-body { color: var(--warning); }
+
+.syntax-keyword { color: var(--syntax-keyword); font-weight: var(--weight-semibold); }
+.syntax-string { color: var(--syntax-string); }
+.syntax-number { color: var(--syntax-number); }
+.syntax-comment { color: var(--syntax-comment); font-style: italic; }
+.syntax-call, .syntax-builtin { color: var(--syntax-call); }
+.syntax-call { font-weight: var(--weight-medium); }
+.syntax-property { color: var(--syntax-property); }
+.syntax-operator { color: var(--syntax-operator); }
+.artifact-note, .artifact-feedback { margin: 0; padding: 6px 11px 7px; color: var(--muted); border-top: 1px solid var(--border-subtle); font-size: 11.5px; }
+.artifact-feedback { color: var(--danger); }
+/* The proof the write landed is a footnote to the code, so the disclosure that
+ * holds it is the quietest row in the panel. */
+.diff-artifact > .card-details { border-top: 1px solid var(--border-subtle); }
+.diff-artifact > .card-details > summary { min-height: 28px; padding: 0 10px; color: var(--faint); font-size: 11.5px; }
+.diff-artifact > .card-details > .card-details-body { padding: 0 11px 9px; }
+.applied-status { display: inline-flex; align-items: center; gap: 6px; margin-top: 11px; color: var(--success); font-size: var(--type-meta); font-weight: var(--weight-medium); }
+.applied-status > svg { flex: 0 0 auto; }
+
+/* -- Secondary card detail ------------------------------------------------ */
+.card-details { border-top: 1px solid var(--border); }
+.card-details > summary { display: flex; align-items: center; gap: 5px; padding: 9px 13px; color: var(--muted); list-style: none; font-size: var(--type-meta); font-weight: var(--weight-medium); }
+.card-details > summary::-webkit-details-marker { display: none; }
+.card-details > summary:hover { color: var(--ink-secondary); }
+.card-details > summary > svg { flex: 0 0 auto; transition: transform .16s ease; }
+.card-details[open] > summary > svg { transform: rotate(90deg); }
+.card-details-body { padding: 0 13px 12px; }
+.metadata-list { display: grid; gap: 6px; margin: 0; }
+.metadata-list > div { display: flex; align-items: baseline; justify-content: space-between; gap: 14px; }
+.metadata-list dt { flex: 0 0 auto; color: var(--muted); font-size: var(--type-meta); }
+.metadata-list dd { margin: 0; color: var(--ink-secondary); font: var(--weight-regular) var(--type-meta) "Geist Mono Variable", monospace; overflow-wrap: anywhere; text-align: right; }
+.tool-output, .evidence-code { overflow: auto; max-height: 270px; margin: 0; padding: 10px 12px; color: var(--ink-secondary); background: var(--surface-sunken); border: 1px solid var(--border-subtle); border-radius: 9px; }
+.tool-output code, .evidence-code code { font: var(--weight-regular) var(--type-meta)/1.6 "Geist Mono Variable", monospace; white-space: pre; }
+.instance-path { overflow: hidden; font-family: "Geist Mono Variable", monospace; text-overflow: ellipsis; white-space: nowrap; }
+
+@media (max-width: 1050px) {
+  .connection-detail { display: none; }
+  .playtest-label { display: none; }
+  .playtest-toggle { gap: 2px; }
+  .select-control.compact { display: none; }
+}
+
+@media (max-width: 840px) {
+  .app-shell { min-width: 0; }
+  /* Laid over the workspace instead of docked beside it, so it travels under
+     its own power and gives the margin back to the layout it no longer sits in. */
+  .sidebar { position: fixed; inset: 0 auto 0 0; width: var(--sidebar-width); margin-left: 0; transform: translateX(0); transition: transform var(--sidebar-motion); box-shadow: var(--shadow-lg); }
+  .app-shell[data-sidebar="hidden"] .sidebar { margin-left: 0; transform: translateX(-105%); }
+  /* Nothing is docked for it to duplicate here, so it is simply always there. */
+  .menu-button { width: 34px; margin-right: 8px; opacity: 1; visibility: visible; transition: none; }
+  .sidebar-scrim { position: fixed; inset: 0; z-index: 25; display: block; background: var(--scrim); border: 0; opacity: 1; transition: opacity var(--sidebar-motion), visibility 0s; }
+  .app-shell[data-sidebar="hidden"] .sidebar-scrim { opacity: 0; visibility: hidden; transition: opacity var(--sidebar-motion), visibility 0s linear var(--sidebar-travel); }
+  .conversation { width: calc(100% - 36px); }
+  .composer-dock { padding-right: 18px; padding-left: 18px; }
+}
+
+@media (max-width: 650px) {
+  .topbar { padding: 0 13px; }
+  .connection-label { display: none; }
+  .conversation { width: calc(100% - 24px); padding-top: 20px; }
+  .user-prompt { max-width: 100%; }
+  .suggestion-grid { grid-template-columns: 1fr; }
+  .select-control.model-control { display: none; }
+  .select-control.approval { max-width: 105px; }
+  .playtest-toggle { display: none; }
+  .composer-dock { padding-right: 10px; padding-left: 10px; }
+  /* The header stays one row at every width: the filename gives up space and
+   * the action collapses to its icon rather than wrapping. */
+  .diff-header { gap: 8px; padding-right: 6px; padding-left: 9px; }
+  .diff-actions { gap: 6px; }
+  .open-studio-action span { display: none; }
+  .open-studio-action { width: 26px; padding: 0; justify-content: center; }
+  .code-text { padding-right: 12px; }
+}
+
+/* Asking for less motion is asking about movement, not about visibility: the
+ * travel and the gliding scroll go, a plain opacity fade stays, and every
+ * indicator — the spinner, the dots, the pulse — keeps running, because each of
+ * those is feedback rather than decoration. */
+@media (prefers-reduced-motion: reduce) {
+  .user-message, .mock-run, .approval-dock { animation: fade .16s ease both; }
+  .mock-run .message-content > *:not(.typing-indicator) { animation: fade .16s ease both; }
+  .completed-run-card, .applied-status { animation: fade .16s ease both; }
+  .conversation-scroll { scroll-behavior: auto; }
+  .typing-indicator { transition: none; }
+  /* The sidebar is reduced rather than removed. Cutting its travel to nothing
+     does not spare anyone the movement -- the workspace still jumps a third of
+     the window wider -- it only makes the jump abrupt. So the glide shortens
+     and flattens instead, which is the same reasoning as the fade above. */
+  :root { --sidebar-travel: .12s; --sidebar-motion: var(--sidebar-travel) linear; }
+}
+.popover-problem { margin: 8px 0 0; color: var(--danger, #b42318); font-size: var(--type-meta); }
+.popover-note { margin: 8px 0 0; color: var(--muted); font-size: var(--type-meta); }
+
+.settings-button.update-ready { color: var(--ink); font-weight: var(--weight-medium); }
+/* An update on its way. Not a button -- there is nothing to press yet -- so it
+ * neither lights on hover nor invites a click; the bar underneath is what says
+ * something is happening while the percent is small. */
+.settings-button.update-progress { cursor: default; }
+.settings-button.update-progress:hover { color: var(--muted); background: transparent; }
+.settings-button.update-progress > svg { flex: 0 0 auto; animation: spin .9s linear infinite; }
+.settings-button.update-progress > div { display: flex; flex: 1; flex-direction: column; gap: 5px; min-width: 0; }
+.settings-button.update-progress > div > span:first-child { overflow: hidden; font-size: var(--type-label); text-overflow: ellipsis; white-space: nowrap; }
+.update-track { display: flex; height: 4px; overflow: hidden; background: var(--surface-sunken); border-radius: 999px; }
+.update-track > span { display: block; height: 100%; background: var(--accent); border-radius: 999px; transition: width .3s ease; }

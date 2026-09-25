@@ -1,0 +1,26 @@
+name: Feature request
+description: Suggest something Roqer, the MCP bridge, or the Studio plugin should do.
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What are you trying to do?
+      description: The Roblox task or workflow, and where Roqer or the MCP gets in the way today.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What would help
+      description: The behaviour you would like. If it needs a new MCP tool, say whether an option on an existing tool would do; the tool catalog is kept small on purpose, since every model that uses it reads all of it.
+  - type: dropdown
+    id: area
+    attributes:
+      label: Where
+      options:
+        - Roqer desktop app
+        - MCP bridge and tools
+        - Studio plugin
+        - Agent skills or instructions
+        - Not sure

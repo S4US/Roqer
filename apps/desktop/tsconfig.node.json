@@ -1,0 +1,13 @@
+{
+  "//": "Main-process and shared code. Kept separate from the renderer config because the two halves have incompatible globals: the renderer has the DOM and no Node APIs, the main process has Node and no DOM.",
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "lib": ["ES2022"],
+    "noEmit": true,
+    "declaration": false,
+    "declarationMap": false,
+    "moduleResolution": "bundler",
+    "types": ["node"]
+  },
+  "include": ["shared", "runtime", "eval", "electron/**/*.ts"]
+}

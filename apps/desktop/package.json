@@ -1,0 +1,56 @@
+{
+  "name": "@roqer/desktop",
+  "productName": "Roqer",
+  "version": "0.0.21",
+  "private": true,
+  "description": "Roqer, a local desktop agent for Roblox Studio.",
+  "license": "MIT",
+  "author": "S4US",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/S4US/Roqer.git",
+    "directory": "apps/desktop"
+  },
+  "homepage": "https://github.com/S4US/Roqer#readme",
+  "bugs": {
+    "url": "https://github.com/S4US/Roqer/issues"
+  },
+  "type": "module",
+  "main": "dist-electron/main.cjs",
+  "scripts": {
+    "dev": "node electron/dev.mjs",
+    "dev:renderer": "vite",
+    "start": "npm run build && electron .",
+    "build": "npm run typecheck && npm run build:electron && vite build",
+    "build:electron": "node electron/build.mjs",
+    "generate:tool-schemas": "tsx scripts/generate-tool-schemas.mjs",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.node.json",
+    "lint": "eslint src shared runtime electron eval --ext .ts,.tsx",
+    "test": "tsx --test \"src/**/*.test.ts\" \"shared/**/*.test.ts\" \"runtime/**/*.test.ts\" \"eval/**/*.test.ts\" \"electron/**/*.test.mjs\" \"electron/**/*.test.ts\"",
+    "eval": "tsx eval/run.ts",
+    "eval:colors": "tsx eval/run-colors.ts",
+    "eval:kits": "tsx eval/run-kits.ts",
+    "smoke:electron": "npm run build:electron && node electron/smoke.mjs",
+    "preview": "vite preview",
+    "stage:server": "node electron/stage-server.mjs",
+    "package": "npm run stage:server && electron-builder --publish never"
+  },
+  "dependencies": {
+    "@fontsource-variable/geist": "^5.3.0",
+    "@fontsource-variable/geist-mono": "^5.3.0",
+    "electron-updater": "^6.8.9",
+    "lucide-react": "^1.37.0",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8"
+  },
+  "devDependencies": {
+    "@types/react": "^19.2.18",
+    "@types/react-dom": "^19.2.5",
+    "@vitejs/plugin-react": "^6.1.1",
+    "electron": "44.0.0",
+    "electron-builder": "^26.0.12",
+    "esbuild": "0.27.2",
+    "typescript": "^5.9.3",
+    "vite": "^8.2.2"
+  }
+}

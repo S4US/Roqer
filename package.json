@@ -1,0 +1,86 @@
+{
+  "name": "roqer",
+  "version": "3.0.3",
+  "private": true,
+  "description": "Roqer: an open-source desktop agent for Roblox Studio, and the Studio MCP bridge it runs through.",
+  "license": "MIT",
+  "author": "S4US",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/S4US/Roqer.git"
+  },
+  "homepage": "https://github.com/S4US/Roqer#readme",
+  "bugs": {
+    "url": "https://github.com/S4US/Roqer/issues"
+  },
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "scripts": {
+    "build": "npm run build -w packages/core && npm run build -w packages/robloxstudio-mcp && npm run build -w packages/robloxstudio-mcp-inspector",
+    "compile:plugin": "node scripts/compile-plugin.mjs",
+    "build:plugin": "npm run compile:plugin && node scripts/build-plugin.mjs",
+    "build:plugin:artifact": "npm run compile:plugin && node scripts/build-plugin.mjs --build-only",
+    "build:plugin:inspector": "npm run compile:plugin && node scripts/build-plugin.mjs --variant inspector",
+    "build:plugins": "npm run compile:plugin && node scripts/build-plugin.mjs --variant inspector && node scripts/build-plugin.mjs",
+    "build:all": "npm run build && npm run build:plugins",
+    "clean": "npm exec --workspaces -- npx rimraf dist",
+    "dev": "npm run build -w packages/core && tsx packages/robloxstudio-mcp/src/index.ts",
+    "dev:desktop": "npm run dev -w apps/desktop",
+    "start:desktop": "npm run start -w apps/desktop",
+    "build:desktop": "npm run build -w apps/desktop",
+    "package:desktop": "npm run build:plugin:artifact && npm run build && npm run build:desktop && npm run package -w apps/desktop",
+    "eval": "npm run eval -w apps/desktop --",
+    "eval:colors": "npm run eval:colors -w apps/desktop --",
+    "eval:kits": "npm run eval:kits -w apps/desktop --",
+    "typecheck:desktop": "npm run typecheck -w apps/desktop",
+    "lint:desktop": "npm run lint -w apps/desktop",
+    "test:desktop": "npm run test -w apps/desktop",
+    "preview:desktop": "npm run preview -w apps/desktop",
+    "dev:inspector": "npm run build -w packages/core && tsx packages/robloxstudio-mcp-inspector/src/index.ts",
+    "start": "node packages/robloxstudio-mcp/dist/index.js",
+    "start:inspector": "node packages/robloxstudio-mcp-inspector/dist/index.js",
+    "lint": "eslint \"packages/*/src/**/*.ts\"",
+    "typecheck": "tsc --noEmit -p packages/core/tsconfig.json",
+    "test": "npm test -w packages/core && npm run test:asset-security && npm run test:package-contents && npm run test:runner && npm run test:port-isolation && npm run test:scripts",
+    "test:asset-security": "jest --config jest.asset-security.config.js --runInBand",
+    "test:package-contents": "node tests/prepack-package-contents.mjs",
+    "test:runner": "node tests/mcp-http-client.mjs && node tests/managed-studio-session.mjs && node tests/instance-routing.mjs && node tests/auto-install-run-process.mjs && node tests/studio-directory-isolation.mjs",
+    "test:port-isolation": "node tests/test-port-allocation.mjs && node tests/test-port-wrapper-isolation.mjs && node tests/studio-test-lease.mjs",
+    "test:codex-wrapper": "node tests/codex-wsl-environment.mjs",
+    "test:e2e": "npm run test:studio:smoke",
+    "test:e2e:full": "npm run test:e2e:auto-install && npm run test:studio:runner && npm run test:e2e:lifecycle && npm run test:studio:parallel",
+    "test:e2e:auto-install": "node tests/run-with-test-port.mjs tests/auto-install-plugin-e2e.mjs",
+    "test:studio:smoke": "npm run build:plugin:artifact && node tests/run-with-test-port.mjs tests/run-all.mjs --managed --smoke",
+    "test:studio:runner": "npm run build:plugin:artifact && node tests/run-with-test-port.mjs tests/run-all.mjs --managed",
+    "test:studio:parallel": "npm run build:plugin:artifact && node tests/parallel-studio-isolation-smoke.mjs",
+    "test:studio:sse-capacity": "npm run build:plugin:artifact && node tests/sse-multi-studio-capacity.mjs",
+    "test:e2e:wsl-process-identity": "node tests/run-with-test-port.mjs tests/wsl-process-identity-launch.mjs",
+    "test:e2e:lifecycle": "npm run test:e2e:wsl-process-identity && node tests/run-with-test-port.mjs tests/studio-lifecycle-regressions.mjs",
+    "test:studio:tools": "node tests/run-with-test-port.mjs tests/studio-tooling-smoke.mjs",
+    "test:watch": "npm run test:watch -w packages/core",
+    "test:coverage": "npm run test:coverage -w packages/core",
+    "publish:all": "node scripts/publish.mjs",
+    "test:scripts": "node --test scripts/fetch-libmp.test.mjs"
+  },
+  "devDependencies": {
+    "@typescript-eslint/eslint-plugin": "^7.0.0",
+    "@typescript-eslint/parser": "^7.0.0",
+    "esbuild": "0.27.2",
+    "eslint": "^8.57.0",
+    "proper-lockfile": "^4.1.2",
+    "tsup": "^8.0.0",
+    "tsx": "^4.6.0",
+    "typescript": "^5.3.2"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/client": "^2.0.0",
+    "@modelcontextprotocol/node": "^2.0.0",
+    "@modelcontextprotocol/server": "^2.0.0"
+  }
+}

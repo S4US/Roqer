@@ -1,0 +1,60 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  mcp:
+    name: MCP bridge and Studio plugin
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            studio-plugin/package-lock.json
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run lint
+      - run: npm test
+      - run: npm run build
+      # Compiles the plugin through roblox-ts and assembles both variants, so a
+      # plugin change that no longer compiles fails here rather than in Studio.
+      # The runner starts without the plugin's own dependencies, so this also
+      # covers the first-build install a fresh checkout relies on.
+      - run: npm run build:plugins
+
+  desktop:
+    name: Desktop app
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck:desktop
+      - run: npm run lint:desktop
+      - run: npm run test:desktop
+      - run: npm run build:desktop
+      # The runner's Chromium sandbox helper is not setuid, so the smoke run
+      # disables Electron's sandbox; it opens only the app's own renderer.
+      - name: Electron smoke
+        run: xvfb-run -a npm run smoke:electron -w apps/desktop
+        env:
+          ELECTRON_DISABLE_SANDBOX: "1"

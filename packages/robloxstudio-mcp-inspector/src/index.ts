@@ -1,0 +1,45 @@
+import { RobloxStudioMCPServer, getReadOnlyTools } from '@roqer/mcp-core';
+import { createRequire } from 'module';
+import { installBundledPlugin } from './install-plugin.js';
+
+// `--install-plugin` is kept as another name for `--install-bundled-plugin`;
+// it no longer downloads a plugin from the project this bridge was forked from.
+const installOnly = process.argv.includes('--install-bundled-plugin') || process.argv.includes('--install-plugin');
+const pluginPathIndex = process.argv.indexOf('--plugin-path');
+const pluginPath = pluginPathIndex !== -1 && pluginPathIndex + 1 < process.argv.length
+  ? process.argv[pluginPathIndex + 1]
+  : undefined;
+
+if (installOnly) {
+  await installBundledPlugin({ sourcePath: pluginPath }).catch((err) => {
+    console.error(err instanceof Error ? err.message : String(err));
+    process.exitCode = 1;
+  });
+} else {
+  if (process.argv.includes('--auto-install-plugin')) {
+    await installBundledPlugin({
+      sourcePath: pluginPath,
+      log: (message) => console.error(`[install-plugin] ${message}`),
+      warn: (message) => console.error(message),
+    }).catch((err) => {
+      console.error(
+        `[install-plugin] Auto-install skipped: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    });
+  }
+
+  const require = createRequire(import.meta.url);
+  const { version: VERSION } = require('../package.json');
+
+  const server = new RobloxStudioMCPServer({
+    name: 'robloxstudio-mcp-inspector',
+    version: VERSION,
+    tools: getReadOnlyTools(),
+    pluginVariant: 'inspector',
+  });
+
+  server.run().catch((error) => {
+    console.error('Server failed to start:', error);
+    process.exit(1);
+  });
+}

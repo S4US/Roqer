@@ -1,0 +1,97 @@
+# Dependencies
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Build outputs
+dist/
+# Bundled Electron main process and preload for the desktop app.
+apps/desktop/dist-electron/
+*.tsbuildinfo
+# studio-plugin/out is the compiled Luau output (rbxtsc); rebuilt by `npm run build`.
+studio-plugin/out/
+# Compiled rbxmx artifacts — produced by `npm run build:plugin`, attached to GitHub releases.
+studio-plugin/MCPPlugin.rbxmx
+studio-plugin/MCPInspectorPlugin.rbxmx
+# Carbon filesystem-capture session files are unrelated to MCP plugin builds.
+studio-plugin/Carbon.rbxm
+studio-plugin/.Carbon.rbxm.lock
+
+# Environment files
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Agent configs (may contain credentials)
+.claude.json
+.claude/
+.codex.json
+.codex/
+.agents
+
+# Development files (keep local only)
+CLAUDE.md
+MCP_Server_Plan.md
+test-*.js
+example-*.json
+mcp.json
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs
+logs/
+*.log
+
+.WARP.md
+
+# Runtime data
+pids/
+*.pid
+*.seed
+*.pid.lock
+
+# Coverage directory used by tools like istanbul
+coverage/
+*.lcov
+
+# Recorded agent-evaluation trajectories. Reproduced by `npm run eval -w apps/desktop`
+# against a live Studio; the seeded tasks and oracles are what belong in git.
+apps/desktop/eval/results/
+
+# Temporary folders
+tmp/
+temp/
+
+# AI-generated content
+banner-prompt.txt
+forum-title.txt
+
+# Binaries
+lune.exe
+lune.zip
+
+# Shell/OS junk
+bash.exe.stackdump
+*.FullName
+
+# Developer-local files — anything ending in .local.* or living under local/
+# is ignored. Use this for per-contributor scripts (e.g. install-mcp.local.mjs),
+# personal docs (SPEC.local.md), maintainer briefings, frozen upstream snapshots,
+# scratch notes, and the like — keep ad-hoc paths out of this file.
+*.local.*
+local/
+
+# Desktop packaging output and the staged MCP bridge it ships
+apps/desktop/release/
+apps/desktop/resources/
