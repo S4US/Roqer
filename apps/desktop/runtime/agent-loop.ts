@@ -283,6 +283,12 @@ function steerBlocks(steers: readonly string[]): TurnContent[] {
   }));
 }
 
+/** Sent with the last turn the budget allows. */
+const LIMIT_NOTE = `[Roqer, the host: this run has reached its limit of ${MAX_LOOP_TURNS} model turns. Do not call any tool; Roqer will not run one. Reply now to the user: what works and how you checked it, what does not work yet, and what is left to do.]`;
+
+/** Added to the reply of a run that ended on its turn limit, so the person knows how it ended. */
+const LIMIT_REPLY = `Roqer stopped this run at its limit of ${MAX_LOOP_TURNS} model turns. Send "Continue" to carry on from here.`;
+
 /** What Roqer says, as the host, to a model that ended a turn with no reply and no tool call. */
 function silenceNote(open: readonly RunTask[]): string {
   if (open.length === 0) {
@@ -469,6 +475,17 @@ export function createAgentLoopPlanner(options: AgentLoopPlannerOptions): Planne
       for (let turn = 0; turn < MAX_LOOP_TURNS; turn += 1) {
         if (context.signal.aborted) throw new RunCancelledError();
         context.progress(`Thinking with ${label}`);
+        // The last turn the budget allows is spent on a report rather than one
+        // more step: a run stopped mid-work with no answer loses everything the
+        // person would need to decide whether to continue it.
+        const finalTurn = turn === MAX_LOOP_TURNS - 1;
+        if (finalTurn) {
+          const note: TurnContent = { kind: "text", text: LIMIT_NOTE };
+          const last = messages[messages.length - 1];
+          if (last.role === "user") messages[messages.length - 1] = { ...last, content: [...last.content, note] };
+          else messages.push({ role: "user", content: [note] });
+          context.status("Turn limit reached", `The model is asked to report instead of taking step ${MAX_LOOP_TURNS}.`);
+        }
 
         const request: TurnRequest = {
           runId: options.runId,
@@ -591,9 +608,16 @@ export function createAgentLoopPlanner(options: AgentLoopPlannerOptions): Planne
             context.status("Model stopped without a reply", "Roqer asked it once to continue the request or reply.");
             continue;
           }
+          if (finalTurn) return `${answer || "The model returned no answer for this turn."}\n\n${LIMIT_REPLY}`;
           if (endedEarly === undefined) return answer || "The model returned no answer for this turn.";
           context.status("Turn ended early", endedEarly);
           return answer.length === 0 ? endedEarly : `${answer}\n\n${endedEarly}`;
+        }
+        // Told to report, it asked for more work instead: nothing more runs.
+        if (finalTurn) {
+          const answer = prose.text().trim();
+          if (answer.length > 0) return `${answer}\n\n${LIMIT_REPLY}`;
+          break;
         }
         // Cut off while still asking for tools is survivable, because the next
         // turn carries the results and the model can pick up where it stopped.

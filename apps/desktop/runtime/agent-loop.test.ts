@@ -597,6 +597,31 @@ function stallingGateway(opening: readonly TurnEvent[] = []): TurnTransport {
   };
 }
 
+test("the last turn the budget allows asks for a report, and runs nothing more", async () => {
+  const controller = new AbortController();
+  const { context, recorded } = makeContext(controller);
+  const requests: TurnRequest[] = [];
+  const working: TurnTransport = {
+    async *streamTurn(request) {
+      requests.push(JSON.parse(JSON.stringify(request)) as TurnRequest);
+      if (requests.length === MAX_LOOP_TURNS) {
+        // Told to report, it answers and still asks for one more step.
+        yield { kind: "delta", text: "The kart drives and drifts; boost is untested." };
+      }
+      yield { kind: "tool-call", call: { id: `c${requests.length}`, name: "update_task_list", arguments: { tasks: [] } } };
+      yield { kind: "completed", stopReason: "tool-use" };
+    },
+  };
+
+  const answer = await planner(working).run(context);
+
+  assert.equal(requests.length, MAX_LOOP_TURNS);
+  assert.match(answer, /^The kart drives and drifts; boost is untested\.\n\nRoqer stopped this run at its limit of \d+ model turns\. Send "Continue"/);
+  assert.match(JSON.stringify(requests.at(-1)?.messages.at(-1)), /reached its limit of \d+ model turns\. Do not call any tool/);
+  assert.doesNotMatch(JSON.stringify(requests.at(-2)?.messages), /reached its limit/, "only the last turn carries the note");
+  assert.ok(recorded.statuses.some((entry) => entry.label === "Turn limit reached"));
+});
+
 test("a turn that makes no progress is ended rather than held open forever", async () => {
   // The transport bound measures whether the connection is alive, and the
   // gateway's keep-alive frames keep it alive, so a model answering the socket

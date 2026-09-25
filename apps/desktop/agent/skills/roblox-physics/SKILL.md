@@ -37,6 +37,8 @@ Server Authority: set `Workspace.AuthorityMode = Server` with its required setti
 
 **Rule:** choose the model first. Keep NPC and gameplay-critical objects authoritative; give client ownership to non-critical physics only when the resulting behavior is acceptable and tested.
 
+**Testing player-owned physics in a playtest:** an assembly a player owns is simulated on that player's client, and its seat's `Throttle` and `Steer` come from that client's input. Drive it from the `client-1` peer, not by setting values on the server, which the owner overwrites. Hold the input and measure in the same call, since speed read after the input ends is zero whether the controls work or not. Read speed from `AssemblyLinearVelocity` on the owning client. Once a behaviour is measured working, record it and move on rather than re-testing it another way.
+
 ### Common Gotchas
 - Constraints do nothing on Anchored parts
 - Both Attachment0 AND Attachment1 required (missing one = silent fail)
