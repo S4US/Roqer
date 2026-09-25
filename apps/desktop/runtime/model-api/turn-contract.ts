@@ -173,7 +173,13 @@ export type TurnUsage = Readonly<{
   cachedInputTokens?: number;
 }>;
 
-export const TURN_STOP_REASONS = ["end", "tool-use", "max-output", "refusal"] as const;
+/**
+ * Why a turn ended. "malformed-tool-call" is a model that tried to call a tool
+ * and could not form the call: Gemini reports it as MALFORMED_FUNCTION_CALL,
+ * with no content, and a relay such as OpenRouter passes that on only as a
+ * provider-native reason beside an ordinary-looking finish.
+ */
+export const TURN_STOP_REASONS = ["end", "tool-use", "max-output", "refusal", "malformed-tool-call"] as const;
 
 export type TurnStopReason = typeof TURN_STOP_REASONS[number];
 

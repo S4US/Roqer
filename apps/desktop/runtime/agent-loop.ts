@@ -279,6 +279,11 @@ function steerBlocks(steers: readonly string[]): TurnContent[] {
   }));
 }
 
+/** How many broken tool calls in a row the model is asked to retry before the run fails. */
+export const MALFORMED_CALL_RETRIES = 3;
+
+const MALFORMED_CALL_NOTE = "[Roqer, the host: your last tool call could not be formed: the model's provider reported a malformed function call, so nothing ran. This usually happens when one call is too large. Make the same step again as a smaller call: split a long script into parts, write a long script in stages with the line editors, or build in several batches.]";
+
 /** Sent with the last turn of a run that is repeating itself. */
 function stuckNote(stuck: Readonly<{ turns: number; failing: boolean }>): string {
   return `[Roqer, the host: you have made the same ${stuck.failing ? "failing " : ""}calls ${stuck.turns} turns in a row, so Roqer is stopping this run. Do not call any tool; Roqer will not run one. Reply now to the user: what works and how you checked it, what does not work yet, and what is left to do.]`;
@@ -333,6 +338,8 @@ export function createAgentLoopPlanner(options: AgentLoopPlannerOptions): Planne
       // Asked at most once a run: a model that goes silent again after being
       // asked is done, and the completion gate reports what it left open.
       let askedAfterSilence = false;
+      // Broken tool calls in a row; a turn that forms a call resets it.
+      let malformedInRow = 0;
       const tools = loopTools(options.skillLibrary, options.blender === true);
       const instructions = {
         system: options.agent.systemInstructions,
@@ -600,6 +607,20 @@ export function createAgentLoopPlanner(options: AgentLoopPlannerOptions): Planne
           // that can be said about the result. Recorded in the timeline and said
           // in the reply both: the timeline is where it is countable and the
           // reply is where the person who asked will actually read it.
+          // The model tried to call a tool and could not form the call, most
+          // often one too large to write in a single piece. Said to it as
+          // that, a few times, then said to the person as that: not as a
+          // model with nothing to say.
+          if (stopReason === "malformed-tool-call") {
+            malformedInRow += 1;
+            if (malformedInRow > MALFORMED_CALL_RETRIES) {
+              throw new Error(`${label === "Roqer" ? "The model" : label} could not form a tool call ${malformedInRow} times in a row (its provider reported a malformed function call). This usually means one call is too large; ask for the work in smaller steps.`);
+            }
+            if (spoken.length > 0) messages.push({ role: "assistant", content: [{ kind: "text", text: spoken }] });
+            messages.push({ role: "user", content: [{ kind: "text", text: MALFORMED_CALL_NOTE }] });
+            context.status("Model sent a broken tool call", `Its provider could not read the call, so Roqer asked for a smaller one (${malformedInRow} of ${MALFORMED_CALL_RETRIES}).`);
+            continue;
+          }
           const answer = prose.text().trim();
           // An empty turn is a model losing its place, not a finished run:
           // some models end a turn silently in the middle of a plan, even
@@ -622,6 +643,7 @@ export function createAgentLoopPlanner(options: AgentLoopPlannerOptions): Planne
           if (answer.length > 0) return `${answer}\n\n${stuckReply(stuck)}`;
           break;
         }
+        malformedInRow = 0;
         // Cut off while still asking for tools is survivable, because the next
         // turn carries the results and the model can pick up where it stopped.
         // It is still worth recording: a run that keeps hitting the limit is one

@@ -50,6 +50,9 @@ type ChatMessage =
   }>
   | Readonly<{ role: "tool"; tool_call_id: string; content: string }>;
 
+/** Provider-native finish reasons that mean the model tried to call a tool and could not form the call. */
+const MALFORMED_NATIVE_REASONS = /MALFORMED_FUNCTION_CALL|UNEXPECTED_TOOL_CALL/i;
+
 type PendingToolCall = { id: string; name: string; arguments: string };
 
 function stopReason(value: unknown): TurnStopReason {
@@ -192,6 +195,8 @@ export class OpenAiChatTurns implements TurnTransport {
     let usage: TurnUsage | undefined;
     let done = false;
     let produced = false;
+    let nativeReason: string | undefined;
+    let relayError = false;
 
     for await (const frame of serverSentFrames(body, signal, MAX_TOOL_ARGUMENT_CHARACTERS * 4)) {
       const data = frameData(frame);
@@ -214,7 +219,13 @@ export class OpenAiChatTurns implements TurnTransport {
       if (reported !== undefined) usage = reported;
       const choice = Array.isArray(payload.choices) ? payload.choices[0] : undefined;
       if (!isRecord(choice)) continue;
-      if (choice.finish_reason !== undefined && choice.finish_reason !== null) reason = stopReason(choice.finish_reason);
+      if (choice.finish_reason !== undefined && choice.finish_reason !== null) {
+        reason = stopReason(choice.finish_reason);
+        if (choice.finish_reason === "error") relayError = true;
+      }
+      // OpenRouter normalises the finish reason and keeps the provider's own
+      // here; Gemini's failed tool call only shows up in this field.
+      if (typeof choice.native_finish_reason === "string") nativeReason = choice.native_finish_reason;
       const delta = isRecord(choice.delta) ? choice.delta : undefined;
       if (delta === undefined) continue;
       // Reasoning text is never shown: splicing a model's thinking into the
@@ -239,6 +250,14 @@ export class OpenAiChatTurns implements TurnTransport {
           : `${label} sent a tool call Roqer could not read. This model may not support tool calls well.`);
       }
       calls.push(completed);
+    }
+    // A model that could not form its tool call ends looking like a finished
+    // turn with nothing in it. Said as what it is, so the loop can ask for a
+    // smaller call instead of reporting that the model had no answer.
+    if (calls.length === 0 && nativeReason !== undefined && MALFORMED_NATIVE_REASONS.test(nativeReason)) {
+      reason = "malformed-tool-call";
+    } else if (calls.length === 0 && relayError) {
+      throw new Error(`${label} ended the turn with an error from the model's provider${nativeReason === undefined ? "" : ` (${nativeReason.slice(0, 80)})`}.`);
     }
     for (const call of calls) yield { kind: "tool-call", call };
     // Some local servers report `stop` for a turn that asked for tools.

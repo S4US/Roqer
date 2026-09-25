@@ -9,6 +9,7 @@ import { buildConversationPrompt } from "./conversation-prompt";
 import { COMPACTION_TRIGGER_MESSAGES } from "./agent-loop-history";
 import {
   createAgentLoopPlanner,
+  MALFORMED_CALL_RETRIES,
   REPEATED_CALL_TURNS,
   REPEATED_FAILURE_TURNS,
   type AgentLoopTelemetryEvent,
@@ -1250,6 +1251,20 @@ test("a note the model had not read when it finished earns one more turn", async
   ]);
   assert.equal(answer, "Done: edited the client script.\n\nMoved the change to the server script.");
   assert.ok(recorded.statuses.some((entry) => entry.label === "Read your note"));
+});
+
+test("a broken tool call is retried as a smaller one, then fails saying so", async () => {
+  const BROKEN: readonly TurnEvent[] = [{ kind: "completed", stopReason: "malformed-tool-call" }];
+  const { context, recorded } = makeContext(new AbortController());
+  const recovering = gateway([BROKEN, BROKEN, DONE("Wrote the controller in two parts.")]);
+  assert.equal(await planner(recovering).run(context), "Wrote the controller in two parts.");
+  assert.match(JSON.stringify(recovering.requests[1].messages.at(-1)), /last tool call could not be formed.*smaller call/);
+  assert.ok(recorded.statuses.some((entry) => entry.label === "Model sent a broken tool call"));
+
+  const hopeless = makeContext(new AbortController());
+  const failing = gateway(Array.from({ length: MALFORMED_CALL_RETRIES + 1 }, () => BROKEN));
+  await assert.rejects(() => planner(failing).run(hopeless.context), /could not form a tool call 4 times in a row/);
+  assert.equal(failing.requests.length, MALFORMED_CALL_RETRIES + 1);
 });
 
 test("a model that ends a turn silently is asked once to continue", async () => {
