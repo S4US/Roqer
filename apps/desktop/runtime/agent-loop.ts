@@ -283,8 +283,11 @@ function steerBlocks(steers: readonly string[]): TurnContent[] {
   }));
 }
 
-/** What Roqer says, as the host, to a model that ended a turn silently with tasks open. */
+/** What Roqer says, as the host, to a model that ended a turn with no reply and no tool call. */
 function silenceNote(open: readonly RunTask[]): string {
+  if (open.length === 0) {
+    return "[Roqer, the host: you ended your turn with no reply and no tool call. Continue working on the user's request now, or reply saying what you did and what is left.]";
+  }
   const titles = open.map((task) => `"${task.title}"`).join(", ");
   return `[Roqer, the host: you ended your turn with no reply and no tool call while ${open.length === 1 ? "this task is" : "these tasks are"} still open: ${titles}. Continue the work now, or mark what cannot be finished as blocked and reply saying why.]`;
 }
@@ -578,14 +581,14 @@ export function createAgentLoopPlanner(options: AgentLoopPlannerOptions): Planne
           // in the reply both: the timeline is where it is countable and the
           // reply is where the person who asked will actually read it.
           const answer = prose.text().trim();
-          // Silence with work still open is a model losing its place, not a
-          // finished run: some models end a turn empty in the middle of a plan.
-          // Asked once, by the host, to carry on or say what is in the way.
-          const open = context.tasks().filter((task) => task.status === "pending" || task.status === "active");
-          if (answer.length === 0 && endedEarly === undefined && open.length > 0 && !askedAfterSilence) {
+          // An empty turn is a model losing its place, not a finished run:
+          // some models end a turn silently in the middle of a plan, even
+          // before writing one. Asked once, by the host, to carry on or answer.
+          if (answer.length === 0 && endedEarly === undefined && !askedAfterSilence) {
             askedAfterSilence = true;
+            const open = context.tasks().filter((task) => task.status === "pending" || task.status === "active");
             messages.push({ role: "user", content: [{ kind: "text", text: silenceNote(open) }] });
-            context.status("Model stopped without a reply", "Tasks were still open, so Roqer asked it once to continue or say what is blocking them.");
+            context.status("Model stopped without a reply", "Roqer asked it once to continue the request or reply.");
             continue;
           }
           if (endedEarly === undefined) return answer || "The model returned no answer for this turn.";

@@ -1169,7 +1169,7 @@ test("a note the model had not read when it finished earns one more turn", async
   assert.ok(recorded.statuses.some((entry) => entry.label === "Read your note"));
 });
 
-test("a model that goes silent with tasks open is asked once to continue", async () => {
+test("a model that ends a turn silently is asked once to continue", async () => {
   const SILENT: readonly TurnEvent[] = [{ kind: "completed", stopReason: "end", usage: { inputTokens: 10, outputTokens: 0 } }];
   const task = (title: string, status: RunTask["status"]): RunTask => ({ id: title, title, status, requiresRuntimeEvidence: false });
 
@@ -1193,12 +1193,18 @@ test("a model that goes silent with tasks open is asked once to continue", async
   assert.equal(await planner(twice).run(again.context), "The model returned no answer for this turn.");
   assert.equal(twice.requests.length, 2);
 
-  // Nothing open: an empty turn ends the run without a nudge.
-  const idle = makeContext(new AbortController());
-  idle.context.setTasks([task("Build the track", "done"), task("Upload", "blocked")]);
-  const quiet = gateway([SILENT]);
-  assert.equal(await planner(quiet).run(idle.context), "The model returned no answer for this turn.");
-  assert.equal(quiet.requests.length, 1);
+  // Silent before any plan exists: still asked once, to continue the request.
+  const early = makeContext(new AbortController());
+  const unplanned = gateway([SILENT, DONE("Here is the kart.")]);
+  assert.equal(await planner(unplanned).run(early.context), "Here is the kart.");
+  assert.match(JSON.stringify(unplanned.requests[1].messages.at(-1)), /no reply and no tool call\. Continue working on the user's request/);
+
+  // A turn that answers is never nudged, whatever is left open.
+  const answered = makeContext(new AbortController());
+  answered.context.setTasks([task("Test the kart in Play mode", "active")]);
+  const replied = gateway([DONE("I could not start a playtest.")]);
+  assert.equal(await planner(replied).run(answered.context), "I could not start a playtest.");
+  assert.equal(replied.requests.length, 1);
 });
 
 test("a screenshot too large to send is reported to the person, not only to the model", async () => {
