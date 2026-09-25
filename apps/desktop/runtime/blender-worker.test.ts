@@ -167,6 +167,95 @@ test("model previews come before rendered images in what the model sees", async 
   });
 });
 
+/**
+ * What Roqer's inspection printed for a real model: a go-kart a model built
+ * from 77 primitives, re-imported and measured in Blender. Its headrest and
+ * roll-hoop bar float off the body, its steering wheel reaches nothing, and its
+ * side pods run into the wheels.
+ */
+const KART_LAYOUT = {
+  pieces: 77, complete: true,
+  loose: [
+    { object: "Body", pieces: 1, size: [1.6, 0.16, 0.16], center: [0, -1.52, 3.4], gap: 0.18 },
+    { object: "Body", pieces: 1, size: [1.1, 0.3, 0.55], center: [0, -1.38, 2.85], gap: 0.08 },
+    { object: "SteeringWheel", pieces: 1, size: [0.8, 0.17, 0.17], center: [0, 0.42, 1.62], gap: 0.07 },
+    { object: "SteeringWheel", pieces: 1, size: [1.1, 0.17, 0.17], center: [0, 0.88, 2.08], gap: 0.06 },
+  ],
+  looseCount: 4,
+  isolated: [{ object: "SteeringWheel", gap: 0.39, nearest: "Body" }],
+  isolatedCount: 1,
+  overlaps: [
+    { objects: ["Body", "Wheel_RL"], depth: 0.55, piece: { object: "Body", size: [0.14, 3.7, 0.14], center: [2.4, 0.1, 0.85] } },
+    { objects: ["Body", "Wheel_RR"], depth: 0.55, piece: { object: "Body", size: [0.14, 3.7, 0.14], center: [-2.4, 0.1, 0.85] } },
+    { objects: ["Body", "Wheel_FL"], depth: 0.38, piece: { object: "Body", size: [0.9, 3.6, 0.75], center: [1.9, 0.1, 0.95] } },
+    { objects: ["Body", "Wheel_FR"], depth: 0.38, piece: { object: "Body", size: [0.9, 3.6, 0.75], center: [-1.9, 0.1, 0.95] } },
+  ],
+  overlapCount: 4,
+};
+
+/** A worker whose inspection prints the given stats for one exported model. */
+function inspectedWorker(jobsRoot: string, stats: Record<string, unknown>) {
+  const blender = fakeBlender(async (args) => {
+    if (args.some((arg) => arg.endsWith("roqer_runner.py"))) {
+      await fs.writeFile(path.join(argAfterDashes(args), "output", "model.glb"), Buffer.alloc(1024));
+      return { output: "ROQER_SCRIPT_DONE\n" };
+    }
+    return { output: `ROQER_INSPECT ${JSON.stringify({ meshes: 6, triangles: 1772, materials: ["Paint"], preview: false, ...stats })}\n` };
+  });
+  return new BlenderWorker({ executable: EXECUTABLE, jobsRoot, spawn: blender.spawn, killTree: blender.killTree, env: {} });
+}
+
+test("the layout reaches the model as facts in the script's own coordinates", async () => {
+  await withJobs(async (jobsRoot) => {
+    const outcome = await inspectedWorker(jobsRoot, { min: [-3.08, -3.84, 0.01], layout: KART_LAYOUT }).run({ script: "import bpy" });
+
+    assert.equal(outcome.ok, true, outcome.text);
+    const file = (outcome.data as { files: Array<{ layout?: { looseCount: number; overlaps: unknown[] }; bottom?: number }> }).files[0];
+    assert.equal(file.layout?.looseCount, 4);
+    assert.equal(file.layout?.overlaps.length, 4);
+    assert.equal(file.bottom, 0.01);
+    // Each fact names a piece by the size and position the script gave it.
+    assert.match(outcome.text, /in the script's Blender coordinates/);
+    assert.match(outcome.text, /4 piece groups touching nothing else in their own object, usually a gap to close: in Body, a piece 1\.60 × 0\.16 × 0\.16 at \(0\.00, -1\.52, 3\.40\), 0\.18 from the rest/);
+    assert.match(outcome.text, /An object touching no other object \(right for a kit set.*\): SteeringWheel, 0\.39 from Body/);
+    assert.match(outcome.text, /Body and Wheel_RL by 0\.55, deepest at the Body piece 0\.14 × 3\.70 × 0\.14 at \(2\.40, 0\.10, 0\.85\)/);
+    assert.match(outcome.text, /Lowest point at Z 0\.01\./, "a model on the ground gets no advice about it");
+  });
+});
+
+test("a clean, a skipped or a malformed layout is reported for what it is", async () => {
+  await withJobs(async (jobsRoot) => {
+    const clean = await inspectedWorker(jobsRoot, {
+      min: [0, 0, 1.5],
+      layout: { pieces: 12, complete: true, loose: [], looseCount: 0, isolated: [], isolatedCount: 0, overlaps: [], overlapCount: 0 },
+    }).run({ script: "import bpy" });
+    assert.match(clean.text, /All 12 pieces connected, and no separate objects pass into each other/);
+    assert.match(clean.text, /Lowest point at Z 1\.50; 0 stands it on the ground/);
+
+    const skipped = await inspectedWorker(jobsRoot, { layout: { pieces: 400, skipped: "more than 300 separate pieces" } }).run({ script: "import bpy" });
+    assert.match(skipped.text, /Layout not measured \(more than 300 separate pieces\); judge it from the preview/);
+
+    const malformed = await inspectedWorker(jobsRoot, {
+      layout: {
+        pieces: 3, complete: false,
+        loose: [{ object: "Body", size: [1, 2], center: [0, 0, 0], gap: 1 }, "junk", { object: 7, size: [1, 1, 1], center: [0, 0, 0], gap: 1 }],
+        looseCount: 2,
+        isolated: [{ object: "Lid", gap: "far" }],
+        overlaps: [{ objects: ["A"], depth: 1, piece: { size: [1, 1, 1], center: [0, 0, 0] } }],
+      },
+    }).run({ script: "import bpy" });
+    const layout = (malformed.data as { files: Array<{ layout?: { loose: unknown[]; isolated: unknown[]; overlaps: unknown[]; looseCount: number } }> }).files[0].layout;
+    assert.deepEqual([layout?.loose.length, layout?.isolated.length, layout?.overlaps.length], [0, 0, 0], "no malformed entry survives");
+    assert.equal(layout?.looseCount, 2, "the count still says pieces are loose");
+    assert.match(malformed.text, /2 piece groups touching nothing else in their own object, usually a gap to close\./);
+    assert.match(malformed.text, /The comparison stopped at its time limit/);
+
+    const none = await inspectedWorker(jobsRoot, { layout: "not an object" }).run({ script: "import bpy" });
+    assert.equal((none.data as { files: Array<{ layout?: unknown }> }).files[0].layout, undefined);
+    assert.doesNotMatch(none.text, /layout/);
+  });
+});
+
 test("an overdue or cancelled job takes Blender's process tree down", async () => {
   await withJobs(async (jobsRoot) => {
     const hanging = fakeBlender(async () => ({ hang: true }));

@@ -45,8 +45,11 @@ the tool away again.
    images.
 3. Roqer does not trust the script's own report. It re-imports the exported
    models (up to three a job), measures their size, triangles, meshes and
-   materials, and renders a preview that reaches the agent as an image, the
-   way a screenshot does. A PNG reaches the agent as it is.
+   materials, and checks their layout: pieces that touch nothing else, and
+   separate parts that pass into each other, reported in the script's own
+   coordinates. It renders a preview of four views in one image (side, top,
+   and two opposite corners) that reaches the agent the way a screenshot does.
+   A PNG reaches the agent as it is.
 4. To use a model, the agent uploads it to Roblox as a Model and inserts it
    into your place, then checks its size there. An image uploads as a Decal,
    whose image ID a UI element can display. Uploads ask first too, outside Full

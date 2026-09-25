@@ -32,7 +32,8 @@ const MAX_INSPECTED_MODELS = 3;
 const MAX_RENDERED_IMAGES = 4;
 /** Roblox stores an uploaded image at most this many pixels a side. */
 const MAX_UPLOAD_IMAGE_SIDE = 1024;
-const INSPECT_TIMEOUT_MS = 30_000;
+/** The inspection re-imports, measures the layout (itself capped at 12 s) and renders four views. */
+const INSPECT_TIMEOUT_MS = 45_000;
 const MAX_LOG_CHARACTERS = 4_000;
 const MAX_PREVIEW_BYTES = 2 * 1024 * 1024;
 /** Old jobs are cleared once they are this old; a model to upload is uploaded within the day. */
@@ -63,9 +64,13 @@ except BaseException:
 print("${DONE_MARKER}", flush=True)
 `;
 
-/** Roqer's own check of one exported model: measure it, then render a framed preview. */
-export const INSPECT_SCRIPT = String.raw`import bpy, os, sys, json, math
+/**
+ * Roqer's own check of one exported model: measure it, lay out how its pieces
+ * sit against each other, and render four views of it in one preview image.
+ */
+export const INSPECT_SCRIPT = String.raw`import bpy, bmesh, os, sys, json, math, time
 from mathutils import Vector
+from mathutils.bvhtree import BVHTree
 
 args = sys.argv[sys.argv.index("--") + 1:]
 model_path, preview_path = args[0], args[1]
@@ -120,10 +125,261 @@ for item in meshes[:16]:
     objects.append({"name": item.name, "size": [round(hi.x - lo.x, 2), round(hi.z - lo.z, 2), round(hi.y - lo.y, 2)]})
 stats = {"meshes": len(meshes), "triangles": triangles, "materials": sorted(materials)[:32], "preview": False,
          "colorSource": color_source, "objects": objects}
+
+# Layout: how the model's pieces sit against each other, in the script's own
+# Blender coordinates. A script usually joins many primitives into one object,
+# so each object is split back into its loose pieces (after welding the
+# vertices the exporter split for flat shading) and the pieces are compared.
+TOUCH = 0.03
+MAX_PIECES = 300
+MAX_SAMPLES = 400
+LAYOUT_SECONDS = 12.0
+RAYS = [Vector(d).normalized() for d in ((0.5773, 0.5774, 0.5775), (-0.31, 0.83, 0.46), (0.71, -0.2, 0.67))]
+r2 = lambda value: round(value, 2)
+
+
+class Piece:
+    def __init__(self, owner, verts, faces, edges, closed):
+        self.owner, self.verts, self.faces, self.closed = owner, verts, faces, closed
+        self.tree = BVHTree.FromPolygons(verts, faces)
+        self.low = Vector(map(min, *verts))
+        self.high = Vector(map(max, *verts))
+        length = sum((verts[b] - verts[a]).length for a, b in edges)
+        step = max(0.08, length / MAX_SAMPLES)
+        samples = list(verts)
+        for a, b in edges:
+            count = int((verts[b] - verts[a]).length / step)
+            samples.extend(verts[a].lerp(verts[b], k / (count + 1)) for k in range(1, count + 1))
+        samples.extend(sum((verts[i] for i in face), Vector()) / len(face) for face in faces)
+        self.samples = samples[:MAX_SAMPLES * 3]
+
+    def describe(self, low=None, high=None):
+        low, high = low or self.low, high or self.high
+        size, centre = high - low, (low + high) / 2
+        return {"size": [r2(size.x), r2(size.y), r2(size.z)], "center": [r2(centre.x), r2(centre.y), r2(centre.z)]}
+
+
+def split_pieces(item):
+    bm = bmesh.new()
+    bm.from_mesh(item.data)
+    bm.transform(item.matrix_world)
+    bmesh.ops.remove_doubles(bm, verts=bm.verts, dist=1e-4)
+    bm.faces.ensure_lookup_table()
+    seen, pieces = set(), []
+    for face in bm.faces:
+        if face.index in seen:
+            continue
+        seen.add(face.index)
+        stack, part = [face], []
+        while stack:
+            current = stack.pop()
+            part.append(current)
+            for edge in current.edges:
+                for other in edge.link_faces:
+                    if other.index not in seen:
+                        seen.add(other.index)
+                        stack.append(other)
+        edges = {edge for current in part for edge in current.edges}
+        index, verts, faces = {}, [], []
+        for current in part:
+            ids = []
+            for vert in current.verts:
+                if vert.index not in index:
+                    index[vert.index] = len(verts)
+                    verts.append(vert.co.copy())
+                ids.append(index[vert.index])
+            faces.append(ids)
+        pairs = [(index[edge.verts[0].index], index[edge.verts[1].index]) for edge in edges]
+        pieces.append(Piece(item.name, verts, faces, pairs, all(len(edge.link_faces) == 2 for edge in edges)))
+    bm.free()
+    return pieces
+
+
+def inside(point, piece):
+    """Ray parity over three skew directions; only a closed piece has an inside."""
+    if not piece.closed or any(point[i] < piece.low[i] - 1e-6 or point[i] > piece.high[i] + 1e-6 for i in range(3)):
+        return False
+    votes = 0
+    for direction in RAYS:
+        hits, origin = 0, point
+        while hits < 64:
+            location = piece.tree.ray_cast(origin, direction)[0]
+            if location is None:
+                break
+            hits += 1
+            origin = location + direction * 1e-5
+        votes += hits % 2
+    return votes >= 2
+
+
+def box_gap(a, b):
+    return max(0.0, max(max(a.low[i] - b.high[i], b.low[i] - a.high[i]) for i in range(3)))
+
+
+def relate(a, b):
+    """The gap between two pieces (0 when they touch) and how far one passes into the other."""
+    if box_gap(a, b) > TOUCH:
+        return math.inf, 0.0
+    gap, depth = (0.0 if a.tree.overlap(b.tree) else math.inf), 0.0
+    for first, second in ((a, b), (b, a)):
+        for point in first.samples:
+            if inside(point, second):
+                gap = 0.0
+                depth = max(depth, second.tree.find_nearest(point)[3])
+            elif gap > 0:
+                gap = min(gap, second.tree.find_nearest(point)[3])
+    return gap, depth
+
+
+def nearest(group, candidates):
+    """The smallest gap from a group of pieces to any candidate, checking the closest few by bounds."""
+    best = (math.inf, None)
+    for piece in group:
+        for other in sorted(candidates, key=lambda c: box_gap(piece, c))[:4]:
+            gap = min(other.tree.find_nearest(point)[3] for point in piece.samples)
+            if gap < best[0]:
+                best = (gap, other)
+    return best
+
+
+def layout_facts():
+    started = time.monotonic()
+    pieces = [piece for item in meshes for piece in split_pieces(item)]
+    if len(pieces) > MAX_PIECES:
+        return {"pieces": len(pieces), "skipped": f"more than {MAX_PIECES} separate pieces"}
+    parent = list(range(len(pieces)))
+
+    def find(i):
+        while parent[i] != i:
+            parent[i] = parent[parent[i]]
+            i = parent[i]
+        return i
+
+    touching_objects, overlaps, complete = set(), {}, True
+    for i in range(len(pieces)):
+        if time.monotonic() - started > LAYOUT_SECONDS:
+            complete = False
+            break
+        for j in range(i + 1, len(pieces)):
+            a, b = pieces[i], pieces[j]
+            gap, depth = relate(a, b)
+            if gap > TOUCH:
+                continue
+            if a.owner == b.owner:
+                parent[find(i)] = find(j)
+                continue
+            touching_objects.update((a.owner, b.owner))
+            key = tuple(sorted((a.owner, b.owner)))
+            if depth > TOUCH and depth > overlaps.get(key, (0,))[0]:
+                overlaps[key] = (depth, a, b)
+
+    loose = []
+    for owner in dict.fromkeys(piece.owner for piece in pieces):
+        groups = {}
+        for i, piece in enumerate(pieces):
+            if piece.owner == owner:
+                groups.setdefault(find(i), []).append(piece)
+        ordered = sorted(groups.values(), key=lambda group: sum(len(p.faces) for p in group), reverse=True)
+        for group in ordered[1:]:
+            rest = [p for other in ordered if other is not group for p in other]
+            gap, _ = nearest(group, rest)
+            low = Vector(map(min, *[p.low for p in group])) if len(group) > 1 else group[0].low
+            high = Vector(map(max, *[p.high for p in group])) if len(group) > 1 else group[0].high
+            loose.append({"object": owner, "pieces": len(group), **group[0].describe(low, high), "gap": r2(gap)})
+
+    isolated = []
+    owners = list(dict.fromkeys(piece.owner for piece in pieces))
+    if len(owners) > 1:
+        for owner in owners:
+            if owner in touching_objects:
+                continue
+            gap, other = nearest([p for p in pieces if p.owner == owner], [p for p in pieces if p.owner != owner])
+            isolated.append({"object": owner, "gap": r2(gap), "nearest": other.owner if other is not None else None})
+
+    crossing = sorted(overlaps.values(), key=lambda entry: entry[0], reverse=True)
+    return {
+        "pieces": len(pieces),
+        "complete": complete,
+        "loose": sorted(loose, key=lambda entry: -entry["gap"])[:8],
+        "looseCount": len(loose),
+        "isolated": isolated[:8],
+        "isolatedCount": len(isolated),
+        "overlaps": [{"objects": [a.owner, b.owner], "depth": r2(depth), "piece": {"object": a.owner, **a.describe()}}
+                     for depth, a, b in crossing[:8]],
+        "overlapCount": len(crossing),
+    }
+
+
+# Four views in one image, so a mistake one angle hides shows in another and no
+# view depends on which way the model faces: side and top (orthographic), then
+# two opposite three-quarter views.
+PANEL_W, PANEL_H = 512, 384
+VIEWS = [("ORTHO", (1.0, 0.0, 0.0)), ("ORTHO", (0.0, 0.0, 1.0)), ("PERSP", (1.0, -1.2, 0.8)), ("PERSP", (-1.0, 1.2, 0.8))]
+
+
+def render_views(size, center):
+    import numpy
+    world = bpy.data.worlds.new("RoqerPreviewWorld")
+    world.color = (0.93, 0.93, 0.93)
+    scene.world = world
+    scene.render.engine = "BLENDER_WORKBENCH"
+    shading = scene.display.shading
+    shading.light = "STUDIO"
+    shading.color_type = {"vertex": "VERTEX", "texture": "TEXTURE"}.get(color_source, "MATERIAL")
+    shading.show_object_outline = True
+    shading.object_outline_color = (0.05, 0.05, 0.05)
+    scene.render.resolution_x = PANEL_W
+    scene.render.resolution_y = PANEL_H
+    scene.render.resolution_percentage = 100
+    scene.render.image_settings.file_format = "PNG"
+    scene.render.image_settings.color_mode = "RGBA"
+    camera = bpy.data.objects.new("RoqerPreviewCamera", bpy.data.cameras.new("RoqerPreviewCamera"))
+    scene.collection.objects.link(camera)
+    scene.camera = camera
+    radius = max(size.length / 2, 0.01)
+    sheet = numpy.ones((PANEL_H * 2, PANEL_W * 2, 4), dtype=numpy.float32)
+    for index, (kind, toward) in enumerate(VIEWS):
+        direction = Vector(toward).normalized()
+        camera.data.type = kind
+        if kind == "ORTHO":
+            across = (size.y, size.z) if direction.x else (size.x, size.y)
+            camera.data.ortho_scale = max(across[0], across[1] * PANEL_W / PANEL_H, 0.01) * 1.12
+            distance = radius * 2 + 1
+        else:
+            distance = radius / math.sin(camera.data.angle / 2) * 1.05
+        camera.location = center + direction * distance
+        camera.data.clip_end = distance * 4
+        camera.rotation_euler = (0, 0, 0) if direction.z > 0.99 else (-direction).to_track_quat("-Z", "Y").to_euler()
+        path = f"{preview_path}.{index}.png"
+        scene.render.filepath = path
+        bpy.ops.render.render(write_still=True)
+        image = bpy.data.images.load(path)
+        pixels = numpy.empty(PANEL_W * PANEL_H * 4, dtype=numpy.float32)
+        image.pixels.foreach_get(pixels)
+        bpy.data.images.remove(image)
+        os.remove(path)
+        # Image rows run bottom to top: the first row of views sits in the upper half.
+        row = PANEL_H if index < 2 else 0
+        column = PANEL_W * (index % 2)
+        sheet[row:row + PANEL_H, column:column + PANEL_W] = pixels.reshape(PANEL_H, PANEL_W, 4)
+    sheet[PANEL_H - 1:PANEL_H + 1, :, :3] = 0.55
+    sheet[:, PANEL_W - 1:PANEL_W + 1, :3] = 0.55
+    sheet[:, :, 3] = 1.0
+    output = bpy.data.images.new("RoqerPreview", PANEL_W * 2, PANEL_H * 2, alpha=True)
+    output.pixels.foreach_set(sheet.ravel())
+    output.filepath_raw = preview_path
+    output.file_format = "PNG"
+    output.save()
+
+
 if meshes:
     size = high - low
     stats["size"] = [round(size.x, 4), round(size.y, 4), round(size.z, 4)]
     stats["min"] = [round(low.x, 4), round(low.y, 4), round(low.z, 4)]
+    try:
+        stats["layout"] = layout_facts()
+    except Exception as error:
+        stats["layout"] = {"skipped": str(error)[:200]}
     # Workbench draws a material's viewport colour, which importers leave grey;
     # copy each principled base colour across so the preview shows real colours.
     for material in bpy.data.materials:
@@ -132,25 +388,8 @@ if meshes:
                 if node.type == "BSDF_PRINCIPLED":
                     material.diffuse_color = tuple(node.inputs["Base Color"].default_value)
                     break
-    center = (low + high) / 2
-    radius = max(size.length / 2, 0.01)
-    camera = bpy.data.objects.new("RoqerPreviewCamera", bpy.data.cameras.new("RoqerPreviewCamera"))
-    scene.collection.objects.link(camera)
-    direction = Vector((1.0, -1.2, 0.8)).normalized()
-    distance = radius / math.sin(camera.data.angle / 2) * 1.1
-    camera.location = center + direction * distance
-    camera.rotation_euler = (center - camera.location).to_track_quat("-Z", "Y").to_euler()
-    camera.data.clip_end = distance * 4
-    scene.camera = camera
-    scene.render.engine = "BLENDER_WORKBENCH"
-    scene.display.shading.light = "STUDIO"
-    scene.display.shading.color_type = {"vertex": "VERTEX", "texture": "TEXTURE"}.get(color_source, "MATERIAL")
-    scene.render.resolution_x = 512
-    scene.render.resolution_y = 384
-    scene.render.image_settings.file_format = "PNG"
-    scene.render.filepath = preview_path
     try:
-        bpy.ops.render.render(write_still=True)
+        render_views(size, (low + high) / 2)
         stats["preview"] = os.path.exists(preview_path)
     except Exception as error:
         stats["previewError"] = str(error)[:200]
@@ -197,7 +436,36 @@ export type InspectedFile = Readonly<{
   colorSource?: "texture" | "vertex" | "material";
   /** Each mesh object's name and size in studs (Roblox axes), for splitting a kit set. */
   objects?: ReadonlyArray<Readonly<{ name: string; size: readonly number[] }>>;
+  /** Where the model's lowest point sits, in Blender units: 0 stands it on the ground. */
+  bottom?: number;
+  /** How the model's pieces sit against each other, in the script's Blender coordinates. */
+  layout?: LayoutFacts;
   inspectionError?: string;
+}>;
+
+/** A piece or group of pieces, by its size and centre in Blender coordinates (X, Y, Z up). */
+export type PieceBox = Readonly<{ size: readonly number[]; center: readonly number[] }>;
+
+/**
+ * Facts about how an exported model's pieces sit, measured by Roqer's own
+ * inspection. A script usually joins many primitives into one object, so each
+ * object is split back into its loose pieces before they are compared.
+ */
+export type LayoutFacts = Readonly<{
+  pieces: number;
+  /** Why the layout was not measured, when it was not. */
+  skipped?: string;
+  /** False when the time cap stopped the comparison early. */
+  complete?: boolean;
+  /** Pieces that touch nothing else in their own object: almost always a gap to close. */
+  loose: ReadonlyArray<PieceBox & Readonly<{ object: string; pieces: number; gap: number }>>;
+  looseCount: number;
+  /** Objects that touch no other object: expected in a kit set, a gap in one assembled model. */
+  isolated: ReadonlyArray<Readonly<{ object: string; gap: number; nearest: string | null }>>;
+  isolatedCount: number;
+  /** Separate objects that pass into each other, deepest first, with the deepest piece of the first. */
+  overlaps: ReadonlyArray<Readonly<{ objects: readonly [string, string]; depth: number; piece: PieceBox }>>;
+  overlapCount: number;
 }>;
 
 export type RenderedImage = Readonly<{
@@ -394,6 +662,8 @@ export class BlenderWorker {
             ? [{ name: object.name, size: object.size as number[] }]
             : [];
         }) : undefined,
+        bottom: Array.isArray(stats.min) && typeof stats.min[2] === "number" ? stats.min[2] : undefined,
+        layout: parseLayout(stats.layout),
       });
       if (stats.preview === true) {
         const png = await fs.readFile(preview).catch(() => undefined);
@@ -411,7 +681,7 @@ export class BlenderWorker {
         ...files.map(describeFile),
         ...(models.length > MAX_INSPECTED_MODELS ? [`${models.length - MAX_INSPECTED_MODELS} more model files were not inspected.`] : []),
         previews > 0
-          ? "A preview render of each model is attached. Check its shape and colours against the request before uploading."
+          ? "A preview of each model is attached: four views in one image. Top left, the side seen from +X (+Y to the right); top right, the top seen from above (+Y up the image); bottom left and right, three-quarter views from the +X -Y and -X +Y corners. Check its shape and colours in every view against the request, and close any gap or overlap listed above that the design does not intend, before uploading."
           : "No preview could be rendered; judge the model by the numbers above.",
         "To use a model in Studio: upload_asset {action: 'upload', filePath: <its path>, assetType: 'Model', displayName}, then insert_asset with the returned asset id, then read the inserted model's size back and scale it in Studio if needed.",
       );
@@ -506,7 +776,93 @@ function describeFile(file: InspectedFile): string {
   const pieces = file.objects !== undefined && file.objects.length > 1
     ? `\n  objects, each arriving as its own MeshPart named after it: ${file.objects.map((object) => `${object.name} ${object.size.map((value) => value.toFixed(2)).join(" × ")}`).join("; ")}`
     : "";
-  return `- ${file.path} (${Math.max(1, Math.round(file.bytes / 1024))} KB): ${facts}${file.colorSource === undefined ? "" : `; ${COLOR_SOURCE_NOTES[file.colorSource]}`}${pieces}`;
+  const layout = file.inspectionError === undefined ? describeLayout(file.layout, file.bottom) : "";
+  return `- ${file.path} (${Math.max(1, Math.round(file.bytes / 1024))} KB): ${facts}${file.colorSource === undefined ? "" : `; ${COLOR_SOURCE_NOTES[file.colorSource]}`}${pieces}${layout}`;
+}
+
+const MAX_LAYOUT_ENTRIES = 8;
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
+const isNumber = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value);
+const isVector = (value: unknown): value is number[] => Array.isArray(value) && value.length === 3 && value.every(isNumber);
+const count = (value: unknown, fallback: number) => isNumber(value) && value >= 0 ? Math.floor(value) : fallback;
+
+function parseBox(value: unknown): PieceBox | undefined {
+  return isRecord(value) && isVector(value.size) && isVector(value.center) ? { size: value.size, center: value.center } : undefined;
+}
+
+/** The inspection's layout facts, keeping only well-formed entries: its output is data, not trusted structure. */
+export function parseLayout(value: unknown): LayoutFacts | undefined {
+  if (!isRecord(value) || !isNumber(value.pieces)) return undefined;
+  const list = (entries: unknown) => Array.isArray(entries) ? entries.slice(0, MAX_LAYOUT_ENTRIES).filter(isRecord) : [];
+  const loose = list(value.loose).flatMap((entry) => {
+    const box = parseBox(entry);
+    return box !== undefined && typeof entry.object === "string" && isNumber(entry.gap)
+      ? [{ ...box, object: entry.object, pieces: count(entry.pieces, 1), gap: entry.gap }]
+      : [];
+  });
+  const isolated = list(value.isolated).flatMap((entry) => typeof entry.object === "string" && isNumber(entry.gap)
+    ? [{ object: entry.object, gap: entry.gap, nearest: typeof entry.nearest === "string" ? entry.nearest : null }]
+    : []);
+  const overlaps = list(value.overlaps).flatMap((entry) => {
+    const piece = parseBox(entry.piece);
+    const objects = entry.objects;
+    return piece !== undefined && isNumber(entry.depth) && Array.isArray(objects) && objects.length === 2 &&
+      typeof objects[0] === "string" && typeof objects[1] === "string"
+      ? [{ objects: [objects[0], objects[1]] as const, depth: entry.depth, piece }]
+      : [];
+  });
+  return {
+    pieces: count(value.pieces, 0),
+    ...(typeof value.skipped === "string" ? { skipped: value.skipped.slice(0, 200) } : {}),
+    ...(typeof value.complete === "boolean" ? { complete: value.complete } : {}),
+    loose,
+    looseCount: Math.max(count(value.looseCount, loose.length), loose.length),
+    isolated,
+    isolatedCount: Math.max(count(value.isolatedCount, isolated.length), isolated.length),
+    overlaps,
+    overlapCount: Math.max(count(value.overlapCount, overlaps.length), overlaps.length),
+  };
+}
+
+const studs = (value: number) => value.toFixed(2);
+const box = (piece: PieceBox) =>
+  `${piece.size.map(studs).join(" × ")} at (${piece.center.map(studs).join(", ")})`;
+const more = (shown: number, total: number) => total > shown ? `; and ${total - shown} more` : "";
+
+/**
+ * The layout in the script's own coordinates, so each fact maps back to the
+ * line that placed the piece. Facts, not verdicts: a kit set is meant to be
+ * apart, and a piece may be meant to sit inside another.
+ */
+function describeLayout(layout: LayoutFacts | undefined, bottom: number | undefined): string {
+  const lines: string[] = [];
+  if (bottom !== undefined) lines.push(`lowest point at Z ${studs(bottom)}${Math.abs(bottom) > 0.05 ? "; 0 stands it on the ground" : ""}`);
+  if (layout !== undefined && layout.skipped !== undefined) {
+    lines.push(`layout not measured (${layout.skipped}); judge it from the preview`);
+  } else if (layout !== undefined) {
+    if (layout.looseCount > 0) {
+      const shown = layout.loose
+        .map((entry) => `in ${entry.object}, ${entry.pieces > 1 ? `${entry.pieces} pieces spanning ` : "a piece "}${box(entry)}, ${studs(entry.gap)} from the rest`)
+        .join("; ");
+      lines.push(`${layout.looseCount === 1 ? "1 piece group touching nothing else in its own object" : `${layout.looseCount} piece groups touching nothing else in their own object`}, usually a gap to close${shown === "" ? "" : `: ${shown}${more(layout.loose.length, layout.looseCount)}`}`);
+    }
+    if (layout.isolatedCount > 0) {
+      lines.push(`${layout.isolatedCount === 1 ? "an object" : `${layout.isolatedCount} objects`} touching no other object (right for a kit set of separate pieces, a gap in one assembled model): ${layout.isolated
+        .map((entry) => `${entry.object}${entry.nearest === null ? "" : `, ${studs(entry.gap)} from ${entry.nearest}`}`)
+        .join("; ")}${more(layout.isolated.length, layout.isolatedCount)}`);
+    }
+    if (layout.overlapCount > 0) {
+      lines.push(`separate objects passing into each other (fine where one is meant to sit inside the other, wrong for a part that must move freely): ${layout.overlaps
+        .map((entry) => `${entry.objects[0]} and ${entry.objects[1]} by ${studs(entry.depth)}, deepest at the ${entry.objects[0]} piece ${box(entry.piece)}`)
+        .join("; ")}${more(layout.overlaps.length, layout.overlapCount)}`);
+    }
+    if (layout.looseCount === 0 && layout.isolatedCount === 0 && layout.overlapCount === 0) {
+      lines.push(layout.pieces === 1 ? "one piece" : `all ${layout.pieces} pieces connected, and no separate objects pass into each other`);
+    }
+    if (layout.complete === false) lines.push("the comparison stopped at its time limit, so pieces may be missing from these facts");
+  }
+  return lines.length === 0 ? "" : `\n  layout, in the script's Blender coordinates (X, Y, Z up; sizes and positions in studs): ${lines.map((line) => line[0].toUpperCase() + line.slice(1)).join(". ")}.`;
 }
 
 function describeImage(image: RenderedImage): string {

@@ -36,10 +36,27 @@ what is failing instead of escalating.
 ## Reading the result
 
 Roqer does not trust the script. It re-imports each exported model and returns
-its triangles, meshes, materials and size, with a preview render attached.
+its triangles, meshes, materials and size, its layout, and a preview of four
+views in one image: the side from +X, the top, and three-quarter views from two
+opposite corners.
 
-- Look at the preview. If the silhouette or colours are wrong, fix the script;
-  do not upload a model you have not seen.
+- Look at every view. A part that looks right from one angle can lean the wrong
+  way, float, or pass through another part in the side or top view. If the
+  silhouette or colours are wrong, fix the script; do not upload a model you
+  have not seen.
+- Read the layout. It gives each finding in your script's own Blender
+  coordinates, naming a piece by the size and centre your script gave it, so
+  find the line that made it:
+  - a piece touching nothing else in its own object is almost always a gap:
+    move it until it meets the part it belongs to;
+  - separate objects passing into each other are wrong for a part that must
+    move freely, and fine where one is meant to sit inside the other;
+  - an object touching no other object is right for a kit set, and a gap in one
+    assembled model;
+  - the lowest point should be at Z 0 for a model that stands on the ground.
+- When a part is angled and a finding shows it missing what it should meet,
+  check the rotation's direction before moving it: a positive rotation about X
+  lifts the +Y end, about Y lowers the +X end, and about Z turns +X toward +Y.
 - Keep triangles low. A prop rarely needs more than a few thousand; stay well
   under Roblox's per-mesh triangle limit, and split a large model into parts.
 - Sizes are in Blender units, which arrive as studs. Still measure the model
