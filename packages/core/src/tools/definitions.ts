@@ -149,7 +149,7 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
       properties: {
         path: {
           type: 'string',
-          description: 'Build root; created if missing.'
+          description: 'Build root below a service; created if missing.'
         },
         operations: {
           type: 'array',
@@ -160,11 +160,11 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
               op: {
                 type: 'string',
                 enum: ['create', 'clone', 'set', 'remove', 'scatter'],
-                description: 'Step kind.'
+                description: 'Step kind; set changes an existing instance.'
               },
               id: {
                 type: 'string',
-                description: 'Name for later $id references.'
+                description: 'Names this step; later steps write $<id>.'
               },
               className: {
                 type: 'string',
@@ -176,11 +176,11 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
               },
               parent: {
                 type: 'string',
-                description: 'Parent path or $id; default root.'
+                description: 'Path, or $<id> of an earlier step; default root.'
               },
               target: {
                 type: 'string',
-                description: 'Set or remove target path or $id.'
+                description: 'Set/remove target: path or $<id>; never the root.'
               },
               name: {
                 type: 'string',
@@ -188,7 +188,7 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
               },
               properties: {
                 type: 'object',
-                description: 'Property values by name.'
+                description: 'By name; Color3 as [r,g,b] 0-1; parent via parent.'
               },
               position: {
                 type: 'array',

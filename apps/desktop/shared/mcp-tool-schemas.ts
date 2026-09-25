@@ -44,7 +44,7 @@ export type ToolSchema = {
 };
 
 /** sha256 of `packages/core/src/tools/definitions.ts` with LF newlines. */
-export const TOOL_DEFINITIONS_DIGEST = "dc720f9d6aea17a83422fa0aaea3acbab2d21bab7c8e80b1db75637a2d1db2e1";
+export const TOOL_DEFINITIONS_DIGEST = "13a6d5a6bc5d247ffc0e44d2bdd1de92ba2cc9a8545032b12d56d472577987e6";
 
 export const TOOL_SCHEMAS: Readonly<Record<string, ToolSchema>> = {
   breakpoints: {
@@ -65,7 +65,7 @@ export const TOOL_SCHEMAS: Readonly<Record<string, ToolSchema>> = {
   build_instances: {
     description: "Use to build, edit, remove, or scatter instances atomically under one root.",
     parameters: [
-      { name: "path", type: "string", required: true, description: "Build root; created if missing." },
+      { name: "path", type: "string", required: true, description: "Build root below a service; created if missing." },
       { name: "operations", type: "object[]", required: true, description: "Steps; all apply or none do." },
       { name: "instance_id", type: "string", required: false, description: "Connected place." },
     ],
