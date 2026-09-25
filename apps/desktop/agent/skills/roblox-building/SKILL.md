@@ -46,6 +46,7 @@ Player ~5 studs | Door 4w×7h | Ceiling 10-14 | Counter 3.5-4 | Seat 1.5 | Path 
 ### Spatial Rules
 - Named dimensions manifest, no magic numbers.
 - Offset sub-parts from anchor CFrames, not guessed world coordinates.
+- Place a part that runs from A to B by its ends, not by guessing angles: in Luau `CFrame.lookAt((A + B) / 2, B)` with the length on `Size.Z`; in `build_instances`, `position` at the midpoint and `rotation` `[0, yaw, 0]` with yaw = `math.deg(math.atan2(-(B.X - A.X), -(B.Z - A.Z)))`, since a yaw of θ turns the front (−Z) toward (−sin θ, −cos θ). Build a curve as segments whose ends meet, keep driving and walking surfaces flat unless banking is asked for, and check any path from directly above before moving on.
 - Snap structural geometry to the world's grid and vertical step (for example 4 and 2 studs for a chunky map); use finer increments only for details or player traversal that needs them.
 - Merge adjoining cells with the same elevation/material into larger blocks. A grid is a design rule, not a requirement to create a Part for every cell.
 - Build complex CSG near origin, then `PivotTo` the destination.

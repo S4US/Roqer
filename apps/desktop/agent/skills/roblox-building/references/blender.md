@@ -21,6 +21,9 @@ The script must:
 - model at the size it should have in Studio: one Blender unit arrives as one
   stud, so a barrel is about 4 units tall, not 1;
 - name its objects and materials for what they are (`Barrel`, `BarrelWood`);
+- face the model's front toward −Y: Blender (x, y, z) arrives in Roblox at
+  (−x, z, y), so −Y becomes Roblox's forward (−Z, the `LookVector`), and a
+  front built toward +Y arrives backwards;
 - colour the model in Blender, with vertex colours or a packed image texture
   (see [Modeling a mesh](modeling.md), "Colour and material"). Both survive the
   upload; a flat material base colour does not, and arrives white;

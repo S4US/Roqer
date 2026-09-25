@@ -879,6 +879,7 @@ export class BlenderWorker {
         previews > 0
           ? "A preview of each model is attached: four views in one image. Top left, the side seen from +X (+Y to the right); top right, the top seen from above (+Y up the image); bottom left and right, three-quarter views from the +X -Y and -X +Y corners. Check its shape and colours in every view against the request, and close any gap or overlap listed above that the design does not intend, before uploading."
           : "No preview could be rendered; judge the model by the numbers above.",
+        "In Studio a point at Blender (x, y, z) arrives at (-x, z, y): Blender -Y becomes Roblox's forward (-Z, the LookVector), so a front modeled toward +Y arrives facing backwards.",
         "To use a model in Studio: upload_asset {action: 'upload', filePath: <its path>, assetType: 'Model', displayName}, then insert_asset with the returned asset id, then read the inserted model's size back and scale it in Studio if needed.",
       );
     }

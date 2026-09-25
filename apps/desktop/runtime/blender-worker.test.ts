@@ -74,6 +74,8 @@ test("a job exports a model, and Roqer's own pass measures it and returns its pr
     assert.deepEqual(outcome.images, [{ data: png.toString("base64"), mediaType: "image/png" }]);
     assert.match(outcome.text, /12 triangles, 1 mesh, 1 material, 2\.00 × 2\.00 × 2\.00 Blender units/);
     assert.match(outcome.text, /upload_asset \{action: 'upload'/);
+    // Which way the model will face in Roblox is said where the model decides it.
+    assert.match(outcome.text, /Blender \(x, y, z\) arrives at \(-x, z, y\): Blender -Y becomes Roblox's forward/);
   });
 });
 
