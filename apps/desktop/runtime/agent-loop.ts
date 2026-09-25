@@ -3,7 +3,6 @@ import {
   TURN_IMAGE_MEDIA_TYPES,
   MAX_TURN_IMAGE_BASE64,
   MAX_TURN_IMAGES,
-  MAX_TURN_MESSAGES,
   type TurnImageMediaType,
   type TurnToolCall,
   type TurnContent,
@@ -128,22 +127,19 @@ function reportTelemetry(options: AgentLoopPlannerOptions, event: AgentLoopTelem
 }
 
 /**
- * The client owns the loop, so it owns its bound. This is a guard against a
- * model that is genuinely stuck -- repeating the same failing call forever --
- * so a run on the user's own endpoint cannot keep spending their key unattended.
+ * The client owns the loop, so it owns when a stuck run stops. There is no
+ * turn count: a long build that keeps making progress is the work the person
+ * asked for, and `agent-loop-history.ts` folds older exchanges so the history
+ * never outgrows the contract. What a bound must catch is a model that is
+ * stuck, which shows as the same calls turn after turn, so a run on the
+ * user's own key does not keep spending unattended on nothing.
  *
- * The number was originally derived from the contract's message ceiling: the
- * loop appends two messages per tool round on top of the one the run opens
- * with, so any larger bound would have ended a long run on a request the
- * service refused rather than on anything this loop had to say.
- *
- * `agent-loop-history.ts` now folds older exchanges away, so the ceiling no longer
- * decides this and the value is kept as what it always should have been: a
- * guard against a model that is genuinely stuck repeating the same failing call.
- * Raising it is now possible, and is a spend decision rather than a protocol
- * one, so it is left where it is until a real run is observed needing more.
+ * The same failing calls three turns running is stuck: nothing changed
+ * between tries. The same calls six turns running is stuck even when they
+ * succeed, because a result that did not change the next step was not read.
  */
-export const MAX_LOOP_TURNS = Math.floor((MAX_TURN_MESSAGES - 1) / 2);
+export const REPEATED_FAILURE_TURNS = 3;
+export const REPEATED_CALL_TURNS = 6;
 
 /** Re-exported so existing callers and tests keep their import. */
 export { DEFAULT_STALL_MS };
@@ -283,11 +279,15 @@ function steerBlocks(steers: readonly string[]): TurnContent[] {
   }));
 }
 
-/** Sent with the last turn the budget allows. */
-const LIMIT_NOTE = `[Roqer, the host: this run has reached its limit of ${MAX_LOOP_TURNS} model turns. Do not call any tool; Roqer will not run one. Reply now to the user: what works and how you checked it, what does not work yet, and what is left to do.]`;
+/** Sent with the last turn of a run that is repeating itself. */
+function stuckNote(stuck: Readonly<{ turns: number; failing: boolean }>): string {
+  return `[Roqer, the host: you have made the same ${stuck.failing ? "failing " : ""}calls ${stuck.turns} turns in a row, so Roqer is stopping this run. Do not call any tool; Roqer will not run one. Reply now to the user: what works and how you checked it, what does not work yet, and what is left to do.]`;
+}
 
-/** Added to the reply of a run that ended on its turn limit, so the person knows how it ended. */
-const LIMIT_REPLY = `Roqer stopped this run at its limit of ${MAX_LOOP_TURNS} model turns. Send "Continue" to carry on from here.`;
+/** Added to the reply of a run stopped for repeating itself, so the person knows how it ended. */
+function stuckReply(stuck: Readonly<{ turns: number; failing: boolean }>): string {
+  return `Roqer stopped this run because the model made the same ${stuck.failing ? "failing " : ""}calls ${stuck.turns} turns in a row. Send "Continue" to try again from here, or say what to change.`;
+}
 
 /** What Roqer says, as the host, to a model that ended a turn with no reply and no tool call. */
 function silenceNote(open: readonly RunTask[]): string {
@@ -472,19 +472,22 @@ export function createAgentLoopPlanner(options: AgentLoopPlannerOptions): Planne
         }
       };
 
-      for (let turn = 0; turn < MAX_LOOP_TURNS; turn += 1) {
+      let stuck: Readonly<{ turns: number; failing: boolean }> | undefined;
+      let lastSignature = "";
+      let sameCalls = 0;
+      let sameFailures = 0;
+      for (let turn = 0; ; turn += 1) {
         if (context.signal.aborted) throw new RunCancelledError();
         context.progress(`Thinking with ${label}`);
-        // The last turn the budget allows is spent on a report rather than one
-        // more step: a run stopped mid-work with no answer loses everything the
-        // person would need to decide whether to continue it.
-        const finalTurn = turn === MAX_LOOP_TURNS - 1;
-        if (finalTurn) {
-          const note: TurnContent = { kind: "text", text: LIMIT_NOTE };
+        // A stuck run's last turn is spent on a report rather than one more
+        // try: a run stopped with no answer loses everything the person would
+        // need to decide whether to continue it.
+        if (stuck !== undefined) {
+          const note: TurnContent = { kind: "text", text: stuckNote(stuck) };
           const last = messages[messages.length - 1];
           if (last.role === "user") messages[messages.length - 1] = { ...last, content: [...last.content, note] };
           else messages.push({ role: "user", content: [note] });
-          context.status("Turn limit reached", `The model is asked to report instead of taking step ${MAX_LOOP_TURNS}.`);
+          context.status("Model is repeating itself", `The same ${stuck.failing ? "failing " : ""}calls ${stuck.turns} turns running; the model is asked to report instead.`);
         }
 
         const request: TurnRequest = {
@@ -608,15 +611,15 @@ export function createAgentLoopPlanner(options: AgentLoopPlannerOptions): Planne
             context.status("Model stopped without a reply", "Roqer asked it once to continue the request or reply.");
             continue;
           }
-          if (finalTurn) return `${answer || "The model returned no answer for this turn."}\n\n${LIMIT_REPLY}`;
+          if (stuck !== undefined) return `${answer || "The model returned no answer for this turn."}\n\n${stuckReply(stuck)}`;
           if (endedEarly === undefined) return answer || "The model returned no answer for this turn.";
           context.status("Turn ended early", endedEarly);
           return answer.length === 0 ? endedEarly : `${answer}\n\n${endedEarly}`;
         }
         // Told to report, it asked for more work instead: nothing more runs.
-        if (finalTurn) {
+        if (stuck !== undefined) {
           const answer = prose.text().trim();
-          if (answer.length > 0) return `${answer}\n\n${LIMIT_REPLY}`;
+          if (answer.length > 0) return `${answer}\n\n${stuckReply(stuck)}`;
           break;
         }
         // Cut off while still asking for tools is survivable, because the next
@@ -666,6 +669,17 @@ export function createAgentLoopPlanner(options: AgentLoopPlannerOptions): Planne
           context.status("Read your note", steers.length === 1 ? steers[0] : `${steers.length} notes reached the model.`);
         }
         messages.push({ role: "user", content: [...results, ...steerBlocks(steers)] });
+        // A note from the user is new input, so it resets the count: the same
+        // call after being told something is not the same situation.
+        const signature = JSON.stringify(calls.map((call) => [call.name, call.arguments]));
+        const outcomes = results.filter((block) => block.kind === "tool-result");
+        const failed = outcomes.length > 0 && outcomes.every((block) => block.kind === "tool-result" && block.failed === true);
+        const repeated = signature === lastSignature && steers.length === 0;
+        sameCalls = repeated ? sameCalls + 1 : 1;
+        sameFailures = failed ? (repeated ? sameFailures + 1 : 1) : 0;
+        lastSignature = signature;
+        if (sameFailures >= REPEATED_FAILURE_TURNS) stuck = { turns: sameFailures, failing: true };
+        else if (sameCalls >= REPEATED_CALL_TURNS) stuck = { turns: sameCalls, failing: false };
         // Folding runs first: an exchange dropped here takes its tool output and
         // its pictures with it, so the budgets below are spent on what the run
         // still carries rather than on what is about to leave.
@@ -696,9 +710,9 @@ export function createAgentLoopPlanner(options: AgentLoopPlannerOptions): Planne
         boundRetainedImages(messages);
       }
 
-      throw new Error(
-        `The run reached ${MAX_LOOP_TURNS} model turns without finishing. Stopping so it does not keep spending.`,
-      );
+      // Reached only when a stuck model, told to report, asked for more calls
+      // and said nothing.
+      throw new Error(stuckReply(stuck ?? { turns: REPEATED_CALL_TURNS, failing: false }));
     },
   };
 }
