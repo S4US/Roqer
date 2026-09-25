@@ -1,0 +1,118 @@
+name: Release
+
+# Builds the Windows installer.
+#
+# Pushing a tag vX.Y.Z, where X.Y.Z is the version in apps/desktop/package.json,
+# attaches the installer, its blockmap, and the update manifest to a draft
+# GitHub release. Nothing reaches users until a maintainer publishes the draft:
+# installed copies of Roqer never see drafts.
+#
+# Run by hand from the Actions tab, it builds the same files and keeps them as a
+# workflow artifact, releasing nothing.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  windows:
+    name: Windows installer
+    runs-on: windows-latest
+    timeout-minutes: 45
+    permissions:
+      # To create the draft release and attach files to it.
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            studio-plugin/package-lock.json
+
+      # The updater finds a release by its tag and compares the version in its
+      # manifest with the installed one, so the tag and the version must agree.
+      - name: Check the tag matches the app version
+        id: version
+        shell: bash
+        run: |
+          version=$(node -p "require('./apps/desktop/package.json').version")
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          if [ "$GITHUB_REF_TYPE" = tag ] && [ "$GITHUB_REF_NAME" != "v$version" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME does not match apps/desktop/package.json, which says $version. Tag v$version, or change the version first."
+            exit 1
+          fi
+
+      - run: npm ci
+      # From that clean install on purpose: staging the bridge refuses any
+      # dependency the committed lockfile does not record.
+      - run: npm run package:desktop
+
+      - name: Collect the release files
+        shell: bash
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          out=apps/desktop/release
+          installer="$out/Roqer-Setup-$VERSION.exe"
+          mkdir release-files
+          cp "$installer" "$installer.blockmap" release-files/
+          # latest.yml, or beta.yml and the like for a prerelease version.
+          for manifest in "$out"/*.yml; do
+            [ "$(basename "$manifest")" = builder-debug.yml ] || cp "$manifest" release-files/
+          done
+          # The manifest must name the installer exactly as it is uploaded.
+          grep -l "Roqer-Setup-$VERSION.exe" release-files/*.yml
+          ls -l release-files
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: roqer-windows-${{ steps.version.outputs.version }}
+          path: release-files/
+          if-no-files-found: error
+
+      - name: Attach the files to a draft release
+        if: github.ref_type == 'tag'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          tag="$GITHUB_REF_NAME"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            # A re-run replaces a draft's files, but never a published release's.
+            if [ "$(gh release view "$tag" --json isDraft --jq .isDraft)" != true ]; then
+              echo "::error::Release $tag is already published, so its files stay as they are. Release a new version instead."
+              exit 1
+            fi
+            gh release upload "$tag" release-files/* --clobber
+            exit 0
+          fi
+          notes=$(mktemp)
+          {
+            echo "## Install"
+            echo
+            echo "Download **Roqer-Setup-$VERSION.exe** below and run it. Roqer then keeps itself up to date from this repository's releases."
+            echo
+            echo "The installer is not code-signed yet, so Windows SmartScreen may say it protected your PC: choose **More info**, then **Run anyway**."
+            echo
+            echo "Roqer installs its Studio plugin when it starts, so open Roblox Studio after launching it, or restart Studio if it was already open."
+            echo
+            gh api "repos/$GITHUB_REPOSITORY/releases/generate-notes" -f tag_name="$tag" --jq .body \
+              || echo "_Could not generate the list of changes; add it before publishing._"
+          } > "$notes"
+          prerelease=""
+          if [[ "$tag" == *-* ]]; then prerelease="--prerelease"; fi
+          gh release create "$tag" release-files/* --draft --verify-tag --title "Roqer $VERSION" --notes-file "$notes" $prerelease

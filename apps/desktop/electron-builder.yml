@@ -42,7 +42,8 @@ extraResources:
 # GitHub Releases on the project's own repository, so a release lands in the
 # same place people download it from. A release needs the installer, its
 # `.blockmap` (which lets an update download only the changed blocks), and
-# `latest.yml`; `electron-builder --publish always` uploads all three.
+# `latest.yml`; `.github/workflows/release.yml` builds all three and attaches
+# them to a draft release.
 #
 # The updater reads releases anonymously, so it works only while the
 # repository is public. Override with `-c.publish.*` to package against a fork.
@@ -61,6 +62,11 @@ win:
   icon: public/roqer-app-icon.ico
 
 nsis:
+  # No spaces, unlike electron-builder's default "Roqer Setup 1.0.0.exe": GitHub
+  # turns spaces in an uploaded file's name into dots, while `latest.yml` names
+  # the installer with dashes, so the updater would ask for a file that is not
+  # there. With this name the file on disk, the upload, and `latest.yml` agree.
+  artifactName: ${productName}-Setup-${version}.${ext}
   # Per-user by default, which is what matches the rest of the product: the
   # Studio plugin folder and the app's own data are per-user, so an installer
   # that demanded administrator rights would be asking for more than it needs.

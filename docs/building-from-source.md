@@ -52,6 +52,45 @@ run. macOS and Linux targets are configured in `apps/desktop/electron-builder.ym
 but have not been built. A packaged build checks this repository's GitHub
 Releases for updates; see [Updates](configuration.md#updates).
 
+## Releasing
+
+Releases are built by
+[`.github/workflows/release.yml`](../.github/workflows/release.yml) on a
+Windows runner, and tagged with the desktop app's version: the one in
+`apps/desktop/package.json`, not the MCP packages'.
+
+1. Set the version and commit it. This updates `apps/desktop/package.json` and
+   the lockfile together:
+
+   ```bash
+   npm version 0.1.0 -w apps/desktop --no-git-tag-version
+   git commit -am "Release 0.1.0"
+   ```
+
+2. Tag that commit and push both:
+
+   ```bash
+   git tag v0.1.0
+   git push origin main v0.1.0
+   ```
+
+3. The workflow checks that the tag matches the version, packages from a clean
+   `npm ci`, and attaches `Roqer-Setup-0.1.0.exe`, its `.blockmap`, and
+   `latest.yml` to a **draft** release with install notes and a list of
+   changes. Review it on the Releases page, then publish it. Installed copies
+   of Roqer update only from published releases, and only while this
+   repository is public.
+
+A tag with a hyphen, such as `v0.2.0-beta.1`, makes a prerelease. Running the
+workflow by hand from the Actions tab builds the same files and keeps them as a
+workflow artifact without releasing anything, which is how to try a packaging
+change on Windows. Re-running a tag's workflow replaces its draft's files, but
+never a published release's.
+
+When a code-signing certificate is available, store it as the repository
+secrets `CSC_LINK` and `CSC_KEY_PASSWORD` and pass them to the packaging step's
+environment; electron-builder signs with them.
+
 ## Feature completion gate
 
 A feature is not complete until the short live Studio gate passes:
