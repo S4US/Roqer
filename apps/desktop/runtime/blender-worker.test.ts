@@ -7,7 +7,7 @@ import path from "node:path";
 import { PassThrough } from "node:stream";
 import test from "node:test";
 
-import { BlenderWorker, scriptEnvironment, type SpawnProcess } from "./blender-worker";
+import { BlenderWorker, HELPERS_SCRIPT, RUNNER_SCRIPT, scriptEnvironment, type SpawnProcess } from "./blender-worker";
 
 /** What one fake Blender process does: optional work, printed output, and how it ends. */
 type Behaviour = (args: readonly string[]) => Promise<{ output?: string; exitCode?: number; hang?: boolean }>;
@@ -69,10 +69,23 @@ test("a job exports a model, and Roqer's own pass measures it and returns its pr
     assert.deepEqual(data.files.map(({ name, triangles, materials, size }) => ({ name, triangles, materials, size })),
       [{ name: "crate.glb", triangles: 12, materials: ["Wood"], size: [2, 2, 2] }]);
     assert.equal(await fs.readFile(path.join(data.jobDirectory, "script.py"), "utf8"), "import bpy\n# builds a crate");
+    // Roqer's helpers sit beside the script, and the runner hands them to it as roqer.
+    assert.equal(await fs.readFile(path.join(data.jobDirectory, "roqer_helpers.py"), "utf8"), HELPERS_SCRIPT);
     assert.deepEqual(outcome.images, [{ data: png.toString("base64"), mediaType: "image/png" }]);
     assert.match(outcome.text, /12 triangles, 1 mesh, 1 material, 2\.00 × 2\.00 × 2\.00 Blender units/);
     assert.match(outcome.text, /upload_asset \{action: 'upload'/);
   });
+});
+
+test("the runner gives the script Roqer's placement helpers, and only those", () => {
+  assert.match(RUNNER_SCRIPT, /roqer_helpers\.py/);
+  assert.match(RUNNER_SCRIPT, /"roqer": roqer/);
+  for (const helper of ["box", "box_between", "cylinder_between", "join", "paint", "vertex_color_material"]) {
+    assert.match(HELPERS_SCRIPT, new RegExp(`^def ${helper}\\(`, "m"), helper);
+  }
+  // A helper places a part by its ends; it never asks the model for a rotation angle.
+  assert.doesNotMatch(HELPERS_SCRIPT, /def \w+\([^)]*rotation/);
+  assert.doesNotMatch(HELPERS_SCRIPT, /shade_smooth/);
 });
 
 test("a script that raises, or exports nothing, is a failed call the model can read", async () => {
@@ -220,6 +233,17 @@ test("the layout reaches the model as facts in the script's own coordinates", as
     assert.match(outcome.text, /An object touching no other object \(right for a kit set.*\): SteeringWheel, 0\.39 from Body/);
     assert.match(outcome.text, /Body and Wheel_RL by 0\.55, deepest at the Body piece 0\.14 × 3\.70 × 0\.14 at \(2\.40, 0\.10, 0\.85\)/);
     assert.match(outcome.text, /Lowest point at Z 0\.01\./, "a model on the ground gets no advice about it");
+    assert.doesNotMatch(outcome.text, /shading:/, "no shading line without smooth shading");
+  });
+});
+
+test("smooth shading across hard edges is reported, and malformed entries are dropped", async () => {
+  await withJobs(async (jobsRoot) => {
+    const outcome = await inspectedWorker(jobsRoot, {
+      smoothShaded: [{ object: "GoKart", share: 0.92 }, { object: 3, share: 0.5 }, { object: "Lid", share: "most" }],
+    }).run({ script: "import bpy" });
+    assert.deepEqual((outcome.data as { files: Array<{ smoothShaded?: unknown }> }).files[0].smoothShaded, [{ object: "GoKart", share: 0.92 }]);
+    assert.match(outcome.text, /shading: smooth across hard edges on GoKart \(92% of corners\).*remove shade_smooth/);
   });
 });
 

@@ -29,6 +29,31 @@ The script must:
   `bpy.ops.export_scene.gltf(filepath=os.path.join(OUTPUT_DIR, "barrel.glb"), export_format="GLB", export_apply=True)`;
 - read or write no other files and use no network.
 
+### Roqer's helpers
+
+Every job also has `roqer`, a few helpers that build parts directly, in studs.
+They place a part by where it starts and ends, so there is no rotation angle to
+get the direction of wrong, and they paint it when given a colour:
+
+- `roqer.box(name, size, center, rgba)`: an upright box of size `(x, y, z)`.
+- `roqer.box_between(name, start, end, width, thickness, width_axis=(1, 0, 0), rgba)`:
+  a box running from `start` to `end`, `width` wide along `width_axis`. A
+  leaning seat back runs from its bottom edge to its top edge; a sloping panel
+  from its low end to its high end.
+- `roqer.cylinder_between(name, start, end, radius, rgba, vertices=12)`: a
+  cylinder whose caps sit at `start` and `end`: a bar, a pipe, a column, an
+  axle, or a wheel from its inner face to its outer face.
+- `roqer.join(name, objects)`: joins parts that never move apart into one
+  flat-shaded object with a vertex-colour material. Join each moving part (a
+  wheel, a lid, a door) on its own.
+- `roqer.paint(obj, rgba)` and `roqer.vertex_color_material()`, for parts made
+  another way.
+
+Use them for any part that is not upright. Raw `bpy` is still available for
+shapes they do not cover; there, keep the model flat-shaded (no
+`shade_smooth` on hard edges) and apply a rotation only after checking its
+direction (see "Reading the result").
+
 A script that raises returns Blender's traceback. Fix the cause and run the
 corrected script; after two failed attempts at the same model, stop and report
 what is failing instead of escalating.
@@ -54,6 +79,9 @@ opposite corners.
   - an object touching no other object is right for a kit set, and a gap in one
     assembled model;
   - the lowest point should be at Z 0 for a model that stands on the ground.
+- A shading line means the model is smooth-shaded across hard edges, which
+  makes boxes and panels look puffy. Remove `shade_smooth` unless the object is
+  meant to look rounded.
 - When a part is angled and a finding shows it missing what it should meet,
   check the rotation's direction before moving it: a positive rotation about X
   lifts the +Y end, about Y lowers the +X end, and about Z turns +X toward +Y.
@@ -151,37 +179,16 @@ import bpy, os
 
 WOOD, IRON = (0.45, 0.28, 0.14, 1), (0.2, 0.2, 0.22, 1)
 
-def paint(obj, rgba):
-    """Colour every corner of the object; the colour travels in the GLB."""
-    attribute = obj.data.color_attributes.get("Col") or obj.data.color_attributes.new("Col", "BYTE_COLOR", "CORNER")
-    for corner in attribute.data:
-        corner.color = rgba
-    obj.data.color_attributes.active_color = attribute
+# Stud scale: 4 studs tall, 3.6 across. A cylinder is given by its two end caps.
+body = roqer.cylinder_between("BarrelBody", (0, 0, 0), (0, 0, 4.0), 1.8, WOOD)
+hoops = [roqer.cylinder_between(f"Hoop{i}", (0, 0, z - 0.1), (0, 0, z + 0.1), 1.86, IRON) for i, z in enumerate((0.7, 3.3))]
+# A part at an angle is given by its two ends, never by a rotation: this tap
+# starts inside the barrel wall and runs out and down.
+tap = roqer.cylinder_between("Tap", (0, -1.7, 1.0), (0, -2.2, 0.8), 0.08, IRON)
 
-# One material that shows the vertex colours; without the Color Attribute node
-# the glTF export leaves them out.
-paint_material = bpy.data.materials.new("BarrelPaint")
-paint_material.use_nodes = True
-nodes = paint_material.node_tree.nodes
-colors = nodes.new("ShaderNodeVertexColor")
-colors.layer_name = "Col"
-paint_material.node_tree.links.new(colors.outputs["Color"], nodes["Principled BSDF"].inputs["Base Color"])
-
-# Stud scale: 4 studs tall, 3.6 across.
-bpy.ops.mesh.primitive_cylinder_add(vertices=12, radius=1.8, depth=4.0, location=(0, 0, 2.0))
-body = bpy.context.active_object
-body.name = "Barrel"
-paint(body, WOOD)
-for height in (0.7, 3.3):
-    bpy.ops.mesh.primitive_torus_add(major_radius=1.84, minor_radius=0.1, major_segments=12, minor_segments=4, location=(0, 0, height))
-    paint(bpy.context.active_object, IRON)
-
-# One object, one material: the barrel arrives as a single MeshPart in its colours.
-bpy.ops.object.select_all(action="SELECT")
-bpy.context.view_layer.objects.active = body
-bpy.ops.object.join()
-body.data.materials.clear()
-body.data.materials.append(paint_material)
+# One object, one vertex-colour material, flat-shaded: it arrives as a single
+# MeshPart in its colours.
+roqer.join("Barrel", [body, *hoops, tap])
 
 bpy.ops.export_scene.gltf(filepath=os.path.join(OUTPUT_DIR, "barrel.glb"), export_format="GLB", export_apply=True)
 

@@ -38,7 +38,9 @@ the tool away again.
 
 ## How a job works
 
-1. The agent writes one complete Python script. Unless you run in Full auto,
+1. The agent writes one complete Python script. Roqer gives it a few helpers
+   of its own that place each part by where it starts and ends, rather than by
+   rotation angles, and keep the model flat-shaded. Unless you run in Full auto,
    Roqer shows you the whole script and asks before running it.
 2. Roqer runs it in Blender in the background, on an empty scene, and collects
    what the script exported: models (`.glb`, `.gltf`, `.fbx`, `.obj`) or PNG

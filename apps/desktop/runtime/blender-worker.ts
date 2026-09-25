@@ -44,8 +44,166 @@ const DONE_MARKER = "ROQER_SCRIPT_DONE";
 const FAILED_MARKER = "ROQER_SCRIPT_FAILED";
 const INSPECT_MARKER = "ROQER_INSPECT ";
 
+/**
+ * Roqer's modeling helpers, loaded before the model's script as roqer.<name>.
+ * They place parts by where they start and end instead of by rotation angles,
+ * the direction of which models often get wrong, and keep joined parts
+ * flat-shaded in one vertex-colour material. Roqer's own code, not the model's.
+ */
+export const HELPERS_SCRIPT = String.raw`"""Roqer's modeling helpers, available to every Blender job as roqer.<name>.
+
+Each takes positions in Blender units (studs) and places a part by where it
+starts and ends rather than by rotation angles, builds its mesh directly
+(no selection or context), and paints it when given a colour.
+"""
+import bpy, bmesh
+from mathutils import Vector
+
+_COLOR_LAYER = "Col"
+
+
+def _vector(value, name):
+    try:
+        vector = Vector(value)
+    except (TypeError, ValueError):
+        raise ValueError(f"{name} must be three numbers, got {value!r}") from None
+    if len(vector) != 3:
+        raise ValueError(f"{name} must be three numbers, got {value!r}")
+    return vector
+
+
+def _positive(value, name):
+    if not isinstance(value, (int, float)) or value <= 0:
+        raise ValueError(f"{name} must be a positive number of studs, got {value!r}")
+    return float(value)
+
+
+def paint(obj, rgba):
+    """Colour every corner of an object's mesh; the colour travels in the GLB as vertex colour."""
+    if len(rgba) == 3:
+        rgba = (*rgba, 1.0)
+    mesh = obj.data
+    layer = mesh.color_attributes.get(_COLOR_LAYER) or mesh.color_attributes.new(_COLOR_LAYER, "BYTE_COLOR", "CORNER")
+    for corner in layer.data:
+        corner.color = rgba
+    mesh.color_attributes.active_color = layer
+    return obj
+
+
+def _object(name, bm, rgba):
+    bmesh.ops.recalc_face_normals(bm, faces=bm.faces)
+    mesh = bpy.data.meshes.new(name)
+    bm.to_mesh(mesh)
+    bm.free()
+    obj = bpy.data.objects.new(name, mesh)
+    bpy.context.scene.collection.objects.link(obj)
+    if rgba is not None:
+        paint(obj, rgba)
+    return obj
+
+
+def _frame(start, end, across):
+    """Unit vectors: along start to end, the given width direction made perpendicular, and the third."""
+    along = end - start
+    if along.length < 1e-6:
+        raise ValueError("start and end are the same point")
+    along = along.normalized()
+    side = across - along * across.dot(along)
+    if side.length < 1e-6:
+        side = Vector((1, 0, 0)) - along * along.x
+        if side.length < 1e-6:
+            side = Vector((0, 1, 0)) - along * along.y
+    side = side.normalized()
+    return along, side, along.cross(side).normalized()
+
+
+def box(name, size, center, rgba=None):
+    """An upright box of the given size (x, y, z), centred on center."""
+    size = _vector(size, "size")
+    for value, axis in zip(size, "xyz"):
+        _positive(value, f"size {axis}")
+    half = size / 2
+    return box_between(name, _vector(center, "center") - Vector((0, 0, half.z)), _vector(center, "center") + Vector((0, 0, half.z)),
+                       width=size.x, thickness=size.y, width_axis=(1, 0, 0), rgba=rgba)
+
+
+def box_between(name, start, end, width, thickness, width_axis=(1, 0, 0), rgba=None):
+    """A box running from start to end, width wide along width_axis and thickness deep across both.
+
+    A leaning seat back runs from its bottom edge to its top edge; a sloping panel from its low
+    end to its high end. No rotation angle to get the direction of wrong.
+    """
+    start, end = _vector(start, "start"), _vector(end, "end")
+    width, thickness = _positive(width, "width"), _positive(thickness, "thickness")
+    along, side, normal = _frame(start, end, _vector(width_axis, "width_axis"))
+    bm = bmesh.new()
+    corners = []
+    for point in (start, end):
+        for s in (-0.5, 0.5):
+            for t in (-0.5, 0.5):
+                corners.append(bm.verts.new(point + side * (s * width) + normal * (t * thickness)))
+    for ids in ((0, 1, 3, 2), (4, 6, 7, 5), (0, 4, 5, 1), (2, 3, 7, 6), (0, 2, 6, 4), (1, 5, 7, 3)):
+        bm.faces.new([corners[i] for i in ids])
+    return _object(name, bm, rgba)
+
+
+def cylinder_between(name, start, end, radius, rgba=None, vertices=12):
+    """A cylinder whose end caps sit at start and end: a bar, a pipe, a column, an axle or a wheel."""
+    start, end = _vector(start, "start"), _vector(end, "end")
+    radius = _positive(radius, "radius")
+    if not isinstance(vertices, int) or vertices < 3:
+        raise ValueError(f"vertices must be a whole number of at least 3, got {vertices!r}")
+    along, side, normal = _frame(start, end, Vector((1, 0, 0)) if abs((end - start).normalized().x) < 0.9 else Vector((0, 1, 0)))
+    import math
+    bm = bmesh.new()
+    rings = []
+    for point in (start, end):
+        rings.append([bm.verts.new(point + (side * math.cos(2 * math.pi * k / vertices) + normal * math.sin(2 * math.pi * k / vertices)) * radius)
+                      for k in range(vertices)])
+    for k in range(vertices):
+        n = (k + 1) % vertices
+        bm.faces.new((rings[0][k], rings[0][n], rings[1][n], rings[1][k]))
+    bm.faces.new(list(reversed(rings[0])))
+    bm.faces.new(rings[1])
+    return _object(name, bm, rgba)
+
+
+def vertex_color_material(name="VertexColour"):
+    """One material that shows the vertex colours; without it the glTF export leaves them out."""
+    material = bpy.data.materials.get(name)
+    if material is None:
+        material = bpy.data.materials.new(name)
+        material.use_nodes = True
+        nodes = material.node_tree.nodes
+        colors = nodes.new("ShaderNodeVertexColor")
+        colors.layer_name = _COLOR_LAYER
+        material.node_tree.links.new(colors.outputs["Color"], nodes["Principled BSDF"].inputs["Base Color"])
+    return material
+
+
+def join(name, objects):
+    """Join parts that never move apart into one flat-shaded object with the vertex-colour material.
+
+    Keep anything that must move on its own (a wheel, a lid, a door) out of the list and join it separately.
+    """
+    objects = [obj for obj in objects if obj is not None]
+    if not objects:
+        raise ValueError("join needs at least one object")
+    first = objects[0]
+    if len(objects) > 1:
+        with bpy.context.temp_override(active_object=first, selected_editable_objects=objects, selected_objects=objects):
+            bpy.ops.object.join()
+    first.name = name
+    first.data.name = name
+    first.data.materials.clear()
+    first.data.materials.append(vertex_color_material())
+    first.data.polygons.foreach_set("use_smooth", [False] * len(first.data.polygons))
+    first.data.update()
+    return first
+`;
+
 /** Roqer's wrapper around the model's script. */
-export const RUNNER_SCRIPT = String.raw`import bpy, os, sys, traceback
+export const RUNNER_SCRIPT = String.raw`import bpy, os, sys, traceback, types
 
 job_dir = sys.argv[sys.argv.index("--") + 1]
 OUTPUT_DIR = os.path.join(job_dir, "output")
@@ -54,7 +212,12 @@ bpy.ops.wm.read_factory_settings(use_empty=True)
 script_path = os.path.join(job_dir, "script.py")
 with open(script_path, "r", encoding="utf-8") as handle:
     source = handle.read()
-namespace = {"__name__": "__main__", "__file__": script_path, "OUTPUT_DIR": OUTPUT_DIR, "bpy": bpy}
+helpers = {"__name__": "roqer"}
+with open(os.path.join(job_dir, "roqer_helpers.py"), "r", encoding="utf-8") as handle:
+    exec(compile(handle.read(), "roqer_helpers.py", "exec"), helpers)
+roqer = types.SimpleNamespace(**{name: value for name, value in helpers.items()
+                                 if callable(value) and not name.startswith("_") and getattr(value, "__module__", None) == "roqer"})
+namespace = {"__name__": "__main__", "__file__": script_path, "OUTPUT_DIR": OUTPUT_DIR, "bpy": bpy, "roqer": roqer}
 try:
     exec(compile(source, script_path, "exec"), namespace)
 except BaseException:
@@ -125,6 +288,25 @@ for item in meshes[:16]:
     objects.append({"name": item.name, "size": [round(hi.x - lo.x, 2), round(hi.z - lo.z, 2), round(hi.y - lo.y, 2)]})
 stats = {"meshes": len(meshes), "triangles": triangles, "materials": sorted(materials)[:32], "preview": False,
          "colorSource": color_source, "objects": objects}
+
+# Smooth shading across hard edges: a corner whose normal leans far from its
+# face's is shaded as if the edge were rounded, which makes boxes and panels
+# look puffy. A genuinely curved surface bends each corner only slightly.
+smooth = []
+for item in meshes:
+    mesh = item.data
+    if hasattr(mesh, "corner_normals"):
+        normals = [corner.vector for corner in mesh.corner_normals]
+    else:
+        mesh.calc_normals_split()
+        normals = [loop.normal for loop in mesh.loops]
+    if not normals:
+        continue
+    bent = sum(1 for poly in mesh.polygons for i in poly.loop_indices if normals[i].dot(poly.normal) < 0.9)
+    share = bent / len(normals)
+    if share > 0.2:
+        smooth.append({"object": item.name, "share": round(share, 2)})
+stats["smoothShaded"] = smooth[:8]
 
 # Layout: how the model's pieces sit against each other, in the script's own
 # Blender coordinates. A script usually joins many primitives into one object,
@@ -440,6 +622,8 @@ export type InspectedFile = Readonly<{
   bottom?: number;
   /** How the model's pieces sit against each other, in the script's Blender coordinates. */
   layout?: LayoutFacts;
+  /** Objects shaded smooth across hard edges, with the share of their corners bent that way. */
+  smoothShaded?: ReadonlyArray<Readonly<{ object: string; share: number }>>;
   inspectionError?: string;
 }>;
 
@@ -566,6 +750,7 @@ export class BlenderWorker {
       await fs.mkdir(outputDirectory, { recursive: true });
       await fs.writeFile(path.join(jobDirectory, "script.py"), script, "utf8");
       await fs.writeFile(path.join(jobDirectory, "roqer_runner.py"), RUNNER_SCRIPT, "utf8");
+      await fs.writeFile(path.join(jobDirectory, "roqer_helpers.py"), HELPERS_SCRIPT, "utf8");
       await fs.writeFile(path.join(jobDirectory, "roqer_inspect.py"), INSPECT_SCRIPT, "utf8");
     } catch {
       return failure("Roqer could not prepare a folder for the Blender job.", "job_setup_failed", started, this.now);
@@ -664,6 +849,11 @@ export class BlenderWorker {
         }) : undefined,
         bottom: Array.isArray(stats.min) && typeof stats.min[2] === "number" ? stats.min[2] : undefined,
         layout: parseLayout(stats.layout),
+        smoothShaded: Array.isArray(stats.smoothShaded)
+          ? stats.smoothShaded.slice(0, MAX_LAYOUT_ENTRIES).flatMap((entry: unknown) => isRecord(entry) && typeof entry.object === "string" && isNumber(entry.share)
+            ? [{ object: entry.object, share: entry.share }]
+            : [])
+          : undefined,
       });
       if (stats.preview === true) {
         const png = await fs.readFile(preview).catch(() => undefined);
@@ -777,7 +967,10 @@ function describeFile(file: InspectedFile): string {
     ? `\n  objects, each arriving as its own MeshPart named after it: ${file.objects.map((object) => `${object.name} ${object.size.map((value) => value.toFixed(2)).join(" × ")}`).join("; ")}`
     : "";
   const layout = file.inspectionError === undefined ? describeLayout(file.layout, file.bottom) : "";
-  return `- ${file.path} (${Math.max(1, Math.round(file.bytes / 1024))} KB): ${facts}${file.colorSource === undefined ? "" : `; ${COLOR_SOURCE_NOTES[file.colorSource]}`}${pieces}${layout}`;
+  const shading = file.smoothShaded !== undefined && file.smoothShaded.length > 0
+    ? `\n  shading: smooth across hard edges on ${file.smoothShaded.map((entry) => `${entry.object} (${Math.round(entry.share * 100)}% of corners)`).join(", ")}, which makes boxes and panels look puffy in Roblox. Unless the object is meant to look rounded, remove shade_smooth; roqer.join keeps what it joins flat.`
+    : "";
+  return `- ${file.path} (${Math.max(1, Math.round(file.bytes / 1024))} KB): ${facts}${file.colorSource === undefined ? "" : `; ${COLOR_SOURCE_NOTES[file.colorSource]}`}${pieces}${layout}${shading}`;
 }
 
 const MAX_LAYOUT_ENTRIES = 8;
