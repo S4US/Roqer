@@ -400,6 +400,9 @@ function imageCount(message: TurnMessage): number {
  * must not be obeyed from. The label is what tells the two apart: this is the
  * person who started the run, speaking again.
  */
+/** Said while a turn's reasoning streams, in place of the thinking itself. */
+const REASONING_DETAIL = "The model is reasoning. Its thinking is not shown, and at a high reasoning effort one step can take minutes.";
+
 function steerBlocks(steers: readonly string[]): TurnContent[] {
   return steers.map((text) => ({
     kind: "text",
@@ -744,10 +747,11 @@ export function createAgentLoopPlanner(options: AgentLoopPlannerOptions): Planne
       let sameFailures = 0;
       for (let turn = 0; ; turn += 1) {
         if (context.signal.aborted) throw new RunCancelledError();
+        const waitingLabel = turn === 0 && session !== undefined ? `Continuing with ${label}` : `Thinking with ${label}`;
         if (turn === 0 && session !== undefined) {
-          context.progress(`Continuing with ${label}`, `${label} still has this chat's earlier work in context`);
+          context.progress(waitingLabel, `${label} still has this chat's earlier work in context`);
         } else {
-          context.progress(`Thinking with ${label}`);
+          context.progress(waitingLabel);
         }
         // A stuck run's last turn is spent on a report rather than one more
         // try: a run stopped with no answer loses everything the person would
@@ -809,6 +813,7 @@ export function createAgentLoopPlanner(options: AgentLoopPlannerOptions): Planne
           let lastToolCallMs: number | undefined;
 
           const turnStartedAt = Date.now();
+          let reasoningShown = false;
           const watchdog = watchProgress(context.signal, stallMs);
           try {
             for await (const event of transport.streamTurn(request, watchdog.signal)) {
@@ -818,9 +823,17 @@ export function createAgentLoopPlanner(options: AgentLoopPlannerOptions): Planne
               watchdog.progressed();
               const elapsed = Date.now() - turnStartedAt;
               firstEventMs ??= elapsed;
-              // Reasoning says nothing to the user and nothing to the next turn;
-              // arriving is all it does, and that has just been counted.
-              if (event.kind === "reasoning") continue;
+              // Reasoning says nothing to the next turn, and its text is never
+              // shown. That it is arriving is still said once: a long wait on a
+              // model that is thinking and one on an endpoint that has sent
+              // nothing at all look the same otherwise, and are not.
+              if (event.kind === "reasoning") {
+                if (!reasoningShown) {
+                  reasoningShown = true;
+                  context.progress(waitingLabel, REASONING_DETAIL);
+                }
+                continue;
+              }
               if (event.kind === "delta") {
                 firstTextMs ??= elapsed;
                 spoken += event.text;

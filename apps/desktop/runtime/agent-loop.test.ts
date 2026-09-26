@@ -45,6 +45,8 @@ type Recorded = {
   evidence: RunEvidence[];
   questions: Array<{ question: string; options: string[] }>;
   progress: string[];
+  /** The detail each progress label came with, in the same order. */
+  progressDetails: Array<string | undefined>;
   statuses: Array<{ label: string; detail?: string }>;
   /** Notes queued for the planner, drained by `takeSteers` the way the engine's are. */
   steers: string[];
@@ -52,7 +54,7 @@ type Recorded = {
 
 function makeContext(controller: AbortController, outcome?: (tool: string) => McpToolOutcome) {
   const recorded: Recorded = {
-    calls: [], said: [], tasks: [], changes: [], evidence: [], questions: [], progress: [], statuses: [], steers: [],
+    calls: [], said: [], tasks: [], changes: [], evidence: [], questions: [], progress: [], progressDetails: [], statuses: [], steers: [],
   };
   let currentTasks: RunTask[] = [];
   const context: PlannerContext = {
@@ -63,7 +65,10 @@ function makeContext(controller: AbortController, outcome?: (tool: string) => Mc
     autoPlaytest: true,
     signal: controller.signal,
     status: (label, detail) => recorded.statuses.push(detail === undefined ? { label } : { label, detail }),
-    progress: (label) => recorded.progress.push(label),
+    progress: (label, detail) => {
+      recorded.progress.push(label);
+      recorded.progressDetails.push(detail);
+    },
     say: (text) => recorded.said.push(text),
     recordChange: (change) => {
       recorded.changes.push({ ...change, id: `change_${recorded.changes.length + 1}` });
@@ -902,6 +907,23 @@ test("a model that reasons for longer than the stall interval is not stopped as 
   };
 
   assert.equal(await planner(thinking, undefined, 50).run(context), "Main prints hi.");
+});
+
+test("a turn whose reasoning is streaming says so once, so a thinking model is not mistaken for a silent endpoint", async () => {
+  const controller = new AbortController();
+  const { context, recorded } = makeContext(controller);
+  const thinking: TurnTransport = {
+    async *streamTurn() {
+      for (let index = 0; index < 3; index += 1) yield { kind: "reasoning" } as TurnEvent;
+      yield { kind: "delta", text: "Main prints hi." };
+      yield { kind: "completed", stopReason: "end" };
+    },
+  };
+
+  await planner(thinking).run(context);
+  const reasoning = recorded.progressDetails.filter((detail) => detail?.startsWith("The model is reasoning"));
+  assert.equal(reasoning.length, 1);
+  assert.equal(recorded.progress[recorded.progressDetails.indexOf(reasoning[0])], "Thinking with Roqer", "the waiting label stays the turn's own");
 });
 
 /** A planner that keeps its chat's conversation in `sessions`, as the Custom provider does. */
