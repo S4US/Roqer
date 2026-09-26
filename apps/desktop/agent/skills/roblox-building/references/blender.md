@@ -9,21 +9,36 @@ Parts, and tell the user they can turn Blender on for modeled visuals.
 
 ## What a job is
 
-One `blender` call runs one complete Python script in the user's own Blender,
-in the background, on an empty scene. `bpy` is imported and `OUTPUT_DIR` is
-defined. Every job is irreversible: the user approves it unless they run in
-Full auto, so write the whole model in one script rather than probing with
-several small ones.
+One `blender` call runs one Python script in the user's own Blender, in the
+background. `bpy` is imported and `OUTPUT_DIR` is defined. The script starts on
+an empty scene, or, with `continue_from` set to an earlier job's id, on the
+scene that job saved. Every job whose script finishes saves its scene, and its
+result gives the job's id and lists the scene's objects by name, size and
+centre, so the next job reads what exists rather than recalling it.
 
-A script may be at most 60,000 characters, and a call that long takes minutes
-to write. Build repeated parts (wheels, bolts, tube runs, vents) with loops and
-small functions rather than writing each one out. A model too detailed for one
-script is built in several jobs, each exporting its own parts (the body in one,
-the wheels and running gear in another), and placed together in Studio.
+A small prop is one job. A detailed model is built in stages, one job per
+stage, each continuing from the last: for a vehicle, the frame; then the body
+panels; then the running gear; then the cockpit and details. Look at each
+stage's preview before starting the next, and fix what is wrong while it is
+the newest stage: a fix is a short script that changes the objects already
+there, by name (`bpy.data.objects["Left_Side_Pod"].location.z += 0.2`), not a
+rebuild. A job that fails saves nothing and the next attempt starts from the
+last job that worked; to undo a step, continue from an earlier job.
+
+Every job is irreversible: the user approves it unless they run in Full auto,
+so make each job a real stage, not a probe, and do not split one stage across
+several jobs. A script may be at most 60,000 characters, and one that long
+takes minutes to write: build repeated parts (wheels, bolts, tube runs, vents)
+with loops and small functions rather than writing each one out.
+
+Export once, when the model is ready to upload, with `use_visible=True`: an
+export otherwise includes hidden helper objects such as boolean cutters. A job
+that exports nothing is still checked and previewed from its saved scene.
 
 The script must:
 
-- build everything with `bpy`; start from the empty scene, nothing else is loaded;
+- build everything with `bpy`: a new model starts from the empty scene, and a
+  continued one from the scene its earlier job saved; nothing else is loaded;
 - model at the size it should have in Studio: one Blender unit arrives as one
   stud, so a barrel is about 4 units tall, not 1;
 - name its objects and materials for what they are (`Barrel`, `BarrelWood`);
@@ -33,9 +48,10 @@ The script must:
 - colour the model in Blender, with vertex colours or a packed image texture
   (see [Modeling a mesh](modeling.md), "Colour and material"). Both survive the
   upload; a flat material base colour does not, and arrives white;
-- export into `OUTPUT_DIR` and nowhere else, normally one GLB, with modifiers
-  applied (without `export_apply=True` a bevel or mirror never reaches Roblox):
-  `bpy.ops.export_scene.gltf(filepath=os.path.join(OUTPUT_DIR, "barrel.glb"), export_format="GLB", export_apply=True)`;
+- when the model is ready, export into `OUTPUT_DIR` and nowhere else, normally
+  one GLB, with modifiers applied (without `export_apply=True` a bevel or
+  mirror never reaches Roblox) and only visible objects:
+  `bpy.ops.export_scene.gltf(filepath=os.path.join(OUTPUT_DIR, "barrel.glb"), export_format="GLB", export_apply=True, use_visible=True)`;
 - read or write no other files and use no network.
 
 ### Roqer's helpers
@@ -203,7 +219,7 @@ tap = roqer.cylinder_between("Tap", (0, -1.7, 1.0), (0, -2.2, 0.8), 0.08, IRON)
 # MeshPart in its colours.
 roqer.join("Barrel", [body, *hoops, tap])
 
-bpy.ops.export_scene.gltf(filepath=os.path.join(OUTPUT_DIR, "barrel.glb"), export_format="GLB", export_apply=True)
+bpy.ops.export_scene.gltf(filepath=os.path.join(OUTPUT_DIR, "barrel.glb"), export_format="GLB", export_apply=True, use_visible=True)
 
 # Optional: a transparent 512 px icon of the same barrel for an inventory slot.
 from mathutils import Vector

@@ -38,24 +38,30 @@ the tool away again.
 
 ## How a job works
 
-1. The agent writes one complete Python script. Roqer gives it a few helpers
-   of its own that place each part by where it starts and ends, rather than by
-   rotation angles, and keep the model flat-shaded. Unless you run in Full auto,
-   Roqer shows you the whole script and asks before running it.
-2. Roqer runs it in Blender in the background, on an empty scene, and collects
-   what the script exported: models (`.glb`, `.gltf`, `.fbx`, `.obj`) or PNG
-   images.
+1. The agent writes a Python script, at most 60,000 characters. Roqer gives it
+   a few helpers of its own that place each part by where it starts and ends,
+   rather than by rotation angles, and keep the model flat-shaded. Unless you
+   run in Full auto, Roqer shows you the whole script and asks before running
+   it.
+2. Roqer runs it in Blender in the background. A job starts on an empty scene,
+   or on the scene an earlier job in the same chat saved, when the agent names
+   that job. Every job whose script finishes saves its scene; a job that fails
+   saves nothing, so the next one starts from the last one that worked. This is
+   how a detailed model is built in stages (frame, body, wheels, details), each
+   a short script the agent can check before the next, and how a later message
+   can change a model rather than rebuild it.
 3. Roqer does not trust the script's own report. It re-imports the exported
-   models (up to three a job), measures their size, triangles, meshes and
-   materials, and checks their layout: pieces that touch nothing else, and
-   separate parts that pass into each other, reported in the script's own
-   coordinates. It renders a preview of four views in one image (side, top,
-   and two opposite corners) that reaches the agent the way a screenshot does.
-   A PNG reaches the agent as it is.
-4. To use a model, the agent uploads it to Roblox as a Model and inserts it
-   into your place, then checks its size there. An image uploads as a Decal,
-   whose image ID a UI element can display. Uploads ask first too, outside Full
-   auto, and go through Roblox's moderation.
+   models (up to three a job), or, when nothing was exported, opens the saved
+   scene, and measures size, triangles, meshes and materials, and checks the
+   layout: pieces that touch nothing else, and separate parts that pass into
+   each other, reported in the script's own coordinates. It renders a preview
+   of four views in one image (side, top, and two opposite corners) that reaches
+   the agent the way a screenshot does, and lists every object in the saved
+   scene by name, size and position. A PNG reaches the agent as it is.
+4. To use a model, the agent exports it, uploads it to Roblox as a Model and
+   inserts it into your place, then checks its size there. An image uploads as
+   a Decal, whose image ID a UI element can display. Uploads ask first too,
+   outside Full auto, and go through Roblox's moderation.
 
 A job stops after two minutes by default, and never runs longer than 200
 seconds. Stopping the run stops Blender.
@@ -77,9 +83,10 @@ without Roqer's own settings.
 Both live in Roqer's data folder:
 
 - `blender.json` holds the setting and which Blender to run;
-- `blender-jobs` holds one folder per job, with the script's output and the
-  preview renders. Roqer deletes a job's folder after seven days, and keeps
-  only the newest 40.
+- `blender-jobs` holds one folder per job, with the script, its output, the
+  scene it saved and the preview renders. Roqer deletes a job's folder after
+  seven days, and keeps only the newest 40, except a job another job is
+  continuing from.
 
 ## Limits
 
