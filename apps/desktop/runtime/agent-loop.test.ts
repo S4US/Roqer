@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import type { TurnEvent, TurnRequest } from "./model-api/turn-contract";
-import { isTurnRequest, MAX_TURN_IMAGE_BASE64 } from "./model-api/turn-contract";
+import { isTurnRequest, MAX_TURN_IMAGE_BASE64, TransientTurnError } from "./model-api/turn-contract";
 
 import type { AgentDefinition } from "./agent-definition";
 import { buildConversationPrompt } from "./conversation-prompt";
@@ -757,6 +757,147 @@ test("cancelling a run still reads as a cancellation rather than as a stall", as
     recorded.statuses.some((entry) => entry.label === "Model stopped making progress"),
     false,
   );
+});
+
+/** A planner whose failed turns are tried again at once, so the retry tests do not wait out real backoff. */
+function retryingPlanner(
+  transport: TurnTransport,
+  options: Readonly<{ turnRetries?: number; retryBaseMs?: number; onTelemetry?: (event: AgentLoopTelemetryEvent) => void }> = {},
+) {
+  return createAgentLoopPlanner({
+    transport,
+    runId: "run_test",
+    modelId: "openai/gpt-5.6-luna",
+    effort: "medium",
+    agent: AGENT,
+    skillLibrary: SKILLS,
+    retryBaseMs: options.retryBaseMs ?? 1,
+    ...(options.turnRetries === undefined ? {} : { turnRetries: options.turnRetries }),
+    ...(options.onTelemetry === undefined ? {} : { onTelemetry: options.onTelemetry }),
+  });
+}
+
+/** A transport that plays each attempt's script in turn; a script may end by throwing. */
+function flakyGateway(attempts: ReadonlyArray<Readonly<{ events?: readonly TurnEvent[]; error?: Error }>>): TurnTransport & {
+  requests: TurnRequest[];
+} {
+  const requests: TurnRequest[] = [];
+  return {
+    requests,
+    async *streamTurn(request) {
+      requests.push(JSON.parse(JSON.stringify(request)) as TurnRequest);
+      const attempt = attempts[requests.length - 1];
+      assert.ok(attempt, `no scripted attempt ${requests.length}`);
+      for (const event of attempt.events ?? []) yield event;
+      if (attempt.error !== undefined) throw attempt.error;
+    },
+  };
+}
+
+test("a turn the endpoint failed transiently is sent again, and the run carries on", async () => {
+  // One overloaded response used to end the whole run, however far it had got.
+  const controller = new AbortController();
+  const { context, recorded } = makeContext(controller);
+  const telemetry: AgentLoopTelemetryEvent[] = [];
+  const read: TurnEvent = {
+    kind: "tool-call",
+    call: { id: "c1", name: "roblox_studio", arguments: { operation: "get_script_source", arguments: { instancePath: "ServerScriptService.Main" } } },
+  };
+  const bridge = flakyGateway([
+    // Cut off partway through its reply, with some prose already on screen.
+    { events: [{ kind: "delta", text: "Let me rea" }], error: new TransientTurnError("Anthropic returned status 529: Overloaded.") },
+    { events: [{ kind: "delta", text: "Reading Main." }, read, { kind: "completed", stopReason: "tool-use" }] },
+    { events: DONE("Main prints hi.") },
+  ]);
+
+  const answer = await retryingPlanner(bridge, { onTelemetry: (event) => telemetry.push(event) }).run(context);
+
+  assert.match(answer, /Main prints hi\./);
+  assert.deepEqual(recorded.calls, ["get_script_source"], "the retried turn's call ran once");
+  const retried = recorded.statuses.filter((status) => status.label === "Model endpoint failed; trying the turn again");
+  assert.equal(retried.length, 1);
+  assert.match(retried[0].detail ?? "", /Overloaded\. Roqer tries again in 1 second \(1 of 4\)\./);
+  // The same request went out twice, and the conversation that followed holds
+  // only what the successful try said: the failed try's fragment is not the
+  // model's turn.
+  assert.deepEqual(bridge.requests[0], bridge.requests[1]);
+  const assistant = bridge.requests[2].messages[1];
+  assert.deepEqual(assistant.content[0], { kind: "text", text: "Reading Main." });
+  // Evaluation counts the failed try apart from the turn it was trying.
+  const turns = telemetry.filter((event) => event.kind === "turn");
+  assert.deepEqual(turns.map((event) => event.kind === "turn" ? [event.turn, event.retried === true] : []), [
+    [1, true], [1, false], [2, false],
+  ]);
+});
+
+test("a turn that keeps failing transiently ends the run once the retries are spent", async () => {
+  const controller = new AbortController();
+  const { context } = makeContext(controller);
+  const failing = new TransientTurnError("Endpoint returned status 503: Service Unavailable.");
+  const bridge = flakyGateway([{ error: failing }, { error: failing }, { error: failing }]);
+
+  await assert.rejects(
+    () => retryingPlanner(bridge, { turnRetries: 2 }).run(context),
+    /^Error: Endpoint returned status 503: Service Unavailable\. Roqer tried this turn 3 times\.$/,
+  );
+  assert.equal(bridge.requests.length, 3);
+});
+
+test("a failure the next try would only repeat is not tried again", async () => {
+  const controller = new AbortController();
+  const { context, recorded } = makeContext(controller);
+  const bridge = flakyGateway([{ error: new Error("Endpoint returned status 401: Invalid key. Check the API key in Settings.") }]);
+
+  await assert.rejects(() => retryingPlanner(bridge).run(context), /status 401/);
+  assert.equal(bridge.requests.length, 1);
+  assert.equal(recorded.statuses.some((status) => status.label === "Model endpoint failed; trying the turn again"), false);
+});
+
+test("an endpoint that asks for a long wait is reported rather than waited on", async () => {
+  const controller = new AbortController();
+  const { context } = makeContext(controller);
+  const bridge = flakyGateway([{ error: new TransientTurnError("Endpoint returned status 429: Slow down.", { retryAfterMs: 3_600_000 }) }]);
+
+  await assert.rejects(
+    () => retryingPlanner(bridge).run(context),
+    /Slow down\. It asked Roqer to wait 3600 seconds before trying again\./,
+  );
+  assert.equal(bridge.requests.length, 1);
+});
+
+test("cancelling during the pause before a retry ends the run as cancelled, at once", async () => {
+  const controller = new AbortController();
+  const { context, recorded } = makeContext(controller);
+  const bridge = flakyGateway([{ error: new TransientTurnError("Overloaded.") }]);
+
+  const running = retryingPlanner(bridge, { retryBaseMs: 60_000 }).run(context);
+  while (!recorded.statuses.some((status) => status.label === "Model endpoint failed; trying the turn again")) {
+    await new Promise((resolve) => setTimeout(resolve, 1));
+  }
+  const cancelledAt = Date.now();
+  controller.abort();
+  await assert.rejects(running, RunCancelledError);
+  assert.ok(Date.now() - cancelledAt < 1_000, "the minute-long pause did not hold the cancellation");
+  assert.equal(bridge.requests.length, 1);
+});
+
+test("a model that reasons for longer than the stall interval is not stopped as stalled", async () => {
+  // A local reasoning model thinks for minutes before its first word. Its
+  // reasoning is never shown, but that it is arriving is progress.
+  const controller = new AbortController();
+  const { context } = makeContext(controller);
+  const thinking: TurnTransport = {
+    async *streamTurn() {
+      for (let index = 0; index < 6; index += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        yield { kind: "reasoning" } as TurnEvent;
+      }
+      yield { kind: "delta", text: "Main prints hi." };
+      yield { kind: "completed", stopReason: "end" };
+    },
+  };
+
+  assert.equal(await planner(thinking, undefined, 50).run(context), "Main prints hi.");
 });
 
 test("a long run folds its own history and sends the host's record in its place", async () => {

@@ -87,6 +87,19 @@ ChatGPT runs use a Codex home of Roqer's own, inside Roqer's data folder, so
 Roqer asks you to sign in to ChatGPT once even if the Codex CLI is already
 signed in, and your own Codex MCP servers and plugins are not loaded there.
 
+A model endpoint you configure runs on Roqer's own agent loop. When the
+endpoint fails in a way that can pass (a rate limit, an overload, a server
+error, or a connection dropped partway through a turn), Roqer sends the same
+turn again up to four times. It waits as long as the endpoint asks, up to a
+minute, or backs off from one second, and each retry is shown in the run's
+activity. A failure that would only repeat, such as a refused key or an unknown
+model, ends the run at once. A turn has no length limit: Roqer stops waiting
+only when the endpoint sends nothing for ten minutes, or the model makes no
+progress, reasoning included, for five. With reasoning on, Claude 4.6 and later
+models think adaptively at the run's effort. Older Claude models and other
+Anthropic-compatible endpoints get a thinking budget. If the endpoint refuses
+the form Roqer tried first, Roqer switches to the other.
+
 Roqer starts its bundled bridge and installs the matching Studio plugin on
 every launch. To run your own bridge instead, start it before Roqer; Roqer
 adopts it rather than replacing it:

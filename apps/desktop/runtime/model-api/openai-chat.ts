@@ -1,5 +1,6 @@
 import {
   isTurnToolCall,
+  TransientTurnError,
   type TurnToolCall,
   type TurnEvent,
   type TurnRequest,
@@ -9,8 +10,8 @@ import {
 
 import type { TurnTransport } from "../agent-loop";
 import {
-  DEFAULT_REQUEST_TIMEOUT_MS, endpointUrl, fetchWithin, frameData, isRecord, MAX_TOOL_ARGUMENT_CHARACTERS,
-  MAX_TOOL_CALLS_PER_TURN, refusalMessage, serverSentFrames, streamErrorMessage, usableCallId,
+  DEFAULT_REQUEST_TIMEOUT_MS, endpointRefusal, endpointUrl, fetchWithin, frameData, interruptedStream, isRecord,
+  MAX_TOOL_ARGUMENT_CHARACTERS, MAX_TOOL_CALLS_PER_TURN, readErrorBody, serverSentFrames, streamFailure, usableCallId,
 } from "./http";
 
 /**
@@ -49,6 +50,17 @@ type ChatMessage =
     tool_calls?: readonly Readonly<{ id: string; type: "function"; function: Readonly<{ name: string; arguments: string }> }>[];
   }>
   | Readonly<{ role: "tool"; tool_call_id: string; content: string }>;
+
+/**
+ * Where OpenAI-compatible servers stream a model's reasoning: `reasoning_content`
+ * (DeepSeek, vLLM, LM Studio, llama.cpp), `reasoning` (OpenRouter, Ollama), and
+ * OpenRouter's structured `reasoning_details`.
+ */
+function carriesReasoning(delta: Record<string, unknown>): boolean {
+  const text = (value: unknown) => typeof value === "string" && value.length > 0;
+  return text(delta.reasoning_content) || text(delta.reasoning) ||
+    (Array.isArray(delta.reasoning_details) && delta.reasoning_details.length > 0);
+}
 
 /** Provider-native finish reasons that mean the model tried to call a tool and could not form the call. */
 const MALFORMED_NATIVE_REASONS = /MALFORMED_FUNCTION_CALL|UNEXPECTED_TOOL_CALL/i;
@@ -177,8 +189,16 @@ export class OpenAiChatTurns implements TurnTransport {
     if (opened === undefined) return;
     const { response, cancellation, dispose } = opened;
     try {
-      if (!response.ok || response.body === null) throw new Error(await refusalMessage(response, label, apiKey));
-      yield* this.readStream(response.body, cancellation.signal, signal);
+      if (!response.ok || response.body === null) {
+        throw endpointRefusal(response, await readErrorBody(response), label, apiKey);
+      }
+      try {
+        yield* this.readStream(response.body, cancellation.signal, signal, opened.alive);
+      } catch (error) {
+        const failure = interruptedStream(error, opened, signal, this.timeoutMs, label);
+        if (failure === undefined) return;
+        throw failure;
+      }
     } finally {
       dispose();
     }
@@ -188,6 +208,7 @@ export class OpenAiChatTurns implements TurnTransport {
     body: ReadableStream<Uint8Array>,
     signal: AbortSignal,
     runSignal: AbortSignal,
+    alive: () => void,
   ): AsyncGenerator<TurnEvent, void, undefined> {
     const { label, apiKey } = this.options;
     const pending = new Map<number, PendingToolCall>();
@@ -198,7 +219,7 @@ export class OpenAiChatTurns implements TurnTransport {
     let nativeReason: string | undefined;
     let relayError = false;
 
-    for await (const frame of serverSentFrames(body, signal, MAX_TOOL_ARGUMENT_CHARACTERS * 4)) {
+    for await (const frame of serverSentFrames(body, signal, MAX_TOOL_ARGUMENT_CHARACTERS * 4, alive)) {
       const data = frameData(frame);
       if (data === "[DONE]") {
         done = true;
@@ -213,7 +234,7 @@ export class OpenAiChatTurns implements TurnTransport {
       }
       if (!isRecord(payload)) continue;
       if (payload.error !== undefined && payload.error !== null) {
-        throw new Error(streamErrorMessage(payload.error, label, apiKey));
+        throw streamFailure(payload.error, label, apiKey);
       }
       const reported = usageOf(payload.usage);
       if (reported !== undefined) usage = reported;
@@ -229,7 +250,13 @@ export class OpenAiChatTurns implements TurnTransport {
       const delta = isRecord(choice.delta) ? choice.delta : undefined;
       if (delta === undefined) continue;
       // Reasoning text is never shown: splicing a model's thinking into the
-      // reply would publish it as though it were written for the user.
+      // reply would publish it as though it were written for the user. That it
+      // is arriving is still reported, because a model reasoning for minutes is
+      // working, and without this the loop would read it as stalled.
+      if (carriesReasoning(delta)) {
+        produced = true;
+        yield { kind: "reasoning" };
+      }
       if (typeof delta.content === "string" && delta.content.length > 0) {
         produced = true;
         yield { kind: "delta", text: delta.content };
@@ -257,17 +284,21 @@ export class OpenAiChatTurns implements TurnTransport {
     if (calls.length === 0 && nativeReason !== undefined && MALFORMED_NATIVE_REASONS.test(nativeReason)) {
       reason = "malformed-tool-call";
     } else if (calls.length === 0 && relayError) {
-      throw new Error(`${label} ended the turn with an error from the model's provider${nativeReason === undefined ? "" : ` (${nativeReason.slice(0, 80)})`}.`);
+      // A relay passing on its upstream provider's failure; the next attempt
+      // may well be routed to one that answers.
+      throw new TransientTurnError(`${label} ended the turn with an error from the model's provider${nativeReason === undefined ? "" : ` (${nativeReason.slice(0, 80)})`}.`);
     }
-    for (const call of calls) yield { kind: "tool-call", call };
     // Some local servers report `stop` for a turn that asked for tools.
     if (calls.length > 0 && (reason === undefined || reason === "end")) reason = "tool-use";
     if (reason === undefined && done) reason = "end";
+    // A stream that stopped without saying it was finished was cut off, and a
+    // turn that was cut off is simply asked for again.
     if (reason === undefined) {
-      throw new Error(produced
+      throw new TransientTurnError(produced
         ? `${label} ended the answer without saying it was finished.`
         : `${label} closed the connection before the model produced anything.`);
     }
+    for (const call of calls) yield { kind: "tool-call", call };
     yield usage === undefined ? { kind: "completed", stopReason: reason } : { kind: "completed", stopReason: reason, usage };
   }
 

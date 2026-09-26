@@ -1,5 +1,6 @@
 import {
   estimateTurnInputTokens,
+  TransientTurnError,
   TURN_IMAGE_MEDIA_TYPES,
   MAX_TURN_IMAGE_BASE64,
   MAX_TURN_IMAGES,
@@ -75,6 +76,11 @@ export type AgentLoopTelemetryEvent =
     completed: boolean;
     /** The turn was ended because it made no semantic progress, not because it finished. */
     stalled?: boolean;
+    /**
+     * This attempt failed transiently and the same turn was sent again. The
+     * turn's number is shared by every attempt at it; only the last is the turn.
+     */
+    retried?: boolean;
     stopReason?: TurnStopReason;
     failureCode?: Extract<TurnEvent, { kind: "failed" }>["code"];
     usage?: TurnUsage;
@@ -116,6 +122,10 @@ export type AgentLoopPlannerOptions = {
   outputLimitAdvice?: string;
   /** Offer the `blender` tool: only while the user has turned the local Blender worker on. */
   blender?: boolean;
+  /** How many times a turn that failed transiently is sent again. Injectable for tests. */
+  turnRetries?: number;
+  /** The first pause before sending a failed turn again; each later one doubles. Injectable for tests. */
+  retryBaseMs?: number;
 };
 
 function reportTelemetry(options: AgentLoopPlannerOptions, event: AgentLoopTelemetryEvent): void {
@@ -143,6 +153,57 @@ export const REPEATED_CALL_TURNS = 6;
 
 /** Re-exported so existing callers and tests keep their import. */
 export { DEFAULT_STALL_MS };
+
+/**
+ * How often a turn the endpoint failed transiently is sent again, and how long
+ * the loop waits between tries.
+ *
+ * One overloaded response, one rate limit, or one dropped connection used to
+ * end the whole run, forty turns into a build, because the retries lived in the
+ * hosted gateway this loop once spoke to and did not come back with the direct
+ * transports. Four more tries over about fifteen seconds rides out the ordinary
+ * blip; an endpoint that asks for longer than a minute is not having a blip,
+ * and is reported rather than waited on.
+ */
+export const TURN_RETRIES = 4;
+const RETRY_BASE_MS = 1_000;
+const MAX_RETRY_BACKOFF_MS = 30_000;
+const MAX_RETRY_AFTER_MS = 60_000;
+
+/**
+ * The pause before a turn's next try: what the endpoint asked for when it
+ * said, otherwise a doubling backoff with a little jitter so that several
+ * clients refused together do not all come back together.
+ */
+function retryDelayMs(retry: number, baseMs: number, retryAfterMs: number | undefined): number {
+  if (retryAfterMs !== undefined) return retryAfterMs;
+  const backoff = Math.min(MAX_RETRY_BACKOFF_MS, baseMs * 2 ** retry);
+  return Math.round(backoff * (1 + Math.random() * 0.25));
+}
+
+/** Wait, or stop waiting the moment the run is cancelled. */
+function pause(milliseconds: number, signal: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal.aborted) {
+      reject(new RunCancelledError());
+      return;
+    }
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(new RunCancelledError());
+    };
+    const timer = setTimeout(() => {
+      signal.removeEventListener("abort", onAbort);
+      resolve();
+    }, milliseconds);
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
+function seconds(milliseconds: number): string {
+  const value = Math.max(1, Math.round(milliseconds / 1_000));
+  return `${value} second${value === 1 ? "" : "s"}`;
+}
 
 /**
  * The engine's image type is provider-neutral, so its media type is a plain
@@ -335,6 +396,8 @@ export function createAgentLoopPlanner(options: AgentLoopPlannerOptions): Planne
       const runSkillTool = createSkillToolRunner(options.skillLibrary);
       const runIconTool = createIconToolRunner(options.skillLibrary);
       const stallMs = options.stallMs ?? DEFAULT_STALL_MS;
+      const turnRetries = options.turnRetries ?? TURN_RETRIES;
+      const retryBaseMs = options.retryBaseMs ?? RETRY_BASE_MS;
       // Asked at most once a run: a model that goes silent again after being
       // asked is done, and the completion gate reports what it left open.
       let askedAfterSilence = false;
@@ -507,76 +570,117 @@ export function createAgentLoopPlanner(options: AgentLoopPlannerOptions): Planne
           messages,
         };
         const turnNumber = turn + 1;
-        const turnStartedAt = Date.now();
         const requestCharacters = JSON.stringify(request).length;
         const estimatedInputTokens = estimateTurnInputTokens(request);
 
         // Each turn is its own message, so the seam between two of them is a
         // paragraph break rather than a bare concatenation.
         prose.beginSegment();
-        const calls: TurnToolCall[] = [];
+        let calls: TurnToolCall[] = [];
         let spoken = "";
         let completed = false;
         let stopReason: TurnStopReason | undefined;
-        let failureCode: Extract<TurnEvent, { kind: "failed" }>["code"] | undefined;
-        let usage: TurnUsage | undefined;
+        let stalled = false;
 
-        let firstEventMs: number | undefined;
-        let firstTextMs: number | undefined;
-        let firstToolCallMs: number | undefined;
-        let lastToolCallMs: number | undefined;
+        // A transport hands over a turn's calls only once the whole turn has
+        // arrived, so a turn that failed partway ran nothing and is simply
+        // asked for again. Each try starts from nothing but what it streams.
+        for (let retry = 0; ; retry += 1) {
+          calls = [];
+          spoken = "";
+          completed = false;
+          stopReason = undefined;
+          let failureCode: Extract<TurnEvent, { kind: "failed" }>["code"] | undefined;
+          let usage: TurnUsage | undefined;
+          let transient: TransientTurnError | undefined;
 
-        const watchdog = watchProgress(context.signal, stallMs);
-        try {
-          for await (const event of options.transport.streamTurn(request, watchdog.signal)) {
-            // Every branch below is semantic progress, so the watchdog is reset
-            // here rather than per branch: a frame that is none of these is not
-            // one of them either.
-            watchdog.progressed();
-            const elapsed = Date.now() - turnStartedAt;
-            firstEventMs ??= elapsed;
-            if (event.kind === "delta") {
-              firstTextMs ??= elapsed;
-              spoken += event.text;
-              prose.push(event.text);
-              continue;
-            }
-            if (event.kind === "tool-call") {
-              lastToolCallMs = elapsed;
-              firstToolCallMs ??= elapsed;
-              calls.push(event.call);
-              continue;
-            }
-            if (event.kind === "failed") {
-              failureCode = event.code;
+          let firstEventMs: number | undefined;
+          let firstTextMs: number | undefined;
+          let firstToolCallMs: number | undefined;
+          let lastToolCallMs: number | undefined;
+
+          const turnStartedAt = Date.now();
+          const watchdog = watchProgress(context.signal, stallMs);
+          try {
+            for await (const event of options.transport.streamTurn(request, watchdog.signal)) {
+              // Every branch below is semantic progress, so the watchdog is reset
+              // here rather than per branch: a frame that is none of these is not
+              // one of them either.
+              watchdog.progressed();
+              const elapsed = Date.now() - turnStartedAt;
+              firstEventMs ??= elapsed;
+              // Reasoning says nothing to the user and nothing to the next turn;
+              // arriving is all it does, and that has just been counted.
+              if (event.kind === "reasoning") continue;
+              if (event.kind === "delta") {
+                firstTextMs ??= elapsed;
+                spoken += event.text;
+                prose.push(event.text);
+                continue;
+              }
+              if (event.kind === "tool-call") {
+                lastToolCallMs = elapsed;
+                firstToolCallMs ??= elapsed;
+                calls.push(event.call);
+                continue;
+              }
+              if (event.kind === "failed") {
+                failureCode = event.code;
+                usage = event.usage;
+                throw new Error(failureMessage(event));
+              }
+              completed = true;
+              stopReason = event.stopReason;
               usage = event.usage;
-              throw new Error(failureMessage(event));
             }
-            completed = true;
-            stopReason = event.stopReason;
-            usage = event.usage;
+          } catch (error) {
+            // A cancellation or a stall ends the run exactly as before: a stall
+            // is not retried, because a model that went quiet once would spend
+            // the same wait again.
+            if (!(error instanceof TransientTurnError) || context.signal.aborted || watchdog.stalled) throw error;
+            if (retry >= turnRetries) {
+              throw new Error(retry === 0 ? error.message : `${error.message} Roqer tried this turn ${retry + 1} times.`, { cause: error });
+            }
+            if (error.retryAfterMs !== undefined && error.retryAfterMs > MAX_RETRY_AFTER_MS) {
+              throw new Error(`${error.message} It asked Roqer to wait ${seconds(error.retryAfterMs)} before trying again.`, { cause: error });
+            }
+            transient = error;
+          } finally {
+            watchdog.stop();
+            stalled = watchdog.stalled;
+            reportTelemetry(options, {
+              kind: "turn",
+              turn: turnNumber,
+              durationMs: Date.now() - turnStartedAt,
+              ...(firstEventMs === undefined ? {} : { firstEventMs }),
+              ...(firstTextMs === undefined ? {} : { firstTextMs }),
+              ...(firstToolCallMs === undefined ? {} : { firstToolCallMs }),
+              ...(lastToolCallMs === undefined ? {} : { lastToolCallMs }),
+              requestCharacters,
+              estimatedInputTokens,
+              completed,
+              ...(watchdog.stalled ? { stalled: true } : {}),
+              ...(transient === undefined ? {} : { retried: true }),
+              ...(stopReason === undefined ? {} : { stopReason }),
+              ...(failureCode === undefined ? {} : { failureCode }),
+              ...(usage === undefined ? {} : { usage }),
+            });
           }
-        } finally {
-          watchdog.stop();
-          reportTelemetry(options, {
-            kind: "turn",
-            turn: turnNumber,
-            durationMs: Date.now() - turnStartedAt,
-            ...(firstEventMs === undefined ? {} : { firstEventMs }),
-            ...(firstTextMs === undefined ? {} : { firstTextMs }),
-            ...(firstToolCallMs === undefined ? {} : { firstToolCallMs }),
-            ...(lastToolCallMs === undefined ? {} : { lastToolCallMs }),
-            requestCharacters,
-            estimatedInputTokens,
-            completed,
-            ...(watchdog.stalled ? { stalled: true } : {}),
-            ...(stopReason === undefined ? {} : { stopReason }),
-            ...(failureCode === undefined ? {} : { failureCode }),
-            ...(usage === undefined ? {} : { usage }),
-          });
+          if (transient === undefined) break;
+
+          const delay = retryDelayMs(retry, retryBaseMs, transient.retryAfterMs);
+          // Said, not done quietly: a failed try may already have streamed some
+          // of its reply, and the next one will say it again.
+          context.status(
+            "Model endpoint failed; trying the turn again",
+            `${transient.message} Roqer tries again in ${seconds(delay)} (${retry + 1} of ${turnRetries}).`,
+          );
+          prose.beginSegment();
+          await pause(delay, context.signal);
+          context.progress(`Thinking with ${label}`);
         }
         if (context.signal.aborted) throw new RunCancelledError();
-        if (watchdog.stalled) {
+        if (stalled) {
           // Checked before the generic incomplete-turn error, because "the
           // endpoint ended the turn without completing it" is what a stall looks
           // like from the outside and is the least useful thing to be told.

@@ -50,6 +50,13 @@ export type PlannerTelemetryMetrics = Readonly<{
    * is doing it.
    */
   stalledTurns: number;
+  /**
+   * Tries at a turn that the endpoint failed transiently, after which the loop
+   * sent the same turn again. They are not turns: their time counts toward the
+   * stream total, and any tokens the endpoint reported for them toward the token
+   * totals, but the per-turn record holds only the try that went through.
+   */
+  retriedAttempts: number;
   measuredUsageTurns: number;
   inputTokens: number;
   outputTokens: number;
@@ -96,6 +103,7 @@ export function createPlannerTelemetryCollector(): Readonly<{
   const turns: Omit<PlannerTurnMetric, "toolsMs" | "toolCalls">[] = [];
   let modelTurns = 0;
   let stalledTurns = 0;
+  let retriedAttempts = 0;
   let measuredUsageTurns = 0;
   let inputTokens = 0;
   let outputTokens = 0;
@@ -110,6 +118,15 @@ export function createPlannerTelemetryCollector(): Readonly<{
 
   return {
     observe(event: AgentLoopTelemetryEvent): void {
+      if (event.kind === "turn" && event.retried === true) {
+        retriedAttempts += 1;
+        streamDurationMs += event.durationMs;
+        timeToFirstEventMs += event.firstEventMs ?? 0;
+        inputTokens += event.usage?.inputTokens ?? 0;
+        outputTokens += event.usage?.outputTokens ?? 0;
+        cachedInputTokens += event.usage?.cachedInputTokens ?? 0;
+        return;
+      }
       if (event.kind === "turn") {
         modelTurns += 1;
         if (event.stalled === true) stalledTurns += 1;
@@ -171,6 +188,7 @@ export function createPlannerTelemetryCollector(): Readonly<{
       return {
         modelTurns,
         stalledTurns,
+        retriedAttempts,
         measuredUsageTurns,
         inputTokens,
         outputTokens,
