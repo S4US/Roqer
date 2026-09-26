@@ -780,6 +780,40 @@ test("OpenRouter's streamed reasoning fragments go back joined into whole blocks
   assert.equal("reasoning_content" in assistant, false);
 });
 
+test("Gemini's thought signature through OpenRouter goes back whole, apart from the unsigned summary before it", async () => {
+  // Gemini streams its thought summary and then its signature at the same
+  // index. Folded into the text, or sent back beside an unsigned summary, the
+  // signature is refused: "Provider returned error".
+  const { fetch, sent } = endpoint([
+    reasonedToolTurn([
+      { reasoning: "Look at", reasoning_details: [{ type: "reasoning.text", text: "Look at", format: "google-gemini-v1", index: 0 }] },
+      { reasoning: " the place", reasoning_details: [{ type: "reasoning.text", text: " the place", format: "google-gemini-v1", index: 0 }] },
+      { reasoning_details: [{ type: "reasoning.encrypted", data: "sig-gemini", id: "call_1", format: "google-gemini-v1", index: 0 }] },
+    ], {}),
+    FINISHED,
+  ]);
+  const turns = new OpenAiChatTurns({ baseUrl: "https://openrouter.ai/api/v1", apiKey: null, label: "OpenRouter", reasoning: true, fetch });
+  await collect(turns.streamTurn(REQUEST, new AbortController().signal));
+  await collect(turns.streamTurn({ ...REQUEST, messages: PLACE_INFO_TURN }, new AbortController().signal));
+
+  const assistant = chatMessages(sent[1]).find((message) => message.role === "assistant")!;
+  assert.deepEqual(assistant.reasoning_details, [
+    { type: "reasoning.encrypted", data: "sig-gemini", id: "call_1", format: "google-gemini-v1", index: 0 },
+  ]);
+});
+
+test("a relay's refusal is reported in the words of the provider that made it", async () => {
+  const raw = json([{ error: { code: 400, message: "Function call is missing a thought_signature in functionCall parts.", status: "INVALID_ARGUMENT" } }]);
+  const { fetch } = endpoint([
+    { status: 400, body: json({ error: { message: "Provider returned error", code: 400, metadata: { raw, provider_name: "Google AI Studio" } } }) },
+  ]);
+  const turns = new OpenAiChatTurns({ baseUrl: "https://openrouter.ai/api/v1", apiKey: null, label: "OpenRouter", reasoning: true, fetch });
+  await assert.rejects(
+    () => collect(turns.streamTurn(REQUEST, new AbortController().signal)),
+    (error: Error) => error.message === "OpenRouter returned status 400: Google AI Studio said: Function call is missing a thought_signature in functionCall parts.",
+  );
+});
+
 test("a Gemini thought signature goes back on the tool call it came with", async () => {
   // Google's OpenAI-compatible endpoint refuses the next turn of a Gemini 3
   // tool loop when a call comes back without its signature.

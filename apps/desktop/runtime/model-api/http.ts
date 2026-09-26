@@ -104,7 +104,7 @@ export function errorDetail(body: string): string {
     if (isRecord(parsed)) {
       const error = parsed.error;
       if (typeof error === "string") return error;
-      if (isRecord(error) && typeof error.message === "string") return error.message;
+      if (isRecord(error) && typeof error.message === "string") return upstreamDetail(error) ?? error.message;
       if (typeof parsed.message === "string") return parsed.message;
       if (typeof parsed.detail === "string") return parsed.detail;
     }
@@ -112,6 +112,30 @@ export function errorDetail(body: string): string {
     // Not JSON: the text itself is the best explanation available.
   }
   return body;
+}
+
+/**
+ * The refusal a relay passed on, in the words of the provider that made it.
+ * OpenRouter says only "Provider returned error" and keeps the provider's own
+ * body -- Google's "missing a thought_signature", say -- in `metadata.raw`.
+ */
+function upstreamDetail(error: Record<string, unknown>): string | undefined {
+  const metadata = error.metadata;
+  if (!isRecord(metadata)) return undefined;
+  let raw: unknown = metadata.raw;
+  if (typeof raw === "string") {
+    try {
+      raw = JSON.parse(raw) as unknown;
+    } catch {
+      // Plain text is the provider's explanation as it stands.
+    }
+  }
+  // Google's streaming endpoint wraps its error in a one-element array.
+  if (Array.isArray(raw)) raw = raw[0];
+  const detail = (typeof raw === "string" ? raw : isRecord(raw) ? errorDetail(JSON.stringify(raw)) : "").trim();
+  if (detail.length === 0) return undefined;
+  const provider = typeof metadata.provider_name === "string" && metadata.provider_name.length > 0 ? metadata.provider_name : "The provider";
+  return `${provider} said: ${detail}`;
 }
 
 function statusHint(status: number): string {
@@ -221,7 +245,7 @@ export function isTransientStreamError(error: unknown): boolean {
 export function streamErrorMessage(error: unknown, label: string, apiKey: string | null): string {
   const text = typeof error === "string"
     ? error
-    : isRecord(error) && typeof error.message === "string" ? error.message : "";
+    : isRecord(error) && typeof error.message === "string" ? upstreamDetail(error) ?? error.message : "";
   const detail = redact(text, apiKey).slice(0, MAX_ERROR_MESSAGE_CHARACTERS);
   return `${label} reported an error during the turn${detail ? `: ${detail}` : "."}`;
 }
