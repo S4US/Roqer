@@ -11,8 +11,8 @@ const CONNECTION: CustomConnectionView = {
   baseUrl: "https://openrouter.ai/api/v1",
   hasKey: true,
   models: [
-    { id: "deepseek/deepseek-chat", displayName: "DeepSeek", images: false, reasoning: false },
-    { id: "openai/o4-mini", displayName: "o4 mini", images: true, reasoning: true },
+    { id: "deepseek/deepseek-chat", displayName: "DeepSeek", images: false, efforts: [] },
+    { id: "openai/o4-mini", displayName: "o4 mini", images: true, efforts: ["low", "medium", "high"] },
   ],
 };
 
@@ -24,6 +24,20 @@ test("the catalog names each model by its connection, with efforts only where th
     ["conn-abcd1234:openai/o4-mini", "OpenRouter", "medium"],
   ]);
   assert.deepEqual(catalog.models[1].supportedReasoningEfforts.map((entry) => entry.reasoningEffort), ["low", "medium", "high"]);
+
+  // The levels are the model's own, beyond the three every model once got.
+  const [claude, offOrHigh, xhighOnly] = customModelCatalog([{
+    ...CONNECTION,
+    models: [
+      { id: "claude", displayName: "Claude", images: true, efforts: ["low", "medium", "high", "xhigh", "max"] },
+      { id: "gpt", displayName: "GPT", images: true, efforts: ["none", "high"] },
+      { id: "deep", displayName: "Deep", images: true, efforts: ["xhigh"] },
+    ],
+  }]).models;
+  assert.deepEqual(claude.supportedReasoningEfforts.map((entry) => entry.reasoningEffort), ["low", "medium", "high", "xhigh", "max"]);
+  assert.equal(claude.defaultReasoningEffort, "medium");
+  assert.equal(offOrHigh.defaultReasoningEffort, "high", "the offered level nearest medium");
+  assert.equal(xhighOnly.defaultReasoningEffort, "xhigh");
 
   const empty = customModelCatalog([]);
   assert.equal(empty.models.length, 0);
@@ -72,6 +86,28 @@ test("a connection test passes only when the model calls a tool", async () => {
   });
   assert.equal(unreachable.ok, false);
   assert.match(unreachable.message, /could not be reached at https:\/\/openrouter\.ai/);
+});
+
+test("a connection test sends the lowest effort the model takes, and none to a model without one", async () => {
+  const sent: Array<Record<string, unknown>> = [];
+  const recording = (async (_url: unknown, init?: RequestInit) => {
+    sent.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+    return streaming([
+      JSON.stringify({ choices: [{ delta: { tool_calls: [{ index: 0, id: "c1", function: { name: "report_ready", arguments: "{\"ok\":true}" } }] }, finish_reason: "tool_calls" }] }),
+      "[DONE]",
+    ])("");
+  }) as typeof globalThis.fetch;
+  for (const efforts of [["xhigh", "max"], []] as const) {
+    const result = await testCustomModel({
+      connection: CONNECTION,
+      model: { id: "m", displayName: "M", images: false, efforts },
+      apiKey: null,
+      fetch: recording,
+    });
+    assert.equal(result.ok, true);
+  }
+  assert.equal(sent[0].reasoning_effort, "xhigh");
+  assert.equal("reasoning_effort" in sent[1], false);
 });
 
 test("the endpoint's model list is read in either format, sorted and deduplicated", async () => {

@@ -34,7 +34,7 @@ const OPENROUTER = {
   name: "OpenRouter",
   format: "openai" as const,
   baseUrl: "https://openrouter.ai/api/v1",
-  models: [{ id: "deepseek/deepseek-chat", displayName: "DeepSeek", images: false, reasoning: false }],
+  models: [{ id: "deepseek/deepseek-chat", displayName: "DeepSeek", images: false, efforts: [] }],
 };
 
 test("a saved key is encrypted on disk, hidden from the view, and decrypted only to run", async () => {
@@ -90,7 +90,7 @@ test("without encrypted storage a key is refused, but a local server needs none"
     await assert.rejects(() => store.save({ ...OPENROUTER, apiKey: "sk-or-secret-123" }), /no encrypted storage/);
     const [local] = await store.save({
       name: "Ollama", format: "openai", baseUrl: "http://localhost:11434/v1",
-      models: [{ id: "qwen2.5-coder:32b", displayName: "Qwen", images: false, reasoning: false }],
+      models: [{ id: "qwen2.5-coder:32b", displayName: "Qwen", images: false, efforts: [] }],
     });
     assert.equal(local.hasKey, false);
     assert.equal((await store.resolve(local.id))?.apiKey, null);
@@ -116,4 +116,47 @@ test("a damaged file is set aside for diagnosis rather than overwritten", async 
     assert.equal(entry.hasKey, true);
     await assert.rejects(() => reopened.resolve(entry.id), /could not be decrypted/);
   });
+});
+
+test("a schema 1 file reads its reasoning flag as the efforts it meant, and saves as schema 2", async () => {
+  await withStore(async (store, file) => {
+    await fs.writeFile(file, JSON.stringify({
+      schemaVersion: 1,
+      connections: [{
+        id: "conn-abcd1234", name: "OpenRouter", format: "openai", baseUrl: "https://openrouter.ai/api/v1",
+        models: [
+          { id: "openai/o4-mini", displayName: "o4 mini", images: true, reasoning: true },
+          { id: "deepseek/deepseek-chat", displayName: "DeepSeek", images: false, reasoning: false, contextWindow: 64_000 },
+        ],
+      }],
+    }), "utf8");
+    const [connection] = await store.list();
+    assert.equal(store.takeDamagedNotice(), undefined, "an old file is read, not set aside");
+    assert.deepEqual(connection.models.map((model) => model.efforts), [["low", "medium", "high"], []]);
+    assert.equal(connection.models[1].contextWindow, 64_000);
+    assert.equal(JSON.parse(await fs.readFile(file, "utf8")).schemaVersion, 1, "reading alone rewrites nothing");
+
+    await store.save({ ...OPENROUTER, id: connection.id, models: connection.models });
+    const written = JSON.parse(await fs.readFile(file, "utf8")) as { schemaVersion: number; connections: Array<{ models: Array<Record<string, unknown>> }> };
+    assert.equal(written.schemaVersion, 2);
+    assert.deepEqual(written.connections[0].models[0].efforts, ["low", "medium", "high"]);
+    assert.equal("reasoning" in written.connections[0].models[0], false);
+  });
+});
+
+test("a schema 2 model with a reasoning flag or out-of-order efforts is damaged, not guessed at", async () => {
+  for (const model of [
+    { id: "a", displayName: "A", images: false, reasoning: true },
+    { id: "a", displayName: "A", images: false, efforts: ["high", "low"] },
+    { id: "a", displayName: "A", images: false, efforts: ["ultra"] },
+  ]) {
+    await withStore(async (store, file) => {
+      await fs.writeFile(file, JSON.stringify({
+        schemaVersion: 2,
+        connections: [{ id: "conn-abcd1234", name: "X", format: "openai", baseUrl: "https://x.example/v1", models: [model] }],
+      }), "utf8");
+      assert.deepEqual(await store.list(), []);
+      assert.ok(store.takeDamagedNotice() !== undefined);
+    });
+  }
 });
