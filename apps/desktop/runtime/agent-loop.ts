@@ -2,6 +2,7 @@ import {
   ContextOverflowError,
   estimateTurnInputTokens,
   TransientTurnError,
+  UnusableToolCallError,
   TURN_IMAGE_MEDIA_TYPES,
   MAX_TURN_IMAGE_BASE64,
   MAX_TURN_IMAGES,
@@ -444,6 +445,11 @@ export const MALFORMED_CALL_RETRIES = 3;
 
 const MALFORMED_CALL_NOTE = "[Roqer, the host: your last tool call could not be formed: the model's provider reported a malformed function call, so nothing ran. This usually happens when one call is too large. Make the same step again as a smaller call: split a long script into parts, write a long script in stages with the line editors, or build in several batches.]";
 
+/** What the model is told when the transport could not use its call; `reason` says why and what to do. */
+function unusableCallNote(reason: string): string {
+  return `[Roqer, the host: your last tool call could not be used, so nothing ran: ${reason}]`;
+}
+
 /** Sent with the last turn of a run that is repeating itself. */
 function stuckNote(stuck: Readonly<{ turns: number; failing: boolean }>): string {
   return `[Roqer, the host: you have made the same ${stuck.failing ? "failing " : ""}calls ${stuck.turns} turns in a row, so Roqer is stopping this run. Do not call any tool; Roqer will not run one. Reply now to the user: what works and how you checked it, what does not work yet, and what is left to do.]`;
@@ -776,6 +782,8 @@ export function createAgentLoopPlanner(options: AgentLoopPlannerOptions): Planne
         let turnUsage: TurnUsage | undefined;
         let retries = 0;
         let shrunk = false;
+        // A call the transport could not use, which the model is told about.
+        let unusable: UnusableToolCallError | undefined;
 
         // A transport hands over a turn's calls only once the whole turn has
         // arrived, so a turn that failed partway ran nothing and is simply
@@ -786,6 +794,7 @@ export function createAgentLoopPlanner(options: AgentLoopPlannerOptions): Planne
           completed = false;
           stopReason = undefined;
           turnUsage = undefined;
+          unusable = undefined;
           let failureCode: Extract<TurnEvent, { kind: "failed" }>["code"] | undefined;
           let usage: TurnUsage | undefined;
           let transient: TransientTurnError | undefined;
@@ -839,7 +848,15 @@ export function createAgentLoopPlanner(options: AgentLoopPlannerOptions): Planne
             // is not retried, because a model that went quiet once would spend
             // the same wait again.
             if (context.signal.aborted || watchdog.stalled) throw error;
-            if (error instanceof ContextOverflowError) {
+            if (error instanceof UnusableToolCallError) {
+              // The turn is over and nothing in it ran; what the model gets
+              // back is why, in the malformed-call path below. Its prose
+              // stands, since it did say it; its calls do not.
+              unusable = error;
+              calls = [];
+              completed = true;
+              stopReason = "malformed-tool-call";
+            } else if (error instanceof ContextOverflowError) {
               // Once a turn: a conversation cut this far that still does not
               // fit is not going to, and a request the model cannot hold is
               // one the person has to shorten or send elsewhere.
@@ -946,11 +963,19 @@ export function createAgentLoopPlanner(options: AgentLoopPlannerOptions): Planne
           if (stopReason === "malformed-tool-call") {
             malformedInRow += 1;
             if (malformedInRow > MALFORMED_CALL_RETRIES) {
-              throw new Error(`${label === "Roqer" ? "The model" : label} could not form a tool call ${malformedInRow} times in a row (its provider reported a malformed function call). This usually means one call is too large; ask for the work in smaller steps.`);
+              throw new Error(unusable === undefined
+                ? `${label === "Roqer" ? "The model" : label} could not form a tool call ${malformedInRow} times in a row (its provider reported a malformed function call). This usually means one call is too large; ask for the work in smaller steps.`
+                : `${unusable.message} That was ${malformedInRow} unusable tool calls in a row, so Roqer stopped the run; ask for the work in smaller steps.`);
             }
             if (spoken.length > 0) messages.push({ role: "assistant", content: [{ kind: "text", text: spoken }] });
-            messages.push({ role: "user", content: [{ kind: "text", text: MALFORMED_CALL_NOTE }] });
-            context.status("Model sent a broken tool call", `Its provider could not read the call, so Roqer asked for a smaller one (${malformedInRow} of ${MALFORMED_CALL_RETRIES}).`);
+            messages.push({
+              role: "user",
+              content: [{ kind: "text", text: unusable === undefined ? MALFORMED_CALL_NOTE : unusableCallNote(unusable.reason) }],
+            });
+            context.status(
+              unusable === undefined ? "Model sent a broken tool call" : "Model sent a tool call Roqer could not use",
+              `${unusable === undefined ? "Its provider could not read the call" : unusable.message} Nothing ran; Roqer asked the model for the step again (${malformedInRow} of ${MALFORMED_CALL_RETRIES}).`,
+            );
             continue;
           }
           const answer = prose.text().trim();

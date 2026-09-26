@@ -2,7 +2,9 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import type { TurnEvent, TurnRequest } from "./model-api/turn-contract";
-import { ContextOverflowError, isTurnRequest, MAX_TURN_IMAGE_BASE64, TransientTurnError } from "./model-api/turn-contract";
+import {
+  ContextOverflowError, isTurnRequest, MAX_TURN_IMAGE_BASE64, TransientTurnError, UnusableToolCallError,
+} from "./model-api/turn-contract";
 
 import type { AgentDefinition } from "./agent-definition";
 import { buildConversationPrompt } from "./conversation-prompt";
@@ -1081,6 +1083,46 @@ test("a conversation crowding a model's context window is folded before the mode
   // Without a known window the usual bound applies, and twelve exchanges are nowhere near it.
   const unknown = await run(undefined);
   assert.equal(unknown.folded, false);
+});
+
+test("a tool call Roqer cannot use is sent back to the model with why, not made the end of the run", async () => {
+  // The run that prompted this: nine minutes writing one Blender script for a
+  // whole go-kart, which arrived too large to use and ended the run as "a tool
+  // call Roqer could not read", with nothing built and nothing the model could act on.
+  const controller = new AbortController();
+  const { context, recorded } = makeContext(controller);
+  const tooLarge = new UnusableToolCallError(
+    "OpenRouter sent a blender call larger than Roqer accepts (more than 262,144 characters).",
+    "the arguments of your blender call passed 262,144 characters, the most one call may carry. Make the same step again as smaller calls.",
+  );
+  const bridge = flakyGateway([
+    { events: [{ kind: "delta", text: "One complete Blender job." }], error: tooLarge },
+    readTurn(1),
+    { events: DONE("Built in parts.") },
+  ]);
+
+  assert.equal(await retryingPlanner(bridge).run(context), "One complete Blender job.\n\nBuilt in parts.");
+
+  // Not retried as the same request: the model is told, and asked again.
+  const told = bridge.requests[1].messages;
+  assert.deepEqual(told[1], { role: "assistant", content: [{ kind: "text", text: "One complete Blender job." }] });
+  const note = told[2].content[0];
+  assert.equal(note.kind === "text" && note.text.startsWith("[Roqer, the host: your last tool call could not be used, so nothing ran: the arguments of your blender call passed 262,144 characters"), true);
+  assert.deepEqual(recorded.calls, ["get_script_source"]);
+  const status = recorded.statuses.find((entry) => entry.label === "Model sent a tool call Roqer could not use");
+  assert.match(status?.detail ?? "", /larger than Roqer accepts .* Nothing ran; Roqer asked the model for the step again \(1 of 3\)\./);
+});
+
+test("a model that keeps sending unusable tool calls is stopped after a few, with the reason", async () => {
+  const controller = new AbortController();
+  const { context } = makeContext(controller);
+  const broken = new UnusableToolCallError("OpenRouter sent a blender call whose arguments are not valid JSON.", "the arguments were not valid JSON.");
+  const bridge = flakyGateway(Array.from({ length: 4 }, () => ({ error: broken })));
+  await assert.rejects(
+    () => retryingPlanner(bridge).run(context),
+    /^Error: OpenRouter sent a blender call whose arguments are not valid JSON\. That was 4 unusable tool calls in a row, so Roqer stopped the run/,
+  );
+  assert.equal(bridge.requests.length, 4);
 });
 
 test("a long run folds its own history and sends the host's record in its place", async () => {

@@ -15,6 +15,12 @@ defined. Every job is irreversible: the user approves it unless they run in
 Full auto, so write the whole model in one script rather than probing with
 several small ones.
 
+A script may be at most 60,000 characters, and a call that long takes minutes
+to write. Build repeated parts (wheels, bolts, tube runs, vents) with loops and
+small functions rather than writing each one out. A model too detailed for one
+script is built in several jobs, each exporting its own parts (the body in one,
+the wheels and running gear in another), and placed together in Studio.
+
 The script must:
 
 - build everything with `bpy`; start from the empty scene, nothing else is loaded;

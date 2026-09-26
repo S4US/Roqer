@@ -1,6 +1,6 @@
 import {
-  isTurnToolCall,
   TransientTurnError,
+  UnusableToolCallError,
   type TurnToolCall,
   type TurnEvent,
   type TurnRequest,
@@ -10,9 +10,9 @@ import {
 
 import type { TurnTransport } from "../agent-loop";
 import {
-  DEFAULT_REQUEST_TIMEOUT_MS, endpointRefusal, endpointUrl, fetchWithin, frameData, interruptedStream, isRecord,
-  MAX_TOOL_ARGUMENT_CHARACTERS, MAX_TOOL_CALLS_PER_TURN, messageKey, readErrorBody, serverSentFrames, streamFailure,
-  turnKey, usableCallId,
+  assembledToolCall, DEFAULT_REQUEST_TIMEOUT_MS, endpointRefusal, endpointUrl, fetchWithin, frameData, interruptedStream,
+  isRecord, MAX_TOOL_ARGUMENT_CHARACTERS, MAX_TOOL_CALLS_PER_TURN, messageKey, oversizedToolCall, readErrorBody,
+  serverSentFrames, streamFailure, tooManyToolCalls, turnKey, usableCallId,
 } from "./http";
 
 /**
@@ -422,12 +422,9 @@ export class OpenAiChatTurns implements TurnTransport {
     const calls: TurnToolCall[] = [];
     const extraContent = new Map<string, JsonRecord>();
     for (const call of pending.values()) {
-      const completed = this.completed(call);
-      if (completed === undefined) {
-        throw new Error(reason === "max-output"
-          ? `${label} cut the model off partway through a tool call. Raise the model's max output in Settings, or ask for a smaller step.`
-          : `${label} sent a tool call Roqer could not read. This model may not support tool calls well.`);
-      }
+      this.calls += 1;
+      const completed = assembledToolCall(label, usableCallId(call.id, `call-${this.calls}`), call.name, call.arguments, reason);
+      if (completed instanceof UnusableToolCallError) throw completed;
       calls.push(completed);
       if (call.extra !== undefined) extraContent.set(completed.id, call.extra);
     }
@@ -458,18 +455,6 @@ export class OpenAiChatTurns implements TurnTransport {
     yield usage === undefined ? { kind: "completed", stopReason: reason } : { kind: "completed", stopReason: reason, usage };
   }
 
-  private completed(pending: PendingToolCall): TurnToolCall | undefined {
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(pending.arguments.trim().length === 0 ? "{}" : pending.arguments) as unknown;
-    } catch {
-      return undefined;
-    }
-    this.calls += 1;
-    const call = { id: usableCallId(pending.id, `call-${this.calls}`), name: pending.name, arguments: parsed };
-    return isTurnToolCall(call) ? call : undefined;
-  }
-
   /**
    * Tool calls stream as indexed fragments. A fragment without an index is
    * placed by what it carries: one naming a function starts a new call, and
@@ -485,7 +470,7 @@ export class OpenAiChatTurns implements TurnTransport {
         ? fragment.index
         : names ? pending.size : Math.max(0, pending.size - 1);
       if (!pending.has(index) && pending.size >= MAX_TOOL_CALLS_PER_TURN) {
-        throw new Error(`${this.options.label} proposed more tool calls in one turn than Roqer accepts.`);
+        throw tooManyToolCalls(this.options.label);
       }
       const current = pending.get(index) ?? { id: "", name: "", arguments: "" };
       if (typeof fragment.id === "string" && fragment.id.length > 0) current.id = fragment.id;
@@ -498,7 +483,7 @@ export class OpenAiChatTurns implements TurnTransport {
           ? call.arguments
           : isRecord(call.arguments) ? JSON.stringify(call.arguments) : "";
         if (current.arguments.length + args.length > MAX_TOOL_ARGUMENT_CHARACTERS) {
-          throw new Error(`${this.options.label} sent tool-call arguments larger than Roqer accepts.`);
+          throw oversizedToolCall(this.options.label, current.name);
         }
         current.arguments += args;
       }

@@ -1,8 +1,8 @@
 import { createHash } from "node:crypto";
 
 import {
-  isTurnToolCall,
   TransientTurnError,
+  UnusableToolCallError,
   type TurnMessage,
   type TurnReasoningEffort,
   type TurnToolCall,
@@ -15,9 +15,9 @@ import {
 import { DEFAULT_ANTHROPIC_MAX_OUTPUT } from "../../shared/custom-providers";
 import type { TurnTransport } from "../agent-loop";
 import {
-  DEFAULT_REQUEST_TIMEOUT_MS, endpointRefusal, endpointUrl, fetchWithin, frameData, interruptedStream, isRecord,
-  MAX_TOOL_ARGUMENT_CHARACTERS, MAX_TOOL_CALLS_PER_TURN, messageKey, readErrorBody, serverSentFrames, streamFailure,
-  turnKey, usableCallId,
+  assembledToolCall, DEFAULT_REQUEST_TIMEOUT_MS, endpointRefusal, endpointUrl, fetchWithin, frameData, interruptedStream,
+  isRecord, MAX_TOOL_ARGUMENT_CHARACTERS, MAX_TOOL_CALLS_PER_TURN, messageKey, oversizedToolCall, readErrorBody,
+  serverSentFrames, streamFailure, tooManyToolCalls, turnKey, usableCallId,
 } from "./http";
 
 /**
@@ -449,7 +449,7 @@ export class AnthropicMessagesTurns implements TurnTransport {
         const block = isRecord(payload.content_block) ? payload.content_block : undefined;
         if (block?.type === "tool_use" && typeof block.id === "string" && typeof block.name === "string") {
           if ([...blocks.values()].filter((entry) => entry.kind === "tool").length >= MAX_TOOL_CALLS_PER_TURN) {
-            throw new Error(`${label} proposed more tool calls in one turn than Roqer accepts.`);
+            throw tooManyToolCalls(label);
           }
           blocks.set(index, { kind: "tool", id: block.id, name: block.name, arguments: "" });
         } else if (block?.type === "text") {
@@ -475,7 +475,7 @@ export class AnthropicMessagesTurns implements TurnTransport {
           yield { kind: "delta", text: delta.text };
         } else if (delta?.type === "input_json_delta" && typeof delta.partial_json === "string" && current?.kind === "tool") {
           if (current.arguments.length + delta.partial_json.length > MAX_TOOL_ARGUMENT_CHARACTERS) {
-            throw new Error(`${label} sent tool-call arguments larger than Roqer accepts.`);
+            throw oversizedToolCall(label, current.name);
           }
           current.arguments += delta.partial_json;
         } else if (delta?.type === "thinking_delta" && typeof delta.thinking === "string" && current?.kind === "thinking") {
@@ -518,17 +518,9 @@ export class AnthropicMessagesTurns implements TurnTransport {
         kept.push({ type: "text", text: block.text });
         text += block.text;
       } else if (block.kind === "tool") {
-        let parsed: unknown;
-        try {
-          parsed = JSON.parse(block.arguments.trim().length === 0 ? "{}" : block.arguments) as unknown;
-        } catch {
-          throw new Error(reason === "max-output"
-            ? `${label} cut the model off partway through a tool call. Raise the model's max output in Settings, or ask for a smaller step.`
-            : `${label} sent a tool call Roqer could not read.`);
-        }
         this.calls += 1;
-        const call = { id: usableCallId(block.id, `call-${this.calls}`), name: block.name, arguments: parsed };
-        if (!isTurnToolCall(call)) throw new Error(`${label} sent a tool call Roqer could not read.`);
+        const call = assembledToolCall(label, usableCallId(block.id, `call-${this.calls}`), block.name, block.arguments, reason);
+        if (call instanceof UnusableToolCallError) throw call;
         calls.push(call);
         kept.push({ type: "tool_use", id: call.id, name: call.name, input: call.arguments });
       }

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import type { TurnEvent, TurnRequest } from "./turn-contract";
-import { ContextOverflowError, TransientTurnError } from "./turn-contract";
+import { ContextOverflowError, TransientTurnError, UnusableToolCallError } from "./turn-contract";
 
 import { AnthropicMessagesTurns, usesThinkingBudget } from "./anthropic-messages";
 import { retryAfterMs } from "./http";
@@ -850,4 +850,67 @@ test("a refusal because the conversation outgrew the model is told apart from ev
     () => collect(anthropic.streamTurn(REQUEST, new AbortController().signal)),
     (error: Error) => !(error instanceof ContextOverflowError) && !(error instanceof TransientTurnError),
   );
+});
+
+/** One OpenAI-compatible turn whose only content is a tool call with these raw arguments. */
+function rawCallTurn(name: string, rawArguments: string, finish = "tool_calls"): { frames: string[] } {
+  return {
+    frames: [
+      json({ choices: [{ delta: { tool_calls: [{ index: 0, id: "call_1", function: { name, arguments: rawArguments } }] } }] }),
+      json({ choices: [{ delta: {}, finish_reason: finish }] }),
+      "[DONE]",
+    ],
+  };
+}
+
+test("a script call longer than the old 64 KB bound reaches its tool instead of being refused unread", async () => {
+  // A Blender job may be 60,000 characters of Python; the turn contract once
+  // refused any call over 65,536 characters of JSON as "a tool call Roqer could
+  // not read", so a script just past Blender's own limit never reached the
+  // check that would have said to split it, and the run ended instead.
+  const script = "import bpy\n".repeat(7_000);
+  const { fetch } = endpoint([rawCallTurn("blender", json({ script }))]);
+  const turns = new OpenAiChatTurns({ baseUrl: "https://openrouter.ai/api/v1", apiKey: null, label: "OpenRouter", reasoning: false, fetch });
+  const events = await collect(turns.streamTurn(REQUEST, new AbortController().signal));
+  const call = events.find((event) => event.kind === "tool-call");
+  assert.ok(json({ script }).length > 65_536);
+  assert.equal(call?.kind === "tool-call" && call.call.arguments.script, script);
+});
+
+test("each way a tool call can be unusable is named as itself, and none ends the run on its own", async () => {
+  const kinds = async (turn: { frames: string[] }) => {
+    const { fetch } = endpoint([turn]);
+    const turns = new OpenAiChatTurns({ baseUrl: "https://openrouter.ai/api/v1", apiKey: null, label: "OpenRouter", reasoning: false, fetch });
+    try {
+      await collect(turns.streamTurn(REQUEST, new AbortController().signal));
+      return undefined;
+    } catch (error) {
+      assert.ok(error instanceof UnusableToolCallError, `${(error as Error).message} is recoverable`);
+      return error;
+    }
+  };
+
+  const invalid = await kinds(rawCallTurn("blender", "{\"script\": \"import bpy"));
+  assert.match(invalid!.message, /OpenRouter sent a blender call whose arguments are not valid JSON\./);
+  assert.match(invalid!.reason, /not valid JSON \(22 characters\)/);
+  assert.doesNotMatch(invalid!.message, /may not support tool calls/);
+
+  const cut = await kinds(rawCallTurn("blender", "{\"script\": \"import bpy", "length"));
+  assert.match(cut!.message, /reached its output limit\. If this keeps happening, raise the model's max output/);
+  assert.match(cut!.reason, /you reached your output limit partway through your blender call.*model a large Blender object across several jobs/);
+
+  const misnamed = await kinds(rawCallTurn("Blender", "{}"));
+  assert.match(misnamed!.reason, /"Blender" is not one of your tools/);
+
+  const oversized = await kinds(rawCallTurn("blender", json({ script: "x".repeat(270_000) })));
+  assert.match(oversized!.message, /OpenRouter sent a blender call larger than Roqer accepts \(more than 262,144 characters\)/);
+
+  const many = await kinds({
+    frames: [
+      json({ choices: [{ delta: { tool_calls: Array.from({ length: 65 }, (_, index) => ({ index, id: `call_${index}`, function: { name: "roblox_studio", arguments: "{}" } })) } }] }),
+      json({ choices: [{ delta: {}, finish_reason: "tool_calls" }] }),
+      "[DONE]",
+    ],
+  });
+  assert.match(many!.reason, /more than 64 tool calls in one turn/);
 });
