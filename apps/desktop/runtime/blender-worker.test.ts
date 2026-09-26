@@ -82,7 +82,7 @@ test("a job exports a model, and Roqer's own pass measures it and returns its pr
 test("the runner gives the script Roqer's placement helpers, and only those", () => {
   assert.match(RUNNER_SCRIPT, /roqer_helpers\.py/);
   assert.match(RUNNER_SCRIPT, /"roqer": roqer/);
-  for (const helper of ["box", "box_between", "cylinder_between", "join", "paint", "vertex_color_material"]) {
+  for (const helper of ["box", "box_between", "cylinder_between", "cone_between", "join", "paint", "vertex_color_material"]) {
     assert.match(HELPERS_SCRIPT, new RegExp(`^def ${helper}\\(`, "m"), helper);
   }
   // A helper places a part by its ends; it never asks the model for a rotation angle.

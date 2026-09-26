@@ -147,25 +147,58 @@ def box_between(name, start, end, width, thickness, width_axis=(1, 0, 0), rgba=N
     return _object(name, bm, rgba)
 
 
-def cylinder_between(name, start, end, radius, rgba=None, vertices=12):
-    """A cylinder whose end caps sit at start and end: a bar, a pipe, a column, an axle or a wheel."""
+def _tube(name, start, end, radii, rgba, vertices):
+    """A closed round solid from start to end with the given radius at each end; a radius of 0 is a point."""
     start, end = _vector(start, "start"), _vector(end, "end")
-    radius = _positive(radius, "radius")
     if not isinstance(vertices, int) or vertices < 3:
         raise ValueError(f"vertices must be a whole number of at least 3, got {vertices!r}")
     along, side, normal = _frame(start, end, Vector((1, 0, 0)) if abs((end - start).normalized().x) < 0.9 else Vector((0, 1, 0)))
     import math
     bm = bmesh.new()
     rings = []
-    for point in (start, end):
+    for point, radius in zip((start, end), radii):
+        if radius == 0:
+            rings.append([bm.verts.new(point)])
+            continue
         rings.append([bm.verts.new(point + (side * math.cos(2 * math.pi * k / vertices) + normal * math.sin(2 * math.pi * k / vertices)) * radius)
                       for k in range(vertices)])
+    first, last = rings
     for k in range(vertices):
         n = (k + 1) % vertices
-        bm.faces.new((rings[0][k], rings[0][n], rings[1][n], rings[1][k]))
-    bm.faces.new(list(reversed(rings[0])))
-    bm.faces.new(rings[1])
+        if len(first) == 1:
+            bm.faces.new((first[0], last[n], last[k]))
+        elif len(last) == 1:
+            bm.faces.new((first[k], first[n], last[0]))
+        else:
+            bm.faces.new((first[k], first[n], last[n], last[k]))
+    if len(first) > 1:
+        bm.faces.new(list(reversed(first)))
+    if len(last) > 1:
+        bm.faces.new(last)
     return _object(name, bm, rgba)
+
+
+def cylinder_between(name, start, end, radius, rgba=None, vertices=12):
+    """A cylinder whose end caps sit at start and end: a bar, a pipe, a column, an axle or a wheel."""
+    radius = _positive(radius, "radius")
+    return _tube(name, start, end, (radius, radius), rgba, vertices)
+
+
+def cone_between(name, start, end, start_radius, end_radius=0.0, rgba=None, vertices=12):
+    """A cone or taper from start to end: start_radius across at start, end_radius at end, 0 for a point.
+
+    Each radius belongs to the end it is named for, so a boost flame runs from the exhaust
+    (its wide end) to its tip (0), a spike from its base to its point, a funnel from its
+    mouth to its spout. No rotation angle to get the direction of wrong.
+    """
+    radii = []
+    for value, label in ((start_radius, "start_radius"), (end_radius, "end_radius")):
+        if not isinstance(value, (int, float)) or value < 0:
+            raise ValueError(f"{label} must be a number of studs, 0 or more, got {value!r}")
+        radii.append(float(value))
+    if radii == [0.0, 0.0]:
+        raise ValueError("start_radius and end_radius cannot both be 0")
+    return _tube(name, start, end, radii, rgba, vertices)
 
 
 def vertex_color_material(name="VertexColour"):
