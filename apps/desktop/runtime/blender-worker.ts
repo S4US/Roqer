@@ -291,6 +291,10 @@ GEOMETRY = {"MESH", "CURVE", "SURFACE", "META", "FONT"}
 MAX_SCENE_OBJECTS = 120
 
 
+def measured(values):
+    return [round(float(value), 3) for value in values]
+
+
 def scene_contents():
     depsgraph = bpy.context.evaluated_depsgraph_get()
     entries, triangles = [], 0
@@ -303,7 +307,8 @@ def scene_contents():
         if not item.visible_get():
             entry["hidden"] = True
         if item.type == "EMPTY":
-            entry["center"] = [round(value, 3) for value in item.matrix_world.translation]
+            if numpy.isfinite(numpy.array(item.matrix_world.translation)).all():
+                entry["center"] = measured(item.matrix_world.translation)
         else:
             # Measured from the evaluated mesh itself: a curve's own bounding
             # box describes its control points, not the tube they become.
@@ -313,12 +318,25 @@ def scene_contents():
                 points = numpy.empty(len(mesh.vertices) * 3, dtype=numpy.float64)
                 mesh.vertices.foreach_get("co", points)
                 points = points.reshape(-1, 3)
+                # A vertex at NaN is what fails a glTF export, and it would
+                # also turn every measurement below, and this file, into NaN.
+                finite = numpy.isfinite(points).all(axis=1)
+                if not finite.all():
+                    entry["invalid"] = int((~finite).sum())
+                    entry["invalidFrom"] = "geometry"
+                    if item.type == "MESH" and item.modifiers:
+                        source = numpy.empty(len(item.data.vertices) * 3, dtype=numpy.float64)
+                        item.data.vertices.foreach_get("co", source)
+                        if numpy.isfinite(source).all():
+                            entry["invalidFrom"] = "modifiers"
+                    points = points[finite]
                 if len(points) > 0:
                     world = numpy.array(evaluated.matrix_world)
                     points = points @ world[:3, :3].T + world[:3, 3]
                     low, high = points.min(axis=0), points.max(axis=0)
-                    entry["size"] = [round(float(value), 3) for value in high - low]
-                    entry["center"] = [round(float(value), 3) for value in (low + high) / 2]
+                    if numpy.isfinite(low).all() and numpy.isfinite(high).all():
+                        entry["size"] = measured(high - low)
+                        entry["center"] = measured((low + high) / 2)
                 mesh.calc_loop_triangles()
                 entry["triangles"] = len(mesh.loop_triangles)
                 triangles += entry["triangles"]
@@ -336,10 +354,16 @@ def scene_contents():
 
 
 try:
+    # Blender leaves data nothing uses out of a saved file, so a material made
+    # now for a later stage would be gone when that stage continues from here.
+    for block in (*bpy.data.materials, *bpy.data.node_groups):
+        if block.users == 0 and block.library is None:
+            block.use_fake_user = True
     bpy.ops.wm.save_as_mainfile(filepath=os.path.join(job_dir, "scene.blend"), compress=True, copy=True)
-    with open(os.path.join(job_dir, "scene.json"), "w", encoding="utf-8") as handle:
-        json.dump(scene_contents(), handle)
     print("${SCENE_SAVED_MARKER}", flush=True)
+    listing = json.dumps(scene_contents(), allow_nan=False)
+    with open(os.path.join(job_dir, "scene.json"), "w", encoding="utf-8") as handle:
+        handle.write(listing)
 except BaseException:
     traceback.print_exc()
 print("${DONE_MARKER}", flush=True)
@@ -819,6 +843,10 @@ export type SceneObject = Readonly<{
   triangles?: number;
   materials?: readonly string[];
   modifiers?: readonly string[];
+  /** Vertices at NaN or infinite positions, which a glTF export fails on. */
+  invalid?: number;
+  /** Whether those came from the object's modifiers or its own geometry. */
+  invalidFrom?: "modifiers" | "geometry";
 }>;
 
 /** What a job's saved scene holds, so the next job's author reads it instead of recalling it. */
@@ -1340,6 +1368,10 @@ export async function readSceneContents(file: string): Promise<SceneContents | u
       ...(isNumber(entry.triangles) ? { triangles: Math.floor(entry.triangles) } : {}),
       ...(materials !== undefined && materials.length > 0 ? { materials } : {}),
       ...(modifiers !== undefined && modifiers.length > 0 ? { modifiers } : {}),
+      ...(isNumber(entry.invalid) && entry.invalid >= 1 ? {
+        invalid: Math.floor(entry.invalid),
+        invalidFrom: entry.invalidFrom === "modifiers" ? "modifiers" : "geometry",
+      } as const : {}),
     }];
   });
   return {
@@ -1360,8 +1392,97 @@ function describeSceneObject(object: SceneObject): string {
     ...(object.materials === undefined ? [] : [`materials ${object.materials.join(", ")}`]),
     ...(object.modifiers === undefined ? [] : [`modifiers ${object.modifiers.join(", ")}`]),
     ...(object.hidden === true ? ["hidden"] : []),
+    ...(object.invalid === undefined ? [] : [`${object.invalid} vertices at invalid (NaN) positions, left out of its size`]),
   ];
   return `- ${object.name} (${object.type})${facts === "" ? "" : `: ${facts}`}${details.length === 0 ? "" : `; ${details.join("; ")}`}`;
+}
+
+/**
+ * Objects with vertices at NaN positions. The glTF exporter fails on them with
+ * an error that names no object ("cannot convert float NaN to integer"), so a
+ * model hunting for the cause spends jobs on it; name them before it exports.
+ */
+function describeInvalidGeometry(objects: readonly SceneObject[]): string[] {
+  const invalid = objects.filter((object) => object.invalid !== undefined);
+  if (invalid.length === 0) return [];
+  const named = invalid.slice(0, 6).map((object) => `${object.name} (${object.invalid} vertices, made by ${object.invalidFrom === "modifiers"
+    ? `its modifiers${object.modifiers === undefined ? "" : `: ${object.modifiers.join(", ")}`}`
+    : "its own geometry"})`);
+  const advice = [
+    ...(invalid.some((object) => object.invalidFrom === "modifiers")
+      ? ["A bevel makes these where the mesh has overlapping vertices: merge them before the modifier runs (bmesh.ops.remove_doubles(bm, verts=bm.verts, dist=0.0001)), or remove the modifier."]
+      : []),
+    ...(invalid.some((object) => object.invalidFrom === "geometry")
+      ? ["Where the object's own geometry holds them, the script computed those positions as NaN (a 0/0, or a value that overflowed): find that calculation."]
+      : []),
+  ];
+  return [`Invalid geometry, which a glTF export fails on ("cannot convert float NaN to integer"): ${named.join("; ")}${more(named.length, invalid.length)}. ${advice.join(" ")}`];
+}
+
+const SIDE_SWAPS: ReadonlyMap<string, string> = new Map([
+  ["L", "R"], ["R", "L"], ["l", "r"], ["r", "l"],
+  ["Left", "Right"], ["Right", "Left"], ["left", "right"], ["right", "left"], ["LEFT", "RIGHT"], ["RIGHT", "LEFT"],
+]);
+
+/**
+ * The name of the object on the other side, for a name that marks exactly one
+ * side as its own word: `Wheel_L`, `Hand.L`, `Front_Left_Wheel`. A name that
+ * marks none, or two, has no other side (`Leftover`, `L_Arm_R`).
+ */
+export function otherSideName(name: string): string | undefined {
+  const words = name.split(/([_.\-\s]+)/);
+  const sides = words.flatMap((word, index) => index % 2 === 0 && SIDE_SWAPS.has(word) ? [index] : []);
+  if (sides.length !== 1) return undefined;
+  return words.map((word, index) => index === sides[0] ? SIDE_SWAPS.get(word) : word).join("");
+}
+
+const median = (values: readonly number[]) => {
+  const sorted = [...values].sort((first, second) => first - second);
+  const middle = Math.floor(sorted.length / 2);
+  return sorted.length % 2 === 1 ? sorted[middle] : (sorted[middle - 1] + sorted[middle]) / 2;
+};
+
+/**
+ * Left and right pairs that do not mirror each other. A mirrored part is placed
+ * by a sign the script flips, and a flip it forgets puts both parts on one side
+ * or in one place: a go-kart kept both front fenders on its left wheel for ten
+ * jobs while every listing showed the same centre for both. The centre plane is
+ * where most pairs meet, so one misplaced pair does not move it.
+ */
+function describeUnmirroredPairs(objects: readonly SceneObject[]): string[] {
+  type Placed = SceneObject & { center: readonly number[] };
+  const placed = new Map(objects.flatMap((object): Array<[string, Placed]> =>
+    object.center !== undefined && object.hidden !== true ? [[object.name, object as Placed]] : []));
+  const pairs = [...placed.values()].flatMap((object): Array<[Placed, Placed]> => {
+    const other = otherSideName(object.name);
+    const partner = other === undefined ? undefined : placed.get(other);
+    return partner !== undefined && object.name < partner.name ? [[object, partner]] : [];
+  });
+  if (pairs.length === 0) return [];
+  const tolerance = ([first, second]: [Placed, Placed]) =>
+    Math.max(0.05, 0.1 * Math.max(...(first.size ?? [0]), ...(second.size ?? [0])));
+  const spreadAlong = (axis: number) => pairs.filter(([first, second]) =>
+    Math.abs(first.center[axis] - second.center[axis]) > Math.abs(first.center[1 - axis] - second.center[1 - axis])).length;
+  const axis = spreadAlong(1) > spreadAlong(0) ? 1 : 0;
+  const apart = pairs.filter((pair) => Math.abs(pair[0].center[axis] - pair[1].center[axis]) > tolerance(pair));
+  const plane = apart.length === 0 ? 0 : median(apart.map(([first, second]) => (first.center[axis] + second.center[axis]) / 2));
+  const at = (object: Placed) => `(${object.center.map(studs).join(", ")})`;
+  const problems = pairs.flatMap((pair): string[] => {
+    const [first, second] = pair;
+    const limit = tolerance(pair);
+    if (Math.hypot(...first.center.map((value, index) => value - second.center[index])) <= limit) {
+      return [`${first.name} and ${second.name} are in the same place, at ${at(first)}`];
+    }
+    const offsets = [first.center[axis] - plane, second.center[axis] - plane];
+    if (offsets[0] * offsets[1] > 0 && Math.min(Math.abs(offsets[0]), Math.abs(offsets[1])) > limit) {
+      return [`${first.name} at ${at(first)} and ${second.name} at ${at(second)} are on the same side`];
+    }
+    const mirrored = Math.abs(offsets[0] + offsets[1]) <= limit &&
+      [0, 1, 2].every((index) => index === axis || Math.abs(first.center[index] - second.center[index]) <= limit);
+    return mirrored ? [] : [`${first.name} at ${at(first)} and ${second.name} at ${at(second)} do not mirror each other`];
+  });
+  if (problems.length === 0) return [];
+  return [`Left and right pairs that do not mirror across the model's centre (${axis === 0 ? "X" : "Y"} = ${studs(plane)}): ${problems.slice(0, 6).join("; ")}${more(Math.min(problems.length, 6), problems.length)}. If a pair should mirror, one of the two is misplaced: check the sign the script placed it with.`];
 }
 
 /**
@@ -1380,7 +1501,7 @@ function describeScene(
     return [`This job's scene could not be saved, so no later job can continue from it${typeof continuedFrom === "string" ? `; job ${continuedFrom}'s scene is unchanged` : ""}.`];
   }
   const lines = [
-    `Scene saved as job ${jobId}${typeof continuedFrom === "string" ? `, continuing job ${continuedFrom}` : ""}${contents === undefined ? "." : `: ${contents.count} object${contents.count === 1 ? "" : "s"}, ${contents.triangles} triangles. Sizes and centres in studs, in Blender coordinates (X, Y, Z up):`}`,
+    `Scene saved as job ${jobId}${typeof continuedFrom === "string" ? `, continuing job ${continuedFrom}` : ""}${contents === undefined ? ". Roqer could not read the list of its objects this time, so check the scene by name in the next script instead." : `: ${contents.count} object${contents.count === 1 ? "" : "s"}, ${contents.triangles} triangles. Sizes and centres in studs, in Blender coordinates (X, Y, Z up):`}`,
   ];
   if (contents !== undefined) {
     const listed = contents.objects.slice(0, MAX_LISTED_SCENE_OBJECTS);
@@ -1390,6 +1511,7 @@ function describeScene(
     if (hidden.length > 0) {
       lines.push(`Hidden objects (${hidden.slice(0, 8).join(", ")}${hidden.length > 8 ? ", and more" : ""}) are ${inspected ? "not in this preview, but an" : "in the scene, and an"} export includes them unless it passes use_visible=True: delete them, or export with use_visible=True, before uploading.`);
     }
+    lines.push(...describeInvalidGeometry(contents.objects), ...describeUnmirroredPairs(contents.objects));
   }
   lines.push(
     `To build on this scene, call blender again with continue_from: '${jobId}'. The script then starts with these objects loaded, by these names, instead of an empty scene, and can change them as well as add to them. A job that fails saves nothing; to undo a step, continue from an earlier job instead.`,
