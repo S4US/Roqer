@@ -1,8 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  argumentTypeProblems,
   looksLikeArgumentError,
   requiredArgumentProblems,
+  restoreArgumentTypes,
   toolSchema,
   toolSchemaHint,
   toolSignature,
@@ -138,4 +140,45 @@ test("mcp-tool-help - argument failures are told apart from everything else", ()
   assert.ok(looksLikeArgumentError("Invalid instancePath"));
   assert.ok(!looksLikeArgumentError("Roblox Studio is not connected"));
   assert.ok(!looksLikeArgumentError("The script source revision changed since it was read"));
+});
+
+// Seen from a custom endpoint: every value in the open `arguments` object sent
+// as text, so a depth crashed a plugin handler and a build's steps were
+// refused sixteen times as "not an array".
+test("mcp-tool-help - values a model wrote as JSON text are read back as the declared type", () => {
+  const steps = [{ op: "create", className: "Part", properties: { Anchored: true } }];
+  assert.deepStrictEqual(
+    restoreArgumentTypes("build_instances", { path: "game.Workspace.Kart", operations: JSON.stringify(steps) }),
+    { path: "game.Workspace.Kart", operations: steps },
+  );
+  assert.deepStrictEqual(
+    restoreArgumentTypes("get_project_structure", { path: "game.Workspace", maxDepth: " 2 ", scriptsOnly: "false" }),
+    { path: "game.Workspace", maxDepth: 2, scriptsOnly: false },
+  );
+});
+
+test("mcp-tool-help - only text that reads unambiguously as the declared type is converted", () => {
+  const args = { maxDepth: "two", scriptsOnly: "yes", path: "123" };
+  assert.strictEqual(restoreArgumentTypes("get_project_structure", args), args, "nothing to restore returns the same object");
+  // A declared string is never parsed, however much it looks like a number or JSON.
+  assert.deepStrictEqual(restoreArgumentTypes("get_project_structure", { path: "[1]" }), { path: "[1]" });
+  for (const text of ["", "0x10", "Infinity", "1,5", "1e"]) {
+    assert.deepStrictEqual(restoreArgumentTypes("get_project_structure", { maxDepth: text }), { maxDepth: text });
+  }
+  // JSON of the wrong shape, and text that is not JSON, are left as sent.
+  assert.deepStrictEqual(restoreArgumentTypes("build_instances", { operations: "{\"op\":\"create\"}" }), { operations: "{\"op\":\"create\"}" });
+  assert.deepStrictEqual(restoreArgumentTypes("build_instances", { operations: "[{op: 'create'}]" }), { operations: "[{op: 'create'}]" });
+  assert.deepStrictEqual(restoreArgumentTypes("operation_from_a_newer_server", { depth: "2" }), { depth: "2" });
+});
+
+test("mcp-tool-help - a value still of the wrong type is named with what to send instead", () => {
+  assert.deepStrictEqual(argumentTypeProblems("build_instances", { path: "game.Workspace.Kart", operations: "[{op: 'create'}]" }), [
+    { name: "operations", reason: "type", expected: "object[]", received: "text that is not a JSON array; send the array itself, not a string" },
+  ]);
+  assert.deepStrictEqual(argumentTypeProblems("get_project_structure", { maxDepth: "two", scriptsOnly: 1 }), [
+    { name: "maxDepth", reason: "type", expected: "number", received: "text" },
+    { name: "scriptsOnly", reason: "type", expected: "boolean", received: "a number" },
+  ]);
+  assert.deepStrictEqual(argumentTypeProblems("get_project_structure", { path: 5, maxDepth: null }), [], "strings and absent values are the server's to judge");
+  assert.deepStrictEqual(argumentTypeProblems("operation_from_a_newer_server", { depth: "2" }), []);
 });

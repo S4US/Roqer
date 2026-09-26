@@ -171,6 +171,36 @@ test("callTool lifts errorCode/message from a structured success:false payload",
   }
 });
 
+test("callTool treats a plugin's bare {error} payload as a failure", async () => {
+  const { server, endpoint } = await startServer(async (req, res) => {
+    await readBody(req);
+    respondJson(res, 200, { error: "Parent instance not found: game.Workspace.GoKart" });
+  });
+  try {
+    const client = new McpClient({ endpoint, authToken: undefined });
+    const outcome = await client.callTool("insert_asset", { assetId: 1, parentPath: "game.Workspace.GoKart" });
+    assert.equal(outcome.ok, false);
+    assert.equal(outcome.message, "Parent instance not found: game.Workspace.GoKart");
+  } finally {
+    await closeServer(server);
+  }
+});
+
+test("callTool leaves an error field alone when the payload says it succeeded", async () => {
+  const { server, endpoint } = await startServer(async (req, res) => {
+    await readBody(req);
+    respondJson(res, 200, { success: true, error: "a warning the tool chose to report" });
+  });
+  try {
+    const client = new McpClient({ endpoint, authToken: undefined });
+    const outcome = await client.callTool("get_place_info", {});
+    assert.equal(outcome.ok, true);
+    assert.equal(outcome.message, undefined);
+  } finally {
+    await closeServer(server);
+  }
+});
+
 test("callTool surfaces a non-2xx response with the server's error/message", async () => {
   const { server, endpoint } = await startServer(async (req, res) => {
     await readBody(req);

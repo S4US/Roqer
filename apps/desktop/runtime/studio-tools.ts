@@ -1,8 +1,10 @@
 import { AUDITED_AFTER_LABEL, UI_AUDIT_TITLE } from "../shared/completion";
 import { isKnownTool, TOOL_RISK } from "../shared/mcp-tools";
 import {
+  argumentTypeProblems,
   looksLikeArgumentError,
   requiredArgumentProblems,
+  restoreArgumentTypes,
   toolSchemaHint,
   toolSignature,
   type ArgumentProblem,
@@ -49,9 +51,10 @@ const MUTATION_SUMMARY: Readonly<Record<string, string>> = {
  * Structured writes whose success is only what the plugin says it is.
  *
  * The plugin refuses a batch it cannot apply by answering with an `error` field
- * rather than a failed request, so the transport reports the call as fine. A
- * refused write changed nothing, and recording it as a verified change would be
- * exactly the false success the change cards exist to prevent.
+ * rather than a failed request. `McpClient` already reads that as a failure;
+ * this check keeps it one for any caller whose outcome did not come through
+ * the client. A refused write changed nothing, and recording it as a verified
+ * change would be exactly the false success the change cards exist to prevent.
  */
 const STRUCTURED_MUTATIONS = new Set(["set_properties", "build_instances"]);
 
@@ -179,16 +182,32 @@ export function studioToolInputSchema(): JsonRecord {
   };
 }
 
+/** An argument object a model wrote out as JSON text, read back; anything else as it came. */
+function argumentObject(value: unknown): unknown {
+  if (typeof value !== "string" || !value.trim().startsWith("{")) return value;
+  try {
+    return JSON.parse(value) as unknown;
+  } catch {
+    return value;
+  }
+}
+
 /**
  * Validate the `{operation, arguments}` envelope a model supplied. Throws so
  * every provider reports the same message back to the model.
+ *
+ * Values a model wrote as JSON text are read back into the types the operation
+ * declares here, before anything else sees the call, so the risk check, the
+ * approval, the Studio request, and the run record all describe the same
+ * arguments. See `restoreArgumentTypes`.
  */
 export function parseStudioToolInput(value: unknown): { operation: string; args: JsonRecord } {
-  if (!isRecord(value) || typeof value.operation !== "string" || !isRecord(value.arguments)) {
+  const args = isRecord(value) ? argumentObject(value.arguments) : undefined;
+  if (!isRecord(value) || typeof value.operation !== "string" || !isRecord(args)) {
     throw new Error("roblox_studio requires an operation and argument object.");
   }
   if (!isKnownTool(value.operation)) throw new Error(`Unknown Roblox Studio operation: ${value.operation}`);
-  return { operation: value.operation, args: value.arguments };
+  return { operation: value.operation, args: restoreArgumentTypes(value.operation, args) };
 }
 
 /**
@@ -856,6 +875,9 @@ function describeProblems(problems: readonly ArgumentProblem[]): string {
   if (empty.length > 0) {
     clauses.push(`${empty.join(", ")} ${empty.length === 1 ? "is required and cannot" : "are required and cannot"} be empty`);
   }
+  for (const problem of problems) {
+    if (problem.reason === "type") clauses.push(`${problem.name} must be ${problem.expected}, but it arrived as ${problem.received}`);
+  }
   return clauses.join(", and ");
 }
 
@@ -1097,7 +1119,7 @@ export function createStudioToolRunner(context: PlannerContext): StudioToolRunne
     // answered here instead, with the schema. It saves a round trip to Studio,
     // and it keeps the activity timeline a record of what actually reached
     // Studio rather than of the model finding its footing.
-    const problems = requiredArgumentProblems(operation, args);
+    const problems = [...requiredArgumentProblems(operation, args), ...argumentTypeProblems(operation, args)];
     if (problems.length > 0) {
       return {
         ok: false,
