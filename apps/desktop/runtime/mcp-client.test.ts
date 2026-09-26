@@ -186,6 +186,28 @@ test("callTool treats a plugin's bare {error} payload as a failure", async () =>
   }
 });
 
+test("callTool reads why from a failure the tool marked itself, as an upload Roblox refused", async () => {
+  // Unwrapped to a bare object, this read as a successful upload: the run
+  // record said ok, and the model guessed at the cause.
+  const { server, endpoint } = await startServer(async (req, res) => {
+    await readBody(req);
+    respondJson(res, 200, {
+      content: [],
+      structuredContent: { path: "operations/op-1", done: true, error: { code: "Internal", message: "Unknown Error" }, status: "failed" },
+      isError: true,
+    });
+  });
+  try {
+    const client = new McpClient({ endpoint, authToken: undefined });
+    const outcome = await client.callTool("upload_asset", { action: "status", operationId: "op-1" });
+    assert.equal(outcome.ok, false);
+    assert.equal(outcome.message, "Unknown Error");
+    assert.equal((outcome.data as { status: string }).status, "failed");
+  } finally {
+    await closeServer(server);
+  }
+});
+
 test("callTool leaves an error field alone when the payload says it succeeded", async () => {
   const { server, endpoint } = await startServer(async (req, res) => {
     await readBody(req);

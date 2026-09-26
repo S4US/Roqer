@@ -823,7 +823,9 @@ export function createHttpServer(tools: RobloxStudioTools, bridge: BridgeService
     app.post(`/mcp/${toolName}`, async (req, res) => {
       try {
         const result = normalizeToolResult(await handler(tools, req.body), 'modern');
-        if (result.structuredContent && result.content.length === 0) {
+        // The bare object carries no isError, so a failure keeps its envelope:
+        // unwrapped, an upload Roblox refused read as a successful call.
+        if (result.structuredContent && result.content.length === 0 && !result.isError) {
           res.json(result.structuredContent);
         } else {
           res.json(result);

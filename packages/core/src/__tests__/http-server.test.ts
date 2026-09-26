@@ -150,6 +150,20 @@ describe('HTTP Server', () => {
   });
 
   describe('Tool Handlers', () => {
+    test('a tool result marked as an error keeps the mark over HTTP, and a success stays a bare object', async () => {
+      const failed = { path: 'operations/op-1', done: true, error: { code: 'Internal', message: 'Unknown Error' }, status: 'failed' };
+      const uploadAsset = jest.spyOn(tools, 'uploadAsset')
+        .mockResolvedValueOnce({ content: [{ type: 'text', text: JSON.stringify(failed) }], isError: true } as never)
+        .mockResolvedValueOnce({ content: [{ type: 'text', text: JSON.stringify({ ...failed, error: undefined, status: 'complete' }) }] });
+
+      const refused = await request(app).post('/mcp/upload_asset').send({ action: 'status', operationId: 'op-1' }).expect(200);
+      expect(refused.body).toEqual({ content: [], structuredContent: failed, isError: true });
+
+      const complete = await request(app).post('/mcp/upload_asset').send({ action: 'status', operationId: 'op-1' }).expect(200);
+      expect(complete.body).toEqual({ path: 'operations/op-1', done: true, status: 'complete' });
+      expect(uploadAsset).toHaveBeenCalledTimes(2);
+    });
+
     test('get_script_source only accepts line_range for range selection', async () => {
       const getScriptSource = jest.fn(async () => ({ content: [] }));
       const fakeTools = { getScriptSource } as unknown as RobloxStudioTools;
