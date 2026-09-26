@@ -6,7 +6,7 @@ import {
   ShieldCheck, Sparkles, Sun,
   Trash2, X, Zap,
 } from "lucide-react";
-import { Fragment, memo, useCallback, useEffect, useId, useMemo, useRef, useState, type CSSProperties } from "react";
+import { Fragment, memo, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { createPortal } from "react-dom";
 import {
   appendMessage, chatStudioInstanceId, createChat, createId, createInitialWorkspace, createProject,
@@ -351,6 +351,11 @@ function App() {
 
   useEffect(() => {
     window.localStorage.setItem("workbench-theme", workspace.preferences.theme);
+  }, [workspace.preferences.theme]);
+  // Dialogs and menus portalled into the body sit outside the shell, so the
+  // theme is mirrored onto the document root for them to inherit its tokens.
+  useLayoutEffect(() => {
+    document.documentElement.dataset.theme = workspace.preferences.theme;
   }, [workspace.preferences.theme]);
 
   const refreshStudioStatus = useCallback(async () => {
