@@ -49,9 +49,10 @@ const MUTATION_SUMMARY: Readonly<Record<string, string>> = {
  * Structured writes whose success is only what the plugin says it is.
  *
  * The plugin refuses a batch it cannot apply by answering with an `error` field
- * rather than a failed request, so the transport reports the call as fine. A
- * refused write changed nothing, and recording it as a verified change would be
- * exactly the false success the change cards exist to prevent.
+ * rather than a failed request. `McpClient` already reads that as a failure;
+ * this check keeps it one for any caller whose outcome did not come through
+ * the client. A refused write changed nothing, and recording it as a verified
+ * change would be exactly the false success the change cards exist to prevent.
  */
 const STRUCTURED_MUTATIONS = new Set(["set_properties", "build_instances"]);
 
