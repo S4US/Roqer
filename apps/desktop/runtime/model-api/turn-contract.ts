@@ -90,6 +90,13 @@ export const MAX_TURN_TOOLS = 64;
 export const MAX_TURN_TEXT = 1_000_000;
 export const MAX_TURN_INSTRUCTIONS = 200_000;
 export const MAX_TURN_JSON = 65_536;
+/**
+ * The arguments of one tool call, as JSON characters. Larger than the bound on
+ * other JSON because a call carries whole scripts: a Blender job may be 60,000
+ * characters of Python, which its JSON escaping makes longer still, and a call
+ * refused here never reaches the tool that would have said what was wrong.
+ */
+export const MAX_TURN_TOOL_ARGUMENTS = 262_144;
 export const MAX_TURN_OUTPUT_TOKENS = 200_000;
 
 /**
@@ -216,6 +223,26 @@ export class TransientTurnError extends Error {
 }
 
 /**
+ * A turn whose tool call cannot be used: its arguments are not valid JSON,
+ * stop partway because the model reached its output limit, are larger than
+ * Roqer accepts, or name no tool.
+ *
+ * Nothing ran, so this is the model's to correct, not the end of the run. The
+ * agent loop tells the model `reason` and asks for the step again; `message` is
+ * what the person is told.
+ */
+export class UnusableToolCallError extends Error {
+  /** What went wrong and what to do instead, written to the model. */
+  readonly reason: string;
+
+  constructor(message: string, reason: string) {
+    super(message);
+    this.name = "UnusableToolCallError";
+    this.reason = reason;
+  }
+}
+
+/**
  * A turn the endpoint refused because the conversation no longer fits the
  * model's context window. Sending it again unchanged would be refused again;
  * the agent loop shortens the conversation first.
@@ -286,10 +313,10 @@ function isToolName(value: unknown): value is string {
   return isBoundedString(value, 64) && /^[a-z][a-z0-9_]*$/.test(value);
 }
 
-function isBoundedJsonObject(value: unknown): value is Readonly<Record<string, unknown>> {
+function isBoundedJsonObject(value: unknown, maximum: number = MAX_TURN_JSON): value is Readonly<Record<string, unknown>> {
   if (!isRecord(value)) return false;
   try {
-    return JSON.stringify(value).length <= MAX_TURN_JSON;
+    return JSON.stringify(value).length <= maximum;
   } catch {
     return false;
   }
@@ -303,7 +330,7 @@ const isRequiredTurnText = isRequiredMultilineText;
 
 export function isTurnToolCall(value: unknown): value is TurnToolCall {
   return isRecord(value) && hasOnlyKeys(value, ["id", "name", "arguments"]) &&
-    isOpaqueId(value.id) && isToolName(value.name) && isBoundedJsonObject(value.arguments);
+    isOpaqueId(value.id) && isToolName(value.name) && isBoundedJsonObject(value.arguments, MAX_TURN_TOOL_ARGUMENTS);
 }
 
 /**

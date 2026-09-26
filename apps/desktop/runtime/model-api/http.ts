@@ -1,4 +1,7 @@
-import { ContextOverflowError, TransientTurnError, type TurnMessage, type TurnToolCall } from "./turn-contract";
+import {
+  ContextOverflowError, isTurnToolCall, MAX_TURN_TOOL_ARGUMENTS, TransientTurnError, UnusableToolCallError,
+  type TurnMessage, type TurnStopReason, type TurnToolCall,
+} from "./turn-contract";
 
 /**
  * Transport pieces shared by the adapters that talk to a user's own model
@@ -14,7 +17,7 @@ import { ContextOverflowError, TransientTurnError, type TurnMessage, type TurnTo
 /** The longest an endpoint may send nothing: before it answers, and between chunks after. See `fetchWithin`. */
 export const DEFAULT_REQUEST_TIMEOUT_MS = 600_000;
 export const MAX_TOOL_CALLS_PER_TURN = 64;
-export const MAX_TOOL_ARGUMENT_CHARACTERS = 262_144;
+export const MAX_TOOL_ARGUMENT_CHARACTERS = MAX_TURN_TOOL_ARGUMENTS;
 const MAX_ERROR_BODY_CHARACTERS = 4_000;
 const MAX_ERROR_MESSAGE_CHARACTERS = 300;
 
@@ -248,6 +251,70 @@ export function messageKey(message: TurnMessage): string {
   const text = message.content.flatMap((block) => block.kind === "text" ? [block.text] : []).join("");
   const calls = message.content.flatMap((block) => block.kind === "tool-call" ? [block.call] : []);
   return turnKey(text, calls);
+}
+
+/** How a call too large to use is split, said once for every transport. */
+const SMALLER_CALL = "Make the same step again as smaller calls: split a long script into parts, write a long script in stages with the line editors, build in several batches, or model a large Blender object across several jobs.";
+
+/** A turn that asked for more calls than one turn may carry. */
+export function tooManyToolCalls(label: string): UnusableToolCallError {
+  return new UnusableToolCallError(
+    `${label} proposed more tool calls in one turn than Roqer accepts.`,
+    `you asked for more than ${MAX_TOOL_CALLS_PER_TURN} tool calls in one turn. Ask for at most ${MAX_TOOL_CALLS_PER_TURN}, and continue on the next turn.`,
+  );
+}
+
+/** A call whose arguments grew past what one call may carry while they streamed. */
+export function oversizedToolCall(label: string, name: string): UnusableToolCallError {
+  return new UnusableToolCallError(
+    `${label} sent a ${name || "tool"} call larger than Roqer accepts (more than ${MAX_TOOL_ARGUMENT_CHARACTERS.toLocaleString("en-US")} characters).`,
+    `the arguments of your ${name || "tool"} call passed ${MAX_TOOL_ARGUMENT_CHARACTERS.toLocaleString("en-US")} characters, the most one call may carry. ${SMALLER_CALL}`,
+  );
+}
+
+/**
+ * The call a transport assembled from a turn's stream, or why it cannot be
+ * used. Each cause is named as what it is: a message that blamed every one of
+ * them on the model not supporting tool calls sent people to change models
+ * when the fix was a smaller call.
+ */
+export function assembledToolCall(
+  label: string,
+  id: string,
+  name: string,
+  rawArguments: string,
+  stopReason: TurnStopReason | undefined,
+): TurnToolCall | UnusableToolCallError {
+  const tool = name || "tool";
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(rawArguments.trim().length === 0 ? "{}" : rawArguments) as unknown;
+  } catch {
+    return stopReason === "max-output"
+      ? new UnusableToolCallError(
+        `${label} cut the model off partway through a ${tool} call: it reached its output limit. If this keeps happening, raise the model's max output in Settings.`,
+        `you reached your output limit partway through your ${tool} call, so its arguments stop mid-way. ${SMALLER_CALL}`,
+      )
+      : new UnusableToolCallError(
+        `${label} sent a ${tool} call whose arguments are not valid JSON.`,
+        `the arguments of your ${tool} call were not valid JSON (${rawArguments.length.toLocaleString("en-US")} characters). Send the call again with a JSON object as its arguments; if it was long, ${SMALLER_CALL.charAt(0).toLowerCase()}${SMALLER_CALL.slice(1)}`,
+      );
+  }
+  const call = { id, name, arguments: parsed };
+  if (isTurnToolCall(call)) return call;
+  if (!isRecord(parsed)) {
+    return new UnusableToolCallError(
+      `${label} sent a ${tool} call whose arguments are not an object.`,
+      `the arguments of your ${tool} call were not a JSON object. Send them as an object with the tool's fields.`,
+    );
+  }
+  if (!/^[a-z][a-z0-9_]{0,63}$/.test(name)) {
+    return new UnusableToolCallError(
+      `${label} called a tool named "${name.slice(0, 64)}", which is not a tool.`,
+      `"${name.slice(0, 64)}" is not one of your tools. Call one of the tools you were given, by its exact name.`,
+    );
+  }
+  return oversizedToolCall(label, name);
 }
 
 const OPAQUE_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;

@@ -17,6 +17,16 @@ export const BLENDER_TOOL_NAME = "blender";
 /** A script longer than this is not a modeling script, it is a program. */
 export const MAX_BLENDER_SCRIPT_CHARACTERS = 60_000;
 
+/**
+ * A job's id, which a later job names in `continue_from` to start from the
+ * scene it saved rather than from an empty one.
+ */
+export const BLENDER_JOB_ID_PATTERN = "^[0-9a-f]{8}$";
+
+export function isBlenderJobId(value: unknown): value is string {
+  return typeof value === "string" && new RegExp(BLENDER_JOB_ID_PATTERN).test(value);
+}
+
 /** How long one job's script may run, and the most a call may ask for. */
 export const DEFAULT_BLENDER_JOB_SECONDS = 120;
 export const MAX_BLENDER_JOB_SECONDS = 200;

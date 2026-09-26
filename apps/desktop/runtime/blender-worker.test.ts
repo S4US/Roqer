@@ -7,7 +7,9 @@ import path from "node:path";
 import { PassThrough } from "node:stream";
 import test from "node:test";
 
-import { BlenderWorker, HELPERS_SCRIPT, RUNNER_SCRIPT, scriptEnvironment, type SpawnProcess } from "./blender-worker";
+import {
+  BlenderWorker, HELPERS_SCRIPT, readSceneContents, RUNNER_SCRIPT, scriptEnvironment, type SpawnProcess,
+} from "./blender-worker";
 
 /** What one fake Blender process does: optional work, printed output, and how it ends. */
 type Behaviour = (args: readonly string[]) => Promise<{ output?: string; exitCode?: number; hang?: boolean }>;
@@ -321,4 +323,167 @@ test("a model-written script never sees credentials or Roqer's own settings", ()
     ELECTRON_RUN_AS_NODE: "1",
   });
   assert.deepEqual(env, { PATH: "p", APPDATA: "a" });
+});
+
+const SCENE = {
+  objects: [
+    { name: "Chassis", type: "curve", size: [0.498, 3.026, 0.15], center: [0.201, 0, 0.225], triangles: 48 },
+    { name: "Kart_Body", type: "mesh", size: [1, 2, 0.3], center: [0, 0, 0.45], triangles: 22, materials: ["Paint"], modifiers: ["mirror"] },
+    { name: "Cutter", type: "mesh", hidden: true, size: [1, 1, 1], center: [0, 0, 2], triangles: 12 },
+  ],
+  count: 3,
+  triangles: 82,
+};
+
+/**
+ * A fake Blender whose script finishes and saves its scene, as the real runner
+ * does, and whose inspection of that scene returns a preview.
+ */
+function savingBlender(scene: unknown = SCENE, options: Readonly<{ exports?: boolean }> = {}) {
+  const preview = Buffer.from([0x89, 0x50, 0x4e, 0x47, 9, 9, 9]);
+  const blender = fakeBlender(async (args) => {
+    if (args.some((arg) => arg.endsWith("roqer_runner.py"))) {
+      const jobDirectory = argAfterDashes(args);
+      await fs.writeFile(path.join(jobDirectory, "scene.blend"), "BLENDER-v500");
+      await fs.writeFile(path.join(jobDirectory, "scene.json"), JSON.stringify(scene));
+      if (options.exports === true) await fs.writeFile(path.join(jobDirectory, "output", "kart.glb"), Buffer.alloc(64));
+      return { output: "ROQER_SCENE_SAVED\nROQER_SCRIPT_DONE\n" };
+    }
+    await fs.writeFile(argAfterDashes(args, 1), preview);
+    return { output: `ROQER_INSPECT ${JSON.stringify({ meshes: 2, triangles: 70, materials: ["Paint"], size: [1, 3.03, 0.45], min: [-0.5, -1.51, 0.15], preview: true })}\n` };
+  });
+  return { ...blender, preview };
+}
+
+const runnerCalls = (calls: ReadonlyArray<{ args: readonly string[] }>) =>
+  calls.filter((call) => call.args.some((arg) => arg.endsWith("roqer_runner.py")));
+
+test("a job saves its scene, and a later job in the same chat starts from it instead of an empty one", async () => {
+  // A detailed model used to have to fit one script, written in one model
+  // turn: a go-kart ran nine minutes and failed whole. Now each stage is its
+  // own job, continuing the scene the one before it saved.
+  await withJobs(async (jobsRoot) => {
+    const blender = savingBlender();
+    const worker = new BlenderWorker({ executable: EXECUTABLE, jobsRoot, scope: "chat-a", spawn: blender.spawn, killTree: blender.killTree, env: {} });
+
+    const frame = await worker.run({ script: "import bpy\n# the frame" });
+    assert.equal(frame.ok, true, frame.text);
+    const first = frame.data as { jobId: string; scene: { path: string; contents: { count: number } } };
+    assert.match(first.jobId, /^[0-9a-f]{8}$/);
+    assert.equal(first.scene.contents.count, 3);
+    // Nothing was exported, so the saved scene is what is inspected and previewed.
+    assert.equal(blender.calls.length, 2);
+    assert.equal(argAfterDashes(blender.calls[1].args), first.scene.path);
+    assert.deepEqual(frame.images, [{ data: blender.preview.toString("base64"), mediaType: "image/png" }]);
+    assert.match(frame.text, /Nothing was exported, so Roqer checked the scene this job saved/);
+    assert.match(frame.text, new RegExp(`Scene saved as job ${first.jobId}: 3 objects, 82 triangles`));
+    assert.match(frame.text, /- Kart_Body \(mesh\): 1\.00 × 2\.00 × 0\.30 at \(0\.00, 0\.00, 0\.45\); 22 triangles; materials Paint; modifiers mirror/);
+    assert.match(frame.text, new RegExp(`call blender again with continue_from: '${first.jobId}'`));
+    assert.doesNotMatch(frame.text, /upload_asset/, "a scene is not something to upload");
+
+    const body = await worker.run({ script: "import bpy\n# the body", continue_from: first.jobId });
+    assert.equal(body.ok, true, body.text);
+    const second = body.data as { jobId: string; continuedFrom: string };
+    assert.notEqual(second.jobId, first.jobId);
+    assert.equal(second.continuedFrom, first.jobId);
+    // The runner is handed the earlier scene to open in place of an empty one.
+    const runners = runnerCalls(blender.calls);
+    assert.equal(runners[0].args.length, runners[0].args.indexOf("--") + 2, "the first job has no scene to start from");
+    assert.equal(argAfterDashes(runners[1].args, 1), first.scene.path);
+    assert.match(body.text, new RegExp(`Scene saved as job ${second.jobId}, continuing job ${first.jobId}`));
+  });
+});
+
+test("a job exports only when asked, and its scene is saved either way", async () => {
+  await withJobs(async (jobsRoot) => {
+    const blender = savingBlender(SCENE, { exports: true });
+    const worker = new BlenderWorker({ executable: EXECUTABLE, jobsRoot, scope: "chat-a", spawn: blender.spawn, killTree: blender.killTree, env: {} });
+    const outcome = await worker.run({ script: "import bpy\n# export the kart" });
+    assert.equal(outcome.ok, true, outcome.text);
+    // The export is what is inspected, and the upload instructions apply to it.
+    assert.match(argAfterDashes(blender.calls[1].args), /kart\.glb$/);
+    assert.match(outcome.text, /Roqer re-imported each exported model/);
+    assert.match(outcome.text, /upload_asset/);
+    assert.match(outcome.text, /Scene saved as job [0-9a-f]{8}/);
+  });
+});
+
+test("a scene is continued only by its own chat, and only when the job that saved it finished", async () => {
+  await withJobs(async (jobsRoot) => {
+    const saving = savingBlender();
+    const chatA = new BlenderWorker({ executable: EXECUTABLE, jobsRoot, scope: "chat-a", spawn: saving.spawn, killTree: saving.killTree, env: {} });
+    const saved = (await chatA.run({ script: "import bpy" })).data as { jobId: string };
+
+    // Another chat cannot build on it, and cannot learn from the answer that it exists.
+    const other = fakeBlender(async () => ({ output: "ROQER_SCENE_SAVED\nROQER_SCRIPT_DONE\n" }));
+    const chatB = new BlenderWorker({ executable: EXECUTABLE, jobsRoot, scope: "chat-b", spawn: other.spawn, killTree: other.killTree, env: {} });
+    const refused = await chatB.run({ script: "import bpy", continue_from: saved.jobId });
+    assert.equal(refused.errorCode, "scene_not_found");
+    assert.match(refused.text, new RegExp(`no saved scene from job ${saved.jobId} in this chat`));
+    assert.equal(other.calls.length, 0, "nothing ran");
+
+    // A script that failed saved nothing, so there is nothing to continue.
+    const failing = fakeBlender(async () => ({ output: "Traceback\nROQER_SCRIPT_FAILED\n", exitCode: 1 }));
+    const broken = new BlenderWorker({ executable: EXECUTABLE, jobsRoot, scope: "chat-a", spawn: failing.spawn, killTree: failing.killTree, env: {} });
+    const failed = await broken.run({ script: "raise ValueError()", continue_from: saved.jobId });
+    assert.equal(failed.errorCode, "script_failed");
+    assert.match(failed.text, new RegExp(`nothing was saved; the scene of job ${saved.jobId} is unchanged`));
+    const failedId = path.basename((failed.data as { jobDirectory: string }).jobDirectory).split("-").at(-1)!;
+    assert.equal((await chatA.run({ script: "import bpy", continue_from: failedId })).errorCode, "scene_not_found");
+
+    assert.equal((await chatA.run({ script: "import bpy", continue_from: "../../etc" })).errorCode, "invalid_arguments");
+    assert.equal((await chatA.run({ script: "import bpy", continue_from: "0123abcd" })).errorCode, "scene_not_found");
+  });
+});
+
+test("clearing old jobs never clears the scene a job is continuing from", async () => {
+  await withJobs(async (jobsRoot) => {
+    let clock = Date.parse("2026-09-26T10:00:00Z");
+    const blender = savingBlender();
+    const worker = new BlenderWorker({
+      executable: EXECUTABLE, jobsRoot, scope: "chat-a", spawn: blender.spawn, killTree: blender.killTree, env: {}, now: () => clock,
+    });
+    const base = (await worker.run({ script: "import bpy" })).data as { jobId: string; scene: { path: string } };
+    // Forty-five newer jobs, more than are kept, put the base among the oldest.
+    for (let index = 0; index < 45; index += 1) {
+      await fs.mkdir(path.join(jobsRoot, `2026-09-26T11-${String(index).padStart(2, "0")}-00-000Z-${String(index).padStart(8, "0")}`));
+    }
+    clock = Date.parse("2026-09-26T12:00:00Z");
+    const continued = await worker.run({ script: "import bpy", continue_from: base.jobId });
+    assert.equal(continued.ok, true, continued.text);
+    assert.equal((await fs.stat(base.scene.path)).isFile(), true);
+  });
+});
+
+test("hidden objects in a saved scene are named, because an export would carry them", async () => {
+  await withJobs(async (jobsRoot) => {
+    const blender = savingBlender();
+    const worker = new BlenderWorker({ executable: EXECUTABLE, jobsRoot, scope: "chat-a", spawn: blender.spawn, killTree: blender.killTree, env: {} });
+    const outcome = await worker.run({ script: "import bpy" });
+    assert.match(outcome.text, /- Cutter \(mesh\): .*; hidden/);
+    assert.match(outcome.text, /Hidden objects \(Cutter\) are not in this preview, but an export includes them unless it passes use_visible=True/);
+  });
+});
+
+test("a scene list the runner wrote is read as data: malformed entries are dropped, and a long one is bounded", async () => {
+  await withJobs(async (jobsRoot) => {
+    const file = path.join(jobsRoot, "scene.json");
+    await fs.writeFile(file, JSON.stringify({
+      objects: [
+        { name: "Wheel", type: "mesh", size: [1, 1, 1], center: [0, 0, 0], triangles: 44.7, materials: ["Rubber", 7], parent: "Kart" },
+        { name: 5, type: "mesh" },
+        { name: "Bad", type: "mesh", size: [1, "x", 1] },
+        ...Array.from({ length: 200 }, (_, index) => ({ name: `Bolt_${index}`, type: "mesh" })),
+      ],
+      count: 203,
+      triangles: 900,
+    }));
+    const contents = await readSceneContents(file);
+    assert.deepEqual(contents?.objects[0], { name: "Wheel", type: "mesh", parent: "Kart", size: [1, 1, 1], center: [0, 0, 0], triangles: 44, materials: ["Rubber"] });
+    assert.deepEqual(contents?.objects[1], { name: "Bad", type: "mesh" });
+    assert.ok((contents?.objects.length ?? 0) <= 120);
+    assert.equal(contents?.count, 203);
+    await fs.writeFile(file, "not json");
+    assert.equal(await readSceneContents(file), undefined);
+  });
 });

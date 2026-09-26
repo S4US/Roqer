@@ -5,6 +5,7 @@ import path from "node:path";
 
 import {
   DEFAULT_BLENDER_JOB_SECONDS,
+  isBlenderJobId,
   MAX_BLENDER_JOB_SECONDS,
   MAX_BLENDER_SCRIPT_CHARACTERS,
 } from "../shared/blender";
@@ -39,9 +40,14 @@ const MAX_PREVIEW_BYTES = 2 * 1024 * 1024;
 /** Old jobs are cleared once they are this old; a model to upload is uploaded within the day. */
 const JOB_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 const MAX_KEPT_JOBS = 40;
+/** How many of a scene's objects the result names; the rest are counted. */
+const MAX_LISTED_SCENE_OBJECTS = 60;
+const MAX_SCENE_OBJECTS = 120;
 
 const DONE_MARKER = "ROQER_SCRIPT_DONE";
 const FAILED_MARKER = "ROQER_SCRIPT_FAILED";
+const BASE_FAILED_MARKER = "ROQER_BASE_SCENE_FAILED";
+const SCENE_SAVED_MARKER = "ROQER_SCENE_SAVED";
 const INSPECT_MARKER = "ROQER_INSPECT ";
 
 /**
@@ -235,13 +241,36 @@ def join(name, objects):
     return first
 `;
 
-/** Roqer's wrapper around the model's script. */
-export const RUNNER_SCRIPT = String.raw`import bpy, os, sys, traceback, types
+/**
+ * Roqer's wrapper around the model's script.
+ *
+ * A job starts from an empty scene, or, when the call names an earlier job in
+ * `continue_from`, from the scene that job saved. Only a script that finishes
+ * saves its scene, so a failed job leaves nothing behind to build on and the
+ * next attempt starts again from the last one that worked. Every saved scene is
+ * its own file, never overwritten, so any earlier step can be gone back to.
+ *
+ * Beside the scene it writes a list of what the scene holds -- each object's
+ * name, size, centre and triangles -- so the model building on it reads what
+ * exists instead of remembering it. The list goes to a file rather than to
+ * Blender's output, which is kept only in part.
+ */
+export const RUNNER_SCRIPT = String.raw`import bpy, json, numpy, os, sys, traceback, types
 
-job_dir = sys.argv[sys.argv.index("--") + 1]
+args = sys.argv[sys.argv.index("--") + 1:]
+job_dir = args[0]
+base_scene = args[1] if len(args) > 1 else ""
 OUTPUT_DIR = os.path.join(job_dir, "output")
 os.makedirs(OUTPUT_DIR, exist_ok=True)
-bpy.ops.wm.read_factory_settings(use_empty=True)
+try:
+    if base_scene:
+        bpy.ops.wm.open_mainfile(filepath=base_scene, load_ui=False)
+    else:
+        bpy.ops.wm.read_factory_settings(use_empty=True)
+except BaseException:
+    traceback.print_exc()
+    print("${BASE_FAILED_MARKER}", flush=True)
+    sys.exit(1)
 script_path = os.path.join(job_dir, "script.py")
 with open(script_path, "r", encoding="utf-8") as handle:
     source = handle.read()
@@ -257,6 +286,62 @@ except BaseException:
     traceback.print_exc()
     print("${FAILED_MARKER}", flush=True)
     sys.exit(1)
+
+GEOMETRY = {"MESH", "CURVE", "SURFACE", "META", "FONT"}
+MAX_SCENE_OBJECTS = 120
+
+
+def scene_contents():
+    depsgraph = bpy.context.evaluated_depsgraph_get()
+    entries, triangles = [], 0
+    for item in bpy.context.scene.objects:
+        if item.type not in GEOMETRY and item.type != "EMPTY":
+            continue
+        entry = {"name": item.name, "type": item.type.lower()}
+        if item.parent is not None:
+            entry["parent"] = item.parent.name
+        if not item.visible_get():
+            entry["hidden"] = True
+        if item.type == "EMPTY":
+            entry["center"] = [round(value, 3) for value in item.matrix_world.translation]
+        else:
+            # Measured from the evaluated mesh itself: a curve's own bounding
+            # box describes its control points, not the tube they become.
+            evaluated = item.evaluated_get(depsgraph)
+            try:
+                mesh = evaluated.to_mesh()
+                points = numpy.empty(len(mesh.vertices) * 3, dtype=numpy.float64)
+                mesh.vertices.foreach_get("co", points)
+                points = points.reshape(-1, 3)
+                if len(points) > 0:
+                    world = numpy.array(evaluated.matrix_world)
+                    points = points @ world[:3, :3].T + world[:3, 3]
+                    low, high = points.min(axis=0), points.max(axis=0)
+                    entry["size"] = [round(float(value), 3) for value in high - low]
+                    entry["center"] = [round(float(value), 3) for value in (low + high) / 2]
+                mesh.calc_loop_triangles()
+                entry["triangles"] = len(mesh.loop_triangles)
+                triangles += entry["triangles"]
+                evaluated.to_mesh_clear()
+            except Exception:
+                pass
+            materials = [slot.material.name for slot in item.material_slots if slot.material is not None]
+            if materials:
+                entry["materials"] = materials[:4]
+            modifiers = [modifier.type.lower() for modifier in item.modifiers]
+            if modifiers:
+                entry["modifiers"] = modifiers[:4]
+        entries.append(entry)
+    return {"objects": entries[:MAX_SCENE_OBJECTS], "count": len(entries), "triangles": triangles}
+
+
+try:
+    bpy.ops.wm.save_as_mainfile(filepath=os.path.join(job_dir, "scene.blend"), compress=True, copy=True)
+    with open(os.path.join(job_dir, "scene.json"), "w", encoding="utf-8") as handle:
+        json.dump(scene_contents(), handle)
+    print("${SCENE_SAVED_MARKER}", flush=True)
+except BaseException:
+    traceback.print_exc()
 print("${DONE_MARKER}", flush=True)
 `;
 
@@ -270,17 +355,43 @@ from mathutils.bvhtree import BVHTree
 
 args = sys.argv[sys.argv.index("--") + 1:]
 model_path, preview_path = args[0], args[1]
-bpy.ops.wm.read_factory_settings(use_empty=True)
 extension = os.path.splitext(model_path)[1].lower()
-if extension in (".glb", ".gltf"):
-    bpy.ops.import_scene.gltf(filepath=model_path)
-elif extension == ".fbx":
-    bpy.ops.import_scene.fbx(filepath=model_path)
-elif extension == ".obj":
-    bpy.ops.wm.obj_import(filepath=model_path)
+if extension == ".blend":
+    # A job's own saved scene, measured as it would export: what is hidden is
+    # left out, and every modifier, curve and text is baked into the mesh it
+    # becomes, so a mirrored half counts as the whole and a curve tube counts at all.
+    bpy.ops.wm.open_mainfile(filepath=model_path, load_ui=False)
+    depsgraph = bpy.context.evaluated_depsgraph_get()
+    baked = []
+    for item in list(bpy.context.scene.objects):
+        if item.type not in ("MESH", "CURVE", "SURFACE", "META", "FONT"):
+            continue
+        if not item.visible_get() or item.hide_render:
+            item.hide_render = True
+            continue
+        baked.append((item, bpy.data.meshes.new_from_object(item.evaluated_get(depsgraph), preserve_all_data_layers=True, depsgraph=depsgraph)))
+    for item, mesh in baked:
+        if item.type == "MESH":
+            item.modifiers.clear()
+            item.data = mesh
+        else:
+            name = item.name
+            item.name = name + " (source)"
+            item.hide_render = True
+            stand_in = bpy.data.objects.new(name, mesh)
+            stand_in.matrix_world = item.matrix_world
+            bpy.context.scene.collection.objects.link(stand_in)
+else:
+    bpy.ops.wm.read_factory_settings(use_empty=True)
+    if extension in (".glb", ".gltf"):
+        bpy.ops.import_scene.gltf(filepath=model_path)
+    elif extension == ".fbx":
+        bpy.ops.import_scene.fbx(filepath=model_path)
+    elif extension == ".obj":
+        bpy.ops.wm.obj_import(filepath=model_path)
 
 scene = bpy.context.scene
-meshes = [item for item in scene.objects if item.type == "MESH"]
+meshes = [item for item in scene.objects if item.type == "MESH" and not item.hide_render]
 depsgraph = bpy.context.evaluated_depsgraph_get()
 triangles = 0
 materials = set()
@@ -626,6 +737,12 @@ export type BlenderWorkerOptions = Readonly<{
   executable: string;
   /** Where job folders are made; one per job. */
   jobsRoot: string;
+  /**
+   * Whose jobs this worker may continue from: the chat, in the app. A job's
+   * saved scene is found by its id, and only a job made under the same scope is
+   * found, so one chat never builds on another's model.
+   */
+  scope?: string;
   spawn?: SpawnProcess;
   /** Stops a process and everything it started. */
   killTree?: (child: ChildProcess) => void;
@@ -689,6 +806,27 @@ export type LayoutFacts = Readonly<{
   /** Separate objects that pass into each other, deepest first, with the deepest piece of the first. */
   overlaps: ReadonlyArray<Readonly<{ objects: readonly [string, string]; depth: number; piece: PieceBox }>>;
   overlapCount: number;
+}>;
+
+/** One object in a saved scene, as the runner listed it, in Blender coordinates. */
+export type SceneObject = Readonly<{
+  name: string;
+  type: string;
+  parent?: string;
+  hidden?: boolean;
+  size?: readonly number[];
+  center?: readonly number[];
+  triangles?: number;
+  materials?: readonly string[];
+  modifiers?: readonly string[];
+}>;
+
+/** What a job's saved scene holds, so the next job's author reads it instead of recalling it. */
+export type SceneContents = Readonly<{
+  objects: readonly SceneObject[];
+  /** Objects in the scene, including any past the listed ones. */
+  count: number;
+  triangles: number;
 }>;
 
 export type RenderedImage = Readonly<{
@@ -757,6 +895,7 @@ export class BlenderWorker {
   private readonly spawn: SpawnProcess;
   private readonly killTree: (child: ChildProcess) => void;
   private readonly now: () => number;
+  private readonly scope: string;
 
   constructor(private readonly options: BlenderWorkerOptions) {
     if (!path.isAbsolute(options.executable) || !path.isAbsolute(options.jobsRoot)) {
@@ -765,6 +904,24 @@ export class BlenderWorker {
     this.spawn = options.spawn ?? defaultSpawn;
     this.killTree = options.killTree ?? defaultKillTree;
     this.now = options.now ?? Date.now;
+    this.scope = options.scope ?? "";
+  }
+
+  /** The scene an earlier job of this scope saved, found by the job's id. */
+  private async savedScene(id: string): Promise<Readonly<{ directory: string; scene: string }> | undefined> {
+    const entries = await fs.readdir(this.options.jobsRoot).catch(() => [] as string[]);
+    const name = entries.find((entry) => entry.endsWith(`-${id}`));
+    if (name === undefined) return undefined;
+    const directory = path.join(this.options.jobsRoot, name);
+    let record: unknown;
+    try {
+      record = JSON.parse(await fs.readFile(path.join(directory, "job.json"), "utf8"));
+    } catch {
+      return undefined;
+    }
+    if (!isRecord(record) || record.id !== id || record.scope !== this.scope) return undefined;
+    const scene = path.join(directory, "scene.blend");
+    return (await fs.stat(scene).catch(() => undefined))?.isFile() === true ? { directory, scene } : undefined;
   }
 
   /** Run a script the engine has already approved. Never throws for the script's own failures. */
@@ -782,11 +939,31 @@ export class BlenderWorker {
       : DEFAULT_BLENDER_JOB_SECONDS;
     const seconds = Math.min(Math.max(Math.round(requested), 5), MAX_BLENDER_JOB_SECONDS);
 
-    await this.prune().catch(() => undefined);
-    const jobDirectory = path.join(this.options.jobsRoot, `${new Date(started).toISOString().replace(/[:.]/g, "-")}-${randomBytes(3).toString("hex")}`);
+    const continueFrom = args.continue_from;
+    if (continueFrom !== undefined && !isBlenderJobId(continueFrom)) {
+      return failure("continue_from must be the id of an earlier job, exactly as that job's result gave it.", "invalid_arguments", started, this.now);
+    }
+    const base = continueFrom === undefined ? undefined : await this.savedScene(continueFrom);
+    if (continueFrom !== undefined && base === undefined) {
+      return failure(
+        `There is no saved scene from job ${continueFrom} in this chat. A job saves its scene only when its script finishes, and job folders are cleared after ${JOB_RETENTION_MS / 86_400_000} days or once ${MAX_KEPT_JOBS} newer jobs exist. Continue from a later job that worked, or start from an empty scene without continue_from.`,
+        "scene_not_found",
+        started,
+        this.now,
+      );
+    }
+
+    await this.prune(base?.directory).catch(() => undefined);
+    const jobId = randomBytes(4).toString("hex");
+    const jobDirectory = path.join(this.options.jobsRoot, `${new Date(started).toISOString().replace(/[:.]/g, "-")}-${jobId}`);
     const outputDirectory = path.join(jobDirectory, "output");
     try {
       await fs.mkdir(outputDirectory, { recursive: true });
+      await fs.writeFile(
+        path.join(jobDirectory, "job.json"),
+        JSON.stringify({ id: jobId, scope: this.scope, ...(continueFrom === undefined ? {} : { continuedFrom: continueFrom }) }),
+        "utf8",
+      );
       await fs.writeFile(path.join(jobDirectory, "script.py"), script, "utf8");
       await fs.writeFile(path.join(jobDirectory, "roqer_runner.py"), RUNNER_SCRIPT, "utf8");
       await fs.writeFile(path.join(jobDirectory, "roqer_helpers.py"), HELPERS_SCRIPT, "utf8");
@@ -796,7 +973,10 @@ export class BlenderWorker {
     }
 
     const run = await this.runBlender(
-      ["--background", "--factory-startup", "--python-exit-code", "1", "--python", path.join(jobDirectory, "roqer_runner.py"), "--", jobDirectory],
+      [
+        "--background", "--factory-startup", "--python-exit-code", "1", "--python", path.join(jobDirectory, "roqer_runner.py"),
+        "--", jobDirectory, ...(base === undefined ? [] : [base.scene]),
+      ],
       jobDirectory,
       seconds * 1000,
       call,
@@ -809,9 +989,21 @@ export class BlenderWorker {
     if (run.timedOut) {
       return failure(`The script ran past ${seconds} seconds and Blender was stopped. Simplify the geometry or raise timeout_seconds (at most ${MAX_BLENDER_JOB_SECONDS}).`, "timeout", started, this.now, { jobDirectory, log });
     }
-    if (run.exitCode !== 0 || run.output.includes(FAILED_MARKER) || !run.output.includes(DONE_MARKER)) {
-      return failure(`The script failed in Blender (exit ${run.exitCode ?? "unknown"}). The end of Blender's output:\n${log}`, "script_failed", started, this.now, { jobDirectory, log });
+    if (run.output.includes(BASE_FAILED_MARKER)) {
+      return failure(`Blender could not open the scene job ${String(continueFrom)} saved, so the script did not run. Continue from another job, or start from an empty scene. The end of Blender's output:\n${log}`, "scene_not_opened", started, this.now, { jobDirectory, log });
     }
+    if (run.exitCode !== 0 || run.output.includes(FAILED_MARKER) || !run.output.includes(DONE_MARKER)) {
+      return failure(
+        `The script failed in Blender (exit ${run.exitCode ?? "unknown"}), so nothing was saved${continueFrom === undefined ? "" : `; the scene of job ${continueFrom} is unchanged`}. The end of Blender's output:\n${log}`,
+        "script_failed",
+        started,
+        this.now,
+        { jobDirectory, log },
+      );
+    }
+    const sceneFile = path.join(jobDirectory, "scene.blend");
+    const sceneSaved = run.output.includes(SCENE_SAVED_MARKER) && (await fs.stat(sceneFile).catch(() => undefined))?.isFile() === true;
+    const contents = sceneSaved ? await readSceneContents(path.join(jobDirectory, "scene.json")) : undefined;
 
     let entries: string[];
     try {
@@ -822,9 +1014,9 @@ export class BlenderWorker {
     const models = entries.filter((name) => MODEL_EXTENSIONS.has(path.extname(name).toLowerCase()));
     const renders = entries.filter((name) => path.extname(name).toLowerCase() === ".png");
     const others = entries.filter((name) => !models.includes(name) && !renders.includes(name));
-    if (models.length === 0 && renders.length === 0) {
+    if (models.length === 0 && renders.length === 0 && !sceneSaved) {
       return failure(
-        `The script finished but left no model (.glb, .gltf, .fbx or .obj) or PNG image in OUTPUT_DIR. Export the model there, for example bpy.ops.export_scene.gltf(filepath=os.path.join(OUTPUT_DIR, "model.glb"), export_format="GLB", export_apply=True), or render the image there.${others.length > 0 ? ` It left: ${others.join(", ")}.` : ""}`,
+        `The script finished but left no model (.glb, .gltf, .fbx or .obj) or PNG image in OUTPUT_DIR. Export the model there, for example bpy.ops.export_scene.gltf(filepath=os.path.join(OUTPUT_DIR, "model.glb"), export_format="GLB", export_apply=True, use_visible=True), or render the image there.${others.length > 0 ? ` It left: ${others.join(", ")}.` : ""}`,
         "no_model_exported",
         started,
         this.now,
@@ -849,8 +1041,13 @@ export class BlenderWorker {
       rendered.push({ name, path: filePath, bytes: bytes.length, width: header.width, height: header.height });
       if (bytes.length <= MAX_PREVIEW_BYTES) renderImages.push({ data: bytes.toString("base64"), mediaType: "image/png" });
     }
-    for (const name of models.slice(0, MAX_INSPECTED_MODELS)) {
-      const filePath = path.join(outputDirectory, name);
+    // Nothing exported, so the scene itself is what the model is to look at:
+    // it is inspected the same way, measured as it would export.
+    const inspectScene = models.length === 0 && renders.length === 0 && sceneSaved;
+    const inspected = inspectScene
+      ? [{ name: "scene.blend", filePath: sceneFile }]
+      : models.slice(0, MAX_INSPECTED_MODELS).map((name) => ({ name, filePath: path.join(outputDirectory, name) }));
+    for (const { name, filePath } of inspected) {
       const bytes = (await fs.stat(filePath).catch(() => undefined))?.size ?? 0;
       const preview = path.join(jobDirectory, `preview-${path.parse(name).name}.png`);
       const inspection = await this.runBlender(
@@ -903,8 +1100,17 @@ export class BlenderWorker {
     const previews = images.length;
     images.push(...renderImages);
     const durationMs = this.now() - started;
-    const lines = [`Blender job finished in ${(durationMs / 1000).toFixed(1)} s.`];
-    if (files.length > 0) {
+    const lines = [`Blender job ${jobId} finished in ${(durationMs / 1000).toFixed(1)} s.`];
+    if (inspectScene) {
+      lines.push(
+        "Nothing was exported, so Roqer checked the scene this job saved, measured as it would export (modifiers applied, curves as the meshes they become, hidden objects left out):",
+        ...files.map(describeFile),
+        previews > 0
+          ? "A preview is attached: four views in one image. Top left, the side seen from +X (+Y to the right); top right, the top seen from above (+Y up the image); bottom left and right, three-quarter views from the +X -Y and -X +Y corners. Check it against the request before building on it."
+          : "No preview could be rendered; judge the scene by the numbers above.",
+        "In Studio a point at Blender (x, y, z) arrives at (-x, z, y): Blender -Y becomes Roblox's forward (-Z, the LookVector), so a front modeled toward +Y arrives facing backwards.",
+      );
+    } else if (files.length > 0) {
       lines.push(
         "Roqer re-imported each exported model and checked it:",
         ...files.map(describeFile),
@@ -924,9 +1130,15 @@ export class BlenderWorker {
         "To use an image in UI: upload_asset {action: 'upload', filePath: <its path>, assetType: 'Decal', displayName}, then set ImageLabel.Image to rbxassetid://<imageId from that result>. The decalId does not display in an ImageLabel; if imageId is null, check the upload again with action 'status'.",
       );
     }
+    lines.push(...describeScene(jobId, continueFrom, contents, sceneSaved, inspectScene));
     return {
       ok: true,
-      data: { jobDirectory, outputDirectory, files, images: rendered, otherFiles: others, log },
+      data: {
+        jobId,
+        ...(continueFrom === undefined ? {} : { continuedFrom: continueFrom }),
+        jobDirectory, outputDirectory, files, images: rendered, otherFiles: others, log,
+        scene: sceneSaved ? { path: sceneFile, ...(contents === undefined ? {} : { contents }) } : null,
+      },
       text: lines.join("\n"),
       ...(images.length > 0 ? { images } : {}),
       httpStatus: 200,
@@ -978,13 +1190,17 @@ export class BlenderWorker {
     });
   }
 
-  /** Clear job folders past their retention, oldest first, keeping the newest few. */
-  private async prune(): Promise<void> {
+  /**
+   * Clear job folders past their retention, oldest first, keeping the newest
+   * few, and always keeping `keep`: the job this one continues from.
+   */
+  private async prune(keep?: string): Promise<void> {
     const entries = await fs.readdir(this.options.jobsRoot, { withFileTypes: true }).catch(() => []);
     const jobs = entries.filter((entry) => entry.isDirectory()).map((entry) => entry.name).sort();
     const cutoff = this.now() - JOB_RETENTION_MS;
     for (const [index, name] of jobs.entries()) {
       const directory = path.join(this.options.jobsRoot, name);
+      if (directory === keep) continue;
       const tooMany = index < jobs.length - MAX_KEPT_JOBS;
       const modified = (await fs.stat(directory).catch(() => undefined))?.mtimeMs ?? 0;
       if (tooMany || modified < cutoff) await fs.rm(directory, { recursive: true, force: true }).catch(() => undefined);
@@ -1096,6 +1312,90 @@ function describeLayout(layout: LayoutFacts | undefined, bottom: number | undefi
     if (layout.complete === false) lines.push("the comparison stopped at its time limit, so pieces may be missing from these facts");
   }
   return lines.length === 0 ? "" : `\n  layout, in the script's Blender coordinates (X, Y, Z up; sizes and positions in studs): ${lines.map((line) => line[0].toUpperCase() + line.slice(1)).join(". ")}.`;
+}
+
+const isText = (value: unknown): value is string => typeof value === "string" && value.length > 0 && value.length <= 200;
+const texts = (value: unknown): string[] | undefined => Array.isArray(value) ? value.filter(isText).slice(0, 4) : undefined;
+
+/** The runner's list of a saved scene, keeping only well-formed entries: it is data, not trusted structure. */
+export async function readSceneContents(file: string): Promise<SceneContents | undefined> {
+  let value: unknown;
+  try {
+    value = JSON.parse(await fs.readFile(file, "utf8"));
+  } catch {
+    return undefined;
+  }
+  if (!isRecord(value) || !Array.isArray(value.objects)) return undefined;
+  const objects = value.objects.slice(0, MAX_SCENE_OBJECTS).filter(isRecord).flatMap((entry): SceneObject[] => {
+    if (!isText(entry.name) || !isText(entry.type)) return [];
+    const materials = texts(entry.materials);
+    const modifiers = texts(entry.modifiers);
+    return [{
+      name: entry.name,
+      type: entry.type,
+      ...(isText(entry.parent) ? { parent: entry.parent } : {}),
+      ...(entry.hidden === true ? { hidden: true } : {}),
+      ...(isVector(entry.size) ? { size: entry.size } : {}),
+      ...(isVector(entry.center) ? { center: entry.center } : {}),
+      ...(isNumber(entry.triangles) ? { triangles: Math.floor(entry.triangles) } : {}),
+      ...(materials !== undefined && materials.length > 0 ? { materials } : {}),
+      ...(modifiers !== undefined && modifiers.length > 0 ? { modifiers } : {}),
+    }];
+  });
+  return {
+    objects,
+    count: Math.max(count(value.count, objects.length), objects.length),
+    triangles: count(value.triangles, 0),
+  };
+}
+
+function describeSceneObject(object: SceneObject): string {
+  const facts = [
+    ...(object.size === undefined ? [] : [object.size.map(studs).join(" × ")]),
+    ...(object.center === undefined ? [] : [`at (${object.center.map(studs).join(", ")})`]),
+  ].join(" ");
+  const details = [
+    ...(object.triangles === undefined ? [] : [`${object.triangles} triangles`]),
+    ...(object.parent === undefined ? [] : [`child of ${object.parent}`]),
+    ...(object.materials === undefined ? [] : [`materials ${object.materials.join(", ")}`]),
+    ...(object.modifiers === undefined ? [] : [`modifiers ${object.modifiers.join(", ")}`]),
+    ...(object.hidden === true ? ["hidden"] : []),
+  ];
+  return `- ${object.name} (${object.type})${facts === "" ? "" : `: ${facts}`}${details.length === 0 ? "" : `; ${details.join("; ")}`}`;
+}
+
+/**
+ * What the model needs to build on this job: its id, what the scene now holds
+ * by name, and how to continue from it. Said on every job, because the next
+ * job's author may be reading it after the turns that built it were folded away.
+ */
+function describeScene(
+  jobId: string,
+  continuedFrom: unknown,
+  contents: SceneContents | undefined,
+  saved: boolean,
+  inspected: boolean,
+): string[] {
+  if (!saved) {
+    return [`This job's scene could not be saved, so no later job can continue from it${typeof continuedFrom === "string" ? `; job ${continuedFrom}'s scene is unchanged` : ""}.`];
+  }
+  const lines = [
+    `Scene saved as job ${jobId}${typeof continuedFrom === "string" ? `, continuing job ${continuedFrom}` : ""}${contents === undefined ? "." : `: ${contents.count} object${contents.count === 1 ? "" : "s"}, ${contents.triangles} triangles. Sizes and centres in studs, in Blender coordinates (X, Y, Z up):`}`,
+  ];
+  if (contents !== undefined) {
+    const listed = contents.objects.slice(0, MAX_LISTED_SCENE_OBJECTS);
+    lines.push(...listed.map(describeSceneObject));
+    if (contents.count > listed.length) lines.push(`- and ${contents.count - listed.length} more objects`);
+    const hidden = contents.objects.filter((object) => object.hidden === true).map((object) => object.name);
+    if (hidden.length > 0) {
+      lines.push(`Hidden objects (${hidden.slice(0, 8).join(", ")}${hidden.length > 8 ? ", and more" : ""}) are ${inspected ? "not in this preview, but an" : "in the scene, and an"} export includes them unless it passes use_visible=True: delete them, or export with use_visible=True, before uploading.`);
+    }
+  }
+  lines.push(
+    `To build on this scene, call blender again with continue_from: '${jobId}'. The script then starts with these objects loaded, by these names, instead of an empty scene, and can change them as well as add to them. A job that fails saves nothing; to undo a step, continue from an earlier job instead.`,
+  );
+  if (inspected) lines.push("Export into OUTPUT_DIR once the model is ready to upload; that job can be one that only exports, continuing from this one.");
+  return lines;
 }
 
 function describeImage(image: RenderedImage): string {

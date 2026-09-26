@@ -1,7 +1,7 @@
 import { app, BrowserWindow, dialog, ipcMain, Menu, shell, type IpcMainEvent, type IpcMainInvokeEvent, type WebContents } from "electron";
 import { autoUpdater } from "electron-updater";
 import { spawn } from "node:child_process";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -484,15 +484,21 @@ function blenderSettings(): BlenderSettings {
 /**
  * One approved Blender job. The engine has already classified and approved
  * it; this checks the worker is still on, then runs it in its own job folder
- * under Roqer's data folder.
+ * under Roqer's data folder. Its saved scene can be continued only by later
+ * jobs in the same chat, so the chat is the worker's scope, hashed so the job
+ * folders do not carry the chat's own id.
  */
-async function runBlenderJob(args: Record<string, unknown>, options: McpCallOptions): Promise<McpToolOutcome> {
+async function runBlenderJob(args: Record<string, unknown>, options: McpCallOptions, chatId: string): Promise<McpToolOutcome> {
   const executable = await blenderSettings().ready().catch(() => undefined);
   if (executable === undefined) {
     const message = "Blender is turned off in Roqer's Settings, so the job did not run. Ask the user to turn it on, or build the asset from parts instead.";
     return { ok: false, data: undefined, text: message, httpStatus: 200, errorCode: "blender_off", message, durationMs: 0 };
   }
-  const worker = new BlenderWorker({ executable, jobsRoot: path.join(app.getPath("userData"), "blender-jobs") });
+  const worker = new BlenderWorker({
+    executable,
+    jobsRoot: path.join(app.getPath("userData"), "blender-jobs"),
+    scope: createHash("sha256").update(chatId).digest("hex").slice(0, 32),
+  });
   return worker.run(args, options);
 }
 
@@ -1277,7 +1283,9 @@ async function startRun(event: IpcMainInvokeEvent, payload: unknown): Promise<Ru
       resolvedRequest = { ...resolvedRequest, prompt: `${request.prompt}\n\n${attachmentContext.text}` };
     }
     const session = new RunSession({
-      caller: blender ? withLocalOperations(client, new Map([[BLENDER_OPERATION, runBlenderJob]])) : client,
+      caller: blender
+        ? withLocalOperations(client, new Map([[BLENDER_OPERATION, (args, options) => runBlenderJob(args, options, request.chatId)]]))
+        : client,
       bridge: bridgeRecoveryFor(client.endpoint),
       planner,
       request: { ...resolvedRequest, runId },
