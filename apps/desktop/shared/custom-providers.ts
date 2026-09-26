@@ -10,6 +10,8 @@
  * whether one is saved (`hasKey`) or sends a new one to replace it.
  */
 
+import type { ReasoningEffort } from "./provider";
+
 export const CUSTOM_API_FORMATS = ["openai", "anthropic"] as const;
 export type CustomApiFormat = typeof CUSTOM_API_FORMATS[number];
 
@@ -35,14 +37,70 @@ export const MAX_CUSTOM_MAX_OUTPUT = 128_000;
  */
 export const DEFAULT_ANTHROPIC_MAX_OUTPUT = 32_000;
 
+/**
+ * The reasoning efforts a custom model can be set to take, lowest first.
+ *
+ * Endpoints disagree: OpenAI's models take `minimal` through `high` and newer
+ * ones `none` and `xhigh`, Claude's go up to `max`, and OpenRouter passes on
+ * whatever the model underneath accepts. So the user says which ones a model
+ * takes rather than Roqer assuming three. `none` is a value some endpoints
+ * accept to turn reasoning off, not the absence of a setting.
+ */
+export const CUSTOM_REASONING_EFFORTS = [
+  "none", "minimal", "low", "medium", "high", "xhigh", "max",
+] as const satisfies readonly ReasoningEffort[];
+export type CustomReasoningEffort = typeof CUSTOM_REASONING_EFFORTS[number];
+
+/** What a model that "takes a reasoning effort" meant before the levels were per model. */
+export const DEFAULT_CUSTOM_REASONING_EFFORTS: readonly CustomReasoningEffort[] = ["low", "medium", "high"];
+
+export function isCustomReasoningEffort(value: unknown): value is CustomReasoningEffort {
+  return CUSTOM_REASONING_EFFORTS.includes(value as CustomReasoningEffort);
+}
+
+/** A model's efforts: known, each once, lowest first, so a list has one spelling. */
+export function isCustomReasoningEffortList(value: unknown): value is CustomReasoningEffort[] {
+  if (!Array.isArray(value) || value.length > CUSTOM_REASONING_EFFORTS.length) return false;
+  let previous = -1;
+  for (const entry of value) {
+    const rank = CUSTOM_REASONING_EFFORTS.indexOf(entry as CustomReasoningEffort);
+    if (rank <= previous) return false;
+    previous = rank;
+  }
+  return true;
+}
+
+/** The given efforts, deduplicated and in order. */
+export function sortCustomReasoningEfforts(efforts: Iterable<CustomReasoningEffort>): CustomReasoningEffort[] {
+  const chosen = new Set(efforts);
+  return CUSTOM_REASONING_EFFORTS.filter((effort) => chosen.has(effort));
+}
+
+/**
+ * The effort a run starts at when the user has not picked one the model takes:
+ * `medium` when offered, otherwise the offered level nearest it, the lower on
+ * a tie, so a default never spends more than the user would expect.
+ */
+export function defaultCustomReasoningEffort(efforts: readonly CustomReasoningEffort[]): CustomReasoningEffort | undefined {
+  const medium = CUSTOM_REASONING_EFFORTS.indexOf("medium");
+  let best: CustomReasoningEffort | undefined;
+  for (const effort of efforts) {
+    if (best === undefined ||
+      Math.abs(CUSTOM_REASONING_EFFORTS.indexOf(effort) - medium) < Math.abs(CUSTOM_REASONING_EFFORTS.indexOf(best) - medium)) {
+      best = effort;
+    }
+  }
+  return best;
+}
+
 export type CustomModel = Readonly<{
   /** The id the endpoint knows the model by, e.g. `deepseek/deepseek-chat` or `qwen2.5-coder:32b`. */
   id: string;
   displayName: string;
   /** Whether the model accepts images. When false, screenshots and attachments are not sent to it. */
   images: boolean;
-  /** Whether the model takes a reasoning effort. When false, none is sent. */
-  reasoning: boolean;
+  /** The reasoning efforts the model takes, lowest first. Empty sends none. */
+  efforts: readonly CustomReasoningEffort[];
   /** Tokens the model can hold, when the user knows it. Bounds how much tool output a run carries. */
   contextWindow?: number;
   /** Largest answer to ask for in one turn, when the user knows it. */
@@ -161,9 +219,9 @@ export function normalizeCustomBaseUrl(value: unknown): { ok: true; baseUrl: str
 
 export function isCustomModel(value: unknown): value is CustomModel {
   if (!isRecord(value) ||
-    !hasOnlyKeys(value, ["id", "displayName", "images", "reasoning", "contextWindow", "maxOutputTokens"])) return false;
+    !hasOnlyKeys(value, ["id", "displayName", "images", "efforts", "contextWindow", "maxOutputTokens"])) return false;
   return isCustomModelId(value.id) && isDisplayText(value.displayName) &&
-    typeof value.images === "boolean" && typeof value.reasoning === "boolean" &&
+    typeof value.images === "boolean" && isCustomReasoningEffortList(value.efforts) &&
     (value.contextWindow === undefined ||
       isBoundedInteger(value.contextWindow, MIN_CUSTOM_CONTEXT_WINDOW, MAX_CUSTOM_CONTEXT_WINDOW)) &&
     (value.maxOutputTokens === undefined ||

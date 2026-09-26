@@ -3,7 +3,9 @@ import test from "node:test";
 
 import {
   customModelKey,
+  defaultCustomReasoningEffort,
   isCustomConnectionView,
+  isCustomReasoningEffortList,
   normalizeCustomBaseUrl,
   parseCustomConnectionSave,
   parseCustomModelKey,
@@ -40,7 +42,7 @@ test("a save request is checked field by field and comes back normalized", () =>
     name: " OpenRouter ",
     format: "openai",
     baseUrl: "https://openrouter.ai/api/v1/",
-    models: [{ id: "deepseek/deepseek-chat", displayName: "DeepSeek", images: false, reasoning: false, contextWindow: 64_000 }],
+    models: [{ id: "deepseek/deepseek-chat", displayName: "DeepSeek", images: false, efforts: [], contextWindow: 64_000 }],
     apiKey: " sk-or-123 ",
   });
   assert.equal(parsed.ok, true);
@@ -48,7 +50,7 @@ test("a save request is checked field by field and comes back normalized", () =>
     name: "OpenRouter",
     format: "openai",
     baseUrl: "https://openrouter.ai/api/v1",
-    models: [{ id: "deepseek/deepseek-chat", displayName: "DeepSeek", images: false, reasoning: false, contextWindow: 64_000 }],
+    models: [{ id: "deepseek/deepseek-chat", displayName: "DeepSeek", images: false, efforts: [], contextWindow: 64_000 }],
     apiKey: "sk-or-123",
   });
 
@@ -56,14 +58,14 @@ test("a save request is checked field by field and comes back normalized", () =>
   assert.equal(parseCustomConnectionSave({ ...base, apiKey: null }).ok, true, "null removes the key");
   assert.equal(parseCustomConnectionSave(base).ok, true, "absent keeps the key");
   const tooSmall = parseCustomConnectionSave({
-    ...base, models: [{ id: "tiny", displayName: "Tiny", images: false, reasoning: false, contextWindow: 4_096 }],
+    ...base, models: [{ id: "tiny", displayName: "Tiny", images: false, efforts: [], contextWindow: 4_096 }],
   });
   assert.match(tooSmall.ok ? "" : tooSmall.message, /context window of at least 16,000/);
   const duplicate = parseCustomConnectionSave({
     ...base,
     models: [
-      { id: "a", displayName: "A", images: false, reasoning: false },
-      { id: "a", displayName: "A again", images: false, reasoning: false },
+      { id: "a", displayName: "A", images: false, efforts: [] },
+      { id: "a", displayName: "A again", images: false, efforts: [] },
     ],
   });
   assert.match(duplicate.ok ? "" : duplicate.message, /only be added once/);
@@ -79,4 +81,29 @@ test("the renderer's view says whether a key is saved and never carries one", ()
   assert.equal(isCustomConnectionView(view), true);
   assert.equal(isCustomConnectionView({ ...view, apiKey: "sk-live" }), false);
   assert.equal(isCustomConnectionView({ ...view, hasKey: undefined }), false);
+});
+
+test("a model's efforts are known levels, each once, lowest first", () => {
+  assert.equal(isCustomReasoningEffortList([]), true);
+  assert.equal(isCustomReasoningEffortList(["none", "minimal", "low", "medium", "high", "xhigh", "max"]), true);
+  assert.equal(isCustomReasoningEffortList(["high", "low"]), false, "out of order");
+  assert.equal(isCustomReasoningEffortList(["low", "low"]), false, "repeated");
+  assert.equal(isCustomReasoningEffortList(["ultra"]), false, "not a level an endpoint takes");
+  assert.equal(isCustomReasoningEffortList("low"), false);
+
+  const save = parseCustomConnectionSave({
+    name: "Anthropic", format: "anthropic", baseUrl: "https://api.anthropic.com/v1",
+    models: [{ id: "claude", displayName: "Claude", images: true, efforts: ["low", "medium", "high", "xhigh", "max"] }],
+  });
+  assert.equal(save.ok, true);
+  // The flag the levels replaced is refused rather than silently dropped.
+  assert.equal(parseCustomConnectionSave({
+    name: "Old", format: "openai", baseUrl: "https://x.example/v1",
+    models: [{ id: "m", displayName: "M", images: true, reasoning: true }],
+  }).ok, false);
+
+  assert.equal(defaultCustomReasoningEffort([]), undefined);
+  assert.equal(defaultCustomReasoningEffort(["low", "medium", "max"]), "medium");
+  assert.equal(defaultCustomReasoningEffort(["minimal", "high"]), "high");
+  assert.equal(defaultCustomReasoningEffort(["low", "high"]), "low");
 });

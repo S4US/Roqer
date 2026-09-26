@@ -371,6 +371,15 @@ export class McpClient implements McpToolCaller {
       if (typeof data.errorCode === "string") errorCode = data.errorCode;
       if (typeof data.message === "string") message = data.message;
     }
+    // The plugin's own refusals come back as a 200 whose payload is `{error}`
+    // with no `success` field: a parent that does not exist, a handler that
+    // threw. Read as fine, `insert_asset` into a missing parent reached the run
+    // record as a successful call, and the model saw `ok: true` beside an error
+    // it had to notice for itself.
+    if (isRecord(data) && typeof data.error === "string" && data.success !== true) {
+      ok = false;
+      message ??= typeof data.message === "string" ? data.message : data.error;
+    }
 
     return {
       ok,

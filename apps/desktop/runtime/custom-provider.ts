@@ -4,6 +4,7 @@ import type { TurnRequest } from "./model-api/turn-contract";
 
 import {
   customModelKey,
+  defaultCustomReasoningEffort,
   isCustomModelId,
   parseCustomModelKey,
   type CustomConnection,
@@ -12,7 +13,7 @@ import {
   type CustomModelImportResult,
   type CustomModelTestResult,
 } from "../shared/custom-providers";
-import type { ProviderModel, ProviderModelCatalog, ProviderStatus, ReasoningEffort } from "../shared/provider";
+import type { ProviderModel, ProviderModelCatalog, ProviderStatus } from "../shared/provider";
 import type { TurnTransport } from "./agent-loop";
 import { AnthropicMessagesTurns, ANTHROPIC_VERSION } from "./model-api/anthropic-messages";
 import { endpointUrl, fetchWithin, isRecord, refusalMessage } from "./model-api/http";
@@ -24,9 +25,8 @@ import { OpenAiChatTurns } from "./model-api/openai-chat";
  * the endpoint.
  */
 
-const REASONING_EFFORTS: readonly ReasoningEffort[] = ["low", "medium", "high"];
-
 function catalogModel(connection: CustomConnectionView, model: CustomModel): ProviderModel {
+  const defaultEffort = defaultCustomReasoningEffort(model.efforts);
   return {
     id: customModelKey(connection.id, model.id),
     displayName: model.displayName,
@@ -34,10 +34,10 @@ function catalogModel(connection: CustomConnectionView, model: CustomModel): Pro
     runsOn: connection.name,
     // A model without a reasoning setting still needs one entry for the
     // picker; "none" says plainly that nothing will be sent.
-    defaultReasoningEffort: model.reasoning ? "medium" : "none",
-    supportedReasoningEfforts: model.reasoning
-      ? REASONING_EFFORTS.map((reasoningEffort) => ({ reasoningEffort }))
-      : [{ reasoningEffort: "none", description: "This model has no reasoning setting." }],
+    defaultReasoningEffort: defaultEffort ?? "none",
+    supportedReasoningEfforts: defaultEffort === undefined
+      ? [{ reasoningEffort: "none", description: "This model has no reasoning setting." }]
+      : model.efforts.map((reasoningEffort) => ({ reasoningEffort })),
   };
 }
 
@@ -89,7 +89,7 @@ export function createCustomTransport(options: CustomTransportOptions): TurnTran
     baseUrl: options.connection.baseUrl,
     apiKey: options.apiKey,
     label: options.connection.name,
-    reasoning: options.model.reasoning,
+    reasoning: options.model.efforts.length > 0,
     ...(options.model.maxOutputTokens === undefined ? {} : { maxOutputTokens: options.model.maxOutputTokens }),
     ...(options.fetch === undefined ? {} : { fetch: options.fetch }),
     ...(options.requestTimeoutMs === undefined ? {} : { requestTimeoutMs: options.requestTimeoutMs }),
@@ -124,7 +124,8 @@ export async function testCustomModel(options: CustomTransportOptions): Promise<
     runId: "connection-test",
     turnId: "connection-test:turn:1",
     modelId: options.model.id,
-    reasoningEffort: options.model.reasoning ? "low" : "none",
+    // The cheapest level the model takes: this checks the connection, not the thinking.
+    reasoningEffort: options.model.efforts[0] ?? "none",
     instructions: { system: `You are checking a connection. Call the ${TEST_TOOL} tool with ok set to true. Do not answer in text.` },
     tools: [{
       name: TEST_TOOL,
@@ -132,7 +133,7 @@ export async function testCustomModel(options: CustomTransportOptions): Promise<
       parameters: { type: "object", properties: { ok: { type: "boolean" } }, required: ["ok"] },
     }],
     messages: [{ role: "user", content: [{ kind: "text", text: `Call ${TEST_TOOL} now.` }] }],
-    maxOutputTokens: options.model.reasoning ? Math.min(options.model.maxOutputTokens ?? 4_096, 4_096) : 512,
+    maxOutputTokens: options.model.efforts.length > 0 ? Math.min(options.model.maxOutputTokens ?? 4_096, 4_096) : 512,
   };
   const controller = new AbortController();
   try {

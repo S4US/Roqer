@@ -39,7 +39,7 @@ import { createAgentLoopPlanner } from "../runtime/agent-loop";
 import { withLocalOperations } from "../runtime/local-operations";
 import { McpClient } from "../runtime/mcp-client";
 import { BLENDER_OPERATION } from "../shared/blender";
-import { CUSTOM_API_FORMATS, type CustomApiFormat, type CustomConnection } from "../shared/custom-providers";
+import { CUSTOM_API_FORMATS, DEFAULT_CUSTOM_REASONING_EFFORTS, type CustomApiFormat, type CustomConnection } from "../shared/custom-providers";
 import { isReasoningEffort, type ReasoningEffort } from "../shared/provider";
 import { formatEvalResult, requireUploads, resolveBlender, runEvalTask, type EvalResult } from "./harness";
 import { probePlace, resetPlace } from "./reset";
@@ -189,7 +189,7 @@ async function main(): Promise<void> {
     name: new URL(modelEndpoint.baseUrl).host,
     format: modelEndpoint.format,
     baseUrl: modelEndpoint.baseUrl,
-    models: [{ id: model, displayName: model, images: modelEndpoint.images, reasoning: modelEndpoint.reasoning }],
+    models: [{ id: model, displayName: model, images: modelEndpoint.images, efforts: modelEndpoint.reasoning ? DEFAULT_CUSTOM_REASONING_EFFORTS : [] }],
   };
   const apiKey = process.env.ROQER_EVAL_API_KEY?.trim() || null;
 

@@ -35,7 +35,7 @@ the wrong size, the wrong style, or arrives in one colour.
   vertices per height); extrude a footprint for
   flat-sided things; combine simple solids for assemblies.
 - Prefer placing a part that is not upright by its two ends
-  (`roqer.box_between`, `roqer.cylinder_between` in
+  (`roqer.box_between`, `roqer.cylinder_between`, `roqer.cone_between` in
   [Blender modeling](blender.md)): the direction of a rotation angle is easy
   to get backwards, and the ends are what the design knows.
 - For the low-poly look use 6–12 segments around a curve, flat shading, and a

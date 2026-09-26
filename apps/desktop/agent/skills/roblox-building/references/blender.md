@@ -46,6 +46,10 @@ get the direction of wrong, and they paint it when given a colour:
 - `roqer.cylinder_between(name, start, end, radius, rgba, vertices=12)`: a
   cylinder whose caps sit at `start` and `end`: a bar, a pipe, a column, an
   axle, or a wheel from its inner face to its outer face.
+- `roqer.cone_between(name, start, end, start_radius, end_radius=0, rgba, vertices=12)`:
+  a cone or taper whose start radius sits at `start` and end radius at `end`
+  (0 is a point). A boost flame runs from the exhaust, its wide end, to its tip;
+  a spike from its base to its point.
 - `roqer.join(name, objects)`: joins parts that never move apart into one
   flat-shaded object with a vertex-colour material. Join each moving part (a
   wheel, a lid, a door) on its own.
