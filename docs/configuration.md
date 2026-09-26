@@ -87,6 +87,32 @@ ChatGPT runs use a Codex home of Roqer's own, inside Roqer's data folder, so
 Roqer asks you to sign in to ChatGPT once even if the Codex CLI is already
 signed in, and your own Codex MCP servers and plugins are not loaded there.
 
+A model endpoint you configure runs on Roqer's own agent loop. The next
+message in the same chat continues the conversation it left, tool results
+included, as the ChatGPT and Claude providers do. The conversation is not kept
+after a run that failed or was stopped, after half an hour idle, when the run's
+connection, model, or settings differ, or once connections are edited.
+
+When the endpoint fails in a way that can pass (a rate limit, an overload, a server
+error, or a connection dropped partway through a turn), Roqer sends the same
+turn again up to four times. It waits as long as the endpoint asks, up to a
+minute, or backs off from one second, and each retry is shown in the run's
+activity. A failure that would only repeat, such as a refused key or an unknown
+model, ends the run at once. When the endpoint says the conversation no longer
+fits the model, Roqer folds older work into a summary, trims older tool output
+and screenshots, and sends the turn once more. If the model's context window is
+set in Settings, Roqer folds the conversation before it fills three quarters
+of that window. A turn has no length limit: Roqer stops waiting
+only when the endpoint sends nothing for ten minutes, or the model makes no
+progress, reasoning included, for five. With reasoning on, Claude 4.6 and later
+models think adaptively at the run's effort. Older Claude models and other
+Anthropic-compatible endpoints get a thinking budget. If the endpoint refuses
+the form Roqer tried first, Roqer switches to the other. On OpenAI-compatible
+endpoints, a model's reasoning goes back with the turn that produced it:
+DeepSeek's `reasoning_content`, OpenRouter's `reasoning_details`, and Gemini's
+thought signatures, which those endpoints require for a model to keep calling
+tools. A server that rejects one of those fields stops receiving it.
+
 Roqer starts its bundled bridge and installs the matching Studio plugin on
 every launch. To run your own bridge instead, start it before Roqer; Roqer
 adopts it rather than replacing it:

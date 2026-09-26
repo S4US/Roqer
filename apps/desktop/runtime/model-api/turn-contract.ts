@@ -194,12 +194,53 @@ export const TURN_FAILURE_CODES = [
 export type TurnFailureCode = typeof TURN_FAILURE_CODES[number];
 
 /**
+ * A turn that failed in a way the same request may not fail again: the
+ * endpoint was overloaded or rate limiting, answered with a server error, or
+ * dropped the connection partway through.
+ *
+ * A transport throws this, and the agent loop sends the same turn again after a
+ * pause. That is safe because a transport hands over a turn's tool calls only
+ * once the whole turn has arrived, so a turn that failed has run nothing. A
+ * failure the next attempt would only repeat -- a refused key, a bad model id,
+ * a request the endpoint cannot read -- is an ordinary `Error` instead.
+ */
+export class TransientTurnError extends Error {
+  /** How long the endpoint asked the client to wait before trying again, when it said. */
+  readonly retryAfterMs: number | undefined;
+
+  constructor(message: string, options: Readonly<{ retryAfterMs?: number; cause?: unknown }> = {}) {
+    super(message, options.cause === undefined ? undefined : { cause: options.cause });
+    this.name = "TransientTurnError";
+    this.retryAfterMs = options.retryAfterMs;
+  }
+}
+
+/**
+ * A turn the endpoint refused because the conversation no longer fits the
+ * model's context window. Sending it again unchanged would be refused again;
+ * the agent loop shortens the conversation first.
+ */
+export class ContextOverflowError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ContextOverflowError";
+  }
+}
+
+/**
  * Stream events. A refusal decided before the stream opens is an HTTP status,
  * not a `failed` event, so a client never has to read a body to learn it was
  * never charged.
  */
 export type TurnEvent =
   | Readonly<{ kind: "delta"; text: string }>
+  /**
+   * The model is reasoning. It carries no text on purpose: reasoning is not
+   * written for the user and never reaches the reply. What it carries is the
+   * fact of progress, so a model thinking for minutes before its first word
+   * is not mistaken for one that has stopped.
+   */
+  | Readonly<{ kind: "reasoning" }>
   | Readonly<{ kind: "tool-call"; call: TurnToolCall }>
   /** `usage` is absent when the provider did not report it; it is never invented. */
   | Readonly<{ kind: "completed"; stopReason: TurnStopReason; usage?: TurnUsage }>
@@ -214,6 +255,7 @@ export type TurnEventKind = TurnEvent["kind"];
  */
 const TURN_EVENT_KIND_SET: Readonly<Record<TurnEventKind, true>> = {
   delta: true,
+  reasoning: true,
   "tool-call": true,
   completed: true,
   failed: true,
@@ -368,6 +410,8 @@ export function isTurnEvent(value: unknown): value is TurnEvent {
   switch (value.kind) {
     case "delta":
       return hasOnlyKeys(value, ["kind", "text"]) && isTurnText(value.text, MAX_TURN_TEXT);
+    case "reasoning":
+      return hasOnlyKeys(value, ["kind"]);
     case "tool-call":
       return hasOnlyKeys(value, ["kind", "call"]) && isTurnToolCall(value.call);
     case "completed":

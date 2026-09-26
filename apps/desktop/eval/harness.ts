@@ -79,6 +79,8 @@ export type EvalMetrics = Readonly<{
   modelTurns: number | null;
   /** Turns ended because the model made no semantic progress. */
   stalledTurns: number | null;
+  /** Tries at a turn the endpoint failed transiently, each followed by another try. */
+  retriedAttempts: number | null;
   totalToolCalls: number;
   distinctTools: number;
   callsBeforeFirstMutation: number | null;
@@ -172,6 +174,7 @@ function deriveMetrics(
   return {
     modelTurns: planner?.modelTurns ?? null,
     stalledTurns: planner?.stalledTurns ?? null,
+    retriedAttempts: planner?.retriedAttempts ?? null,
     totalToolCalls: calls.length,
     distinctTools: new Set(calls.map((call) => call.tool)).size,
     callsBeforeFirstMutation: firstMutation < 0 ? null : firstMutation,
@@ -400,6 +403,7 @@ export function formatEvalResult(result: EvalResult): string {
   // Named on the line rather than left to the JSONL: a stall is the reliability
   // property most easily mistaken for a slow arm when only averages are read.
   if (result.metrics.stalledTurns) parts.push(`${result.metrics.stalledTurns} stalled`);
+  if (result.metrics.retriedAttempts) parts.push(`${result.metrics.retriedAttempts} retried`);
   if (!result.verified && result.gateIssues.length > 0) {
     parts.push(`gate: ${result.gateIssues.length} unmet`);
   }

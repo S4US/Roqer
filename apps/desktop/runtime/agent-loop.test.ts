@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import type { TurnEvent, TurnRequest } from "./model-api/turn-contract";
-import { isTurnRequest, MAX_TURN_IMAGE_BASE64 } from "./model-api/turn-contract";
+import { ContextOverflowError, isTurnRequest, MAX_TURN_IMAGE_BASE64, TransientTurnError } from "./model-api/turn-contract";
 
 import type { AgentDefinition } from "./agent-definition";
 import { buildConversationPrompt } from "./conversation-prompt";
@@ -12,10 +12,12 @@ import {
   MALFORMED_CALL_RETRIES,
   REPEATED_CALL_TURNS,
   REPEATED_FAILURE_TURNS,
+  type AgentLoopSession,
   type AgentLoopTelemetryEvent,
   type TurnTransport,
 } from "./agent-loop";
 import type { McpToolOutcome } from "./mcp-types";
+import { ProviderSessionStore } from "./provider-sessions";
 import { RunCancelledError, type PlannerContext } from "./run-engine";
 import type { SkillLibrary } from "./skill-library";
 import type { RunChange, RunEvidence } from "../shared/run-events";
@@ -759,6 +761,328 @@ test("cancelling a run still reads as a cancellation rather than as a stall", as
   );
 });
 
+/** A planner whose failed turns are tried again at once, so the retry tests do not wait out real backoff. */
+function retryingPlanner(
+  transport: TurnTransport,
+  options: Readonly<{ turnRetries?: number; retryBaseMs?: number; onTelemetry?: (event: AgentLoopTelemetryEvent) => void }> = {},
+) {
+  return createAgentLoopPlanner({
+    transport,
+    runId: "run_test",
+    modelId: "openai/gpt-5.6-luna",
+    effort: "medium",
+    agent: AGENT,
+    skillLibrary: SKILLS,
+    retryBaseMs: options.retryBaseMs ?? 1,
+    ...(options.turnRetries === undefined ? {} : { turnRetries: options.turnRetries }),
+    ...(options.onTelemetry === undefined ? {} : { onTelemetry: options.onTelemetry }),
+  });
+}
+
+/** A transport that plays each attempt's script in turn; a script may end by throwing. */
+function flakyGateway(attempts: ReadonlyArray<Readonly<{ events?: readonly TurnEvent[]; error?: Error }>>): TurnTransport & {
+  requests: TurnRequest[];
+} {
+  const requests: TurnRequest[] = [];
+  return {
+    requests,
+    async *streamTurn(request) {
+      requests.push(JSON.parse(JSON.stringify(request)) as TurnRequest);
+      const attempt = attempts[requests.length - 1];
+      assert.ok(attempt, `no scripted attempt ${requests.length}`);
+      for (const event of attempt.events ?? []) yield event;
+      if (attempt.error !== undefined) throw attempt.error;
+    },
+  };
+}
+
+test("a turn the endpoint failed transiently is sent again, and the run carries on", async () => {
+  // One overloaded response used to end the whole run, however far it had got.
+  const controller = new AbortController();
+  const { context, recorded } = makeContext(controller);
+  const telemetry: AgentLoopTelemetryEvent[] = [];
+  const read: TurnEvent = {
+    kind: "tool-call",
+    call: { id: "c1", name: "roblox_studio", arguments: { operation: "get_script_source", arguments: { instancePath: "ServerScriptService.Main" } } },
+  };
+  const bridge = flakyGateway([
+    // Cut off partway through its reply, with some prose already on screen.
+    { events: [{ kind: "delta", text: "Let me rea" }], error: new TransientTurnError("Anthropic returned status 529: Overloaded.") },
+    { events: [{ kind: "delta", text: "Reading Main." }, read, { kind: "completed", stopReason: "tool-use" }] },
+    { events: DONE("Main prints hi.") },
+  ]);
+
+  const answer = await retryingPlanner(bridge, { onTelemetry: (event) => telemetry.push(event) }).run(context);
+
+  assert.match(answer, /Main prints hi\./);
+  assert.deepEqual(recorded.calls, ["get_script_source"], "the retried turn's call ran once");
+  const retried = recorded.statuses.filter((status) => status.label === "Model endpoint failed; trying the turn again");
+  assert.equal(retried.length, 1);
+  assert.match(retried[0].detail ?? "", /Overloaded\. Roqer tries again in 1 second \(1 of 4\)\./);
+  // The same request went out twice, and the conversation that followed holds
+  // only what the successful try said: the failed try's fragment is not the
+  // model's turn.
+  assert.deepEqual(bridge.requests[0], bridge.requests[1]);
+  const assistant = bridge.requests[2].messages[1];
+  assert.deepEqual(assistant.content[0], { kind: "text", text: "Reading Main." });
+  // Evaluation counts the failed try apart from the turn it was trying.
+  const turns = telemetry.filter((event) => event.kind === "turn");
+  assert.deepEqual(turns.map((event) => event.kind === "turn" ? [event.turn, event.retried === true] : []), [
+    [1, true], [1, false], [2, false],
+  ]);
+});
+
+test("a turn that keeps failing transiently ends the run once the retries are spent", async () => {
+  const controller = new AbortController();
+  const { context } = makeContext(controller);
+  const failing = new TransientTurnError("Endpoint returned status 503: Service Unavailable.");
+  const bridge = flakyGateway([{ error: failing }, { error: failing }, { error: failing }]);
+
+  await assert.rejects(
+    () => retryingPlanner(bridge, { turnRetries: 2 }).run(context),
+    /^Error: Endpoint returned status 503: Service Unavailable\. Roqer tried this turn 3 times\.$/,
+  );
+  assert.equal(bridge.requests.length, 3);
+});
+
+test("a failure the next try would only repeat is not tried again", async () => {
+  const controller = new AbortController();
+  const { context, recorded } = makeContext(controller);
+  const bridge = flakyGateway([{ error: new Error("Endpoint returned status 401: Invalid key. Check the API key in Settings.") }]);
+
+  await assert.rejects(() => retryingPlanner(bridge).run(context), /status 401/);
+  assert.equal(bridge.requests.length, 1);
+  assert.equal(recorded.statuses.some((status) => status.label === "Model endpoint failed; trying the turn again"), false);
+});
+
+test("an endpoint that asks for a long wait is reported rather than waited on", async () => {
+  const controller = new AbortController();
+  const { context } = makeContext(controller);
+  const bridge = flakyGateway([{ error: new TransientTurnError("Endpoint returned status 429: Slow down.", { retryAfterMs: 3_600_000 }) }]);
+
+  await assert.rejects(
+    () => retryingPlanner(bridge).run(context),
+    /Slow down\. It asked Roqer to wait 3600 seconds before trying again\./,
+  );
+  assert.equal(bridge.requests.length, 1);
+});
+
+test("cancelling during the pause before a retry ends the run as cancelled, at once", async () => {
+  const controller = new AbortController();
+  const { context, recorded } = makeContext(controller);
+  const bridge = flakyGateway([{ error: new TransientTurnError("Overloaded.") }]);
+
+  const running = retryingPlanner(bridge, { retryBaseMs: 60_000 }).run(context);
+  while (!recorded.statuses.some((status) => status.label === "Model endpoint failed; trying the turn again")) {
+    await new Promise((resolve) => setTimeout(resolve, 1));
+  }
+  const cancelledAt = Date.now();
+  controller.abort();
+  await assert.rejects(running, RunCancelledError);
+  assert.ok(Date.now() - cancelledAt < 1_000, "the minute-long pause did not hold the cancellation");
+  assert.equal(bridge.requests.length, 1);
+});
+
+test("a model that reasons for longer than the stall interval is not stopped as stalled", async () => {
+  // A local reasoning model thinks for minutes before its first word. Its
+  // reasoning is never shown, but that it is arriving is progress.
+  const controller = new AbortController();
+  const { context } = makeContext(controller);
+  const thinking: TurnTransport = {
+    async *streamTurn() {
+      for (let index = 0; index < 6; index += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        yield { kind: "reasoning" } as TurnEvent;
+      }
+      yield { kind: "delta", text: "Main prints hi." };
+      yield { kind: "completed", stopReason: "end" };
+    },
+  };
+
+  assert.equal(await planner(thinking, undefined, 50).run(context), "Main prints hi.");
+});
+
+/** A planner that keeps its chat's conversation in `sessions`, as the Custom provider does. */
+function keepingPlanner(transport: TurnTransport, sessions: ProviderSessionStore<AgentLoopSession>, transportKey = "endpoint-a") {
+  return createAgentLoopPlanner({
+    transport,
+    runId: "run_test",
+    modelId: "openai/gpt-5.6-luna",
+    effort: "medium",
+    agent: AGENT,
+    skillLibrary: SKILLS,
+    chatId: "chat-1",
+    sessions,
+    transportKey,
+  });
+}
+
+const READ_MAIN: TurnEvent = {
+  kind: "tool-call",
+  call: { id: "c1", name: "roblox_studio", arguments: { operation: "get_script_source", arguments: { instancePath: "ServerScriptService.Main" } } },
+};
+
+/** The same context, one message later in the same chat. */
+function followUp(context: PlannerContext, reply: string, prompt: string): PlannerContext {
+  return {
+    ...context,
+    prompt,
+    conversation: { messages: [{ role: "user", text: context.prompt }, { role: "assistant", text: reply }], truncated: false },
+  };
+}
+
+test("a Custom chat's next message continues the conversation it left, tool results included", async () => {
+  // Every follow-up used to replay the chat as plain text: what the last run
+  // read was gone, so the next one re-read Studio before it could act.
+  const sessions = new ProviderSessionStore<AgentLoopSession>();
+  const controller = new AbortController();
+  const { context, recorded } = makeContext(controller);
+  const first = gateway([
+    [{ kind: "delta", text: "Reading Main." }, READ_MAIN, { kind: "completed", stopReason: "tool-use" }],
+    DONE("Main prints hi."),
+    DONE("It now prints bye."),
+  ]);
+  assert.equal(await keepingPlanner(first, sessions).run(context), "Reading Main.\n\nMain prints hi.");
+  assert.equal(sessions.size, 1);
+
+  // The next run is handed a new transport; the kept conversation's is the one
+  // that holds what the endpoint produced, so that is the one used.
+  const unused = gateway([]);
+  const next = followUp(context, "Reading Main.\n\nMain prints hi.", "Make it print bye");
+  assert.equal(await keepingPlanner(unused, sessions).run(next), "It now prints bye.");
+
+  assert.equal(unused.requests.length, 0);
+  const sent = first.requests[2].messages;
+  // Everything the first run held, its final answer, then only the new message.
+  assert.deepEqual(sent.slice(0, 3), first.requests[1].messages);
+  assert.deepEqual(sent[3], { role: "assistant", content: [{ kind: "text", text: "Main prints hi." }] });
+  assert.equal(sent.length, 5);
+  const opening = sent[4].content[0];
+  assert.equal(opening.kind === "text" && opening.text.includes("Make it print bye"), true);
+  assert.equal(opening.kind === "text" && opening.text.includes("Prior conversation context"), false, "the chat is not replayed as text");
+  assert.ok(recorded.progress.includes("Continuing with Roqer"));
+});
+
+test("a kept conversation is not continued under other settings, after a failed run, or once the chat moved on", async () => {
+  const controller = new AbortController();
+  const { context } = makeContext(controller);
+  const replay = (request: TurnRequest) => {
+    const text = request.messages[0].content[0];
+    return text.kind === "text" && text.text.includes("Prior conversation context");
+  };
+
+  // Another endpoint, model, or key: the conversation belongs to the transport it was held on.
+  const sessions = new ProviderSessionStore<AgentLoopSession>();
+  await keepingPlanner(gateway([DONE("Main prints hi.")]), sessions, "endpoint-a").run(context);
+  const other = gateway([DONE("Done.")]);
+  await keepingPlanner(other, sessions, "endpoint-b").run(followUp(context, "Main prints hi.", "Again"));
+  assert.equal(other.requests[0].messages.length, 1);
+  assert.equal(replay(other.requests[0]), true);
+
+  // A chat that has moved on without this conversation, here by a run on another provider.
+  const moved = new ProviderSessionStore<AgentLoopSession>();
+  await keepingPlanner(gateway([DONE("Main prints hi.")]), moved).run(context);
+  const later = gateway([DONE("Done.")]);
+  await keepingPlanner(later, moved).run({
+    ...followUp(context, "Main prints hi.", "Again"),
+    conversation: {
+      messages: [
+        { role: "user", text: context.prompt }, { role: "assistant", text: "Main prints hi." },
+        { role: "user", text: "Asked elsewhere" }, { role: "assistant", text: "Answered elsewhere" },
+      ],
+      truncated: false,
+    },
+  });
+  assert.equal(replay(later.requests[0]), true);
+
+  // A run that failed leaves a conversation the chat does not describe.
+  const failed = new ProviderSessionStore<AgentLoopSession>();
+  await assert.rejects(() => keepingPlanner(flakyGateway([{ error: new Error("status 401") }]), failed).run(context));
+  assert.equal(failed.size, 0);
+});
+
+/** A turn that reads one script, with a distinct call id per turn so none of them looks repeated. */
+const readTurn = (index: number, usage?: Readonly<{ inputTokens: number; outputTokens: number }>): Readonly<{ events: readonly TurnEvent[] }> => ({
+  events: [
+    {
+      kind: "tool-call",
+      call: { id: `read_${index}`, name: "roblox_studio", arguments: { operation: "get_script_source", arguments: { instancePath: `ServerScriptService.Script${index}` } } },
+    },
+    usage === undefined ? { kind: "completed", stopReason: "tool-use" } : { kind: "completed", stopReason: "tool-use", usage },
+  ],
+});
+
+const TOO_LONG = new ContextOverflowError("Endpoint returned status 400: This model's maximum context length is 32000 tokens.");
+
+test("a turn refused as too long for the model is sent again once the conversation has been cut", async () => {
+  // A long run used to end here, with the endpoint's refusal as its answer.
+  const controller = new AbortController();
+  const { context, recorded } = makeContext(controller);
+  const bridge = flakyGateway([
+    ...Array.from({ length: 8 }, (_, index) => readTurn(index)),
+    { error: TOO_LONG },
+    { events: DONE("Done.") },
+  ]);
+
+  assert.equal(await retryingPlanner(bridge).run(context), "Done.");
+
+  const refused = bridge.requests[8].messages;
+  const resent = bridge.requests[9].messages;
+  assert.equal(refused.length, 17);
+  // The request, the host's record of the folded work, and the last four exchanges.
+  assert.equal(resent.length, 10);
+  assert.deepEqual(resent[0], refused[0]);
+  const summary = resent[1].content[0];
+  assert.equal(summary.kind === "text" && summary.text.startsWith("[Roqer folded 8 earlier messages"), true);
+  assert.ok(recorded.statuses.some((status) => status.label === "Conversation too long for the model"));
+});
+
+test("a turn still too long after the conversation was cut ends the run and says what to do", async () => {
+  const controller = new AbortController();
+  const { context } = makeContext(controller);
+  const long = flakyGateway([...Array.from({ length: 8 }, (_, index) => readTurn(index)), { error: TOO_LONG }, { error: TOO_LONG }]);
+  await assert.rejects(
+    () => retryingPlanner(long).run(context),
+    /maximum context length is 32000 tokens\. Roqer shortened the conversation and it still does not fit\. Start a new chat/,
+  );
+  assert.equal(long.requests.length, 10);
+
+  // With nothing before the request to cut, there is no second try at all.
+  const first = flakyGateway([{ error: TOO_LONG }]);
+  await assert.rejects(
+    () => retryingPlanner(first).run(makeContext(new AbortController()).context),
+    /There is nothing earlier in the conversation left to shorten\. Send a shorter request/,
+  );
+  assert.equal(first.requests.length, 1);
+});
+
+test("a conversation crowding a model's context window is folded before the model refuses it", async () => {
+  // The fold used to wait for sixty-one messages, which a model with a small
+  // window never reaches before the endpoint refuses the turn.
+  const crowding = { inputTokens: 13_000, outputTokens: 50 };
+  const script = () => [...Array.from({ length: 12 }, (_, index) => readTurn(index, crowding)), { events: DONE("Done.") }];
+  const run = async (contextWindow: number | undefined) => {
+    const { context, recorded } = makeContext(new AbortController());
+    const bridge = flakyGateway(script());
+    await createAgentLoopPlanner({
+      transport: bridge, runId: "run_test", modelId: "local-model", effort: "medium", agent: AGENT, skillLibrary: SKILLS,
+      ...(contextWindow === undefined ? {} : { contextWindow }),
+    }).run(context);
+    return { bridge, folded: recorded.statuses.some((status) => status.label === "Earlier conversation folded") };
+  };
+
+  const small = await run(16_000);
+  assert.equal(small.folded, true);
+  const lengths = small.bridge.requests.map((request) => request.messages.length);
+  // Folded down to the request, the record, and six exchanges once there were enough to fold.
+  assert.ok(Math.max(...lengths) <= 1 + (6 + 4) * 2 + 2, `requests grew to ${Math.max(...lengths)} messages`);
+  assert.ok(lengths.includes(1 + 1 + 6 * 2));
+
+  // Without a known window the usual bound applies, and twelve exchanges are nowhere near it.
+  const unknown = await run(undefined);
+  assert.equal(unknown.folded, false);
+});
+
 test("a long run folds its own history and sends the host's record in its place", async () => {
   // Every turn re-sends the whole conversation, so without this a fortieth turn
   // pays again for all thirty-nine sets of tool output before it.
@@ -995,21 +1319,22 @@ test("a screenshot survives the turns between capturing it and describing it", a
   assert.equal(carries(bridge.requests[2]), true, "the turn that describes it");
 });
 
-test("only the newest screenshots are carried, so a long run stays bounded", async () => {
+test("screenshots accumulate, then are cut back to the newest in one step", async () => {
+  // Evicting the previous capture on every new one rewrote an earlier message
+  // each time, and the provider re-billed everything after it at full price.
+  // Now history is left alone until the high-water mark, then cut deeply once.
   const controller = new AbortController();
-  // Two-thirds of the budget each, so the second capture evicts the first.
-  // Rounded to a multiple of four, because the wire contract checks that the
-  // data is real base64 before it checks anything else.
-  const size = Math.floor((MAX_TURN_IMAGE_BASE64 * 2) / 3 / 4) * 4;
-  const first = "A".repeat(size);
-  const second = "B".repeat(size);
+  // Nine-tenths of a turn's image budget each, rounded to a multiple of four,
+  // because the wire contract checks that the data is real base64 first.
+  const size = Math.floor((MAX_TURN_IMAGE_BASE64 * 9) / 10 / 4) * 4;
+  const shots = ["A", "B", "C", "D", "E"].map((letter) => letter.repeat(size));
   let captures = 0;
   const { context } = makeContext(controller, (tool) => tool === "capture_screenshot"
     ? {
         ok: true,
         data: undefined,
         text: "Screenshot",
-        images: [{ mediaType: "image/png", data: captures++ === 0 ? first : second }],
+        images: [{ mediaType: "image/png", data: shots[captures++] }],
         httpStatus: 200,
         durationMs: 1,
       }
@@ -1019,8 +1344,7 @@ test("only the newest screenshots are carried, so a long run stays bounded", asy
     call: { id, name: "roblox_studio", arguments: { operation: "capture_screenshot", arguments: {} } },
   });
   const bridge = gateway([
-    [shoot("shot_1"), { kind: "completed", stopReason: "tool-use" }],
-    [shoot("shot_2"), { kind: "completed", stopReason: "tool-use" }],
+    ...shots.map((_, index): readonly TurnEvent[] => [shoot(`shot_${index + 1}`), { kind: "completed", stopReason: "tool-use" }]),
     DONE("Done."),
   ]);
 
@@ -1028,9 +1352,18 @@ test("only the newest screenshots are carried, so a long run stays bounded", asy
 
   const data = (request: TurnRequest): string[] => request.messages
     .flatMap((message) => message.content.flatMap((block) => block.kind === "image" ? [block.data] : []));
-  assert.deepEqual(data(bridge.requests[1]), [first]);
-  // The older capture is gone rather than accumulating alongside the new one.
-  assert.deepEqual(data(bridge.requests[2]), [second]);
+  // Three captures ride along untouched: before, after, and one more.
+  assert.deepEqual(data(bridge.requests[1]), [shots[0]]);
+  assert.deepEqual(data(bridge.requests[2]), [shots[0], shots[1]]);
+  assert.deepEqual(data(bridge.requests[3]), [shots[0], shots[1], shots[2]]);
+  // Every request until then repeats the one before it exactly, which is what
+  // lets the provider serve it from its cache.
+  for (const index of [2, 3]) {
+    assert.deepEqual(bridge.requests[index].messages.slice(0, bridge.requests[index - 1].messages.length), bridge.requests[index - 1].messages);
+  }
+  // The fourth crosses the byte budget, and the run keeps only the newest.
+  assert.deepEqual(data(bridge.requests[4]), [shots[3]]);
+  assert.deepEqual(data(bridge.requests[5]), [shots[3], shots[4]]);
 });
 
 test("a Studio screenshot reaches the next model turn", async () => {
@@ -1079,8 +1412,8 @@ test("a Studio screenshot reaches the next model turn", async () => {
 });
 
 test("an attached picture is still there on the turn that acts on it", async () => {
-  // Screenshots are dropped once read, because they describe a moment that has
-  // passed. An attachment is the request itself: someone who hands over a mockup
+  // Screenshots are dropped once enough newer ones have arrived, because they
+  // describe a moment that has passed. An attachment is the request itself: someone who hands over a mockup
   // and says "build this" needs it present on the turn that builds, which is
   // never the first one.
   const controller = new AbortController();
@@ -1153,8 +1486,11 @@ test("an attached reference and a run of screenshots still fit one model turn", 
 
   const data = (request: TurnRequest): string[] => request.messages
     .flatMap((message) => message.content.flatMap((block) => block.kind === "image" ? [block.data] : []));
-  // The reference is never evicted; the screenshots share what it leaves.
-  assert.deepEqual(data(bridge.requests[5]), [reference, shots[2], shots[3], shots[4]]);
+  // The reference is never evicted; the screenshots share what it leaves, and
+  // once they fill it they are cut back to the newest, then accumulate again.
+  assert.deepEqual(data(bridge.requests[3]), [reference, shots[0], shots[1], shots[2]]);
+  assert.deepEqual(data(bridge.requests[4]), [reference, shots[3]]);
+  assert.deepEqual(data(bridge.requests[5]), [reference, shots[3], shots[4]]);
 });
 
 test("attachments that fill every slot leave a screenshot reported, not the run refused", async () => {

@@ -66,6 +66,21 @@ test("folding keeps the opening request, the newest exchanges, and one summary",
   assert.deepEqual(messages[messages.length - 1], newest, "the newest exchange survives untouched");
 });
 
+test("folding keeps the request a continued conversation is answering, right after the summary", () => {
+  // In a conversation continued from an earlier message, the opening message is
+  // the chat's first request; the one this run answers sits further in.
+  const messages = conversation(10);
+  const current: TurnMessage = { role: "user", content: [{ kind: "text", text: "Now add a buy button" }] };
+  messages.push(current);
+  for (let index = 0; index < 30; index += 1) messages.push(...exchange(100 + index));
+
+  assert.equal(compactHistory(messages, (folded) => `folded ${folded}`, current), true);
+  assert.equal(messages[2], current);
+  assert.equal(messages[3].role, "assistant");
+  assert.equal(messages.filter((message) => message === current).length, 1);
+  assert.deepEqual(messages[1], { role: "user", content: [{ kind: "text", text: "folded 56" }] });
+});
+
 test("a folded conversation always resumes at an assistant message", () => {
   // A tool result whose call is no longer in the conversation is a message no
   // provider accepts, so the retained window may never open on a user turn.

@@ -1,5 +1,7 @@
 import {
+  ContextOverflowError,
   estimateTurnInputTokens,
+  TransientTurnError,
   TURN_IMAGE_MEDIA_TYPES,
   MAX_TURN_IMAGE_BASE64,
   MAX_TURN_IMAGES,
@@ -18,14 +20,17 @@ import type { RunTask } from "../shared/tasks";
 import type { AgentDefinition } from "./agent-definition";
 import { blenderToolDefinition, parseBlenderToolInput } from "./blender-tool";
 import { BLENDER_TOOL_NAME } from "../shared/blender";
-import { buildConversationPrompt } from "./conversation-prompt";
-import { boundRetainedToolResults, compactHistory, describeRunState, type ToolOutputBudget } from "./agent-loop-history";
+import { buildConversationPrompt, buildFollowUpPrompt, continuesConversation } from "./conversation-prompt";
+import {
+  boundRetainedToolResults, compactHistory, describeRunState, retainedToolResultCharacters, type ToolOutputBudget,
+} from "./agent-loop-history";
 import { createIconToolRunner, iconToolDefinition, ICON_TOOL_NAME } from "./icon-tool";
 import { runQuestionTool, questionToolDefinition, QUESTION_TOOL_NAME } from "./question-tool";
 import { RunCancelledError, type Planner, type PlannerContext } from "./run-engine";
 import { runDeveloperInstructions } from "./run-instructions";
 import type { SkillLibrary } from "./skill-library";
-import { createSkillToolRunner, skillToolDefinition, SKILL_TOOL_NAME } from "./skill-tool";
+import type { ProviderSessionStore } from "./provider-sessions";
+import { createSkillToolRunner, skillToolDefinition, SKILL_TOOL_NAME, type SkillToolRunner } from "./skill-tool";
 import {
   createStudioToolRunner, parseStudioToolInput, studioToolDescription, studioToolInputSchema,
   STUDIO_TOOL_NAME,
@@ -75,6 +80,11 @@ export type AgentLoopTelemetryEvent =
     completed: boolean;
     /** The turn was ended because it made no semantic progress, not because it finished. */
     stalled?: boolean;
+    /**
+     * This attempt failed transiently and the same turn was sent again. The
+     * turn's number is shared by every attempt at it; only the last is the turn.
+     */
+    retried?: boolean;
     stopReason?: TurnStopReason;
     failureCode?: Extract<TurnEvent, { kind: "failed" }>["code"];
     usage?: TurnUsage;
@@ -112,11 +122,67 @@ export type AgentLoopPlannerOptions = {
   images?: boolean;
   /** How much tool output the conversation may carry. Defaults to the standard budget. */
   toolOutputBudget?: ToolOutputBudget;
+  /** Tokens the model holds, when the user said. The conversation is folded before it crowds them. */
+  contextWindow?: number;
   /** What to tell the user when a turn hits its output limit, where they can raise it. */
   outputLimitAdvice?: string;
   /** Offer the `blender` tool: only while the user has turned the local Blender worker on. */
   blender?: boolean;
+  /** The chat this run belongs to, which names its kept conversation. */
+  chatId?: string;
+  /** Where a chat's conversation waits for its next message. Without it, every run starts a new one. */
+  sessions?: AgentLoopSessionStore;
+  /**
+   * Everything the transport was made with -- the endpoint, the model, the
+   * key -- as one string, so a conversation is continued only on the
+   * transport it was held on. Without it, a kept conversation is never used.
+   */
+  transportKey?: string;
+  /** How many times a turn that failed transiently is sent again. Injectable for tests. */
+  turnRetries?: number;
+  /** The first pause before sending a failed turn again; each later one doubles. Injectable for tests. */
+  retryBaseMs?: number;
 };
+
+/**
+ * A Custom chat's conversation, kept for the chat's next message.
+ *
+ * The subscription planners keep their Claude Code process or Codex thread
+ * between the messages of a chat, and this loop now keeps its own: the whole
+ * message history, tool results included, and the transport that produced it,
+ * which holds each turn's reasoning as it has to be sent back. Without it every
+ * follow-up replayed the chat as plain text, re-read Studio before it could
+ * act, and paid for the replay again outside the endpoint's prompt cache.
+ *
+ * Nothing here is persisted, and closing it only lets it go.
+ */
+export type AgentLoopSession = Readonly<{
+  /** The settings the conversation was held under; a run with other settings starts a new one. */
+  key: string;
+  /** The prompt of the last run that finished cleanly on this conversation. */
+  lastPrompt: string;
+  messages: TurnMessage[];
+  transport: TurnTransport;
+  /** Guidance delivered into this conversation and not folded out of it since. */
+  skills: SkillToolRunner;
+  /** Results that carry a user's answer, which elision must leave alone. */
+  answerCallIds: Set<string>;
+  close(): void;
+}>;
+
+export type AgentLoopSessionStore = ProviderSessionStore<AgentLoopSession>;
+
+/**
+ * Everything fixed when a conversation starts. The effort is not in it: it is
+ * sent with every turn, so changing it keeps the conversation.
+ */
+function sessionKey(options: AgentLoopPlannerOptions, autoPlaytest: boolean): string {
+  return JSON.stringify([
+    options.transportKey ?? null, options.plannerId ?? "agent-loop", options.modelId, autoPlaytest,
+    options.agent.id, options.agent.version, options.blender === true, options.images !== false,
+    options.toolOutputBudget ?? null, options.contextWindow ?? null,
+  ]);
+}
 
 function reportTelemetry(options: AgentLoopPlannerOptions, event: AgentLoopTelemetryEvent): void {
   try {
@@ -143,6 +209,57 @@ export const REPEATED_CALL_TURNS = 6;
 
 /** Re-exported so existing callers and tests keep their import. */
 export { DEFAULT_STALL_MS };
+
+/**
+ * How often a turn the endpoint failed transiently is sent again, and how long
+ * the loop waits between tries.
+ *
+ * One overloaded response, one rate limit, or one dropped connection used to
+ * end the whole run, forty turns into a build, because the retries lived in the
+ * hosted gateway this loop once spoke to and did not come back with the direct
+ * transports. Four more tries over about fifteen seconds rides out the ordinary
+ * blip; an endpoint that asks for longer than a minute is not having a blip,
+ * and is reported rather than waited on.
+ */
+export const TURN_RETRIES = 4;
+const RETRY_BASE_MS = 1_000;
+const MAX_RETRY_BACKOFF_MS = 30_000;
+const MAX_RETRY_AFTER_MS = 60_000;
+
+/**
+ * The pause before a turn's next try: what the endpoint asked for when it
+ * said, otherwise a doubling backoff with a little jitter so that several
+ * clients refused together do not all come back together.
+ */
+function retryDelayMs(retry: number, baseMs: number, retryAfterMs: number | undefined): number {
+  if (retryAfterMs !== undefined) return retryAfterMs;
+  const backoff = Math.min(MAX_RETRY_BACKOFF_MS, baseMs * 2 ** retry);
+  return Math.round(backoff * (1 + Math.random() * 0.25));
+}
+
+/** Wait, or stop waiting the moment the run is cancelled. */
+function pause(milliseconds: number, signal: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal.aborted) {
+      reject(new RunCancelledError());
+      return;
+    }
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(new RunCancelledError());
+    };
+    const timer = setTimeout(() => {
+      signal.removeEventListener("abort", onAbort);
+      resolve();
+    }, milliseconds);
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
+function seconds(milliseconds: number): string {
+  const value = Math.max(1, Math.round(milliseconds / 1_000));
+  return `${value} second${value === 1 ? "" : "s"}`;
+}
 
 /**
  * The engine's image type is provider-neutral, so its media type is a plain
@@ -233,12 +350,20 @@ function endedEarlyNote(stopReason: TurnStopReason | undefined, outputLimitAdvic
 }
 
 /**
- * How much tool-output imagery a run carries forward, as base64 characters.
- * One screenshot's worth: enough that the newest capture always survives, small
- * enough that a run which screenshots repeatedly cannot grow its own bill
- * without limit. Raise it to let an agent compare a before and an after.
+ * How much tool-output imagery a run carries forward, as base64 characters,
+ * and what it is cut back to once that is exceeded.
+ *
+ * Hysteretic, like the bound on tool output in `agent-loop-history.ts`, and
+ * for the same reason. The budget used to be one screenshot's worth, so every
+ * capture after the first rewrote the message holding the one before it; the
+ * provider's prompt cache ends at the first changed token, so each capture
+ * re-billed everything after that message at the full rate -- far more than the
+ * picture it saved -- and invalidated the reasoning later turns had built on it.
+ * Now screenshots accumulate up to about three, which also lets an agent compare
+ * a before with an after, and are then cut back to the newest in one step.
  */
-const MAX_RETAINED_IMAGE_BASE64 = MAX_TURN_IMAGE_BASE64;
+const MAX_RETAINED_IMAGE_BASE64 = MAX_TURN_IMAGE_BASE64 * 3;
+const RETAINED_IMAGE_LOW_WATER = MAX_TURN_IMAGE_BASE64;
 
 /**
  * Keep the newest tool-output images; drop the ones behind them.
@@ -252,13 +377,15 @@ const MAX_RETAINED_IMAGE_BASE64 = MAX_TURN_IMAGE_BASE64;
  * Retention is bounded by bytes rather than by turns, because what makes a run
  * expensive is how many pixels ride along, not how long ago they arrived.
  *
- * The opening message is exempt from eviction. What the person attached is the
- * request itself, not a transient observation: a mockup handed over with "build
- * this" has to still be there on the turn that builds. It is not exempt from
- * the count: the wire contract caps images per request with attachments
- * included, so screenshots get whatever slots the attachments leave. A run that
- * kept four screenshots beside one attached reference built a request the
- * contract refused, and died on the turn after its fourth capture.
+ * The request messages are exempt from eviction: the opening one, and in a
+ * conversation continued from an earlier message of the chat, the one this run
+ * is answering. What the person attached is the request itself, not a
+ * transient observation: a mockup handed over with "build this" has to still
+ * be there on the turn that builds. They are not exempt from the count: the
+ * wire contract caps images per request with attachments included, so
+ * screenshots get whatever slots the attachments leave. A run that kept four
+ * screenshots beside one attached reference built a request the contract
+ * refused, and died on the turn after its fourth capture.
  */
 function imageCount(message: TurnMessage): number {
   return message.content.filter((block) => block.kind === "image").length;
@@ -277,6 +404,39 @@ function steerBlocks(steers: readonly string[]): TurnContent[] {
     kind: "text",
     text: `[Roqer relays a note the user typed while you were working. It is from the user, not from a tool:]\n${text}`,
   }));
+}
+
+/**
+ * When the endpoint's own count says the next request will fill this much of
+ * the model's context window, the conversation is folded early rather than at
+ * its usual length: a model with a small window reaches it long before a
+ * message count would notice.
+ */
+const CONTEXT_FOLD_RATIO = 0.75;
+
+/** How many exchanges survive a fold made because the conversation is crowding the model's window. */
+const CROWDED_RETAINED_EXCHANGES = 6;
+
+/**
+ * The fewest exchanges an early fold removes. A conversation that stays
+ * crowded after folding -- a long request, a large result kept verbatim --
+ * would otherwise be re-cut every turn for one exchange at a time, rewriting
+ * its history, and so missing the provider's cache, on every request.
+ */
+const MIN_CROWDED_FOLD_EXCHANGES = 4;
+
+/** How many exchanges survive the fold that makes room after the endpoint refused a turn as too long. */
+const OVERFLOW_RETAINED_EXCHANGES = 4;
+
+/** Drop every screenshot the conversation carries, keeping what the user attached. */
+function dropCarriedImages(messages: TurnMessage[], requests: ReadonlySet<TurnMessage>): boolean {
+  let dropped = false;
+  for (const [index, message] of messages.entries()) {
+    if (requests.has(message) || !message.content.some((block) => block.kind === "image")) continue;
+    messages[index] = { ...message, content: message.content.filter((block) => block.kind !== "image") };
+    dropped = true;
+  }
+  return dropped;
 }
 
 /** How many broken tool calls in a row the model is asked to retry before the run fails. */
@@ -303,18 +463,35 @@ function silenceNote(open: readonly RunTask[]): string {
   return `[Roqer, the host: you ended your turn with no reply and no tool call while ${open.length === 1 ? "this task is" : "these tasks are"} still open: ${titles}. Continue the work now, or mark what cannot be finished as blocked and reply saying why.]`;
 }
 
-function boundRetainedImages(messages: TurnMessage[]): void {
-  let remaining = MAX_RETAINED_IMAGE_BASE64;
-  let kept = imageCount(messages[0]);
+function boundRetainedImages(messages: TurnMessage[], requests: ReadonlySet<TurnMessage>): void {
+  const attached = [...requests].reduce((total, message) => total + imageCount(message), 0);
+  let carried = 0;
+  let carriedBytes = 0;
+  for (const message of messages) {
+    if (requests.has(message)) continue;
+    for (const block of message.content) {
+      if (block.kind !== "image") continue;
+      carried += 1;
+      carriedBytes += block.data.length;
+    }
+  }
+  // Under the high-water mark the history is left exactly as it is.
+  if (attached + carried <= MAX_TURN_IMAGES && carriedBytes <= MAX_RETAINED_IMAGE_BASE64) return;
+
+  // Over it, cut deep: back to the newest capture, so the next few can
+  // accumulate before history is rewritten again.
+  let remaining = RETAINED_IMAGE_LOW_WATER;
+  let kept = attached;
+  const keepAtMost = Math.min(MAX_TURN_IMAGES, attached + 1);
   // Newest first, so the budget is spent on the most recent view of Studio.
-  for (let index = messages.length - 1; index >= 1; index -= 1) {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
     const message = messages[index];
-    if (!message.content.some((block) => block.kind === "image")) continue;
+    if (requests.has(message) || !message.content.some((block) => block.kind === "image")) continue;
     // Every message carrying an image also carries the tool result it came
     // with, so filtering images can never empty one.
     const content = message.content.filter((block) => {
       if (block.kind !== "image") return true;
-      if (kept >= MAX_TURN_IMAGES || block.data.length > remaining) return false;
+      if (kept >= keepAtMost || block.data.length > remaining) return false;
       remaining -= block.data.length;
       kept += 1;
       return true;
@@ -332,9 +509,29 @@ export function createAgentLoopPlanner(options: AgentLoopPlannerOptions): Planne
     async run(context: PlannerContext): Promise<string> {
       const prose = createProseStream((text) => context.say(text));
       const runStudioTool = createStudioToolRunner(context);
-      const runSkillTool = createSkillToolRunner(options.skillLibrary);
+      const images = (acceptsImages ? context.images : []).flatMap((image): TurnContent[] => isTurnImageMediaType(image.mediaType)
+        ? [{ kind: "image", mediaType: image.mediaType, data: image.data }]
+        : []);
+
+      // A kept conversation is used only when it has seen exactly this chat so
+      // far, under the settings this run asks for, and has room for what this
+      // message attaches; anything else would put the model in a conversation
+      // the user is not looking at.
+      const chatId = options.sessions !== undefined ? options.chatId : undefined;
+      const key = sessionKey(options, context.autoPlaytest);
+      const kept = chatId === undefined ? undefined : options.sessions!.take(chatId);
+      const session = kept !== undefined && options.transportKey !== undefined && kept.key === key &&
+        continuesConversation(context.conversation, kept.lastPrompt) &&
+        imageCount(kept.messages[0]) + images.length <= MAX_TURN_IMAGES
+        ? kept
+        : undefined;
+      if (kept !== undefined && session === undefined) kept.close();
+      const transport = session?.transport ?? options.transport;
+      const runSkillTool = session?.skills ?? createSkillToolRunner(options.skillLibrary);
       const runIconTool = createIconToolRunner(options.skillLibrary);
       const stallMs = options.stallMs ?? DEFAULT_STALL_MS;
+      const turnRetries = options.turnRetries ?? TURN_RETRIES;
+      const retryBaseMs = options.retryBaseMs ?? RETRY_BASE_MS;
       // Asked at most once a run: a model that goes silent again after being
       // asked is done, and the completion gate reports what it left open.
       let askedAfterSilence = false;
@@ -353,22 +550,78 @@ export function createAgentLoopPlanner(options: AgentLoopPlannerOptions): Planne
       }
       // Any attached pictures follow the prose, so the model reads what it is
       // being asked about before it looks. They ride only on this first message:
-      // re-sending them every turn would re-bill them for the whole run.
-      const messages: TurnMessage[] = [{
+      // re-sending them every turn would re-bill them for the whole run. A kept
+      // conversation already holds the chat so far, tool results included, so
+      // it is sent only this message and Roqer's record of the last run.
+      const opening: TurnMessage = {
         role: "user",
         content: [
-          { kind: "text", text: buildConversationPrompt(context.conversation, context.prompt) },
-          ...(acceptsImages ? context.images : []).flatMap((image): TurnContent[] => isTurnImageMediaType(image.mediaType)
-            ? [{ kind: "image", mediaType: image.mediaType, data: image.data }]
-            : []),
+          {
+            kind: "text",
+            text: session === undefined
+              ? buildConversationPrompt(context.conversation, context.prompt)
+              : buildFollowUpPrompt(context.conversation, context.prompt, (name) => runSkillTool.isLoaded(name)),
+          },
+          ...images,
         ],
-      }];
+      };
+      const messages: TurnMessage[] = session?.messages ?? [];
+      messages.push(opening);
+      // The chat's first request and this one are the request, not
+      // observations: neither is folded away nor loses its pictures.
+      const requests: ReadonlySet<TurnMessage> = new Set([messages[0], opening]);
+      // A continued conversation can hold an earlier run's screenshot beside
+      // what this message attaches, so the budget applies before the first turn.
+      if (session !== undefined) boundRetainedImages(messages, requests);
       // Attachments hold their slots for the whole run, so every screenshot
       // budget below starts from what they leave rather than from the cap.
-      const attachedImages = imageCount(messages[0]);
+      const attachedImages = [...requests].reduce((total, message) => total + imageCount(message), 0);
       const screenshotSlots = acceptsImages ? MAX_TURN_IMAGES - attachedImages : 0;
       /** Results that carry a user's answer, which elision must leave alone. */
-      const answerCallIds = new Set<string>();
+      const answerCallIds = session?.answerCallIds ?? new Set<string>();
+
+      /**
+       * End the run with its answer, and keep the conversation for the chat's
+       * next message. Only a run that ends here is kept: one that failed, was
+       * cancelled, or stalled leaves a conversation the chat does not describe.
+       */
+      const finish = (answer: string, finalText: string): string => {
+        if (finalText.length > 0) messages.push({ role: "assistant", content: [{ kind: "text", text: finalText }] });
+        if (chatId !== undefined && options.transportKey !== undefined) {
+          options.sessions!.put(chatId, {
+            key, lastPrompt: context.prompt, messages, transport, skills: runSkillTool, answerCallIds, close: () => undefined,
+          });
+        }
+        return answer;
+      };
+
+      /** The host's record of the run, in place of the exchanges a fold removes. */
+      const describeFold = (foldedMessages: number): string => describeRunState({
+        tasks: context.tasks(),
+        changes: context.changes(),
+        evidence: context.evidence(),
+        verification: context.checkCompletion(),
+        decisions: context.decisions(),
+      }, foldedMessages);
+
+      /**
+       * Make room after the endpoint refused a turn as longer than the model
+       * can hold: fold all but the last few exchanges, elide the older half of
+       * the tool output that is left, and drop every screenshot. Returns false
+       * when there was nothing left to cut.
+       */
+      const shrinkHistory = (): boolean => {
+        const folded = compactHistory(messages, describeFold, opening, {
+          force: true, retainedExchanges: OVERFLOW_RETAINED_EXCHANGES,
+        });
+        const carried = retainedToolResultCharacters(messages);
+        const elided = carried > 0 && boundRetainedToolResults(messages, answerCallIds, {
+          max: Math.floor(carried / 2), lowWater: Math.floor(carried / 4),
+        });
+        const dropped = dropCarriedImages(messages, requests);
+        if (folded || elided) runSkillTool.clearCache();
+        return folded || elided || dropped;
+      };
 
       /**
        * Run one tool the model asked for. A bad argument object or a refused
@@ -485,7 +738,11 @@ export function createAgentLoopPlanner(options: AgentLoopPlannerOptions): Planne
       let sameFailures = 0;
       for (let turn = 0; ; turn += 1) {
         if (context.signal.aborted) throw new RunCancelledError();
-        context.progress(`Thinking with ${label}`);
+        if (turn === 0 && session !== undefined) {
+          context.progress(`Continuing with ${label}`, `${label} still has this chat's earlier work in context`);
+        } else {
+          context.progress(`Thinking with ${label}`);
+        }
         // A stuck run's last turn is spent on a report rather than one more
         // try: a run stopped with no answer loses everything the person would
         // need to decide whether to continue it.
@@ -507,76 +764,151 @@ export function createAgentLoopPlanner(options: AgentLoopPlannerOptions): Planne
           messages,
         };
         const turnNumber = turn + 1;
-        const turnStartedAt = Date.now();
-        const requestCharacters = JSON.stringify(request).length;
-        const estimatedInputTokens = estimateTurnInputTokens(request);
 
         // Each turn is its own message, so the seam between two of them is a
         // paragraph break rather than a bare concatenation.
         prose.beginSegment();
-        const calls: TurnToolCall[] = [];
+        let calls: TurnToolCall[] = [];
         let spoken = "";
         let completed = false;
         let stopReason: TurnStopReason | undefined;
-        let failureCode: Extract<TurnEvent, { kind: "failed" }>["code"] | undefined;
-        let usage: TurnUsage | undefined;
+        let stalled = false;
+        let turnUsage: TurnUsage | undefined;
+        let retries = 0;
+        let shrunk = false;
 
-        let firstEventMs: number | undefined;
-        let firstTextMs: number | undefined;
-        let firstToolCallMs: number | undefined;
-        let lastToolCallMs: number | undefined;
+        // A transport hands over a turn's calls only once the whole turn has
+        // arrived, so a turn that failed partway ran nothing and is simply
+        // asked for again. Each try starts from nothing but what it streams.
+        for (;;) {
+          calls = [];
+          spoken = "";
+          completed = false;
+          stopReason = undefined;
+          turnUsage = undefined;
+          let failureCode: Extract<TurnEvent, { kind: "failed" }>["code"] | undefined;
+          let usage: TurnUsage | undefined;
+          let transient: TransientTurnError | undefined;
+          let overflowed = false;
+          // Measured per try: a try after the conversation was shortened sends less.
+          const requestCharacters = JSON.stringify(request).length;
+          const estimatedInputTokens = estimateTurnInputTokens(request);
 
-        const watchdog = watchProgress(context.signal, stallMs);
-        try {
-          for await (const event of options.transport.streamTurn(request, watchdog.signal)) {
-            // Every branch below is semantic progress, so the watchdog is reset
-            // here rather than per branch: a frame that is none of these is not
-            // one of them either.
-            watchdog.progressed();
-            const elapsed = Date.now() - turnStartedAt;
-            firstEventMs ??= elapsed;
-            if (event.kind === "delta") {
-              firstTextMs ??= elapsed;
-              spoken += event.text;
-              prose.push(event.text);
-              continue;
-            }
-            if (event.kind === "tool-call") {
-              lastToolCallMs = elapsed;
-              firstToolCallMs ??= elapsed;
-              calls.push(event.call);
-              continue;
-            }
-            if (event.kind === "failed") {
-              failureCode = event.code;
+          let firstEventMs: number | undefined;
+          let firstTextMs: number | undefined;
+          let firstToolCallMs: number | undefined;
+          let lastToolCallMs: number | undefined;
+
+          const turnStartedAt = Date.now();
+          const watchdog = watchProgress(context.signal, stallMs);
+          try {
+            for await (const event of transport.streamTurn(request, watchdog.signal)) {
+              // Every branch below is semantic progress, so the watchdog is reset
+              // here rather than per branch: a frame that is none of these is not
+              // one of them either.
+              watchdog.progressed();
+              const elapsed = Date.now() - turnStartedAt;
+              firstEventMs ??= elapsed;
+              // Reasoning says nothing to the user and nothing to the next turn;
+              // arriving is all it does, and that has just been counted.
+              if (event.kind === "reasoning") continue;
+              if (event.kind === "delta") {
+                firstTextMs ??= elapsed;
+                spoken += event.text;
+                prose.push(event.text);
+                continue;
+              }
+              if (event.kind === "tool-call") {
+                lastToolCallMs = elapsed;
+                firstToolCallMs ??= elapsed;
+                calls.push(event.call);
+                continue;
+              }
+              if (event.kind === "failed") {
+                failureCode = event.code;
+                usage = event.usage;
+                throw new Error(failureMessage(event));
+              }
+              completed = true;
+              stopReason = event.stopReason;
               usage = event.usage;
-              throw new Error(failureMessage(event));
+              turnUsage = event.usage;
             }
-            completed = true;
-            stopReason = event.stopReason;
-            usage = event.usage;
+          } catch (error) {
+            // A cancellation or a stall ends the run exactly as before: a stall
+            // is not retried, because a model that went quiet once would spend
+            // the same wait again.
+            if (context.signal.aborted || watchdog.stalled) throw error;
+            if (error instanceof ContextOverflowError) {
+              // Once a turn: a conversation cut this far that still does not
+              // fit is not going to, and a request the model cannot hold is
+              // one the person has to shorten or send elsewhere.
+              if (shrunk) {
+                throw new Error(`${error.message} Roqer shortened the conversation and it still does not fit. Start a new chat, or use a model with a larger context window.`, { cause: error });
+              }
+              if (!shrinkHistory()) {
+                throw new Error(`${error.message} There is nothing earlier in the conversation left to shorten. Send a shorter request, or use a model with a larger context window.`, { cause: error });
+              }
+              shrunk = true;
+              overflowed = true;
+            } else {
+              if (!(error instanceof TransientTurnError)) throw error;
+              if (retries >= turnRetries) {
+                throw new Error(retries === 0 ? error.message : `${error.message} Roqer tried this turn ${retries + 1} times.`, { cause: error });
+              }
+              if (error.retryAfterMs !== undefined && error.retryAfterMs > MAX_RETRY_AFTER_MS) {
+                throw new Error(`${error.message} It asked Roqer to wait ${seconds(error.retryAfterMs)} before trying again.`, { cause: error });
+              }
+              transient = error;
+            }
+          } finally {
+            watchdog.stop();
+            stalled = watchdog.stalled;
+            reportTelemetry(options, {
+              kind: "turn",
+              turn: turnNumber,
+              durationMs: Date.now() - turnStartedAt,
+              ...(firstEventMs === undefined ? {} : { firstEventMs }),
+              ...(firstTextMs === undefined ? {} : { firstTextMs }),
+              ...(firstToolCallMs === undefined ? {} : { firstToolCallMs }),
+              ...(lastToolCallMs === undefined ? {} : { lastToolCallMs }),
+              requestCharacters,
+              estimatedInputTokens,
+              completed,
+              ...(watchdog.stalled ? { stalled: true } : {}),
+              ...(transient === undefined && !overflowed ? {} : { retried: true }),
+              ...(stopReason === undefined ? {} : { stopReason }),
+              ...(failureCode === undefined ? {} : { failureCode }),
+              ...(usage === undefined ? {} : { usage }),
+            });
           }
-        } finally {
-          watchdog.stop();
-          reportTelemetry(options, {
-            kind: "turn",
-            turn: turnNumber,
-            durationMs: Date.now() - turnStartedAt,
-            ...(firstEventMs === undefined ? {} : { firstEventMs }),
-            ...(firstTextMs === undefined ? {} : { firstTextMs }),
-            ...(firstToolCallMs === undefined ? {} : { firstToolCallMs }),
-            ...(lastToolCallMs === undefined ? {} : { lastToolCallMs }),
-            requestCharacters,
-            estimatedInputTokens,
-            completed,
-            ...(watchdog.stalled ? { stalled: true } : {}),
-            ...(stopReason === undefined ? {} : { stopReason }),
-            ...(failureCode === undefined ? {} : { failureCode }),
-            ...(usage === undefined ? {} : { usage }),
-          });
+          if (overflowed) {
+            // Said, because the model is about to lose detail it had: it has to
+            // know to read Studio again rather than trust a memory, and the
+            // person watching deserves to know why it went back.
+            context.status(
+              "Conversation too long for the model",
+              `${label} said the conversation no longer fits the model. Roqer folded older work into a summary, elided older tool output, dropped earlier screenshots, and is sending the turn again.`,
+            );
+            prose.beginSegment();
+            continue;
+          }
+          if (transient === undefined) break;
+
+          const delay = retryDelayMs(retries, retryBaseMs, transient.retryAfterMs);
+          retries += 1;
+          // Said, not done quietly: a failed try may already have streamed some
+          // of its reply, and the next one will say it again.
+          context.status(
+            "Model endpoint failed; trying the turn again",
+            `${transient.message} Roqer tries again in ${seconds(delay)} (${retries} of ${turnRetries}).`,
+          );
+          prose.beginSegment();
+          await pause(delay, context.signal);
+          context.progress(`Thinking with ${label}`);
         }
         if (context.signal.aborted) throw new RunCancelledError();
-        if (watchdog.stalled) {
+        if (stalled) {
           // Checked before the generic incomplete-turn error, because "the
           // endpoint ended the turn without completing it" is what a stall looks
           // like from the outside and is the least useful thing to be told.
@@ -632,15 +964,15 @@ export function createAgentLoopPlanner(options: AgentLoopPlannerOptions): Planne
             context.status("Model stopped without a reply", "Roqer asked it once to continue the request or reply.");
             continue;
           }
-          if (stuck !== undefined) return `${answer || "The model returned no answer for this turn."}\n\n${stuckReply(stuck)}`;
-          if (endedEarly === undefined) return answer || "The model returned no answer for this turn.";
+          if (stuck !== undefined) return finish(`${answer || "The model returned no answer for this turn."}\n\n${stuckReply(stuck)}`, spoken);
+          if (endedEarly === undefined) return finish(answer || "The model returned no answer for this turn.", spoken);
           context.status("Turn ended early", endedEarly);
-          return answer.length === 0 ? endedEarly : `${answer}\n\n${endedEarly}`;
+          return finish(answer.length === 0 ? endedEarly : `${answer}\n\n${endedEarly}`, spoken);
         }
         // Told to report, it asked for more work instead: nothing more runs.
         if (stuck !== undefined) {
           const answer = prose.text().trim();
-          if (answer.length > 0) return `${answer}\n\n${stuckReply(stuck)}`;
+          if (answer.length > 0) return finish(`${answer}\n\n${stuckReply(stuck)}`, spoken);
           break;
         }
         malformedInRow = 0;
@@ -705,13 +1037,16 @@ export function createAgentLoopPlanner(options: AgentLoopPlannerOptions): Planne
         // Folding runs first: an exchange dropped here takes its tool output and
         // its pictures with it, so the budgets below are spent on what the run
         // still carries rather than on what is about to leave.
-        const folded = compactHistory(messages, (foldedMessages) => describeRunState({
-          tasks: context.tasks(),
-          changes: context.changes(),
-          evidence: context.evidence(),
-          verification: context.checkCompletion(),
-          decisions: context.decisions(),
-        }, foldedMessages));
+        // The endpoint's own count of what this turn sent, plus what it said and
+        // what its tools returned, is what the next request will carry.
+        const resultCharacters = results.reduce((total, block) => total + (block.kind === "tool-result" ? block.content.length : 0), 0);
+        const crowded = options.contextWindow !== undefined && turnUsage !== undefined &&
+          turnUsage.inputTokens + turnUsage.outputTokens + Math.ceil(resultCharacters / 4) > options.contextWindow * CONTEXT_FOLD_RATIO &&
+          messages.length > 1 + (CROWDED_RETAINED_EXCHANGES + MIN_CROWDED_FOLD_EXCHANGES) * 2;
+        const folded = compactHistory(
+          messages, describeFold, opening,
+          crowded ? { force: true, retainedExchanges: CROWDED_RETAINED_EXCHANGES } : {},
+        );
         if (folded) {
           // Said rather than done quietly. A model that suddenly cannot quote a
           // result it read twenty turns ago is behaving correctly, and a reader
@@ -729,7 +1064,7 @@ export function createAgentLoopPlanner(options: AgentLoopPlannerOptions): Planne
         if (folded || elided) runSkillTool.clearCache();
         // After the new results are in, so the budget is spent newest-first and
         // the capture that just happened is the one that survives.
-        boundRetainedImages(messages);
+        boundRetainedImages(messages, requests);
       }
 
       // Reached only when a stuck model, told to report, asked for more calls

@@ -140,20 +140,32 @@ export function describeRunState(snapshot: RunStateSnapshot, foldedMessages: num
  * tool result whose call is no longer in the conversation, which no provider
  * accepts.
  *
+ * `force` folds however short the conversation is, and `retainedExchanges`
+ * keeps fewer than usual: that is how a run whose conversation outgrew the
+ * model's context window makes room.
+ *
+ * `keep` is one more message that must survive: in a conversation continued
+ * from an earlier message of the chat, the opening message is that chat's
+ * first request, and the request this run is answering sits further in. It is
+ * placed right after the summary, so the run never loses what it was asked.
+ *
  * Returns true when it folded, so the caller can say so.
  */
 export function compactHistory(
   messages: TurnMessage[],
   describe: (foldedMessages: number) => string,
+  keep?: TurnMessage,
+  options: Readonly<{ force?: boolean; retainedExchanges?: number }> = {},
 ): boolean {
-  if (messages.length < COMPACTION_TRIGGER_MESSAGES) return false;
+  if (options.force !== true && messages.length < COMPACTION_TRIGGER_MESSAGES) return false;
 
-  let start = messages.length - RETAINED_EXCHANGES * 2;
+  let start = messages.length - (options.retainedExchanges ?? RETAINED_EXCHANGES) * 2;
   while (start > 1 && messages[start].role !== "assistant") start -= 1;
   if (start <= 1) return false;
 
-  const folded = start - 1;
-  messages.splice(1, folded, { role: "user", content: [{ kind: "text", text: describe(folded) }] });
+  const kept = keep !== undefined && messages.indexOf(keep, 1) > 0 && messages.indexOf(keep, 1) < start ? [keep] : [];
+  const folded = start - 1 - kept.length;
+  messages.splice(1, start - 1, { role: "user", content: [{ kind: "text", text: describe(folded) }] }, ...kept);
   return true;
 }
 
@@ -202,6 +214,15 @@ export function toolOutputBudgetFor(contextWindow: number | undefined): ToolOutp
   if (contextWindow === undefined) return DEFAULT_TOOL_OUTPUT_BUDGET;
   const max = Math.min(MAX_RETAINED_TOOL_RESULT_CHARACTERS, Math.max(8_000, Math.floor(contextWindow * 4 * 0.35)));
   return { max, lowWater: Math.floor(max / 2) };
+}
+
+/** The tool output a conversation carries, in characters. */
+export function retainedToolResultCharacters(messages: readonly TurnMessage[]): number {
+  let total = 0;
+  for (const message of messages) {
+    for (const block of message.content) if (block.kind === "tool-result") total += block.content.length;
+  }
+  return total;
 }
 
 export function boundRetainedToolResults(

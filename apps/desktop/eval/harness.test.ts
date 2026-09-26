@@ -185,6 +185,7 @@ test("provider telemetry adds model, context, token, and client-tool metrics", a
     const plannerMetrics: EvalPlannerMetrics = {
       modelTurns: 3,
       stalledTurns: 1,
+      retriedAttempts: 0,
       measuredUsageTurns: 2,
       inputTokens: 120,
       outputTokens: 30,

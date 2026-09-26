@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 import type { TurnRequest } from "./model-api/turn-contract";
 
 import {
@@ -93,6 +95,18 @@ export function createCustomTransport(options: CustomTransportOptions): TurnTran
     ...(options.requestTimeoutMs === undefined ? {} : { requestTimeoutMs: options.requestTimeoutMs }),
   };
   return options.connection.format === "anthropic" ? new AnthropicMessagesTurns(shared) : new OpenAiChatTurns(shared);
+}
+
+/**
+ * Everything a transport is made with, as one string: a conversation kept for
+ * a chat's next message is continued only on a transport made the same way.
+ * An edit to the connection, the model, or the key starts a new conversation,
+ * so a revoked key is never used again from memory. The key is hashed; the
+ * string is compared, never shown.
+ */
+export function customTransportKey(options: Pick<CustomTransportOptions, "connection" | "model" | "apiKey">): string {
+  const key = options.apiKey === null ? null : createHash("sha256").update(options.apiKey).digest("hex");
+  return JSON.stringify([options.connection, options.model, key]);
 }
 
 const TEST_TOOL = "report_ready";

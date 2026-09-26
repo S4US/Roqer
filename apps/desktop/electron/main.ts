@@ -7,7 +7,7 @@ import path from "node:path";
 
 import { loadAgentRuntime, type AgentRuntime } from "../runtime/agent-definition";
 import { createChatGptPlanner, type CodexThread } from "../runtime/chatgpt-planner";
-import { createAgentLoopPlanner } from "../runtime/agent-loop";
+import { createAgentLoopPlanner, type AgentLoopSession } from "../runtime/agent-loop";
 import { toolOutputBudgetFor } from "../runtime/agent-loop-history";
 import { CustomProviderStore } from "../runtime/custom-provider-store";
 import { bridgeEnvironment, checkOpenCloudKey } from "../runtime/open-cloud";
@@ -24,7 +24,8 @@ import {
   type OpenCloudSettingsResult,
 } from "../shared/open-cloud";
 import {
-  createCustomTransport, customModelCatalog, customProviderStatus, findCustomModel, listEndpointModels, testCustomModel,
+  createCustomTransport, customModelCatalog, customProviderStatus, customTransportKey, findCustomModel, listEndpointModels,
+  testCustomModel,
 } from "../runtime/custom-provider";
 import {
   isCustomConnectionId,
@@ -153,6 +154,7 @@ let claudeCode: ClaudeCodeClient | null = null;
  */
 const claudeSessions = new ProviderSessionStore<ClaudeSession>();
 const codexThreads = new ProviderSessionStore<CodexThread>();
+const customConversations = new ProviderSessionStore<AgentLoopSession>();
 let agentRuntimePromise: Promise<AgentRuntime> | null = null;
 let customProviderStore: CustomProviderStore | null = null;
 
@@ -899,7 +901,11 @@ async function saveCustomConnection(event: IpcMainInvokeEvent, payload: unknown)
   const parsed = parseCustomConnectionSave(payload);
   if (!parsed.ok) return parsed;
   try {
-    return { ok: true, connections: await customProviders().save(parsed.save) };
+    const connections = await customProviders().save(parsed.save);
+    // A kept conversation holds its transport, key included. After an edit it
+    // would not be continued anyway (see `customTransportKey`), so it goes now.
+    void customConversations.closeAll();
+    return { ok: true, connections };
   } catch (error) {
     return storeFailure(error, "The connection could not be saved.");
   }
@@ -909,7 +915,9 @@ async function removeCustomConnection(event: IpcMainInvokeEvent, id: unknown): P
   if (!isTrusted(event.sender)) return { ok: false, message: "This window may not change model connections." };
   if (!isCustomConnectionId(id)) return { ok: false, message: "That connection was not valid." };
   try {
-    return { ok: true, connections: await customProviders().remove(id) };
+    const connections = await customProviders().remove(id);
+    void customConversations.closeAll();
+    return { ok: true, connections };
   } catch (error) {
     return storeFailure(error, "The connection could not be removed.");
   }
@@ -976,6 +984,7 @@ function plannerFor(request: RunStartRequest, agentRuntime: AgentRuntime, runId:
   // does in the same chat, so a run on any other provider retires it.
   if (request.provider !== "claude") claudeSessions.drop(request.chatId);
   if (request.provider !== "chatgpt") codexThreads.drop(request.chatId);
+  if (request.provider !== "custom") customConversations.drop(request.chatId);
   if (request.provider === "custom") {
     if (custom === undefined) throw new Error("Choose one of your own models before starting.");
     // Roqer's own loop, pointed at the user's endpoint: the same tools,
@@ -992,10 +1001,14 @@ function plannerFor(request: RunStartRequest, agentRuntime: AgentRuntime, runId:
       label: custom.connection.name,
       images: custom.model.images,
       toolOutputBudget: toolOutputBudgetFor(custom.model.contextWindow),
-      outputLimitAdvice: `Raise Max output for ${custom.model.displayName} in Settings â†’ Your own models${
+      ...(custom.model.contextWindow === undefined ? {} : { contextWindow: custom.model.contextWindow }),
+      outputLimitAdvice: `Raise Max output for ${custom.model.displayName} in Settings → Your own models${
         custom.model.maxOutputTokens === undefined ? "" : ` (it is set to ${custom.model.maxOutputTokens.toLocaleString("en-US")})`
       }, then ask it to continue.`,
       blender,
+      chatId: request.chatId,
+      sessions: customConversations,
+      transportKey: customTransportKey(custom),
     });
   }
   if (request.provider === "claude") {
@@ -1706,6 +1719,7 @@ app.on("before-quit", () => {
   cancelAllRuns();
   void claudeSessions.closeAll();
   void codexThreads.closeAll();
+  void customConversations.closeAll();
   codexAppServer?.close();
   claudeCode?.close();
 });

@@ -78,3 +78,20 @@ test("the per-turn record carries what a trend needs and nothing a person wrote"
     }
   }
 });
+
+test("a try the endpoint failed is counted apart from the turn it was trying", () => {
+  const collector = createPlannerTelemetryCollector();
+  collector.observe(turnEvent(1, { completed: false, retried: true, durationMs: 400, firstEventMs: 300 }));
+  collector.observe(turnEvent(1, { usage: { inputTokens: 100, outputTokens: 10 } }));
+  collector.observe({ kind: "tool", turn: 1, index: 1, tool: "get_place_info", ok: true, durationMs: 20, resultCharacters: 10 });
+  collector.observe(turnEvent(2));
+
+  const snapshot = collector.snapshot();
+  assert.equal(snapshot.modelTurns, 2);
+  assert.equal(snapshot.retriedAttempts, 1);
+  // One record per turn, so the trend a reader draws from them is not doubled.
+  assert.deepEqual(snapshot.turns.map((turn) => [turn.turn, turn.toolCalls]), [[1, 1], [2, 0]]);
+  // The failed try's time was still spent.
+  assert.equal(snapshot.streamDurationMs, 2_400);
+  assert.equal(snapshot.timeToFirstEventMs, 2_100);
+});
