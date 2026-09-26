@@ -45,8 +45,9 @@ the tool away again.
    it.
 2. Roqer runs it in Blender in the background. A job starts on an empty scene,
    or on the scene an earlier job in the same chat saved, when the agent names
-   that job. Every job whose script finishes saves its scene; a job that fails
-   saves nothing, so the next one starts from the last one that worked. This is
+   that job. Every job whose script finishes saves its scene, with any
+   material the script made but has not used yet; a job that fails saves
+   nothing, so the next one starts from the last one that worked. This is
    how a detailed model is built in stages (frame, body, wheels, details), each
    a short script the agent can check before the next, and how a later message
    can change a model rather than rebuild it.
@@ -57,7 +58,11 @@ the tool away again.
    each other, reported in the script's own coordinates. It renders a preview
    of four views in one image (side, top, and two opposite corners) that reaches
    the agent the way a screenshot does, and lists every object in the saved
-   scene by name, size and position. A PNG reaches the agent as it is.
+   scene by name, size and position. The list points out what the agent would
+   otherwise have to spot for itself: hidden objects an export would carry,
+   geometry at invalid (NaN) positions that an export fails on, and left and
+   right pairs (`Wheel_L` and `Wheel_R`) that do not mirror each other. A PNG
+   reaches the agent as it is.
 4. To use a model, the agent exports it, uploads it to Roblox as a Model and
    inserts it into your place, then checks its size there. An image uploads as
    a Decal, whose image ID a UI element can display. Uploads ask first too,

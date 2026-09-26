@@ -25,6 +25,11 @@ there, by name (`bpy.data.objects["Left_Side_Pod"].location.z += 0.2`), not a
 rebuild. A job that fails saves nothing and the next attempt starts from the
 last job that worked; to undo a step, continue from an earlier job.
 
+Read the listing as well as the preview. It names what a small preview hides:
+a left and right pair (`Fender_L`, `Fender_R`) that does not mirror, which is
+usually a side sign the script forgot to flip, and geometry at NaN positions,
+which an export fails on. Fix those in the next job, before building on them.
+
 Every job is irreversible: the user approves it unless they run in Full auto,
 so make each job a real stage, not a probe, and do not split one stage across
 several jobs. A script may be at most 60,000 characters, and one that long

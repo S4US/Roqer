@@ -8,7 +8,7 @@ import { PassThrough } from "node:stream";
 import test from "node:test";
 
 import {
-  BlenderWorker, HELPERS_SCRIPT, readSceneContents, RUNNER_SCRIPT, scriptEnvironment, type SpawnProcess,
+  BlenderWorker, HELPERS_SCRIPT, otherSideName, readSceneContents, RUNNER_SCRIPT, scriptEnvironment, type SpawnProcess,
 } from "./blender-worker";
 
 /** What one fake Blender process does: optional work, printed output, and how it ends. */
@@ -465,24 +465,119 @@ test("hidden objects in a saved scene are named, because an export would carry t
   });
 });
 
+test("geometry an export would fail on is named with its cause, and the rest of the list survives it", async () => {
+  // A bevel over overlapping vertices put an engine's vertices at NaN. The
+  // listing then held NaN, which is not JSON, so the whole of it vanished for
+  // two jobs, and the export failed three times on an error naming no object.
+  await withJobs(async (jobsRoot) => {
+    const blender = savingBlender({
+      objects: [
+        { name: "Engine", type: "mesh", size: [1.37, 1.31, 0.94], center: [0.06, 1.84, 0.88], triangles: 5172, modifiers: ["bevel"], invalid: 56, invalidFrom: "modifiers" },
+        { name: "Spring", type: "curve", size: [0.2, 0.2, 0.5], center: [0, 0, 0.5], triangles: 400, invalid: 3, invalidFrom: "geometry" },
+      ],
+      count: 2,
+      triangles: 5572,
+    });
+    const worker = new BlenderWorker({ executable: EXECUTABLE, jobsRoot, scope: "chat-a", spawn: blender.spawn, killTree: blender.killTree, env: {} });
+    const outcome = await worker.run({ script: "import bpy" });
+    assert.equal(outcome.ok, true, outcome.text);
+    assert.match(outcome.text, /- Engine \(mesh\): 1\.37 × 1\.31 × 0\.94 at .*; modifiers bevel; 56 vertices at invalid \(NaN\) positions/);
+    assert.match(outcome.text, /Invalid geometry, which a glTF export fails on \("cannot convert float NaN to integer"\): Engine \(56 vertices, made by its modifiers: bevel\); Spring \(3 vertices, made by its own geometry\)\./);
+    assert.match(outcome.text, /merge them before the modifier runs \(bmesh\.ops\.remove_doubles/);
+    assert.match(outcome.text, /the script computed those positions as NaN/);
+  });
+});
+
+test("a list Roqer cannot read is said to be missing, not left out in silence", async () => {
+  await withJobs(async (jobsRoot) => {
+    const saving = fakeBlender(async (args) => {
+      if (args.some((arg) => arg.endsWith("roqer_runner.py"))) {
+        const jobDirectory = argAfterDashes(args);
+        await fs.writeFile(path.join(jobDirectory, "scene.blend"), "BLENDER-v500");
+        await fs.writeFile(path.join(jobDirectory, "scene.json"), '{"objects": [{"name": "Engine", "type": "mesh", "size": [NaN, NaN, NaN]}]}');
+        return { output: "ROQER_SCENE_SAVED\nROQER_SCRIPT_DONE\n" };
+      }
+      return { output: "" };
+    });
+    const worker = new BlenderWorker({ executable: EXECUTABLE, jobsRoot, scope: "chat-a", spawn: saving.spawn, killTree: saving.killTree, env: {} });
+    const outcome = await worker.run({ script: "import bpy" });
+    assert.match(outcome.text, /Scene saved as job [0-9a-f]{8}\. Roqer could not read the list of its objects this time/);
+  });
+});
+
+test("left and right pairs placed on one side, or in one place, are named; mirrored pairs are not", async () => {
+  // From a real go-kart: a fender placed by a sign the script forgot to flip
+  // sat on top of its twin for ten jobs, as did a pair of headlights.
+  await withJobs(async (jobsRoot) => {
+    const mesh = (name: string, center: number[], size = [0.4, 0.8, 0.4]) => ({ name, type: "mesh", size, center, triangles: 100 });
+    const blender = savingBlender({
+      objects: [
+        mesh("Tire_Front_L", [1.56, -2.05, 0.72], [0.76, 1.43, 1.43]),
+        mesh("Tire_Front_R", [-1.56, -2.05, 0.72], [0.76, 1.43, 1.43]),
+        mesh("Rim_Front_L", [1.575, -2.05, 0.72], [0.64, 0.79, 0.79]),
+        mesh("Rim_Front_R", [-1.545, -2.05, 0.72], [0.64, 0.79, 0.79]),
+        mesh("Left_Side_Pod", [1.42, 0.47, 0.93], [1.28, 1.69, 0.71]),
+        mesh("Right_Side_Pod", [-1.42, 0.47, 0.93], [1.28, 1.69, 0.71]),
+        mesh("Rear_Left_Wheel", [1.66, 2.05, 0.8]),
+        mesh("Rear_Right_Wheel", [-1.66, 2.05, 0.8]),
+        mesh("Front_Fender_L", [1.56, -2.105, 1.263], [0.91, 1.735, 0.97]),
+        mesh("Front_Fender_R", [1.56, -2.105, 1.263], [0.91, 1.735, 0.97]),
+        mesh("Nose_Vent_L", [0.742, -1.542, 0.792]),
+        mesh("Nose_Vent_R", [0.657, -1.539, 0.916]),
+        mesh("Mirror.L", [0.9, 0.2, 1.4]),
+        mesh("Mirror.R", [-0.9, 0.6, 1.4]),
+        { ...mesh("Cutter_L", [3, 3, 3]), hidden: true },
+        mesh("Leftover", [2, 2, 2]),
+      ],
+      count: 16,
+      triangles: 1600,
+    });
+    const worker = new BlenderWorker({ executable: EXECUTABLE, jobsRoot, scope: "chat-a", spawn: blender.spawn, killTree: blender.killTree, env: {} });
+    const outcome = await worker.run({ script: "import bpy" });
+    const line = outcome.text.split("\n").find((text) => text.startsWith("Left and right pairs"));
+    assert.ok(line, outcome.text);
+    assert.match(line, /across the model's centre \(X = 0\.00\)/);
+    assert.match(line, /Front_Fender_L and Front_Fender_R are in the same place, at \(1\.56, -2\.10, 1\.26\)/);
+    assert.match(line, /Nose_Vent_L at \(0\.74, -1\.54, 0\.79\) and Nose_Vent_R at \(0\.66, -1\.54, 0\.92\) are on the same side/);
+    assert.match(line, /Mirror\.L at \(0\.90, 0\.20, 1\.40\) and Mirror\.R at \(-0\.90, 0\.60, 1\.40\) do not mirror each other/);
+    for (const fine of ["Tire", "Rim", "Side_Pod", "Wheel", "Cutter", "Leftover"]) assert.doesNotMatch(line, new RegExp(fine));
+  });
+});
+
+test("an object's other side is found only from a name that marks one side as its own word", () => {
+  assert.equal(otherSideName("Front_Fender_L"), "Front_Fender_R");
+  assert.equal(otherSideName("Hand.R"), "Hand.L");
+  assert.equal(otherSideName("Rear_Left_Wheel"), "Rear_Right_Wheel");
+  assert.equal(otherSideName("left arm"), "right arm");
+  assert.equal(otherSideName("Headlight_L.001"), "Headlight_R.001");
+  assert.equal(otherSideName("Leftover"), undefined);
+  assert.equal(otherSideName("Wheel_FL"), undefined);
+  assert.equal(otherSideName("L_Strut_R"), undefined);
+  assert.equal(otherSideName("Chassis"), undefined);
+});
+
 test("a scene list the runner wrote is read as data: malformed entries are dropped, and a long one is bounded", async () => {
   await withJobs(async (jobsRoot) => {
     const file = path.join(jobsRoot, "scene.json");
     await fs.writeFile(file, JSON.stringify({
       objects: [
         { name: "Wheel", type: "mesh", size: [1, 1, 1], center: [0, 0, 0], triangles: 44.7, materials: ["Rubber", 7], parent: "Kart" },
+        { name: "Engine", type: "mesh", invalid: 56.2, invalidFrom: "somewhere" },
+        { name: "Pipe", type: "mesh", invalid: 0, invalidFrom: "modifiers" },
         { name: 5, type: "mesh" },
         { name: "Bad", type: "mesh", size: [1, "x", 1] },
         ...Array.from({ length: 200 }, (_, index) => ({ name: `Bolt_${index}`, type: "mesh" })),
       ],
-      count: 203,
+      count: 205,
       triangles: 900,
     }));
     const contents = await readSceneContents(file);
     assert.deepEqual(contents?.objects[0], { name: "Wheel", type: "mesh", parent: "Kart", size: [1, 1, 1], center: [0, 0, 0], triangles: 44, materials: ["Rubber"] });
-    assert.deepEqual(contents?.objects[1], { name: "Bad", type: "mesh" });
+    assert.deepEqual(contents?.objects[1], { name: "Engine", type: "mesh", invalid: 56, invalidFrom: "geometry" });
+    assert.deepEqual(contents?.objects[2], { name: "Pipe", type: "mesh" });
+    assert.deepEqual(contents?.objects[3], { name: "Bad", type: "mesh" });
     assert.ok((contents?.objects.length ?? 0) <= 120);
-    assert.equal(contents?.count, 203);
+    assert.equal(contents?.count, 205);
     await fs.writeFile(file, "not json");
     assert.equal(await readSceneContents(file), undefined);
   });

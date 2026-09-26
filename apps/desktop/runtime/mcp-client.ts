@@ -380,6 +380,11 @@ export class McpClient implements McpToolCaller {
       ok = false;
       message ??= typeof data.message === "string" ? data.message : data.error;
     }
+    // A failure the tool marked itself, such as an upload Roblox refused, says
+    // why in an `{error: {code, message}}` object.
+    if (!ok && message === undefined && isRecord(data) && isRecord(data.error) && typeof data.error.message === "string") {
+      message = data.error.message;
+    }
 
     return {
       ok,
