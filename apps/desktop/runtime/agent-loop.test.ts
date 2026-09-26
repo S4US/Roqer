@@ -12,10 +12,12 @@ import {
   MALFORMED_CALL_RETRIES,
   REPEATED_CALL_TURNS,
   REPEATED_FAILURE_TURNS,
+  type AgentLoopSession,
   type AgentLoopTelemetryEvent,
   type TurnTransport,
 } from "./agent-loop";
 import type { McpToolOutcome } from "./mcp-types";
+import { ProviderSessionStore } from "./provider-sessions";
 import { RunCancelledError, type PlannerContext } from "./run-engine";
 import type { SkillLibrary } from "./skill-library";
 import type { RunChange, RunEvidence } from "../shared/run-events";
@@ -898,6 +900,105 @@ test("a model that reasons for longer than the stall interval is not stopped as 
   };
 
   assert.equal(await planner(thinking, undefined, 50).run(context), "Main prints hi.");
+});
+
+/** A planner that keeps its chat's conversation in `sessions`, as the Custom provider does. */
+function keepingPlanner(transport: TurnTransport, sessions: ProviderSessionStore<AgentLoopSession>, transportKey = "endpoint-a") {
+  return createAgentLoopPlanner({
+    transport,
+    runId: "run_test",
+    modelId: "openai/gpt-5.6-luna",
+    effort: "medium",
+    agent: AGENT,
+    skillLibrary: SKILLS,
+    chatId: "chat-1",
+    sessions,
+    transportKey,
+  });
+}
+
+const READ_MAIN: TurnEvent = {
+  kind: "tool-call",
+  call: { id: "c1", name: "roblox_studio", arguments: { operation: "get_script_source", arguments: { instancePath: "ServerScriptService.Main" } } },
+};
+
+/** The same context, one message later in the same chat. */
+function followUp(context: PlannerContext, reply: string, prompt: string): PlannerContext {
+  return {
+    ...context,
+    prompt,
+    conversation: { messages: [{ role: "user", text: context.prompt }, { role: "assistant", text: reply }], truncated: false },
+  };
+}
+
+test("a Custom chat's next message continues the conversation it left, tool results included", async () => {
+  // Every follow-up used to replay the chat as plain text: what the last run
+  // read was gone, so the next one re-read Studio before it could act.
+  const sessions = new ProviderSessionStore<AgentLoopSession>();
+  const controller = new AbortController();
+  const { context, recorded } = makeContext(controller);
+  const first = gateway([
+    [{ kind: "delta", text: "Reading Main." }, READ_MAIN, { kind: "completed", stopReason: "tool-use" }],
+    DONE("Main prints hi."),
+    DONE("It now prints bye."),
+  ]);
+  assert.equal(await keepingPlanner(first, sessions).run(context), "Reading Main.\n\nMain prints hi.");
+  assert.equal(sessions.size, 1);
+
+  // The next run is handed a new transport; the kept conversation's is the one
+  // that holds what the endpoint produced, so that is the one used.
+  const unused = gateway([]);
+  const next = followUp(context, "Reading Main.\n\nMain prints hi.", "Make it print bye");
+  assert.equal(await keepingPlanner(unused, sessions).run(next), "It now prints bye.");
+
+  assert.equal(unused.requests.length, 0);
+  const sent = first.requests[2].messages;
+  // Everything the first run held, its final answer, then only the new message.
+  assert.deepEqual(sent.slice(0, 3), first.requests[1].messages);
+  assert.deepEqual(sent[3], { role: "assistant", content: [{ kind: "text", text: "Main prints hi." }] });
+  assert.equal(sent.length, 5);
+  const opening = sent[4].content[0];
+  assert.equal(opening.kind === "text" && opening.text.includes("Make it print bye"), true);
+  assert.equal(opening.kind === "text" && opening.text.includes("Prior conversation context"), false, "the chat is not replayed as text");
+  assert.ok(recorded.progress.includes("Continuing with Roqer"));
+});
+
+test("a kept conversation is not continued under other settings, after a failed run, or once the chat moved on", async () => {
+  const controller = new AbortController();
+  const { context } = makeContext(controller);
+  const replay = (request: TurnRequest) => {
+    const text = request.messages[0].content[0];
+    return text.kind === "text" && text.text.includes("Prior conversation context");
+  };
+
+  // Another endpoint, model, or key: the conversation belongs to the transport it was held on.
+  const sessions = new ProviderSessionStore<AgentLoopSession>();
+  await keepingPlanner(gateway([DONE("Main prints hi.")]), sessions, "endpoint-a").run(context);
+  const other = gateway([DONE("Done.")]);
+  await keepingPlanner(other, sessions, "endpoint-b").run(followUp(context, "Main prints hi.", "Again"));
+  assert.equal(other.requests[0].messages.length, 1);
+  assert.equal(replay(other.requests[0]), true);
+
+  // A chat that has moved on without this conversation, here by a run on another provider.
+  const moved = new ProviderSessionStore<AgentLoopSession>();
+  await keepingPlanner(gateway([DONE("Main prints hi.")]), moved).run(context);
+  const later = gateway([DONE("Done.")]);
+  await keepingPlanner(later, moved).run({
+    ...followUp(context, "Main prints hi.", "Again"),
+    conversation: {
+      messages: [
+        { role: "user", text: context.prompt }, { role: "assistant", text: "Main prints hi." },
+        { role: "user", text: "Asked elsewhere" }, { role: "assistant", text: "Answered elsewhere" },
+      ],
+      truncated: false,
+    },
+  });
+  assert.equal(replay(later.requests[0]), true);
+
+  // A run that failed leaves a conversation the chat does not describe.
+  const failed = new ProviderSessionStore<AgentLoopSession>();
+  await assert.rejects(() => keepingPlanner(flakyGateway([{ error: new Error("status 401") }]), failed).run(context));
+  assert.equal(failed.size, 0);
 });
 
 test("a long run folds its own history and sends the host's record in its place", async () => {

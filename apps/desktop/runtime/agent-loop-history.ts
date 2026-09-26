@@ -140,11 +140,17 @@ export function describeRunState(snapshot: RunStateSnapshot, foldedMessages: num
  * tool result whose call is no longer in the conversation, which no provider
  * accepts.
  *
+ * `keep` is one more message that must survive: in a conversation continued
+ * from an earlier message of the chat, the opening message is that chat's
+ * first request, and the request this run is answering sits further in. It is
+ * placed right after the summary, so the run never loses what it was asked.
+ *
  * Returns true when it folded, so the caller can say so.
  */
 export function compactHistory(
   messages: TurnMessage[],
   describe: (foldedMessages: number) => string,
+  keep?: TurnMessage,
 ): boolean {
   if (messages.length < COMPACTION_TRIGGER_MESSAGES) return false;
 
@@ -152,8 +158,9 @@ export function compactHistory(
   while (start > 1 && messages[start].role !== "assistant") start -= 1;
   if (start <= 1) return false;
 
-  const folded = start - 1;
-  messages.splice(1, folded, { role: "user", content: [{ kind: "text", text: describe(folded) }] });
+  const kept = keep !== undefined && messages.indexOf(keep, 1) > 0 && messages.indexOf(keep, 1) < start ? [keep] : [];
+  const folded = start - 1 - kept.length;
+  messages.splice(1, start - 1, { role: "user", content: [{ kind: "text", text: describe(folded) }] }, ...kept);
   return true;
 }
 

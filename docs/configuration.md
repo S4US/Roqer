@@ -87,8 +87,13 @@ ChatGPT runs use a Codex home of Roqer's own, inside Roqer's data folder, so
 Roqer asks you to sign in to ChatGPT once even if the Codex CLI is already
 signed in, and your own Codex MCP servers and plugins are not loaded there.
 
-A model endpoint you configure runs on Roqer's own agent loop. When the
-endpoint fails in a way that can pass (a rate limit, an overload, a server
+A model endpoint you configure runs on Roqer's own agent loop. The next
+message in the same chat continues the conversation it left, tool results
+included, as the ChatGPT and Claude providers do. The conversation is not kept
+after a run that failed or was stopped, after half an hour idle, when the run's
+connection, model, or settings differ, or once connections are edited.
+
+When the endpoint fails in a way that can pass (a rate limit, an overload, a server
 error, or a connection dropped partway through a turn), Roqer sends the same
 turn again up to four times. It waits as long as the endpoint asks, up to a
 minute, or backs off from one second, and each retry is shown in the run's
