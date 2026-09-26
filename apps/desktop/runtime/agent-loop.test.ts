@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import type { TurnEvent, TurnRequest } from "./model-api/turn-contract";
-import { isTurnRequest, MAX_TURN_IMAGE_BASE64, TransientTurnError } from "./model-api/turn-contract";
+import { ContextOverflowError, isTurnRequest, MAX_TURN_IMAGE_BASE64, TransientTurnError } from "./model-api/turn-contract";
 
 import type { AgentDefinition } from "./agent-definition";
 import { buildConversationPrompt } from "./conversation-prompt";
@@ -999,6 +999,88 @@ test("a kept conversation is not continued under other settings, after a failed 
   const failed = new ProviderSessionStore<AgentLoopSession>();
   await assert.rejects(() => keepingPlanner(flakyGateway([{ error: new Error("status 401") }]), failed).run(context));
   assert.equal(failed.size, 0);
+});
+
+/** A turn that reads one script, with a distinct call id per turn so none of them looks repeated. */
+const readTurn = (index: number, usage?: Readonly<{ inputTokens: number; outputTokens: number }>): Readonly<{ events: readonly TurnEvent[] }> => ({
+  events: [
+    {
+      kind: "tool-call",
+      call: { id: `read_${index}`, name: "roblox_studio", arguments: { operation: "get_script_source", arguments: { instancePath: `ServerScriptService.Script${index}` } } },
+    },
+    usage === undefined ? { kind: "completed", stopReason: "tool-use" } : { kind: "completed", stopReason: "tool-use", usage },
+  ],
+});
+
+const TOO_LONG = new ContextOverflowError("Endpoint returned status 400: This model's maximum context length is 32000 tokens.");
+
+test("a turn refused as too long for the model is sent again once the conversation has been cut", async () => {
+  // A long run used to end here, with the endpoint's refusal as its answer.
+  const controller = new AbortController();
+  const { context, recorded } = makeContext(controller);
+  const bridge = flakyGateway([
+    ...Array.from({ length: 8 }, (_, index) => readTurn(index)),
+    { error: TOO_LONG },
+    { events: DONE("Done.") },
+  ]);
+
+  assert.equal(await retryingPlanner(bridge).run(context), "Done.");
+
+  const refused = bridge.requests[8].messages;
+  const resent = bridge.requests[9].messages;
+  assert.equal(refused.length, 17);
+  // The request, the host's record of the folded work, and the last four exchanges.
+  assert.equal(resent.length, 10);
+  assert.deepEqual(resent[0], refused[0]);
+  const summary = resent[1].content[0];
+  assert.equal(summary.kind === "text" && summary.text.startsWith("[Roqer folded 8 earlier messages"), true);
+  assert.ok(recorded.statuses.some((status) => status.label === "Conversation too long for the model"));
+});
+
+test("a turn still too long after the conversation was cut ends the run and says what to do", async () => {
+  const controller = new AbortController();
+  const { context } = makeContext(controller);
+  const long = flakyGateway([...Array.from({ length: 8 }, (_, index) => readTurn(index)), { error: TOO_LONG }, { error: TOO_LONG }]);
+  await assert.rejects(
+    () => retryingPlanner(long).run(context),
+    /maximum context length is 32000 tokens\. Roqer shortened the conversation and it still does not fit\. Start a new chat/,
+  );
+  assert.equal(long.requests.length, 10);
+
+  // With nothing before the request to cut, there is no second try at all.
+  const first = flakyGateway([{ error: TOO_LONG }]);
+  await assert.rejects(
+    () => retryingPlanner(first).run(makeContext(new AbortController()).context),
+    /There is nothing earlier in the conversation left to shorten\. Send a shorter request/,
+  );
+  assert.equal(first.requests.length, 1);
+});
+
+test("a conversation crowding a model's context window is folded before the model refuses it", async () => {
+  // The fold used to wait for sixty-one messages, which a model with a small
+  // window never reaches before the endpoint refuses the turn.
+  const crowding = { inputTokens: 13_000, outputTokens: 50 };
+  const script = () => [...Array.from({ length: 12 }, (_, index) => readTurn(index, crowding)), { events: DONE("Done.") }];
+  const run = async (contextWindow: number | undefined) => {
+    const { context, recorded } = makeContext(new AbortController());
+    const bridge = flakyGateway(script());
+    await createAgentLoopPlanner({
+      transport: bridge, runId: "run_test", modelId: "local-model", effort: "medium", agent: AGENT, skillLibrary: SKILLS,
+      ...(contextWindow === undefined ? {} : { contextWindow }),
+    }).run(context);
+    return { bridge, folded: recorded.statuses.some((status) => status.label === "Earlier conversation folded") };
+  };
+
+  const small = await run(16_000);
+  assert.equal(small.folded, true);
+  const lengths = small.bridge.requests.map((request) => request.messages.length);
+  // Folded down to the request, the record, and six exchanges once there were enough to fold.
+  assert.ok(Math.max(...lengths) <= 1 + (6 + 4) * 2 + 2, `requests grew to ${Math.max(...lengths)} messages`);
+  assert.ok(lengths.includes(1 + 1 + 6 * 2));
+
+  // Without a known window the usual bound applies, and twelve exchanges are nowhere near it.
+  const unknown = await run(undefined);
+  assert.equal(unknown.folded, false);
 });
 
 test("a long run folds its own history and sends the host's record in its place", async () => {

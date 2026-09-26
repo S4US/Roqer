@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import type { TurnEvent, TurnRequest } from "./turn-contract";
-import { TransientTurnError } from "./turn-contract";
+import { ContextOverflowError, TransientTurnError } from "./turn-contract";
 
 import { AnthropicMessagesTurns, usesThinkingBudget } from "./anthropic-messages";
 import { retryAfterMs } from "./http";
@@ -823,4 +823,31 @@ test("an endpoint asking for reasoning it did not get is reported, not answered 
     /DeepSeek returned status 400: Missing `reasoning_content`/,
   );
   assert.equal(sent.length, 1);
+});
+
+test("a refusal because the conversation outgrew the model is told apart from every other refusal", async () => {
+  const bodies: ReadonlyArray<readonly [string, number, string]> = [
+    ["OpenAI", 400, json({ error: { code: "context_length_exceeded", message: "This model's maximum context length is 128000 tokens. However, your messages resulted in 130211 tokens." } })],
+    ["Anthropic", 400, json({ type: "error", error: { type: "invalid_request_error", message: "prompt is too long: 205101 tokens > 200000 maximum" } })],
+    ["llama.cpp", 400, json({ error: { type: "exceed_context_size_error", message: "the request exceeds the available context size, try increasing it" } })],
+    ["Gemini", 400, json([{ error: { message: "The input token count (1100000) exceeds the maximum number of tokens allowed (1048576)." } }])],
+  ];
+  for (const [label, status, body] of bodies) {
+    const fetch = (async () => new Response(body, { status })) as typeof globalThis.fetch;
+    const turns = new OpenAiChatTurns({ baseUrl: "https://api.example.com/v1", apiKey: null, label, reasoning: false, fetch });
+    await assert.rejects(
+      () => collect(turns.streamTurn(REQUEST, new AbortController().signal)),
+      (error: Error) => error instanceof ContextOverflowError,
+      label,
+    );
+  }
+  // Asking for more output than the model writes is not a conversation that is too long.
+  const outputLimit = (async () => new Response(json({
+    type: "error", error: { type: "invalid_request_error", message: "max_tokens: 200000 > 128000, which is the maximum allowed number of output tokens for claude-opus-5-5" },
+  }), { status: 400 })) as typeof globalThis.fetch;
+  const anthropic = new AnthropicMessagesTurns({ baseUrl: "https://api.anthropic.com/v1", apiKey: null, label: "Anthropic", reasoning: false, fetch: outputLimit });
+  await assert.rejects(
+    () => collect(anthropic.streamTurn(REQUEST, new AbortController().signal)),
+    (error: Error) => !(error instanceof ContextOverflowError) && !(error instanceof TransientTurnError),
+  );
 });

@@ -216,6 +216,18 @@ export class TransientTurnError extends Error {
 }
 
 /**
+ * A turn the endpoint refused because the conversation no longer fits the
+ * model's context window. Sending it again unchanged would be refused again;
+ * the agent loop shortens the conversation first.
+ */
+export class ContextOverflowError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ContextOverflowError";
+  }
+}
+
+/**
  * Stream events. A refusal decided before the stream opens is an HTTP status,
  * not a `failed` event, so a client never has to read a body to learn it was
  * never charged.

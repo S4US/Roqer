@@ -1,4 +1,4 @@
-import { TransientTurnError, type TurnMessage, type TurnToolCall } from "./turn-contract";
+import { ContextOverflowError, TransientTurnError, type TurnMessage, type TurnToolCall } from "./turn-contract";
 
 /**
  * Transport pieces shared by the adapters that talk to a user's own model
@@ -170,8 +170,23 @@ export function retryAfterMs(headers: Headers, now: number = Date.now()): number
 }
 
 /**
- * The error for a request the endpoint refused, already read: transient when
- * another attempt could succeed, an ordinary error when it would not.
+ * How endpoints say a request is longer than the model can hold: OpenAI's and
+ * vLLM's "maximum context length" (and `context_length_exceeded`), Anthropic's
+ * "prompt is too long", Gemini's input token count, llama.cpp's context size,
+ * and the generic forms relays pass on.
+ */
+const CONTEXT_OVERFLOW =
+  /context[_ ]length|context[_ ]window|context size|maximum context|prompt is too long|too many (?:input )?tokens|input token count|exceeds the maximum number of tokens|reduce the length of the messages/i;
+
+/** Whether a refusal says the conversation does not fit the model's context window. */
+export function isContextOverflow(status: number, body: string): boolean {
+  return (status === 400 || status === 413 || status === 422) && CONTEXT_OVERFLOW.test(body);
+}
+
+/**
+ * The error for a request the endpoint refused, already read: a context
+ * overflow when the conversation has outgrown the model, transient when another
+ * attempt could succeed, and an ordinary error when it would not.
  */
 export function endpointRefusal(
   response: Response,
@@ -180,6 +195,7 @@ export function endpointRefusal(
   apiKey: string | null,
 ): Error {
   const message = describeRefusal(response.status, body, label, apiKey);
+  if (isContextOverflow(response.status, body)) return new ContextOverflowError(message);
   if (!isTransientStatus(response.status) || EXHAUSTED_ACCOUNT.test(body)) return new Error(message);
   const wait = retryAfterMs(response.headers);
   return new TransientTurnError(message, wait === undefined ? {} : { retryAfterMs: wait });

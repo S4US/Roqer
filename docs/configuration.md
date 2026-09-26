@@ -98,7 +98,11 @@ error, or a connection dropped partway through a turn), Roqer sends the same
 turn again up to four times. It waits as long as the endpoint asks, up to a
 minute, or backs off from one second, and each retry is shown in the run's
 activity. A failure that would only repeat, such as a refused key or an unknown
-model, ends the run at once. A turn has no length limit: Roqer stops waiting
+model, ends the run at once. When the endpoint says the conversation no longer
+fits the model, Roqer folds older work into a summary, trims older tool output
+and screenshots, and sends the turn once more. If the model's context window is
+set in Settings, Roqer folds the conversation before it fills three quarters
+of that window. A turn has no length limit: Roqer stops waiting
 only when the endpoint sends nothing for ten minutes, or the model makes no
 progress, reasoning included, for five. With reasoning on, Claude 4.6 and later
 models think adaptively at the run's effort. Older Claude models and other

@@ -1,4 +1,5 @@
 import {
+  ContextOverflowError,
   estimateTurnInputTokens,
   TransientTurnError,
   TURN_IMAGE_MEDIA_TYPES,
@@ -20,7 +21,9 @@ import type { AgentDefinition } from "./agent-definition";
 import { blenderToolDefinition, parseBlenderToolInput } from "./blender-tool";
 import { BLENDER_TOOL_NAME } from "../shared/blender";
 import { buildConversationPrompt, buildFollowUpPrompt, continuesConversation } from "./conversation-prompt";
-import { boundRetainedToolResults, compactHistory, describeRunState, type ToolOutputBudget } from "./agent-loop-history";
+import {
+  boundRetainedToolResults, compactHistory, describeRunState, retainedToolResultCharacters, type ToolOutputBudget,
+} from "./agent-loop-history";
 import { createIconToolRunner, iconToolDefinition, ICON_TOOL_NAME } from "./icon-tool";
 import { runQuestionTool, questionToolDefinition, QUESTION_TOOL_NAME } from "./question-tool";
 import { RunCancelledError, type Planner, type PlannerContext } from "./run-engine";
@@ -119,6 +122,8 @@ export type AgentLoopPlannerOptions = {
   images?: boolean;
   /** How much tool output the conversation may carry. Defaults to the standard budget. */
   toolOutputBudget?: ToolOutputBudget;
+  /** Tokens the model holds, when the user said. The conversation is folded before it crowds them. */
+  contextWindow?: number;
   /** What to tell the user when a turn hits its output limit, where they can raise it. */
   outputLimitAdvice?: string;
   /** Offer the `blender` tool: only while the user has turned the local Blender worker on. */
@@ -175,7 +180,7 @@ function sessionKey(options: AgentLoopPlannerOptions, autoPlaytest: boolean): st
   return JSON.stringify([
     options.transportKey ?? null, options.plannerId ?? "agent-loop", options.modelId, autoPlaytest,
     options.agent.id, options.agent.version, options.blender === true, options.images !== false,
-    options.toolOutputBudget ?? null,
+    options.toolOutputBudget ?? null, options.contextWindow ?? null,
   ]);
 }
 
@@ -401,6 +406,39 @@ function steerBlocks(steers: readonly string[]): TurnContent[] {
   }));
 }
 
+/**
+ * When the endpoint's own count says the next request will fill this much of
+ * the model's context window, the conversation is folded early rather than at
+ * its usual length: a model with a small window reaches it long before a
+ * message count would notice.
+ */
+const CONTEXT_FOLD_RATIO = 0.75;
+
+/** How many exchanges survive a fold made because the conversation is crowding the model's window. */
+const CROWDED_RETAINED_EXCHANGES = 6;
+
+/**
+ * The fewest exchanges an early fold removes. A conversation that stays
+ * crowded after folding -- a long request, a large result kept verbatim --
+ * would otherwise be re-cut every turn for one exchange at a time, rewriting
+ * its history, and so missing the provider's cache, on every request.
+ */
+const MIN_CROWDED_FOLD_EXCHANGES = 4;
+
+/** How many exchanges survive the fold that makes room after the endpoint refused a turn as too long. */
+const OVERFLOW_RETAINED_EXCHANGES = 4;
+
+/** Drop every screenshot the conversation carries, keeping what the user attached. */
+function dropCarriedImages(messages: TurnMessage[], requests: ReadonlySet<TurnMessage>): boolean {
+  let dropped = false;
+  for (const [index, message] of messages.entries()) {
+    if (requests.has(message) || !message.content.some((block) => block.kind === "image")) continue;
+    messages[index] = { ...message, content: message.content.filter((block) => block.kind !== "image") };
+    dropped = true;
+  }
+  return dropped;
+}
+
 /** How many broken tool calls in a row the model is asked to retry before the run fails. */
 export const MALFORMED_CALL_RETRIES = 3;
 
@@ -557,6 +595,34 @@ export function createAgentLoopPlanner(options: AgentLoopPlannerOptions): Planne
         return answer;
       };
 
+      /** The host's record of the run, in place of the exchanges a fold removes. */
+      const describeFold = (foldedMessages: number): string => describeRunState({
+        tasks: context.tasks(),
+        changes: context.changes(),
+        evidence: context.evidence(),
+        verification: context.checkCompletion(),
+        decisions: context.decisions(),
+      }, foldedMessages);
+
+      /**
+       * Make room after the endpoint refused a turn as longer than the model
+       * can hold: fold all but the last few exchanges, elide the older half of
+       * the tool output that is left, and drop every screenshot. Returns false
+       * when there was nothing left to cut.
+       */
+      const shrinkHistory = (): boolean => {
+        const folded = compactHistory(messages, describeFold, opening, {
+          force: true, retainedExchanges: OVERFLOW_RETAINED_EXCHANGES,
+        });
+        const carried = retainedToolResultCharacters(messages);
+        const elided = carried > 0 && boundRetainedToolResults(messages, answerCallIds, {
+          max: Math.floor(carried / 2), lowWater: Math.floor(carried / 4),
+        });
+        const dropped = dropCarriedImages(messages, requests);
+        if (folded || elided) runSkillTool.clearCache();
+        return folded || elided || dropped;
+      };
+
       /**
        * Run one tool the model asked for. A bad argument object or a refused
        * action is the model's to recover from and comes back as a failed tool
@@ -698,8 +764,6 @@ export function createAgentLoopPlanner(options: AgentLoopPlannerOptions): Planne
           messages,
         };
         const turnNumber = turn + 1;
-        const requestCharacters = JSON.stringify(request).length;
-        const estimatedInputTokens = estimateTurnInputTokens(request);
 
         // Each turn is its own message, so the seam between two of them is a
         // paragraph break rather than a bare concatenation.
@@ -709,18 +773,26 @@ export function createAgentLoopPlanner(options: AgentLoopPlannerOptions): Planne
         let completed = false;
         let stopReason: TurnStopReason | undefined;
         let stalled = false;
+        let turnUsage: TurnUsage | undefined;
+        let retries = 0;
+        let shrunk = false;
 
         // A transport hands over a turn's calls only once the whole turn has
         // arrived, so a turn that failed partway ran nothing and is simply
         // asked for again. Each try starts from nothing but what it streams.
-        for (let retry = 0; ; retry += 1) {
+        for (;;) {
           calls = [];
           spoken = "";
           completed = false;
           stopReason = undefined;
+          turnUsage = undefined;
           let failureCode: Extract<TurnEvent, { kind: "failed" }>["code"] | undefined;
           let usage: TurnUsage | undefined;
           let transient: TransientTurnError | undefined;
+          let overflowed = false;
+          // Measured per try: a try after the conversation was shortened sends less.
+          const requestCharacters = JSON.stringify(request).length;
+          const estimatedInputTokens = estimateTurnInputTokens(request);
 
           let firstEventMs: number | undefined;
           let firstTextMs: number | undefined;
@@ -760,19 +832,35 @@ export function createAgentLoopPlanner(options: AgentLoopPlannerOptions): Planne
               completed = true;
               stopReason = event.stopReason;
               usage = event.usage;
+              turnUsage = event.usage;
             }
           } catch (error) {
             // A cancellation or a stall ends the run exactly as before: a stall
             // is not retried, because a model that went quiet once would spend
             // the same wait again.
-            if (!(error instanceof TransientTurnError) || context.signal.aborted || watchdog.stalled) throw error;
-            if (retry >= turnRetries) {
-              throw new Error(retry === 0 ? error.message : `${error.message} Roqer tried this turn ${retry + 1} times.`, { cause: error });
+            if (context.signal.aborted || watchdog.stalled) throw error;
+            if (error instanceof ContextOverflowError) {
+              // Once a turn: a conversation cut this far that still does not
+              // fit is not going to, and a request the model cannot hold is
+              // one the person has to shorten or send elsewhere.
+              if (shrunk) {
+                throw new Error(`${error.message} Roqer shortened the conversation and it still does not fit. Start a new chat, or use a model with a larger context window.`, { cause: error });
+              }
+              if (!shrinkHistory()) {
+                throw new Error(`${error.message} There is nothing earlier in the conversation left to shorten. Send a shorter request, or use a model with a larger context window.`, { cause: error });
+              }
+              shrunk = true;
+              overflowed = true;
+            } else {
+              if (!(error instanceof TransientTurnError)) throw error;
+              if (retries >= turnRetries) {
+                throw new Error(retries === 0 ? error.message : `${error.message} Roqer tried this turn ${retries + 1} times.`, { cause: error });
+              }
+              if (error.retryAfterMs !== undefined && error.retryAfterMs > MAX_RETRY_AFTER_MS) {
+                throw new Error(`${error.message} It asked Roqer to wait ${seconds(error.retryAfterMs)} before trying again.`, { cause: error });
+              }
+              transient = error;
             }
-            if (error.retryAfterMs !== undefined && error.retryAfterMs > MAX_RETRY_AFTER_MS) {
-              throw new Error(`${error.message} It asked Roqer to wait ${seconds(error.retryAfterMs)} before trying again.`, { cause: error });
-            }
-            transient = error;
           } finally {
             watchdog.stop();
             stalled = watchdog.stalled;
@@ -788,20 +876,32 @@ export function createAgentLoopPlanner(options: AgentLoopPlannerOptions): Planne
               estimatedInputTokens,
               completed,
               ...(watchdog.stalled ? { stalled: true } : {}),
-              ...(transient === undefined ? {} : { retried: true }),
+              ...(transient === undefined && !overflowed ? {} : { retried: true }),
               ...(stopReason === undefined ? {} : { stopReason }),
               ...(failureCode === undefined ? {} : { failureCode }),
               ...(usage === undefined ? {} : { usage }),
             });
           }
+          if (overflowed) {
+            // Said, because the model is about to lose detail it had: it has to
+            // know to read Studio again rather than trust a memory, and the
+            // person watching deserves to know why it went back.
+            context.status(
+              "Conversation too long for the model",
+              `${label} said the conversation no longer fits the model. Roqer folded older work into a summary, elided older tool output, dropped earlier screenshots, and is sending the turn again.`,
+            );
+            prose.beginSegment();
+            continue;
+          }
           if (transient === undefined) break;
 
-          const delay = retryDelayMs(retry, retryBaseMs, transient.retryAfterMs);
+          const delay = retryDelayMs(retries, retryBaseMs, transient.retryAfterMs);
+          retries += 1;
           // Said, not done quietly: a failed try may already have streamed some
           // of its reply, and the next one will say it again.
           context.status(
             "Model endpoint failed; trying the turn again",
-            `${transient.message} Roqer tries again in ${seconds(delay)} (${retry + 1} of ${turnRetries}).`,
+            `${transient.message} Roqer tries again in ${seconds(delay)} (${retries} of ${turnRetries}).`,
           );
           prose.beginSegment();
           await pause(delay, context.signal);
@@ -937,13 +1037,16 @@ export function createAgentLoopPlanner(options: AgentLoopPlannerOptions): Planne
         // Folding runs first: an exchange dropped here takes its tool output and
         // its pictures with it, so the budgets below are spent on what the run
         // still carries rather than on what is about to leave.
-        const folded = compactHistory(messages, (foldedMessages) => describeRunState({
-          tasks: context.tasks(),
-          changes: context.changes(),
-          evidence: context.evidence(),
-          verification: context.checkCompletion(),
-          decisions: context.decisions(),
-        }, foldedMessages), opening);
+        // The endpoint's own count of what this turn sent, plus what it said and
+        // what its tools returned, is what the next request will carry.
+        const resultCharacters = results.reduce((total, block) => total + (block.kind === "tool-result" ? block.content.length : 0), 0);
+        const crowded = options.contextWindow !== undefined && turnUsage !== undefined &&
+          turnUsage.inputTokens + turnUsage.outputTokens + Math.ceil(resultCharacters / 4) > options.contextWindow * CONTEXT_FOLD_RATIO &&
+          messages.length > 1 + (CROWDED_RETAINED_EXCHANGES + MIN_CROWDED_FOLD_EXCHANGES) * 2;
+        const folded = compactHistory(
+          messages, describeFold, opening,
+          crowded ? { force: true, retainedExchanges: CROWDED_RETAINED_EXCHANGES } : {},
+        );
         if (folded) {
           // Said rather than done quietly. A model that suddenly cannot quote a
           // result it read twenty turns ago is behaving correctly, and a reader
