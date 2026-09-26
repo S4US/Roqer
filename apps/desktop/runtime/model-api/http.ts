@@ -1,4 +1,4 @@
-import { TransientTurnError } from "./turn-contract";
+import { TransientTurnError, type TurnMessage, type TurnToolCall } from "./turn-contract";
 
 /**
  * Transport pieces shared by the adapters that talk to a user's own model
@@ -215,6 +215,23 @@ export function streamFailure(error: unknown, label: string, apiKey: string | nu
 
 export function endpointUrl(baseUrl: string, relative: string): string {
   return new URL(relative, baseUrl.endsWith("/") ? baseUrl : `${baseUrl}/`).toString();
+}
+
+/**
+ * How a transport recognises one of its own turns when the loop sends it back:
+ * by the text and calls the loop keeps for it, which the transport produced
+ * verbatim. What the loop does not keep -- reasoning, signatures -- the
+ * transport records against this and restores.
+ */
+export function turnKey(text: string, calls: readonly TurnToolCall[]): string {
+  return JSON.stringify([text, calls.map((call) => [call.id, call.name, call.arguments])]);
+}
+
+/** The same key, for an assistant message as the loop recorded it. */
+export function messageKey(message: TurnMessage): string {
+  const text = message.content.flatMap((block) => block.kind === "text" ? [block.text] : []).join("");
+  const calls = message.content.flatMap((block) => block.kind === "tool-call" ? [block.call] : []);
+  return turnKey(text, calls);
 }
 
 const OPAQUE_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;

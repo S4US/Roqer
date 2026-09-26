@@ -714,3 +714,113 @@ test("reasoning an OpenAI-compatible server streams is reported as progress and 
     { kind: "completed", stopReason: "end" },
   ]);
 });
+
+type SentChatMessage = { role: string; content: unknown; tool_calls?: Array<Record<string, unknown>>; reasoning_content?: string; reasoning_details?: unknown };
+const chatMessages = (sent: Sent) => sent.body.messages as SentChatMessage[];
+
+/** One OpenAI-compatible turn that reasons in `reasoning`, then asks for one tool call. */
+function reasonedToolTurn(reasoning: readonly Record<string, unknown>[], call: Record<string, unknown>): { frames: string[] } {
+  return {
+    frames: [
+      ...reasoning.map((delta) => json({ choices: [{ delta }] })),
+      json({ choices: [{ delta: { tool_calls: [{ index: 0, id: "call_1", ...call, function: { name: "roblox_studio", arguments: "{\"operation\":\"get_place_info\"}" } }] } }] }),
+      json({ choices: [{ delta: {}, finish_reason: "tool_calls" }] }),
+      "[DONE]",
+    ],
+  };
+}
+
+const PLACE_INFO_TURN: TurnRequest["messages"] = [
+  ...REQUEST.messages,
+  { role: "assistant", content: [{ kind: "tool-call", call: { id: "call_1", name: "roblox_studio", arguments: { operation: "get_place_info" } } }] },
+  { role: "user", content: [{ kind: "tool-result", callId: "call_1", content: "Place1", failed: false }] },
+];
+
+const FINISHED = { frames: [json({ choices: [{ delta: { content: "Done." }, finish_reason: "stop" }] }), "[DONE]"] };
+
+test("DeepSeek's reasoning goes back with the turn that produced it, which a request with tools requires", async () => {
+  // From V3.2, DeepSeek refuses a tool-carrying request whose earlier turns come
+  // back without their reasoning_content: "Missing reasoning_content".
+  const { fetch, sent } = endpoint([
+    reasonedToolTurn([{ reasoning_content: "The user wants " }, { reasoning_content: "the place name." }], {}),
+    FINISHED,
+  ]);
+  const turns = new OpenAiChatTurns({ baseUrl: "https://api.deepseek.com/v1", apiKey: null, label: "DeepSeek", reasoning: false, fetch });
+  await collect(turns.streamTurn(REQUEST, new AbortController().signal));
+  await collect(turns.streamTurn({ ...REQUEST, messages: PLACE_INFO_TURN }, new AbortController().signal));
+
+  const assistant = chatMessages(sent[1]).find((message) => message.role === "assistant")!;
+  assert.equal(assistant.reasoning_content, "The user wants the place name.");
+  assert.equal(assistant.tool_calls?.[0].id, "call_1");
+  assert.equal("reasoning_content" in chatMessages(sent[0])[0], false, "nothing is invented for a turn that did not reason");
+});
+
+test("OpenRouter's streamed reasoning fragments go back joined into whole blocks", async () => {
+  // A signed block is valid only whole; sent back a few words at a time, its
+  // signature no longer matches and the provider refuses the turn.
+  const { fetch, sent } = endpoint([
+    reasonedToolTurn([
+      { reasoning: "Plan", reasoning_details: [{ type: "reasoning.text", text: "Plan", format: "anthropic-claude-v1", index: 0 }] },
+      { reasoning: " the shop", reasoning_details: [{ type: "reasoning.text", text: " the shop", index: 0 }] },
+      { reasoning_details: [{ type: "reasoning.text", signature: "sig-", index: 0 }] },
+      { reasoning_details: [{ type: "reasoning.text", signature: "123", index: 0 }] },
+      { reasoning_details: [{ type: "reasoning.encrypted", data: "opaque", id: "call_1", index: 1 }] },
+    ], {}),
+    FINISHED,
+  ]);
+  const turns = new OpenAiChatTurns({ baseUrl: "https://openrouter.ai/api/v1", apiKey: null, label: "OpenRouter", reasoning: true, fetch });
+  await collect(turns.streamTurn(REQUEST, new AbortController().signal));
+  await collect(turns.streamTurn({ ...REQUEST, messages: PLACE_INFO_TURN }, new AbortController().signal));
+
+  const assistant = chatMessages(sent[1]).find((message) => message.role === "assistant")!;
+  assert.deepEqual(assistant.reasoning_details, [
+    { type: "reasoning.text", text: "Plan the shop", format: "anthropic-claude-v1", index: 0, signature: "sig-123" },
+    { type: "reasoning.encrypted", data: "opaque", id: "call_1", index: 1 },
+  ]);
+  assert.equal("reasoning_content" in assistant, false);
+});
+
+test("a Gemini thought signature goes back on the tool call it came with", async () => {
+  // Google's OpenAI-compatible endpoint refuses the next turn of a Gemini 3
+  // tool loop when a call comes back without its signature.
+  const signature = { google: { thought_signature: "sig-gemini" } };
+  const { fetch, sent } = endpoint([reasonedToolTurn([], { extra_content: signature }), FINISHED]);
+  const turns = new OpenAiChatTurns({ baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai", apiKey: null, label: "Gemini", reasoning: false, fetch });
+  await collect(turns.streamTurn(REQUEST, new AbortController().signal));
+  await collect(turns.streamTurn({ ...REQUEST, messages: PLACE_INFO_TURN }, new AbortController().signal));
+
+  const assistant = chatMessages(sent[1]).find((message) => message.role === "assistant")!;
+  assert.deepEqual(assistant.tool_calls?.[0].extra_content, signature);
+});
+
+test("a server that does not know a reasoning field gets the turn again without it, for the rest of the run", async () => {
+  const { fetch, sent } = endpoint([
+    reasonedToolTurn([{ reasoning_content: "Thinking." }], {}),
+    { status: 400, body: json({ detail: [{ loc: ["body", "messages", 2, "reasoning_content"], msg: "Extra inputs are not permitted" }] }) },
+    FINISHED,
+    FINISHED,
+  ]);
+  const turns = new OpenAiChatTurns({ baseUrl: "http://localhost:8000/v1", apiKey: null, label: "vLLM", reasoning: false, fetch });
+  await collect(turns.streamTurn(REQUEST, new AbortController().signal));
+  assert.deepEqual((await collect(turns.streamTurn({ ...REQUEST, messages: PLACE_INFO_TURN }, new AbortController().signal))).at(-1),
+    { kind: "completed", stopReason: "end" });
+  await collect(turns.streamTurn({ ...REQUEST, messages: PLACE_INFO_TURN }, new AbortController().signal));
+
+  const assistant = (index: number) => chatMessages(sent[index]).find((message) => message.role === "assistant")!;
+  assert.equal(assistant(1).reasoning_content, "Thinking.");
+  assert.equal("reasoning_content" in assistant(2), false);
+  assert.equal("reasoning_content" in assistant(3), false, "not offered again, so no second refusal");
+  assert.equal(sent.length, 4);
+});
+
+test("an endpoint asking for reasoning it did not get is reported, not answered by sending less", async () => {
+  const { fetch, sent } = endpoint([
+    { status: 400, body: json({ error: { message: "Missing `reasoning_content` field in the assistant message at message index 2." } }) },
+  ]);
+  const turns = new OpenAiChatTurns({ baseUrl: "https://api.deepseek.com/v1", apiKey: null, label: "DeepSeek", reasoning: false, fetch });
+  await assert.rejects(
+    () => collect(turns.streamTurn({ ...REQUEST, messages: PLACE_INFO_TURN }, new AbortController().signal)),
+    /DeepSeek returned status 400: Missing `reasoning_content`/,
+  );
+  assert.equal(sent.length, 1);
+});

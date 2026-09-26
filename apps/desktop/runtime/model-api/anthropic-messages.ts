@@ -16,7 +16,8 @@ import { DEFAULT_ANTHROPIC_MAX_OUTPUT } from "../../shared/custom-providers";
 import type { TurnTransport } from "../agent-loop";
 import {
   DEFAULT_REQUEST_TIMEOUT_MS, endpointRefusal, endpointUrl, fetchWithin, frameData, interruptedStream, isRecord,
-  MAX_TOOL_ARGUMENT_CHARACTERS, MAX_TOOL_CALLS_PER_TURN, readErrorBody, serverSentFrames, streamFailure, usableCallId,
+  MAX_TOOL_ARGUMENT_CHARACTERS, MAX_TOOL_CALLS_PER_TURN, messageKey, readErrorBody, serverSentFrames, streamFailure,
+  turnKey, usableCallId,
 } from "./http";
 
 /**
@@ -169,17 +170,6 @@ const THINKING_BINDING_REFUSAL = /signature|different conversation/i;
 
 function isThinking(block: ContentBlock): block is ThinkingBlock {
   return block.type === "thinking" || block.type === "redacted_thinking";
-}
-
-/** How a turn is recognised: the text and calls the loop keeps for it, which a transport produced verbatim. */
-function turnKey(text: string, calls: readonly TurnToolCall[]): string {
-  return JSON.stringify([text, calls.map((call) => [call.id, call.name, call.arguments])]);
-}
-
-function messageKey(message: TurnMessage): string {
-  const text = message.content.flatMap((block) => block.kind === "text" ? [block.text] : []).join("");
-  const calls = message.content.flatMap((block) => block.kind === "tool-call" ? [block.call] : []);
-  return turnKey(text, calls);
 }
 
 /**
