@@ -3,7 +3,7 @@ import test from "node:test";
 import type { McpToolOutcome } from "./mcp-types";
 import type { PlannerContext } from "./run-engine";
 import type { RunEvidence } from "../shared/run-events";
-import { createStudioToolRunner, studioToolDescription, studioToolResultText } from "./studio-tools";
+import { createStudioToolRunner, parseStudioToolInput, studioToolDescription, studioToolResultText } from "./studio-tools";
 
 const ok = (data: Record<string, unknown>): McpToolOutcome => ({
   ok: true,
@@ -544,6 +544,33 @@ test("a guessed upload shape is corrected locally instead of becoming a failed a
   assert.deepEqual(calls, [], "the malformed upload must not reach the bridge");
   assert.match(result.text, /missing the required arguments filePath, assetType, displayName/);
   assert.match(result.text, /action='upload' requires filePath, assetType, displayName/);
+});
+
+test("steps written as JSON text reach Studio as the array the model meant", async () => {
+  const steps = [{ op: "create", className: "Part", id: "floor" }];
+  const parsed = parseStudioToolInput({
+    operation: "build_instances",
+    arguments: JSON.stringify({ path: "game.Workspace.Track", operations: JSON.stringify(steps) }),
+  });
+  const { context, calls } = contextWith([ok({ path: "game.Workspace.Track", created: 1 })]);
+  const run = createStudioToolRunner(context);
+
+  const result = await run(parsed.operation, parsed.args);
+
+  assert.equal(result.ok, true);
+  assert.deepEqual(calls, [{ tool: "build_instances", args: { path: "game.Workspace.Track", operations: steps } }]);
+});
+
+test("a value that cannot be read as its declared type is answered locally, saying what to send", async () => {
+  const { context, calls } = contextWith([]);
+  const run = createStudioToolRunner(context);
+
+  const result = await run("get_project_structure", { path: "game.Workspace", maxDepth: "deep" });
+
+  assert.equal(result.ok, false);
+  assert.deepEqual(calls, [], "a string where Studio compares numbers must not reach the plugin");
+  assert.match(result.text, /maxDepth must be number, but it arrived as text/);
+  assert.match(result.text, /Schema for get_project_structure/);
 });
 
 test("an empty pattern is answered with the schema rather than sent to Studio", async () => {

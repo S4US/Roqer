@@ -136,8 +136,124 @@ export function toolSchemaHint(operation: string): string | undefined {
   ].join("\n");
 }
 
-/** Why a required argument cannot be sent as it stands. */
-export type ArgumentProblem = Readonly<{ name: string; reason: "missing" | "empty" }>;
+/** Why an argument cannot be sent as it stands. */
+export type ArgumentProblem =
+  | Readonly<{ name: string; reason: "missing" | "empty" }>
+  /** `expected` is the declared type (`number`, `object[]`); `received` says what came instead. */
+  | Readonly<{ name: string; reason: "type"; expected: string; received: string }>;
+
+/** The JavaScript shape a declared type needs, or nothing for a string or an unknown type. */
+function declaredShape(type: string): "number" | "boolean" | "array" | "object" | undefined {
+  if (type === "number" || type === "integer") return "number";
+  if (type === "boolean") return "boolean";
+  if (type.endsWith("[]") || type === "array") return "array";
+  if (type === "object") return "object";
+  return undefined;
+}
+
+function hasShape(value: unknown, shape: NonNullable<ReturnType<typeof declaredShape>>): boolean {
+  switch (shape) {
+    case "number":
+      return typeof value === "number" && Number.isFinite(value);
+    case "boolean":
+      return typeof value === "boolean";
+    case "array":
+      return Array.isArray(value);
+    case "object":
+      return typeof value === "object" && value !== null && !Array.isArray(value);
+  }
+}
+
+/** A plain decimal number, the only text read as one: not "", "0x10", "Infinity" or "1,5". */
+const NUMBER_TEXT = /^-?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/;
+
+function restoredValue(value: string, shape: NonNullable<ReturnType<typeof declaredShape>>): unknown {
+  const trimmed = value.trim();
+  switch (shape) {
+    case "number":
+      return NUMBER_TEXT.test(trimmed) ? Number(trimmed) : value;
+    case "boolean":
+      return trimmed === "true" ? true : trimmed === "false" ? false : value;
+    case "array":
+    case "object": {
+      if (!trimmed.startsWith(shape === "array" ? "[" : "{")) return value;
+      try {
+        const parsed = JSON.parse(trimmed) as unknown;
+        return hasShape(parsed, shape) ? parsed : value;
+      } catch {
+        return value;
+      }
+    }
+  }
+}
+
+/**
+ * The arguments a model sent, with values it wrote as text restored to the
+ * type the operation declares.
+ *
+ * The `roblox_studio` envelope leaves `arguments` unconstrained, so no
+ * operation's argument types reach the provider, and some models then write
+ * values as strings: `maxDepth: "3"`, `operations: "[{…}]"`. The bridge route
+ * Roqer calls checks no schema, so such a value reached Studio as text: a
+ * depth compared against a number crashed a plugin handler, and a build's steps
+ * arrived as one string and were refused sixteen times while the model
+ * insisted it had sent an array.
+ *
+ * Only a string that reads unambiguously as the declared type is converted: a
+ * JSON array for an array, a JSON object for an object, a plain decimal for a
+ * number, `true` or `false` for a boolean. Anything else is left as sent, for
+ * `argumentTypeProblems` and the server to judge. An argument declared a
+ * string is never touched, so paths and script source pass through byte for
+ * byte, and a model that sends proper JSON values sees no difference at all.
+ */
+export function restoreArgumentTypes(operation: string, args: Record<string, unknown>): Record<string, unknown> {
+  const schema = toolSchema(operation);
+  if (schema === undefined) return args;
+  let restored: Record<string, unknown> | undefined;
+  for (const parameter of schema.parameters) {
+    if (!Object.prototype.hasOwnProperty.call(args, parameter.name)) continue;
+    const value = args[parameter.name];
+    const shape = declaredShape(parameter.type);
+    if (shape === undefined || typeof value !== "string") continue;
+    const converted = restoredValue(value, shape);
+    if (converted === value) continue;
+    restored ??= { ...args };
+    restored[parameter.name] = converted;
+  }
+  return restored ?? args;
+}
+
+function describeReceived(value: unknown, shape: NonNullable<ReturnType<typeof declaredShape>>): string {
+  if (typeof value === "string") {
+    return shape === "array" || shape === "object"
+      ? `text that is not a JSON ${shape}; send the ${shape} itself, not a string`
+      : "text";
+  }
+  if (Array.isArray(value)) return "an array";
+  if (typeof value === "number") return Number.isFinite(value) ? "a number" : "a non-finite number";
+  return typeof value === "object" ? "an object" : `a ${typeof value}`;
+}
+
+/**
+ * Arguments supplied with a type the operation does not declare, after
+ * `restoreArgumentTypes` has had its chance. A value of the wrong type is one
+ * the plugin was never written to receive, so the call is answered here with
+ * the rule it broke rather than with whatever the handler does with it.
+ * Strings, unknown types, and unknown operations are left to the server.
+ */
+export function argumentTypeProblems(operation: string, args: Record<string, unknown>): ArgumentProblem[] {
+  const schema = toolSchema(operation);
+  if (schema === undefined) return [];
+  const problems: ArgumentProblem[] = [];
+  for (const parameter of schema.parameters) {
+    if (!Object.prototype.hasOwnProperty.call(args, parameter.name)) continue;
+    const value = args[parameter.name];
+    const shape = declaredShape(parameter.type);
+    if (shape === undefined || value === undefined || value === null || hasShape(value, shape)) continue;
+    problems.push({ name: parameter.name, reason: "type", expected: parameter.type, received: describeReceived(value, shape) });
+  }
+  return problems;
+}
 
 /**
  * Required arguments the call cannot be sent with, in the order the server
