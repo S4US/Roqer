@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, Menu, shell, type IpcMainEvent, type IpcMainInvokeEvent, type WebContents } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme, shell, type IpcMainEvent, type IpcMainInvokeEvent, type WebContents } from "electron";
 import { autoUpdater } from "electron-updater";
 import { spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
@@ -236,7 +236,10 @@ function queueStateWrite(state: unknown): Promise<{ savedAt: string }> {
 
 function saveState(event: IpcMainInvokeEvent, state: unknown): Promise<{ savedAt: string }> {
   if (!isTrusted(event.sender)) throw new Error("This window may not save the workspace.");
-  return queueStateWrite(state);
+  return queueStateWrite(state).then((saved) => {
+    followTheme(savedTheme(state));
+    return saved;
+  });
 }
 
 async function recoverState(event: IpcMainInvokeEvent): Promise<unknown> {
@@ -1383,17 +1386,33 @@ async function drainRunExecutions(): Promise<void> {
 
 /**
  * Painted before the renderer has drawn anything. Read from the saved theme so
- * a light-theme user never sees a black frame on startup, or the reverse.
+ * a light-theme user never sees a dark frame on startup, or the reverse, and
+ * the same colour as the renderer's canvas so the first paint is not a seam.
  * Dark until a saved workspace says otherwise, which is the default the app
  * starts on.
  */
-let windowBackground = "#0a0a0a";
+let windowBackground = "#15171b";
+
+function savedTheme(state: unknown): "light" | "dark" | undefined {
+  const preferences = isRecord(state) ? state.preferences : undefined;
+  const theme = isRecord(preferences) ? preferences.theme : undefined;
+  return theme === "light" || theme === "dark" ? theme : undefined;
+}
+
+/**
+ * Native surfaces -- file dialogs, the Windows title bar -- take their colours
+ * from the system unless told otherwise, which leaves them light beside a dark
+ * Roqer. They follow the theme the user chose instead, whenever it is saved.
+ */
+function followTheme(theme: "light" | "dark" | undefined): void {
+  if (theme !== undefined && nativeTheme.themeSource !== theme) nativeTheme.themeSource = theme;
+}
 
 async function resolveWindowBackground(): Promise<string> {
   const state = await loadState().catch(() => null);
-  const preferences = isRecord(state) ? state.preferences : undefined;
-  const light = isRecord(preferences) && preferences.theme === "light";
-  return light ? "#fafafa" : "#0a0a0a";
+  const theme = savedTheme(state) ?? "dark";
+  followTheme(theme);
+  return theme === "light" ? "#f2f3f5" : "#15171b";
 }
 
 function createWindow(): void {

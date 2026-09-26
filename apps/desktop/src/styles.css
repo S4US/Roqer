@@ -16,6 +16,9 @@
   font-weight: 400;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
+  /* Native controls -- a select's open list, checkboxes, autofill -- are drawn
+     by Chromium from this, not from the tokens below. */
+  color-scheme: light;
 
   --canvas: #f2f3f5;
   --surface: #f7f8fa;
@@ -92,6 +95,8 @@
 }
 
 [data-theme="dark"] {
+  color-scheme: dark;
+
   --canvas: #15171b;
   --surface: #1b1e24;
   --surface-raised: #21242b;
@@ -153,12 +158,9 @@
 
 * { box-sizing: border-box; }
 html, body, #root { width: 100%; height: 100%; margin: 0; }
-/* The dark canvas, before any of the app has mounted. `data-theme` lives on the
-   shell inside React, so without this the window paints white for the frame or
-   two before the first render — a flash on every launch, on the theme that is
-   now the default. Someone who has chosen light sees their own colour as soon
-   as the shell appears. */
-body { overflow: hidden; background: #15171b; }
+/* The theme is on the document before the first render (see main.tsx), so the
+   canvas is the right colour from the first frame, whichever theme is saved. */
+body { overflow: hidden; background: var(--canvas); }
 button, textarea, select { font: inherit; }
 button { cursor: pointer; }
 button:focus-visible, textarea:focus-visible, select:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }

@@ -352,8 +352,9 @@ function App() {
   useEffect(() => {
     window.localStorage.setItem("workbench-theme", workspace.preferences.theme);
   }, [workspace.preferences.theme]);
-  // Dialogs and menus portalled into the body sit outside the shell, so the
-  // theme is mirrored onto the document root for them to inherit its tokens.
+  // Dialogs and menus portalled into the body sit outside the shell, and
+  // native controls read `color-scheme` from the root, so the theme is kept on
+  // the document root too.
   useLayoutEffect(() => {
     document.documentElement.dataset.theme = workspace.preferences.theme;
   }, [workspace.preferences.theme]);
