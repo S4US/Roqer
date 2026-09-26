@@ -992,7 +992,7 @@ function plannerFor(request: RunStartRequest, agentRuntime: AgentRuntime, runId:
       label: custom.connection.name,
       images: custom.model.images,
       toolOutputBudget: toolOutputBudgetFor(custom.model.contextWindow),
-      outputLimitAdvice: `Raise Max output for ${custom.model.displayName} in Settings â†’ Your own models${
+      outputLimitAdvice: `Raise Max output for ${custom.model.displayName} in Settings → Your own models${
         custom.model.maxOutputTokens === undefined ? "" : ` (it is set to ${custom.model.maxOutputTokens.toLocaleString("en-US")})`
       }, then ask it to continue.`,
       blender,
