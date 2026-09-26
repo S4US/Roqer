@@ -345,12 +345,20 @@ function endedEarlyNote(stopReason: TurnStopReason | undefined, outputLimitAdvic
 }
 
 /**
- * How much tool-output imagery a run carries forward, as base64 characters.
- * One screenshot's worth: enough that the newest capture always survives, small
- * enough that a run which screenshots repeatedly cannot grow its own bill
- * without limit. Raise it to let an agent compare a before and an after.
+ * How much tool-output imagery a run carries forward, as base64 characters,
+ * and what it is cut back to once that is exceeded.
+ *
+ * Hysteretic, like the bound on tool output in `agent-loop-history.ts`, and
+ * for the same reason. The budget used to be one screenshot's worth, so every
+ * capture after the first rewrote the message holding the one before it; the
+ * provider's prompt cache ends at the first changed token, so each capture
+ * re-billed everything after that message at the full rate -- far more than the
+ * picture it saved -- and invalidated the reasoning later turns had built on it.
+ * Now screenshots accumulate up to about three, which also lets an agent compare
+ * a before with an after, and are then cut back to the newest in one step.
  */
-const MAX_RETAINED_IMAGE_BASE64 = MAX_TURN_IMAGE_BASE64;
+const MAX_RETAINED_IMAGE_BASE64 = MAX_TURN_IMAGE_BASE64 * 3;
+const RETAINED_IMAGE_LOW_WATER = MAX_TURN_IMAGE_BASE64;
 
 /**
  * Keep the newest tool-output images; drop the ones behind them.
@@ -418,8 +426,25 @@ function silenceNote(open: readonly RunTask[]): string {
 }
 
 function boundRetainedImages(messages: TurnMessage[], requests: ReadonlySet<TurnMessage>): void {
-  let remaining = MAX_RETAINED_IMAGE_BASE64;
-  let kept = [...requests].reduce((total, message) => total + imageCount(message), 0);
+  const attached = [...requests].reduce((total, message) => total + imageCount(message), 0);
+  let carried = 0;
+  let carriedBytes = 0;
+  for (const message of messages) {
+    if (requests.has(message)) continue;
+    for (const block of message.content) {
+      if (block.kind !== "image") continue;
+      carried += 1;
+      carriedBytes += block.data.length;
+    }
+  }
+  // Under the high-water mark the history is left exactly as it is.
+  if (attached + carried <= MAX_TURN_IMAGES && carriedBytes <= MAX_RETAINED_IMAGE_BASE64) return;
+
+  // Over it, cut deep: back to the newest capture, so the next few can
+  // accumulate before history is rewritten again.
+  let remaining = RETAINED_IMAGE_LOW_WATER;
+  let kept = attached;
+  const keepAtMost = Math.min(MAX_TURN_IMAGES, attached + 1);
   // Newest first, so the budget is spent on the most recent view of Studio.
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     const message = messages[index];
@@ -428,7 +453,7 @@ function boundRetainedImages(messages: TurnMessage[], requests: ReadonlySet<Turn
     // with, so filtering images can never empty one.
     const content = message.content.filter((block) => {
       if (block.kind !== "image") return true;
-      if (kept >= MAX_TURN_IMAGES || block.data.length > remaining) return false;
+      if (kept >= keepAtMost || block.data.length > remaining) return false;
       remaining -= block.data.length;
       kept += 1;
       return true;

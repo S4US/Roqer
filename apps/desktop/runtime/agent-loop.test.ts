@@ -1237,21 +1237,22 @@ test("a screenshot survives the turns between capturing it and describing it", a
   assert.equal(carries(bridge.requests[2]), true, "the turn that describes it");
 });
 
-test("only the newest screenshots are carried, so a long run stays bounded", async () => {
+test("screenshots accumulate, then are cut back to the newest in one step", async () => {
+  // Evicting the previous capture on every new one rewrote an earlier message
+  // each time, and the provider re-billed everything after it at full price.
+  // Now history is left alone until the high-water mark, then cut deeply once.
   const controller = new AbortController();
-  // Two-thirds of the budget each, so the second capture evicts the first.
-  // Rounded to a multiple of four, because the wire contract checks that the
-  // data is real base64 before it checks anything else.
-  const size = Math.floor((MAX_TURN_IMAGE_BASE64 * 2) / 3 / 4) * 4;
-  const first = "A".repeat(size);
-  const second = "B".repeat(size);
+  // Nine-tenths of a turn's image budget each, rounded to a multiple of four,
+  // because the wire contract checks that the data is real base64 first.
+  const size = Math.floor((MAX_TURN_IMAGE_BASE64 * 9) / 10 / 4) * 4;
+  const shots = ["A", "B", "C", "D", "E"].map((letter) => letter.repeat(size));
   let captures = 0;
   const { context } = makeContext(controller, (tool) => tool === "capture_screenshot"
     ? {
         ok: true,
         data: undefined,
         text: "Screenshot",
-        images: [{ mediaType: "image/png", data: captures++ === 0 ? first : second }],
+        images: [{ mediaType: "image/png", data: shots[captures++] }],
         httpStatus: 200,
         durationMs: 1,
       }
@@ -1261,8 +1262,7 @@ test("only the newest screenshots are carried, so a long run stays bounded", asy
     call: { id, name: "roblox_studio", arguments: { operation: "capture_screenshot", arguments: {} } },
   });
   const bridge = gateway([
-    [shoot("shot_1"), { kind: "completed", stopReason: "tool-use" }],
-    [shoot("shot_2"), { kind: "completed", stopReason: "tool-use" }],
+    ...shots.map((_, index): readonly TurnEvent[] => [shoot(`shot_${index + 1}`), { kind: "completed", stopReason: "tool-use" }]),
     DONE("Done."),
   ]);
 
@@ -1270,9 +1270,18 @@ test("only the newest screenshots are carried, so a long run stays bounded", asy
 
   const data = (request: TurnRequest): string[] => request.messages
     .flatMap((message) => message.content.flatMap((block) => block.kind === "image" ? [block.data] : []));
-  assert.deepEqual(data(bridge.requests[1]), [first]);
-  // The older capture is gone rather than accumulating alongside the new one.
-  assert.deepEqual(data(bridge.requests[2]), [second]);
+  // Three captures ride along untouched: before, after, and one more.
+  assert.deepEqual(data(bridge.requests[1]), [shots[0]]);
+  assert.deepEqual(data(bridge.requests[2]), [shots[0], shots[1]]);
+  assert.deepEqual(data(bridge.requests[3]), [shots[0], shots[1], shots[2]]);
+  // Every request until then repeats the one before it exactly, which is what
+  // lets the provider serve it from its cache.
+  for (const index of [2, 3]) {
+    assert.deepEqual(bridge.requests[index].messages.slice(0, bridge.requests[index - 1].messages.length), bridge.requests[index - 1].messages);
+  }
+  // The fourth crosses the byte budget, and the run keeps only the newest.
+  assert.deepEqual(data(bridge.requests[4]), [shots[3]]);
+  assert.deepEqual(data(bridge.requests[5]), [shots[3], shots[4]]);
 });
 
 test("a Studio screenshot reaches the next model turn", async () => {
@@ -1321,8 +1330,8 @@ test("a Studio screenshot reaches the next model turn", async () => {
 });
 
 test("an attached picture is still there on the turn that acts on it", async () => {
-  // Screenshots are dropped once read, because they describe a moment that has
-  // passed. An attachment is the request itself: someone who hands over a mockup
+  // Screenshots are dropped once enough newer ones have arrived, because they
+  // describe a moment that has passed. An attachment is the request itself: someone who hands over a mockup
   // and says "build this" needs it present on the turn that builds, which is
   // never the first one.
   const controller = new AbortController();
@@ -1395,8 +1404,11 @@ test("an attached reference and a run of screenshots still fit one model turn", 
 
   const data = (request: TurnRequest): string[] => request.messages
     .flatMap((message) => message.content.flatMap((block) => block.kind === "image" ? [block.data] : []));
-  // The reference is never evicted; the screenshots share what it leaves.
-  assert.deepEqual(data(bridge.requests[5]), [reference, shots[2], shots[3], shots[4]]);
+  // The reference is never evicted; the screenshots share what it leaves, and
+  // once they fill it they are cut back to the newest, then accumulate again.
+  assert.deepEqual(data(bridge.requests[3]), [reference, shots[0], shots[1], shots[2]]);
+  assert.deepEqual(data(bridge.requests[4]), [reference, shots[3]]);
+  assert.deepEqual(data(bridge.requests[5]), [reference, shots[3], shots[4]]);
 });
 
 test("attachments that fill every slot leave a screenshot reported, not the run refused", async () => {
