@@ -113,11 +113,18 @@ type ProducedTurn = Readonly<{
  * fragments are joined back into one entry per block before anything is sent
  * back: their text, summary, data and signature concatenated in order, and
  * every other field taken from whichever fragment carried it.
+ *
+ * An index alone does not name a block: a Gemini thought signature, a
+ * `reasoning.encrypted` entry, can share its index with the reasoning text
+ * before it, and folded into that text it is no longer a signature at all. A fragment
+ * joins only a block of its own type, and never one with a different id.
  */
 function mergeReasoningDetail(details: JsonRecord[], fragment: JsonRecord): void {
   const index = fragment.index;
+  const sameBlock = (entry: JsonRecord): boolean => entry.type === fragment.type &&
+    (typeof entry.id !== "string" || typeof fragment.id !== "string" || entry.id === fragment.id);
   const target = typeof index === "number"
-    ? details.find((entry) => entry.index === index)
+    ? details.find((entry) => entry.index === index && sameBlock(entry))
     : details.at(-1)?.type === fragment.type && fragment.type !== "reasoning.encrypted" ? details.at(-1) : undefined;
   if (target === undefined) {
     details.push({ ...fragment });
@@ -130,6 +137,22 @@ function mergeReasoningDetail(details: JsonRecord[], fragment: JsonRecord): void
       target[field] = value;
     }
   }
+}
+
+/** Reasoning formats whose provider checks, on the way back, that its text is signed. */
+const SIGNED_REASONING_FORMATS = new Set(["anthropic-claude-v1", "google-gemini-v1"]);
+
+/**
+ * The reasoning blocks worth sending back. Anthropic and Google refuse a turn
+ * whose thinking comes back unsigned, and Gemini streams its thought summary as
+ * text that never is, so those are left out, as OpenRouter's own SDK leaves
+ * them out; the signatures themselves, in `reasoning.encrypted` or on a signed
+ * text block, all go back.
+ */
+function replayableDetails(details: readonly JsonRecord[]): JsonRecord[] {
+  return details.filter((detail) => detail.type !== "reasoning.text" ||
+    typeof detail.format !== "string" || !SIGNED_REASONING_FORMATS.has(detail.format) ||
+    (typeof detail.signature === "string" && detail.signature.length > 0));
 }
 
 /**
@@ -448,8 +471,9 @@ export class OpenAiChatTurns implements TurnTransport {
         ? `${label} ended the answer without saying it was finished.`
         : `${label} closed the connection before the model produced anything.`);
     }
-    if (reasoningContent.length > 0 || reasoningDetails.length > 0 || extraContent.size > 0) {
-      this.produced.push({ key: turnKey(text, calls), reasoningContent, reasoningDetails, extraContent });
+    const replayedDetails = replayableDetails(reasoningDetails);
+    if (reasoningContent.length > 0 || replayedDetails.length > 0 || extraContent.size > 0) {
+      this.produced.push({ key: turnKey(text, calls), reasoningContent, reasoningDetails: replayedDetails, extraContent });
     }
     for (const call of calls) yield { kind: "tool-call", call };
     yield usage === undefined ? { kind: "completed", stopReason: reason } : { kind: "completed", stopReason: reason, usage };
