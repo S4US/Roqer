@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 
 import {
+  DEFAULT_CUSTOM_REASONING_EFFORTS,
   isCustomConnection,
   MAX_CUSTOM_API_KEY_CHARACTERS,
   MAX_CUSTOM_CONNECTIONS,
@@ -20,6 +21,10 @@ import type { SecretProtector } from "./secret-protector";
  * only to send a request; the renderer never receives one. A file that does
  * not validate is moved aside for diagnosis rather than overwritten, and the
  * user starts again with no connections instead of a half-read list.
+ *
+ * Schema 2 replaced a model's `reasoning` flag with the list of efforts it
+ * takes. A schema 1 file is read as the list the flag stood for and written
+ * back as schema 2 on the next change; nothing is rewritten just by reading.
  */
 
 export class CustomProviderStoreError extends Error {
@@ -37,7 +42,9 @@ export type CustomProviderStoreOptions = Readonly<{
 
 type StoredConnection = CustomConnection & Readonly<{ encryptedApiKey?: string }>;
 
-type StoredFile = Readonly<{ schemaVersion: 1; connections: readonly StoredConnection[] }>;
+const SCHEMA_VERSION = 2;
+
+type StoredFile = Readonly<{ schemaVersion: typeof SCHEMA_VERSION; connections: readonly StoredConnection[] }>;
 
 /** Generous for sixteen connections of thirty-two models each, and small enough to refuse a runaway file. */
 const MAX_FILE_BYTES = 512 * 1_024;
@@ -53,13 +60,32 @@ function decodeCiphertext(value: unknown): Buffer | undefined {
   return decoded;
 }
 
+/**
+ * A schema 1 connection with each model's `reasoning` flag turned into the
+ * efforts it meant then. Anything that is not the old shape is left for
+ * validation to refuse.
+ */
+function migrateVersion1Connection(connection: Record<string, unknown>): Record<string, unknown> {
+  if (!Array.isArray(connection.models)) return connection;
+  return {
+    ...connection,
+    models: connection.models.map((model: unknown) => {
+      if (!isRecord(model) || typeof model.reasoning !== "boolean" || "efforts" in model) return model;
+      const { reasoning, ...rest } = model;
+      return { ...rest, efforts: reasoning ? [...DEFAULT_CUSTOM_REASONING_EFFORTS] : [] };
+    }),
+  };
+}
+
 function parseStoredFile(value: unknown): StoredFile | undefined {
-  if (!isRecord(value) || value.schemaVersion !== 1 || !Array.isArray(value.connections) ||
-    value.connections.length > MAX_CUSTOM_CONNECTIONS) return undefined;
+  if (!isRecord(value) || (value.schemaVersion !== 1 && value.schemaVersion !== SCHEMA_VERSION) ||
+    !Array.isArray(value.connections) || value.connections.length > MAX_CUSTOM_CONNECTIONS) return undefined;
+  const fromVersion1 = value.schemaVersion === 1;
   const connections: StoredConnection[] = [];
   for (const entry of value.connections) {
     if (!isRecord(entry)) return undefined;
-    const { encryptedApiKey, ...connection } = entry;
+    const { encryptedApiKey, ...stored } = entry;
+    const connection = fromVersion1 ? migrateVersion1Connection(stored) : stored;
     if (!isCustomConnection(connection)) return undefined;
     if (encryptedApiKey !== undefined && decodeCiphertext(encryptedApiKey) === undefined) return undefined;
     connections.push(encryptedApiKey === undefined
@@ -67,7 +93,7 @@ function parseStoredFile(value: unknown): StoredFile | undefined {
       : { ...connection, encryptedApiKey: encryptedApiKey as string });
   }
   if (new Set(connections.map((connection) => connection.id)).size !== connections.length) return undefined;
-  return { schemaVersion: 1, connections };
+  return { schemaVersion: SCHEMA_VERSION, connections };
 }
 
 function view(connection: StoredConnection): CustomConnectionView {
@@ -106,7 +132,7 @@ export class CustomProviderStore {
       contents = await fs.readFile(this.file, "utf8");
     } catch (error) {
       if ((error as NodeJS.ErrnoException | null)?.code === "ENOENT") {
-        this.cached = { schemaVersion: 1, connections: [] };
+        this.cached = { schemaVersion: SCHEMA_VERSION, connections: [] };
         return this.cached;
       }
       throw new CustomProviderStoreError("Your model connections could not be read.");
@@ -130,7 +156,7 @@ export class CustomProviderStore {
       throw new CustomProviderStoreError("Your saved model connections are damaged and could not be set aside.");
     }
     this.preservedPath = preserved;
-    this.cached = { schemaVersion: 1, connections: [] };
+    this.cached = { schemaVersion: SCHEMA_VERSION, connections: [] };
     return this.cached;
   }
 
@@ -225,7 +251,7 @@ export class CustomProviderStore {
       const connections = existing === undefined
         ? [...current.connections, connection]
         : current.connections.map((entry) => entry.id === existing.id ? connection : entry);
-      await this.write({ schemaVersion: 1, connections });
+      await this.write({ schemaVersion: SCHEMA_VERSION, connections });
       return connections.map(view);
     });
   }
@@ -234,7 +260,7 @@ export class CustomProviderStore {
     return this.enqueue(async () => {
       const current = await this.read();
       const connections = current.connections.filter((connection) => connection.id !== id);
-      if (connections.length !== current.connections.length) await this.write({ schemaVersion: 1, connections });
+      if (connections.length !== current.connections.length) await this.write({ schemaVersion: SCHEMA_VERSION, connections });
       return connections.map(view);
     });
   }

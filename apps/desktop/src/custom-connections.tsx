@@ -3,12 +3,15 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 
 import {
   CUSTOM_API_FORMATS,
+  CUSTOM_REASONING_EFFORTS,
   DEFAULT_ANTHROPIC_MAX_OUTPUT,
   MAX_CUSTOM_MODELS,
+  sortCustomReasoningEfforts,
   type CustomApiFormat,
   type CustomConnectionSave,
   type CustomConnectionView,
   type CustomModel,
+  type CustomReasoningEffort,
 } from "../shared/custom-providers";
 import {
   importCustomModels, listCustomConnections, removeCustomConnection, saveCustomConnection, testCustomModel,
@@ -43,7 +46,7 @@ type DraftModel = {
   id: string;
   displayName: string;
   images: boolean;
-  reasoning: boolean;
+  efforts: readonly CustomReasoningEffort[];
   contextWindow: string;
   maxOutputTokens: string;
 };
@@ -69,7 +72,7 @@ function draftModel(model?: CustomModel): DraftModel {
     id: model?.id ?? "",
     displayName: model?.displayName ?? "",
     images: model?.images ?? true,
-    reasoning: model?.reasoning ?? false,
+    efforts: model?.efforts ?? [],
     contextWindow: model?.contextWindow === undefined ? "" : String(model.contextWindow),
     maxOutputTokens: model?.maxOutputTokens === undefined ? "" : String(model.maxOutputTokens),
   };
@@ -110,7 +113,7 @@ function saveRequest(draft: Draft): { ok: true; save: CustomConnectionSave } | {
       id,
       displayName: model.displayName.trim() || id,
       images: model.images,
-      reasoning: model.reasoning,
+      efforts: sortCustomReasoningEfforts(model.efforts),
       ...(contextWindow === undefined ? {} : { contextWindow }),
       ...(maxOutputTokens === undefined ? {} : { maxOutputTokens }),
     });
@@ -253,7 +256,7 @@ function ConnectionEditor({ draft, busy, saved, onChange, onSave, onCancel }: {
   const isSavedModel = (model: DraftModel) => {
     const match = saved?.models.find((entry) => entry.id === model.id.trim());
     return match !== undefined && saved?.baseUrl === draft.baseUrl.trim() && saved.format === draft.format &&
-      match.images === model.images && match.reasoning === model.reasoning;
+      match.images === model.images && match.efforts.join() === sortCustomReasoningEfforts(model.efforts).join();
   };
 
   const test = async (model: DraftModel) => {
@@ -285,7 +288,7 @@ function ConnectionEditor({ draft, busy, saved, onChange, onSave, onCancel }: {
 
   const addChosen = () => {
     const room = MAX_CUSTOM_MODELS - draft.models.length;
-    const added = [...chosen].slice(0, room).map((id) => draftModel({ id, displayName: id, images: true, reasoning: false }));
+    const added = [...chosen].slice(0, room).map((id) => draftModel({ id, displayName: id, images: true, efforts: [] }));
     update({ models: [...draft.models, ...added] });
     setImported(null);
     setChosen(new Set());
@@ -345,7 +348,6 @@ function ConnectionEditor({ draft, busy, saved, onChange, onSave, onCancel }: {
         </div>
         <div className="custom-model-options">
           <label title="Screenshots and attached images are sent only to models that accept them."><input type="checkbox" checked={model.images} onChange={(event) => updateModel(index, { images: event.target.checked })} /> Sees images</label>
-          <label title="Send the reasoning effort you pick in the composer."><input type="checkbox" checked={model.reasoning} onChange={(event) => updateModel(index, { reasoning: event.target.checked })} /> Reasoning effort</label>
           <label className="custom-number" title="Tokens the model can hold. Roqer keeps less tool output for a small model."><span>Context</span><input value={model.contextWindow} inputMode="numeric" placeholder="optional" onChange={(event) => updateModel(index, { contextWindow: event.target.value })} /></label>
           <label className="custom-number" title="The longest answer to ask for in one turn, thinking included. Writing a whole UI builder takes around 10,000 tokens."><span>Max output</span><input value={model.maxOutputTokens} inputMode="numeric" placeholder={draft.format === "anthropic" ? String(DEFAULT_ANTHROPIC_MAX_OUTPUT) : "endpoint's"} onChange={(event) => updateModel(index, { maxOutputTokens: event.target.value })} /></label>
           <div className="settings-actions">
@@ -353,6 +355,7 @@ function ConnectionEditor({ draft, busy, saved, onChange, onSave, onCancel }: {
             <button className="small-button" onClick={() => update({ models: draft.models.filter((_, position) => position !== index) })} aria-label={`Remove ${model.id || "model"}`}><X size={14} /></button>
           </div>
         </div>
+        <EffortPicker efforts={model.efforts} onChange={(efforts) => updateModel(index, { efforts })} />
         {result?.text && <p className={`custom-message ${result.ok ? "ok" : "error"}`}>{result.ok ? <Check size={13} /> : null} {result.text}</p>}
       </div>;
     })}
@@ -361,5 +364,43 @@ function ConnectionEditor({ draft, busy, saved, onChange, onSave, onCancel }: {
       <button className="secondary-action" onClick={onCancel}>Cancel</button>
       <button className="primary-action" disabled={busy || draft.name.trim() === "" || draft.baseUrl.trim() === ""} onClick={onSave}>{busy ? "Saving…" : "Save connection"}</button>
     </div>
+  </div>;
+}
+
+const EFFORT_LABELS: Record<CustomReasoningEffort, string> = {
+  none: "Off",
+  minimal: "Minimal",
+  low: "Low",
+  medium: "Medium",
+  high: "High",
+  xhigh: "X-high",
+  max: "Max",
+};
+
+/**
+ * The reasoning efforts a model takes, as toggles. None chosen means Roqer
+ * sends no effort at all, which is what a model without the setting needs.
+ */
+function EffortPicker({ efforts, onChange }: {
+  efforts: readonly CustomReasoningEffort[];
+  onChange: (efforts: CustomReasoningEffort[]) => void;
+}) {
+  const chosen = new Set(efforts);
+  const toggle = (effort: CustomReasoningEffort) => {
+    const next = new Set(chosen);
+    if (next.has(effort)) next.delete(effort); else next.add(effort);
+    onChange(sortCustomReasoningEfforts(next));
+  };
+  return <div className="custom-efforts" role="group" aria-label="Reasoning efforts this model takes">
+    <span title="The levels you can pick in the composer for this model. Choose none if the model has no reasoning setting.">Reasoning effort</span>
+    {CUSTOM_REASONING_EFFORTS.map((effort) => <button
+      key={effort}
+      type="button"
+      className="custom-effort"
+      aria-pressed={chosen.has(effort)}
+      title={effort === "none" ? "Sends \"none\": the endpoint accepts it to turn reasoning off." : `Sends "${effort}".`}
+      onClick={() => toggle(effort)}
+    >{EFFORT_LABELS[effort]}</button>)}
+    {chosen.size === 0 && <em>not sent</em>}
   </div>;
 }
