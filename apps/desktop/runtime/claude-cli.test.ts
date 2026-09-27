@@ -181,6 +181,59 @@ test("Claude sign-in returns the authorization URL and finishes with a pasted co
   assert.match(result.message, /Max connected through Claude Code/);
 });
 
+test("Claude sign-in connects the moment the browser reaches Claude Code's callback, without a code", async () => {
+  let loginChild: FakeChildProcess | null = null;
+  const script = scripted(
+    (child) => {
+      loginChild = child;
+      child.write("Opening browser to sign in…\nIf the browser didn't open, visit: https://claude.com/cai/oauth/authorize?code=true\nPaste code here if prompted > ");
+    },
+    statusStep({ loggedIn: true, authMethod: "claude.ai", subscriptionType: "pro" }),
+  );
+  const client = new ClaudeCodeClient({ spawnProcess: script.spawnProcess });
+  await client.beginLogin();
+
+  let settled = false;
+  const waited = client.waitForLogin().then((result) => { settled = true; return result; });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(settled, false);
+
+  // The callback page says "good to go" and Claude Code exits by itself.
+  loginChild!.finish(0);
+  const result = await waited;
+  assert.equal(result.ok, true);
+  assert.match(result.message, /Pro connected through Claude Code/);
+  // Confirmed by a fresh status read, not by the exit alone.
+  assert.deepEqual(script.calls[1], ["auth", "status", "--json"]);
+});
+
+test("a Claude sign-in that ends without an account, or is never finished, reports it", async () => {
+  const script = scripted(
+    (child) => {
+      child.write("visit: https://claude.com/cai/oauth/authorize\n");
+      queueMicrotask(() => child.finish(1));
+    },
+    statusStep({ loggedIn: false, authMethod: "none" }, 1),
+  );
+  const client = new ClaudeCodeClient({ spawnProcess: script.spawnProcess });
+  await client.beginLogin();
+  const ended = await client.waitForLogin();
+  assert.equal(ended.ok, false);
+  assert.match(ended.message, /did not finish/);
+
+  let kept: FakeChildProcess | null = null;
+  const lingering = scripted((child) => {
+    kept = child;
+    child.write("visit: https://claude.com/cai/oauth/authorize\n");
+  });
+  const waiting = new ClaudeCodeClient({ spawnProcess: lingering.spawnProcess });
+  await waiting.beginLogin();
+  const expired = await waiting.waitForLogin(20);
+  assert.equal(expired.ok, false);
+  assert.match(expired.message, /not finished in time/);
+  assert.equal(kept!.killed, true);
+});
+
 test("Claude sign-in rejects a code that was never asked for, and malformed codes", async () => {
   const script = scripted((child) => {
     child.write("visit: https://claude.com/cai/oauth/authorize\n");

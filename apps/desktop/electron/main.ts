@@ -162,6 +162,8 @@ let codexLimits: CodexLimitsTracker | null = null;
 let claudeLimits: ClaudeLimitsTracker | null = null;
 let claudeCode: ClaudeCodeClient | null = null;
 const clientInstalls = new ClientInstallRunner();
+/** A ChatGPT sign-in waiting in the browser, and how it ends. */
+let pendingChatGptLogin: { loginId: string; done: Promise<ProviderLoginResult> } | null = null;
 /** Set from the confirmation onwards, so a second request cannot open a second dialog. */
 let clientInstallRequested = false;
 /**
@@ -878,19 +880,27 @@ async function loginProvider(event: IpcMainInvokeEvent, value: unknown): Promise
       await codexThreads.closeAll();
       codexLimits?.forget();
     }
-    const login = provider === "claude"
+    const login: { authUrl: string; loginId?: string } = provider === "claude"
       ? await claudeProvider().beginLogin()
       : await chatGptProvider().beginChatGptLogin();
     const authUrl = new URL(login.authUrl);
     if (authUrl.protocol !== "https:" || !SIGN_IN_HOSTS[provider].includes(authUrl.hostname)) {
       return { ok: false, message: `${label} returned an unexpected sign-in address.` };
     }
+    if (login.loginId !== undefined) {
+      // Listen before the browser opens, so a quick sign-in is not missed. A
+      // sign-in started earlier and never finished is replaced by this one.
+      const client = chatGptProvider();
+      if (pendingChatGptLogin !== null) void client.cancelChatGptLogin(pendingChatGptLogin.loginId);
+      pendingChatGptLogin = { loginId: login.loginId, done: client.waitForChatGptLogin(login.loginId) };
+    }
     await shell.openExternal(authUrl.href);
 
-    // Claude Code's flow hands the authorization code to a hosted page instead
-    // of finishing in the browser, so the user has to bring the code back.
+    // Claude Code's sign-in usually finishes by itself through a local
+    // callback; when the browser cannot reach it, Claude shows a code instead,
+    // so the row offers a field for it while it waits.
     return provider === "claude"
-      ? { ok: true, message: "Sign in with Claude, then paste the code it gives you.", awaitingCode: true }
+      ? { ok: true, message: "Finish signing in with Claude in your browser. If Claude shows you a code instead, paste it here.", awaitingCode: true }
       : { ok: true, message: "Finish signing in with ChatGPT in your browser." };
   } catch (error) {
     return { ok: false, message: error instanceof Error ? error.message : `${label} sign-in could not start.` };
@@ -956,6 +966,38 @@ async function confirmAndInstall(event: IpcMainInvokeEvent, provider: ProviderId
   if (choice.response !== 0) return { ok: false, message: "Install cancelled." };
 
   return clientInstalls.install(installer);
+}
+
+/**
+ * Wait for a sign-in to finish in the browser, so the account row connects
+ * the moment it does instead of on its next status check.
+ */
+async function waitForProviderLogin(event: IpcMainInvokeEvent, value: unknown): Promise<ProviderLoginResult> {
+  if (!isTrusted(event.sender)) return { ok: false, message: "This window may not finish sign-in." };
+  const provider = providerArgument(value);
+  if (provider === "claude") return claudeProvider().waitForLogin();
+  if (provider !== "chatgpt") return { ok: false, message: "This sign-in does not finish in the browser." };
+  const pending = pendingChatGptLogin;
+  if (pending === null) {
+    // Already finished and collected, or never started: the account says which.
+    const status = await readProviderStatus("chatgpt");
+    return status.kind === "signed-in" ? { ok: true, message: status.message } : { ok: false, message: "No ChatGPT sign-in is waiting." };
+  }
+  const result = await pending.done;
+  if (pendingChatGptLogin === pending) pendingChatGptLogin = null;
+  return result;
+}
+
+async function cancelProviderLogin(event: IpcMainInvokeEvent, value: unknown): Promise<ProviderLoginResult> {
+  if (!isTrusted(event.sender)) return { ok: false, message: "This window may not cancel sign-in." };
+  const provider = providerArgument(value);
+  if (provider === "claude") {
+    claudeProvider().cancelLogin();
+    return { ok: true, message: "Sign-in cancelled." };
+  }
+  if (provider !== "chatgpt" || pendingChatGptLogin === null) return { ok: true, message: "Nothing to cancel." };
+  await chatGptProvider().cancelChatGptLogin(pendingChatGptLogin.loginId);
+  return { ok: true, message: "Sign-in cancelled." };
 }
 
 async function submitProviderCode(event: IpcMainInvokeEvent, payload: unknown): Promise<ProviderLoginResult> {
@@ -1792,6 +1834,8 @@ app.whenReady().then(async () => {
   ipcMain.handle("provider:models", getProviderModels);
   ipcMain.handle("provider:login", loginProvider);
   ipcMain.handle("provider:login-code", submitProviderCode);
+  ipcMain.handle("provider:login-wait", waitForProviderLogin);
+  ipcMain.handle("provider:login-cancel", cancelProviderLogin);
   ipcMain.handle("provider:install", installProviderClient);
   ipcMain.handle("provider:limits", getProviderLimits);
   ipcMain.handle("custom-providers:list", listCustomConnections);

@@ -151,6 +151,19 @@ export async function loginProvider(provider: ProviderId): Promise<ProviderLogin
   return bridge.login();
 }
 
+/** Wait for a sign-in that finishes in the browser, so the account connects the moment it does. */
+export async function waitForProviderLogin(provider: ProviderId): Promise<ProviderLoginResult> {
+  const bridge = connector(provider);
+  if (!bridge) return { ok: false, message: `${providerLabel(provider)} sign-in needs the desktop app.` };
+  return bridge.waitForLogin();
+}
+
+export async function cancelProviderLogin(provider: ProviderId): Promise<ProviderLoginResult> {
+  const bridge = connector(provider);
+  if (!bridge) return { ok: false, message: `${providerLabel(provider)} sign-in needs the desktop app.` };
+  return bridge.cancelLogin();
+}
+
 /** Finish a sign-in that came back with `awaitingCode`. */
 export async function submitProviderCode(provider: ProviderId, code: string): Promise<ProviderLoginResult> {
   const bridge = connector(provider);

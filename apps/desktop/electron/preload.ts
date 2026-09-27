@@ -118,6 +118,19 @@ function connector(provider: ProviderId) {
         ? value
         : { ok: false, message: `The ${label} sign-in request returned an invalid result.` };
     },
+    /** Wait for a sign-in that finishes in the browser, which `login` started. */
+    waitForLogin: async (): Promise<ProviderLoginResult> => {
+      const value: unknown = await ipcRenderer.invoke("provider:login-wait", provider);
+      return isProviderLoginResult(value)
+        ? value
+        : { ok: false, message: `The ${label} sign-in request returned an invalid result.` };
+    },
+    cancelLogin: async (): Promise<ProviderLoginResult> => {
+      const value: unknown = await ipcRenderer.invoke("provider:login-cancel", provider);
+      return isProviderLoginResult(value)
+        ? value
+        : { ok: false, message: `The ${label} sign-in request returned an invalid result.` };
+    },
     /** Install the client this subscription runs through; the main process asks the user first. */
     install: async (): Promise<ProviderInstallResult> => {
       const value: unknown = await ipcRenderer.invoke("provider:install", provider);

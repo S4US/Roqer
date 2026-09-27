@@ -28,6 +28,8 @@ const STATUS_TIMEOUT_MS = 20_000;
 const LOGIN_URL_TIMEOUT_MS = 45_000;
 const MAX_LOGIN_OUTPUT_LENGTH = 64 * 1024;
 const LOGIN_FINISH_TIMEOUT_MS = 180_000;
+/** How long a sign-in may wait in the browser before it is given up. */
+const LOGIN_WAIT_TIMEOUT_MS = 10 * 60_000;
 const MAX_LOGIN_CODE_LENGTH = 512;
 
 const isRecord = (value: unknown): value is JsonRecord =>
@@ -321,8 +323,10 @@ export class ClaudeCodeClient implements ClaudeLauncher {
 
   /**
    * Start the subscription sign-in and return the authorization URL the CLI
-   * printed. The child is kept alive: Claude Code's flow ends with the user
-   * pasting a code back, which `submitLoginCode` writes to its stdin.
+   * printed. The child is kept alive until the sign-in ends, which happens one
+   * of two ways: the browser reaches Claude Code's local callback and the CLI
+   * exits by itself (`waitForLogin` notices), or Claude shows a code the user
+   * pastes back, which `submitLoginCode` writes to its stdin.
    */
   async beginLogin(): Promise<{ authUrl: string }> {
     this.cancelLogin();
@@ -416,6 +420,45 @@ export class ClaudeCodeClient implements ClaudeLauncher {
     const status = await this.getStatus();
     if (status.kind === "signed-in") return { ok: true, message: status.message };
     return { ok: false, message: "Claude Code did not accept that code. Try connecting again." };
+  }
+
+  /**
+   * Wait for the pending sign-in to end, however it ends, and report whether
+   * the account is now signed in. The Claude Code process exits once the
+   * browser has reached its callback, so the row can connect then instead of
+   * on its next status check.
+   */
+  async waitForLogin(timeoutMs = LOGIN_WAIT_TIMEOUT_MS): Promise<ProviderLoginResult> {
+    const login = this.pendingLogin;
+    if (!login) {
+      const status = await this.getStatus();
+      return status.kind === "signed-in" ? { ok: true, message: status.message } : { ok: false, message: "No Claude sign-in is waiting." };
+    }
+    const ended = await new Promise<boolean>((resolve) => {
+      if (login.child.exitCode !== null || (login.child.signalCode ?? null) !== null) {
+        resolve(true);
+        return;
+      }
+      const timer = setTimeout(() => {
+        login.child.off("exit", onExit);
+        resolve(false);
+      }, timeoutMs);
+      const onExit = () => {
+        clearTimeout(timer);
+        resolve(true);
+      };
+      login.child.once("exit", onExit);
+    });
+    if (!ended) {
+      if (this.pendingLogin === login) this.cancelLogin();
+      return { ok: false, message: "The Claude sign-in was not finished in time. Choose Connect to try again." };
+    }
+    if (this.pendingLogin === login) this.pendingLogin = null;
+    // Confirmed by a fresh read, never by the exit alone.
+    this.forgetStatus();
+    const status = await this.getStatus();
+    if (status.kind === "signed-in") return { ok: true, message: status.message };
+    return { ok: false, message: "The Claude sign-in did not finish. Choose Connect to try again." };
   }
 
   cancelLogin(): void {

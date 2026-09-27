@@ -9,7 +9,9 @@ import type { WorkspaceState } from "./model";
 import { BlenderSettings } from "./blender-settings";
 import { EndpointPage, endpointDetail, useCustomConnections } from "./custom-connections";
 import { OpenCloudSettings } from "./open-cloud-settings";
-import { getProviderLimits, getProviderStatus, installProviderClient, loginProvider, submitProviderCode } from "./platform";
+import {
+  cancelProviderLogin, getProviderLimits, getProviderStatus, installProviderClient, loginProvider, submitProviderCode, waitForProviderLogin,
+} from "./platform";
 import { planUsageView } from "./plan-usage";
 import { SettingsGroup, SettingsRow, SettingsSwitch } from "./settings-parts";
 
@@ -236,6 +238,10 @@ function AccountRow({ provider, onChanged }: { provider: ProviderId; onChanged: 
   const [installing, setInstalling] = useState(false);
   const [installNote, setInstallNote] = useState<{ message: string; command?: string } | null>(null);
   const [limits, setLimits] = useState<ProviderLimits>(NO_LIMITS);
+  /** What the row says while a sign-in is open in the browser; null when none is. */
+  const [waitingMessage, setWaitingMessage] = useState<string | null>(null);
+  /** Bumped when a sign-in is cancelled, replaced, or settled by a pasted code, so an older wait cannot touch the row. */
+  const loginAttempt = useRef(0);
   const name = providerLabel(provider);
 
   const refresh = useCallback(async () => {
@@ -260,12 +266,33 @@ function AccountRow({ provider, onChanged }: { provider: ProviderId; onChanged: 
       setStatus({ kind: "unavailable", message: result.message });
       return;
     }
-    setStatus({ kind: "signed-out", message: result.message });
     setAwaitingCode(result.awaitingCode === true);
-    // A browser sign-in finishes on its own; look again shortly after.
-    if (result.awaitingCode !== true) {
-      window.setTimeout(() => void refresh().then(onChanged), 2_500);
+    // Connect the moment the sign-in finishes in the browser, not on the
+    // row's next status check; Claude's code field stays as the fallback.
+    const attempt = ++loginAttempt.current;
+    setWaitingMessage(result.message);
+    const done = await waitForProviderLogin(provider);
+    if (loginAttempt.current !== attempt) return;
+    setWaitingMessage(null);
+    setAwaitingCode(false);
+    setCode("");
+    setCodeError(null);
+    if (!done.ok) {
+      setStatus({ kind: "signed-out", message: done.message });
+      return;
     }
+    await refresh();
+    onChanged();
+  };
+
+  const cancel = async () => {
+    loginAttempt.current += 1;
+    setWaitingMessage(null);
+    setAwaitingCode(false);
+    setCode("");
+    setCodeError(null);
+    await cancelProviderLogin(provider);
+    await refresh();
   };
 
   const install = async () => {
@@ -289,6 +316,9 @@ function AccountRow({ provider, onChanged }: { provider: ProviderId; onChanged: 
       setCodeError(result.message);
       return;
     }
+    // The code settled it; the browser wait ending too changes nothing.
+    loginAttempt.current += 1;
+    setWaitingMessage(null);
     setAwaitingCode(false);
     setCode("");
     setCodeError(null);
@@ -305,15 +335,20 @@ function AccountRow({ provider, onChanged }: { provider: ProviderId; onChanged: 
     ? [status.planType === undefined ? undefined : capitalized(status.planType), status.email, client === undefined ? undefined : `through ${client}`]
       .filter((part): part is string => part !== undefined && part !== "")
       .join(" · ") || status.message
-    : installing ? `Installing ${client ?? name}… This can take a few minutes.` : status.message;
+    : installing ? `Installing ${client ?? name}… This can take a few minutes.` : waitingMessage ?? status.message;
   const usage = signedIn ? planUsageView(limits, USAGE_SCOPES[provider] ?? name, Date.now()) : null;
 
   return <>
     <SettingsRow title={name} detail={detail}>
       {installable && <button type="button" className="small-button" disabled={installing} onClick={() => void install()}>{installing ? "Installing…" : "Install"}</button>}
-      {canCheckOnly
-        ? <button type="button" className="small-button" disabled={installing} onClick={() => void refresh()}>Check</button>
-        : <button type="button" className="small-button" disabled={pending || status.kind === "checking"} onClick={() => void connect()}>{pending ? "Opening…" : "Connect"}</button>}
+      {waitingMessage !== null && !signedIn
+        ? <>
+          <button type="button" className="small-button" disabled>Waiting…</button>
+          <button type="button" className="small-button" onClick={() => void cancel()}>Cancel</button>
+        </>
+        : canCheckOnly
+          ? <button type="button" className="small-button" disabled={installing} onClick={() => void refresh()}>Check</button>
+          : <button type="button" className="small-button" disabled={pending || status.kind === "checking"} onClick={() => void connect()}>{pending ? "Opening…" : "Connect"}</button>}
     </SettingsRow>
     {usage !== null && <div className="plan-usage">
       {usage.reached && <p className="plan-usage-reached">{name} reports this plan's usage limit is reached.</p>}
