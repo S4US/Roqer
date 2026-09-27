@@ -15,6 +15,10 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="MIT license"></a>
 </p>
 
+<p align="center">
+  <img src="docs/media/roqer-run.webp" alt="Roqer working on a request to build a drivable go-kart in Blender and Roblox Studio: its five-step plan with the first step done, the activity log, and Full auto mode with playtests on" width="900">
+</p>
+
 ## Features
 
 - **Your own model.** ChatGPT through the Codex app, Claude through Claude Code, or any OpenAI- or Anthropic-compatible endpoint, including local models.
