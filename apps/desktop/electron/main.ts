@@ -60,6 +60,7 @@ import { McpServerProcess } from "../runtime/mcp-server-process";
 import { mcpServerMessage, type McpServerState } from "../shared/mcp-server";
 import type { AppUpdateState } from "../shared/app-update";
 import { mergeRecoveredRuns } from "../runtime/recovered-runs";
+import { describesUpdateFeed } from "../runtime/update-feed";
 import { createInitialWorkspace, normalizeWorkspace, type WorkspaceState } from "../src/model";
 import type { ApprovalMode } from "../shared/policy";
 import { isConversationContext } from "../shared/conversation";
@@ -669,16 +670,12 @@ let checkForUpdatesNow: (() => void) | undefined;
  * Whether this package was built against a release feed.
  *
  * electron-builder writes `app-update.yml` beside the app only when a publish
- * target is configured, and the updater reads its `url`. Checking first turns
- * "there is nowhere to check" into a plain statement rather than a recurring
- * error a user cannot act on â€” a build made without `ROQER_UPDATE_FEED_URL`
- * set should say so, not look broken.
+ * target is configured. Checking first turns "there is nowhere to check" into
+ * a plain statement rather than a recurring error a user cannot act on.
  */
 function hasUpdateFeed(): boolean {
   try {
-    const configured = path.join(process.resourcesPath, "app-update.yml");
-    const contents = fs.readFileSync(configured, "utf8");
-    return /^\s*url:\s*\S+/m.test(contents);
+    return describesUpdateFeed(fs.readFileSync(path.join(process.resourcesPath, "app-update.yml"), "utf8"));
   } catch {
     return false;
   }
