@@ -692,6 +692,110 @@ return true
       });
     }
 
+    // A tree too large for one result is listed a level at a time up to a
+    // size budget: every folder near the root is named, and the deeper ones
+    // left out say how many children they hold.
+    const budgetSetup = await client.callTool('execute_luau', {
+      target: 'edit',
+      instance_id: instanceId,
+      code: `
+local folder = workspace.__RSMCP_ToolingSmoke
+local budget = Instance.new("Folder")
+budget.Name = "BudgetFixture"
+local many = Instance.new("Folder")
+many.Name = "Many"
+for i = 1, 22 do
+  local module = Instance.new("ModuleScript")
+  module.Name = string.format("Module%02d", i)
+  module.Parent = many
+end
+many.Parent = budget
+local wide = Instance.new("Folder")
+wide.Name = "Wide"
+for g = 1, 25 do
+  local group = Instance.new("Folder")
+  group.Name = string.format("Group%02d", g)
+  for i = 1, 6 do
+    local module = Instance.new("ModuleScript")
+    module.Name = string.format("Module%02d", i)
+    module.Parent = group
+  end
+  group.Parent = wide
+end
+wide.Parent = budget
+budget.Parent = folder
+local named = Instance.new("Folder")
+named.Name = "NameFixture"
+for i = 1, 600 do
+  local module = Instance.new("ModuleScript")
+  module.Name = string.format("ModuleWithADescriptiveName%04d", i)
+  module.Parent = named
+end
+named.Parent = folder
+return true
+`,
+    });
+    assert(budgetSetup.success === true && String(budgetSetup.returnValue) === 'true', 'execute_luau creates structure budget fixtures');
+    try {
+      const budgetTree = await client.callTool('get_project_structure', {
+        path: `${folderPath}.BudgetFixture`,
+        maxDepth: 3,
+        scriptsOnly: true,
+        instance_id: instanceId,
+      });
+      assertNoError(budgetTree, 'get_project_structure lists a tree larger than its budget');
+      const budgetChars = JSON.stringify(budgetTree).length;
+      assert(budgetChars < 20_000, `get_project_structure keeps a large tree within its budget (${budgetChars} chars)`);
+      const many = budgetTree.children?.find((child) => child.name === 'Many');
+      assert(
+        many?.children?.length === 22 && !Object.hasOwn(many, 'childSummary'),
+        'get_project_structure scriptsOnly names every script in a folder of more than 20',
+      );
+      const groups = budgetTree.children?.find((child) => child.name === 'Wide')?.children ?? [];
+      const expanded = groups.filter((group) => group.children?.length === 6);
+      const unexpanded = groups.filter(
+        (group) => group.hasMore === true && group.childCount === 6 && !Object.hasOwn(group, 'children'),
+      );
+      assert(
+        groups.length === 25 && expanded.length >= 1 && unexpanded.length >= 1 &&
+          expanded.length + unexpanded.length === 25,
+        `get_project_structure names every folder and expands deeper ones only while the budget lasts (${expanded.length} expanded, ${unexpanded.length} counted)`,
+      );
+      assert(
+        typeof budgetTree.note === 'string' && budgetTree.note.includes('keep this result small'),
+        'get_project_structure says when entries were left unexpanded for size',
+      );
+
+      const namedTree = await client.callTool('get_project_structure', {
+        path: `${folderPath}.NameFixture`,
+        maxDepth: 3,
+        scriptsOnly: true,
+        instance_id: instanceId,
+      });
+      assertNoError(namedTree, 'get_project_structure lists a folder of too many scripts to list');
+      const namedChars = JSON.stringify(namedTree).length;
+      const moduleSummary = namedTree.childSummary?.find((row) => row.className === 'ModuleScript');
+      const shownNames = moduleSummary?.examples?.length ?? 0;
+      assert(
+        namedChars < 20_000 && moduleSummary?.count === 600 && shownNames > 100 && shownNames < 600 &&
+          moduleSummary.examples[0] === 'ModuleWithADescriptiveName0001',
+        `get_project_structure summarises too many scripts with as many names as fit (${shownNames} names, ${namedChars} chars)`,
+      );
+    } finally {
+      await client.callTool('execute_luau', {
+        target: 'edit',
+        instance_id: instanceId,
+        code: `
+local folder = workspace.__RSMCP_ToolingSmoke
+for _, name in { "BudgetFixture", "NameFixture" } do
+  local child = folder:FindFirstChild(name)
+  if child then child:Destroy() end
+end
+return true
+`,
+      });
+    }
+
     const setProp = await client.callTool('set_properties', {
       instancePath: partPath,
       instanceRef: partNode.instanceRef,
