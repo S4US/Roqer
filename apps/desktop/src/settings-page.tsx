@@ -10,7 +10,8 @@ import { BlenderSettings } from "./blender-settings";
 import { EndpointPage, endpointDetail, useCustomConnections } from "./custom-connections";
 import { OpenCloudSettings } from "./open-cloud-settings";
 import {
-  cancelProviderLogin, getProviderLimits, getProviderStatus, installProviderClient, loginProvider, submitProviderCode, waitForProviderLogin,
+  cancelProviderLogin, getProviderLimits, getProviderStatus, installProviderClient, loginProvider, openProviderLogin, submitProviderCode,
+  waitForProviderLogin,
 } from "./platform";
 import { planUsageView } from "./plan-usage";
 import { SettingsGroup, SettingsRow, SettingsSwitch } from "./settings-parts";
@@ -285,6 +286,11 @@ function AccountRow({ provider, onChanged }: { provider: ProviderId; onChanged: 
     onChanged();
   };
 
+  const openLoginPage = async () => {
+    const result = await openProviderLogin(provider);
+    setCodeError(result.ok ? null : result.message);
+  };
+
   const cancel = async () => {
     loginAttempt.current += 1;
     setWaitingMessage(null);
@@ -367,12 +373,18 @@ function AccountRow({ provider, onChanged }: { provider: ProviderId; onChanged: 
       {installNote.message}
       {installNote.command !== undefined && <><br />To install it yourself, run this in PowerShell: <code className="settings-command">{installNote.command}</code></>}
     </p>}
+    {/* The fallback: a page that shows a code, opened only on request, so the
+        tab Claude Code opened is the only one unless it failed to appear. */}
     {awaitingCode && !signedIn && <label className="settings-field">
-      <span>{`Paste the code ${name} showed you`}</span>
+      <span>{`Or paste the code ${name} shows you`}</span>
       <div className="custom-key-row">
-        <input value={code} autoFocus spellCheck={false} placeholder="Authorization code" onChange={(event) => setCode(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && code.trim()) void finish(); }} />
+        <input value={code} spellCheck={false} placeholder="Authorization code" onChange={(event) => setCode(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && code.trim()) void finish(); }} />
         <button type="button" className="small-button" disabled={pending || !code.trim()} onClick={() => void finish()}>{pending ? "Finishing…" : "Finish sign-in"}</button>
       </div>
+      <span className="custom-message">
+        Browser didn&apos;t open?{" "}
+        <button type="button" className="link-button" onClick={() => void openLoginPage()}>Open the sign-in page</button>
+      </span>
       {codeError !== null && <span className="custom-message error">{codeError}</span>}
     </label>}
   </>;

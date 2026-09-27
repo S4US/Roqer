@@ -172,12 +172,16 @@ test("Claude sign-in returns the authorization URL and finishes with a pasted co
   );
   const client = new ClaudeCodeClient({ spawnProcess: script.spawnProcess });
 
+  assert.equal(client.pendingLoginUrl(), null);
   const login = await client.beginLogin();
   assert.equal(login.authUrl, "https://claude.com/cai/oauth/authorize?code=true");
   assert.deepEqual(script.calls[0], ["auth", "login", "--claudeai"]);
+  // The printed address is kept as the fallback page the row can open on request.
+  assert.equal(client.pendingLoginUrl(), login.authUrl);
 
   const result = await client.submitLoginCode("code-123#state");
   assert.equal(result.ok, true);
+  assert.equal(client.pendingLoginUrl(), null);
   assert.match(result.message, /Max connected through Claude Code/);
 });
 

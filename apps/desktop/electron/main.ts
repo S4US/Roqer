@@ -883,8 +883,9 @@ async function loginProvider(event: IpcMainInvokeEvent, value: unknown): Promise
     const login: { authUrl: string; loginId?: string } = provider === "claude"
       ? await claudeProvider().beginLogin()
       : await chatGptProvider().beginChatGptLogin();
-    const authUrl = new URL(login.authUrl);
-    if (authUrl.protocol !== "https:" || !SIGN_IN_HOSTS[provider].includes(authUrl.hostname)) {
+    const authUrl = allowedSignInUrl(provider, login.authUrl);
+    if (authUrl === null) {
+      if (provider === "claude") claudeProvider().cancelLogin();
       return { ok: false, message: `${label} returned an unexpected sign-in address.` };
     }
     if (login.loginId !== undefined) {
@@ -894,13 +895,14 @@ async function loginProvider(event: IpcMainInvokeEvent, value: unknown): Promise
       if (pendingChatGptLogin !== null) void client.cancelChatGptLogin(pendingChatGptLogin.loginId);
       pendingChatGptLogin = { loginId: login.loginId, done: client.waitForChatGptLogin(login.loginId) };
     }
-    await shell.openExternal(authUrl.href);
+    // `claude auth login` opens the browser itself, at an address that
+    // finishes through its local callback. The address it printed is the
+    // fallback that shows a code to paste, so opening it too gave two tabs;
+    // the row offers it only for when the browser did not open.
+    if (provider !== "claude") await shell.openExternal(authUrl.href);
 
-    // Claude Code's sign-in usually finishes by itself through a local
-    // callback; when the browser cannot reach it, Claude shows a code instead,
-    // so the row offers a field for it while it waits.
     return provider === "claude"
-      ? { ok: true, message: "Finish signing in with Claude in your browser. If Claude shows you a code instead, paste it here.", awaitingCode: true }
+      ? { ok: true, message: "Claude Code opened your browser. Finish signing in there, and Roqer connects by itself.", awaitingCode: true }
       : { ok: true, message: "Finish signing in with ChatGPT in your browser." };
   } catch (error) {
     return { ok: false, message: error instanceof Error ? error.message : `${label} sign-in could not start.` };
@@ -966,6 +968,31 @@ async function confirmAndInstall(event: IpcMainInvokeEvent, provider: ProviderId
   if (choice.response !== 0) return { ok: false, message: "Install cancelled." };
 
   return clientInstalls.install(installer);
+}
+
+/** A sign-in address from a provider CLI, if it is one the user may be sent to. */
+function allowedSignInUrl(provider: ProviderId, address: string): URL | null {
+  try {
+    const url = new URL(address);
+    return url.protocol === "https:" && SIGN_IN_HOSTS[provider].includes(url.hostname) ? url : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Open the fallback sign-in page of the Claude sign-in in progress, for when
+ * the browser Claude Code opens did not appear. The address is the one main
+ * already checked; the renderer only names the provider.
+ */
+async function openProviderLogin(event: IpcMainInvokeEvent, value: unknown): Promise<ProviderLoginResult> {
+  if (!isTrusted(event.sender)) return { ok: false, message: "This window may not open sign-in." };
+  if (providerArgument(value) !== "claude") return { ok: false, message: "Unknown provider." };
+  const address = claudeProvider().pendingLoginUrl();
+  const url = address === null ? null : allowedSignInUrl("claude", address);
+  if (url === null) return { ok: false, message: "No Claude sign-in is waiting. Choose Connect to start one." };
+  await shell.openExternal(url.href);
+  return { ok: true, message: "Opened the sign-in page. If Claude shows you a code, paste it here." };
 }
 
 /**
@@ -1835,6 +1862,7 @@ app.whenReady().then(async () => {
   ipcMain.handle("provider:login", loginProvider);
   ipcMain.handle("provider:login-code", submitProviderCode);
   ipcMain.handle("provider:login-wait", waitForProviderLogin);
+  ipcMain.handle("provider:login-open", openProviderLogin);
   ipcMain.handle("provider:login-cancel", cancelProviderLogin);
   ipcMain.handle("provider:install", installProviderClient);
   ipcMain.handle("provider:limits", getProviderLimits);

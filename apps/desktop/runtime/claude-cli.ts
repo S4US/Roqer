@@ -323,10 +323,14 @@ export class ClaudeCodeClient implements ClaudeLauncher {
 
   /**
    * Start the subscription sign-in and return the authorization URL the CLI
-   * printed. The child is kept alive until the sign-in ends, which happens one
-   * of two ways: the browser reaches Claude Code's local callback and the CLI
-   * exits by itself (`waitForLogin` notices), or Claude shows a code the user
-   * pastes back, which `submitLoginCode` writes to its stdin.
+   * printed. `claude auth login` opens the browser itself, at an address that
+   * returns to its local callback; the one it prints is the fallback, whose
+   * page shows a code to paste instead, so it is for when the browser did not
+   * open and should not be opened as well.
+   *
+   * The child is kept alive until the sign-in ends: the browser reaches the
+   * callback and the CLI exits by itself (`waitForLogin` notices), or the user
+   * pastes the code, which `submitLoginCode` writes to its stdin.
    */
   async beginLogin(): Promise<{ authUrl: string }> {
     this.cancelLogin();
@@ -459,6 +463,11 @@ export class ClaudeCodeClient implements ClaudeLauncher {
     const status = await this.getStatus();
     if (status.kind === "signed-in") return { ok: true, message: status.message };
     return { ok: false, message: "The Claude sign-in did not finish. Choose Connect to try again." };
+  }
+
+  /** The printed fallback address of the sign-in in progress, if one is. */
+  pendingLoginUrl(): string | null {
+    return this.pendingLogin?.authUrl ?? null;
   }
 
   cancelLogin(): void {

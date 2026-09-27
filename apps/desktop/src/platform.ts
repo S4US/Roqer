@@ -158,6 +158,13 @@ export async function waitForProviderLogin(provider: ProviderId): Promise<Provid
   return bridge.waitForLogin();
 }
 
+/** Open the fallback sign-in page, for when the browser the CLI opens did not appear. */
+export async function openProviderLogin(provider: ProviderId): Promise<ProviderLoginResult> {
+  const bridge = connector(provider);
+  if (!bridge) return { ok: false, message: `${providerLabel(provider)} sign-in needs the desktop app.` };
+  return bridge.openLogin();
+}
+
 export async function cancelProviderLogin(provider: ProviderId): Promise<ProviderLoginResult> {
   const bridge = connector(provider);
   if (!bridge) return { ok: false, message: `${providerLabel(provider)} sign-in needs the desktop app.` };
