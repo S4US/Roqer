@@ -373,6 +373,31 @@ function getClassInfo(requestData: Record<string, unknown>) {
 	return classInfo;
 }
 
+// get_project_structure stops expanding entries once its result would pass
+// this many characters of JSON, well inside what an agent host passes to a
+// model in one tool result. The count is an estimate made before encoding.
+const STRUCTURE_BUDGET_CHARS = 16_000;
+// An entry's instanceRef is minted only once the entry is listed.
+const INSTANCE_REF_CHARS = 48;
+const CHILDREN_KEY_CHARS = 14;
+const UNEXPANDED_CHARS = 32;
+const RESULT_FIELDS_CHARS = 320;
+
+function estimatedJsonChars(value: unknown): number {
+	const kind = typeOf(value);
+	if (kind === "string") return (value as string).size() + 2;
+	if (kind === "number") return 12;
+	if (kind === "boolean") return 5;
+	if (kind === "table") {
+		let size = 2;
+		for (const [key, item] of pairs(value as Record<string | number, unknown>)) {
+			size += (typeIs(key, "string") ? key.size() + 3 : 0) + estimatedJsonChars(item) + 1;
+		}
+		return size;
+	}
+	return 4;
+}
+
 function getProjectStructure(requestData: Record<string, unknown>) {
 	const startPath = (requestData.path as string) ?? "";
 	const instanceRef = requestData.instanceRef as string | undefined;
@@ -421,14 +446,11 @@ function getProjectStructure(requestData: Record<string, unknown>) {
 		return instance.IsA("LuaSourceContainer") || instance.FindFirstChildWhichIsA("LuaSourceContainer", true) !== undefined;
 	}
 
-	let reachedMaxDepth = false;
-
-	function getStructure(instance: Instance, depth: number): Record<string, unknown> {
+	function describe(instance: Instance): Record<string, unknown> {
 		const node: Record<string, unknown> = {
 			name: instance.Name,
 			className: instance.ClassName,
 			path: getInstancePath(instance),
-			instanceRef: getInstanceReference(instance),
 		};
 
 		if (instance.IsA("LuaSourceContainer")) {
@@ -452,74 +474,205 @@ function getProjectStructure(requestData: Record<string, unknown>) {
 			}
 		}
 
-		let children = instance.GetChildren();
-		if (showScriptsOnly) {
-			children = children.filter(isScriptOrHoldsOne);
-		}
-
-		const childCount = children.size();
-		if (childCount === 0) return node;
-
-		// The frontier says how much lies below it rather than listing it. One
-		// entry per child here made a place of a few hundred models return
-		// thousands of entries, more than any client could read.
-		if (depth >= maxDepth) {
-			node.childCount = childCount;
-			node.hasMore = true;
-			reachedMaxDepth = true;
-			return node;
-		}
-
-		const nodeChildren: Record<string, unknown>[] = [];
-		if (childCount > 20) {
-			const classGroups = new Map<string, Instance[]>();
-			for (const child of children) {
-				const cn = child.ClassName;
-				if (!classGroups.has(cn)) classGroups.set(cn, []);
-				classGroups.get(cn)!.push(child);
-			}
-
-			const childSummary: Record<string, unknown>[] = [];
-			classGroups.forEach((classChildren, cn) => {
-				childSummary.push({
-					className: cn,
-					count: classChildren.size(),
-					examples: [classChildren[0]?.Name, classChildren[1]?.Name],
-				});
-			});
-			node.childSummary = childSummary;
-
-			classGroups.forEach((classChildren, cn) => {
-				const limit = math.min(3, classChildren.size());
-				for (let i = 0; i < limit; i++) {
-					nodeChildren.push(getStructure(classChildren[i], depth + 1));
-				}
-				if (classChildren.size() > 3) {
-					nodeChildren.push({
-						name: `... ${classChildren.size() - 3} more ${cn} objects`,
-						className: "MoreIndicator",
-						path: `${getInstancePath(instance)} [${cn} children]`,
-						note: "Use specific path to explore these objects",
-					});
-				}
-			});
-		} else {
-			for (const child of children) {
-				nodeChildren.push(getStructure(child, depth + 1));
-			}
-		}
-		node.children = nodeChildren;
-
 		return node;
 	}
 
-	const result = getStructure(startInstance, 0);
+	function listedChildren(instance: Instance): Instance[] {
+		const children = instance.GetChildren();
+		return showScriptsOnly ? children.filter(isScriptOrHoldsOne) : children;
+	}
+
+	type Entry = { instance: Instance; node: Record<string, unknown> };
+	// One way to list an entry's children: every child, or (past 20 children)
+	// a count per class with three examples of each. A plan that does not fit
+	// the budget may name the class summary to use instead.
+	type Plan = {
+		owner: Entry;
+		entries: Entry[];
+		nodes: Record<string, unknown>[];
+		summary?: Record<string, unknown>[];
+		// Each summary row's children, in the same order.
+		groups?: Instance[][];
+		childCount: number;
+		cost: number;
+		order: number;
+		fallback?: Plan;
+	};
+
+	function entryFor(instance: Instance): Entry {
+		return { instance, node: describe(instance) };
+	}
+
+	function entryCost(entry: Entry): number {
+		return estimatedJsonChars(entry.node) + INSTANCE_REF_CHARS;
+	}
+
+	function everyChildPlan(owner: Entry, children: Instance[], order: number): Plan {
+		const entries = children.map(entryFor);
+		let cost = CHILDREN_KEY_CHARS;
+		for (const entry of entries) cost += entryCost(entry);
+		return { owner, entries, nodes: entries.map((entry) => entry.node), childCount: children.size(), cost, order };
+	}
+
+	function groupedPlan(owner: Entry, children: Instance[], order: number): Plan {
+		// Classes in the order they first appear, so the listing is stable.
+		const classNames: string[] = [];
+		const classGroups = new Map<string, Instance[]>();
+		for (const child of children) {
+			const cn = child.ClassName;
+			let group = classGroups.get(cn);
+			if (group === undefined) {
+				group = [];
+				classGroups.set(cn, group);
+				classNames.push(cn);
+			}
+			group.push(child);
+		}
+
+		const summary: Record<string, unknown>[] = [];
+		const groups: Instance[][] = [];
+		const entries: Entry[] = [];
+		const nodes: Record<string, unknown>[] = [];
+		let cost = CHILDREN_KEY_CHARS;
+		for (const cn of classNames) {
+			const classChildren = classGroups.get(cn)!;
+			groups.push(classChildren);
+			summary.push({
+				className: cn,
+				count: classChildren.size(),
+				examples: [classChildren[0]?.Name, classChildren[1]?.Name],
+			});
+			const limit = math.min(3, classChildren.size());
+			for (let i = 0; i < limit; i++) {
+				const entry = entryFor(classChildren[i]);
+				entries.push(entry);
+				nodes.push(entry.node);
+				cost += entryCost(entry);
+			}
+			if (classChildren.size() > 3) {
+				const more = {
+					name: `... ${classChildren.size() - 3} more ${cn} objects`,
+					className: "MoreIndicator",
+					path: `${owner.node.path} [${cn} children]`,
+					note: "Use specific path to explore these objects",
+				};
+				nodes.push(more);
+				cost += estimatedJsonChars(more);
+			}
+		}
+		cost += estimatedJsonChars(summary);
+		return { owner, entries, nodes, summary, groups, childCount: children.size(), cost, order };
+	}
+
+	function planFor(owner: Entry, children: Instance[], order: number): Plan {
+		if (children.size() <= 20) return everyChildPlan(owner, children, order);
+		if (!showScriptsOnly) return groupedPlan(owner, children, order);
+		// A scripts-only listing is read for the names of the scripts, so it
+		// lists every one where it can, and too many to list are summarised by
+		// class with as many names as the budget has room for.
+		const plan = everyChildPlan(owner, children, order);
+		plan.fallback = groupedPlan(owner, children, order);
+		return plan;
+	}
+
+	// The tree is listed a level at a time, so every entry near the root is
+	// shown before any entry deeper down, and it stops expanding entries once
+	// the result reaches its budget. Listed depth-first, one large subtree used
+	// to fill the result on its own and the whole result was cut down after
+	// the fact, dropping its siblings.
+	const root = entryFor(startInstance);
+	root.node.instanceRef = getInstanceReference(startInstance);
+	let used = entryCost(root) + RESULT_FIELDS_CHARS;
+	let reachedMaxDepth = false;
+	let reachedBudget = false;
+
+	function commit(plan: Plan, nextLevel: Entry[]) {
+		if (plan.summary !== undefined) plan.owner.node.childSummary = plan.summary;
+		for (const entry of plan.entries) {
+			entry.node.instanceRef = getInstanceReference(entry.instance);
+			nextLevel.push(entry);
+		}
+		plan.owner.node.children = plan.nodes;
+		used += plan.cost;
+	}
+
+	// Adds names from each class to a summary's examples until the room is
+	// spent, and returns the room used.
+	function nameMore(plan: Plan, room: number): number {
+		const summary = plan.summary!;
+		const groups = plan.groups!;
+		let added = 0;
+		for (let i = 0; i < summary.size(); i++) {
+			const examples = summary[i].examples as string[];
+			const group = groups[i];
+			for (let k = examples.size(); k < group.size(); k++) {
+				const cost = group[k].Name.size() + 3;
+				if (added + cost > room) return added;
+				examples.push(group[k].Name);
+				added += cost;
+			}
+		}
+		return added;
+	}
+
+	function leaveUnexpanded(entry: Entry, childCount: number) {
+		entry.node.childCount = childCount;
+		entry.node.hasMore = true;
+		used += UNEXPANDED_CHARS;
+	}
+
+	let level: Entry[] = [root];
+	for (let depth = 0; level.size() > 0; depth++) {
+		const plans: Plan[] = [];
+		for (const entry of level) {
+			const children = listedChildren(entry.instance);
+			if (children.size() === 0) continue;
+			if (depth >= maxDepth) {
+				leaveUnexpanded(entry, children.size());
+				reachedMaxDepth = true;
+				continue;
+			}
+			plans.push(planFor(entry, children, plans.size()));
+		}
+
+		// Cheapest first, so the budget expands as many entries as it can.
+		plans.sort((a, b) => a.cost < b.cost || (a.cost === b.cost && a.order < b.order));
+		const nextLevel: Entry[] = [];
+		const leftover: Plan[] = [];
+		for (const plan of plans) {
+			if (used + plan.cost <= STRUCTURE_BUDGET_CHARS) commit(plan, nextLevel);
+			else leftover.push(plan);
+		}
+		const summarised: Plan[] = [];
+		for (const plan of leftover) {
+			const summary = plan.fallback;
+			// The requested entry's own children are always listed.
+			if (summary !== undefined && (used + summary.cost <= STRUCTURE_BUDGET_CHARS || depth === 0)) {
+				commit(summary, nextLevel);
+				summarised.push(summary);
+			} else if (depth === 0) {
+				commit(plan, nextLevel);
+			} else {
+				leaveUnexpanded(plan.owner, plan.childCount);
+				reachedBudget = true;
+			}
+		}
+		// Every summary at this level is in before any of them names more.
+		for (const summary of summarised) {
+			used += nameMore(summary, STRUCTURE_BUDGET_CHARS - used);
+		}
+		level = nextLevel;
+	}
+
+	const result = root.node;
 	result.requestedPath = startPath;
 	result.maxDepth = maxDepth;
 	result.scriptsOnly = showScriptsOnly;
 	result.timestamp = tick();
-	if (reachedMaxDepth) {
-		result.note = "Entries with hasMore list only their childCount; pass one as path to see its children.";
+	if (reachedMaxDepth || reachedBudget) {
+		result.note = reachedBudget
+			? "Entries with hasMore list only their childCount; the deepest were left unexpanded to keep this result small. Pass one as path to see its children."
+			: "Entries with hasMore list only their childCount; pass one as path to see its children.";
 	}
 
 	return result;
