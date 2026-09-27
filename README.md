@@ -62,6 +62,12 @@ claude mcp add robloxstudio -- node C:\path\to\Roqer\packages\robloxstudio-mcp\d
 - [Creator Store assets](docs/creator-store-assets.md)
 - [Removed tools and parameters](docs/deprecated-api.md)
 
+## Roadmap
+
+What Roqer is working toward. Plans can change; [open an issue](https://github.com/S4US/Roqer/issues) to suggest something.
+
+- **Now: Rojo and version control.** Work on places whose code lives in a Rojo project: edit the files on disk that Rojo syncs into Studio, instead of only the copy inside Studio, so every change can be reviewed and kept in Git like the rest of your project.
+
 ## Contributing
 
 Contributions are welcome. [CONTRIBUTING.md](CONTRIBUTING.md) explains how to set up, test, and send a change. Please report security problems privately, as [SECURITY.md](SECURITY.md) describes.
