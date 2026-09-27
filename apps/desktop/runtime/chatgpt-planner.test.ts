@@ -5,7 +5,7 @@ import { PassThrough } from "node:stream";
 import test from "node:test";
 
 import { CodexAppServerClient, type AppServerNotification, type AppServerRequest, type AppServerRequestHandler } from "./codex-app-server";
-import { createChatGptPlanner, type ChatGptAppServer, type CodexThread, type CodexThreadStore } from "./chatgpt-planner";
+import { codexStreamedOutput, createChatGptPlanner, type ChatGptAppServer, type CodexThread, type CodexThreadStore } from "./chatgpt-planner";
 import { ProviderSessionStore } from "./provider-sessions";
 import type { AgentDefinition } from "./agent-definition";
 import type { PlannerContext } from "./run-engine";
@@ -129,6 +129,7 @@ test("ChatGPT planner routes Studio calls through PlannerContext and records ver
     signal: new AbortController().signal,
     status: (label, detail) => statuses.push({ label, detail }),
     progress: () => undefined,
+    outputTokens: () => undefined,
     say: (text) => said.push(text),
     recordChange: (change) => changes.push(change),
     recordEvidence: (item) => evidence.push(item),
@@ -252,6 +253,7 @@ test("ChatGPT keeps an empty history prompt byte-for-byte unchanged", async () =
     signal: controller.signal,
     status: () => undefined,
     progress: () => undefined,
+    outputTokens: () => undefined,
     say: () => undefined,
     recordChange: () => undefined,
     recordEvidence: () => undefined,
@@ -292,6 +294,7 @@ test("ChatGPT receives user-attached images in the opening turn", async () => {
     signal: controller.signal,
     status: () => undefined,
     progress: () => undefined,
+    outputTokens: () => undefined,
     say: () => undefined,
     recordChange: () => undefined,
     recordEvidence: () => undefined,
@@ -343,7 +346,7 @@ function lifecycleRun(
   const context: PlannerContext = {
     prompt: "Inspect Studio", conversation: { messages: [], truncated: false }, images: [],
     instanceId: null, autoPlaytest: false, signal,
-    progress: () => undefined, status: () => undefined, say: () => undefined,
+    progress: () => undefined, outputTokens: () => undefined, status: () => undefined, say: () => undefined,
     recordChange: () => undefined, recordEvidence: () => undefined, setTasks: () => undefined,
     tasks: () => [], changes: () => [], evidence: () => [], decisions: () => [], takeSteers: () => [],
     askUser: overrides.askUser ?? (async (_question, options) => options[0]),
@@ -605,7 +608,7 @@ function sessionRun(
   const context: PlannerContext = {
     prompt, conversation: { messages, truncated: false }, images: [],
     instanceId: null, autoPlaytest: false, signal: new AbortController().signal,
-    progress: () => undefined, status: () => undefined, say: () => undefined,
+    progress: () => undefined, outputTokens: () => undefined, status: () => undefined, say: () => undefined,
     recordChange: () => undefined, recordEvidence: () => undefined, setTasks: () => undefined,
     tasks: () => [], changes: () => [], evidence: () => [], decisions: () => [], takeSteers: () => [],
     askUser: async (_question, options) => options[0],
@@ -754,4 +757,24 @@ test("ChatGPT does not keep a thread whose turn failed", async () => {
   });
   await rejected;
   assert.equal(sessions.size, 0);
+});
+
+test("Codex's stream is counted for the waiting line: what streamed, then Codex's own figure per response", () => {
+  const note = (method: string, params: Record<string, unknown>) => codexStreamedOutput({ method, params: { threadId: "thread-1", ...params } });
+
+  assert.deepEqual(note("item/agentMessage/delta", { itemId: "m1", delta: "Adding it." }), { characters: 10 });
+  assert.deepEqual(note("item/reasoning/summaryTextDelta", { itemId: "r1", delta: "Planning", summaryIndex: 0 }), { characters: 8 });
+  assert.deepEqual(note("item/reasoning/textDelta", { itemId: "r1", delta: "Plan", contentIndex: 0 }), { characters: 4 });
+  assert.deepEqual(note("thread/tokenUsage/updated", {
+    turnId: "turn-1",
+    tokenUsage: {
+      total: { totalTokens: 9_000, inputTokens: 8_000, cachedInputTokens: 0, cacheWriteInputTokens: 0, outputTokens: 1_000, reasoningOutputTokens: 800 },
+      last: { totalTokens: 3_000, inputTokens: 2_600, cachedInputTokens: 0, cacheWriteInputTokens: 0, outputTokens: 400, reasoningOutputTokens: 300 },
+      modelContextWindow: null,
+    },
+  }), { exact: 400 }, "the last response's count, not the thread's running total");
+  assert.deepEqual(note("item/started", { item: { type: "dynamicToolCall", id: "call-1" } }), { ended: true });
+  assert.equal(note("item/started", { item: { type: "reasoning", id: "r2" } }), null);
+  assert.equal(note("item/agentMessage/delta", { itemId: "m1", delta: "" }), null);
+  assert.equal(note("thread/tokenUsage/updated", { tokenUsage: { last: { outputTokens: "400" } } }), null);
 });

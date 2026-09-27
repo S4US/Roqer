@@ -191,6 +191,14 @@ export type RunEvent =
    * the whole run, not one of the things it did.
    */
   | (RunEventBase & { type: "status"; label: string; detail?: string; transient?: boolean })
+  /**
+   * How much the model has written in the response it is producing now, for
+   * the waiting line. Live state like a transient status: never a step, never
+   * kept. `exact` is the provider's own count, reported once a response ends;
+   * otherwise it is estimated from what has streamed, which leaves out
+   * reasoning a model does not show. A later response starts again from zero.
+   */
+  | (RunEventBase & { type: "output-tokens"; tokens: number; exact: boolean })
   /** A chunk of assistant prose. Concatenating deltas rebuilds the reply. */
   | (RunEventBase & { type: "message-delta"; text: string })
   | (RunEventBase & { type: "tool-proposed"; proposal: ToolProposal })
@@ -422,6 +430,9 @@ export function isRunEvent(value: unknown): value is RunEvent {
     case "status":
       return isString(value.label) &&
         (value.transient === undefined || typeof value.transient === "boolean");
+    case "output-tokens":
+      return typeof value.tokens === "number" && Number.isSafeInteger(value.tokens) && value.tokens >= 0 &&
+        typeof value.exact === "boolean";
     case "message-delta":
       return isString(value.text);
     case "tool-proposed":

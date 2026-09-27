@@ -69,6 +69,8 @@ test("an OpenAI-compatible turn streams prose and a tool call, keyless for a loc
 
   assert.deepEqual(events, [
     { kind: "delta", text: "Looking" },
+    // How much of the call has arrived, counted and never carried.
+    { kind: "tool-input", characters: 30 },
     { kind: "tool-call", call: { id: "call-1", name: "roblox_studio", arguments: { operation: "get_place_info" } } },
     { kind: "completed", stopReason: "tool-use", usage: { inputTokens: 100, outputTokens: 20 } },
   ]);
@@ -185,10 +187,13 @@ test("an Anthropic turn authenticates with x-api-key, caches the prefix, and rep
 
   const first = await collect(turns.streamTurn(REQUEST, new AbortController().signal));
   assert.deepEqual(first, [
-    // The thinking block's start, its text, and its signature: progress, with nothing to show.
+    // The thinking block's start, its text, and its signature: progress, with
+    // nothing to show but how much thinking and how much of the call arrived.
     { kind: "reasoning" },
+    { kind: "reasoning", characters: 14 },
     { kind: "reasoning" },
-    { kind: "reasoning" },
+    { kind: "tool-input", characters: 13 },
+    { kind: "tool-input", characters: 17 },
     { kind: "tool-call", call: { id: "toolu_1", name: "roblox_studio", arguments: { operation: "get_place_info" } } },
     { kind: "completed", stopReason: "tool-use", usage: { inputTokens: 450, outputTokens: 30, cachedInputTokens: 400 } },
   ]);
@@ -209,7 +214,7 @@ test("an Anthropic turn authenticates with x-api-key, caches the prefix, and rep
     turnId: "run-1:turn:2",
     messages: [
       ...REQUEST.messages,
-      { role: "assistant", content: [{ kind: "tool-call", call: first[3].kind === "tool-call" ? first[3].call : { id: "", name: "", arguments: {} } }] },
+      { role: "assistant", content: first.flatMap((event) => event.kind === "tool-call" ? [{ kind: "tool-call" as const, call: event.call }] : []) },
       { role: "user", content: [{ kind: "tool-result", callId: "toolu_1", content: "Place1", failed: false }] },
     ],
   };
@@ -707,11 +712,30 @@ test("reasoning an OpenAI-compatible server streams is reported as progress and 
   }]);
   const turns = new OpenAiChatTurns({ baseUrl: "http://localhost:11434/v1", apiKey: null, label: "Ollama", reasoning: true, fetch });
   assert.deepEqual(await collect(turns.streamTurn(REQUEST, new AbortController().signal)), [
-    { kind: "reasoning" },
-    { kind: "reasoning" },
+    { kind: "reasoning", characters: 20 },
+    { kind: "reasoning", characters: 14 },
+    // Encrypted reasoning is progress, but not text to count.
     { kind: "reasoning" },
     { kind: "delta", text: "Done." },
     { kind: "completed", stopReason: "end" },
+  ]);
+});
+
+test("reasoning OpenRouter sends twice over is counted once", async () => {
+  const { fetch } = endpoint([{
+    frames: [
+      // The same words as \`reasoning\` and inside \`reasoning_details\`.
+      json({ choices: [{ delta: { reasoning: "Plan the shop", reasoning_details: [{ type: "reasoning.text", text: "Plan the shop", index: 0 }] } }] }),
+      json({ choices: [{ delta: { reasoning_details: [{ type: "reasoning.summary", summary: "Shop", index: 1 }] } }] }),
+      json({ choices: [{ delta: { content: "Done." }, finish_reason: "stop" }] }),
+      "[DONE]",
+    ],
+  }]);
+  const turns = new OpenAiChatTurns({ baseUrl: "https://openrouter.ai/api/v1", apiKey: "sk-or-1234567890", label: "OpenRouter", reasoning: true, fetch });
+  const events = await collect(turns.streamTurn(REQUEST, new AbortController().signal));
+  assert.deepEqual(events.slice(0, 2), [
+    { kind: "reasoning", characters: 13 },
+    { kind: "reasoning", characters: 4 },
   ]);
 });
 

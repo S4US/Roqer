@@ -23,6 +23,7 @@ import { buildConversationPrompt, buildFollowUpPrompt, continuesConversation } f
 import type { ProviderSessionStore } from "./provider-sessions";
 import { runDeveloperInstructions } from "./run-instructions";
 import { createProseStream } from "./text-stream";
+import { estimateTurnOutputTokens } from "./model-api/turn-contract";
 import { DEFAULT_STALL_MS, describeStall, watchProgress } from "./progress-watchdog";
 import {
   startWorkbenchMcpServer, type WorkbenchMcpServerHandle, type WorkbenchMcpToolResult,
@@ -188,6 +189,34 @@ function streamedProse(message: JsonRecord): { start: boolean; text: string } | 
   const delta = event.delta;
   if (!isRecord(delta) || delta.type !== "text_delta" || typeof delta.text !== "string") return null;
   return { start: false, text: delta.text };
+}
+
+/**
+ * What a `stream_event` from the main agent says about how much it has written.
+ *
+ * `start` opens a new API response, whose count begins again at zero.
+ * `characters` is what one delta streamed: reply text, thinking Claude Code
+ * passes through, or a tool call's arguments. `exact` is the output count the
+ * API reports as a response ends, which includes thinking that was never shown.
+ */
+export function streamedOutput(message: JsonRecord): { start?: true; characters?: number; exact?: number } | null {
+  if (message.parent_tool_use_id != null) return null;
+  const event = message.event;
+  if (!isRecord(event)) return null;
+
+  if (event.type === "message_start") return { start: true };
+  if (event.type === "message_delta") {
+    const usage = event.usage;
+    const exact = isRecord(usage) ? usage.output_tokens : undefined;
+    return typeof exact === "number" && Number.isSafeInteger(exact) && exact >= 0 ? { exact } : null;
+  }
+  if (event.type !== "content_block_delta" || !isRecord(event.delta)) return null;
+  const delta = event.delta;
+  const streamed = delta.type === "text_delta" ? delta.text
+    : delta.type === "thinking_delta" ? delta.thinking
+      : delta.type === "input_json_delta" ? delta.partial_json
+        : undefined;
+  return typeof streamed === "string" && streamed.length > 0 ? { characters: streamed.length } : null;
 }
 
 function assistantText(message: JsonRecord): string {
@@ -402,6 +431,8 @@ export function createClaudePlanner(options: ClaudePlannerOptions): Planner {
       let succeeded = false;
       let streaming = false;
       let turnProseStart = 0;
+      /** What the API response in progress has streamed, for the waiting line's count. */
+      let responseCharacters = 0;
 
       const finish = (summary: string) => {
         if (settled) return;
@@ -496,6 +527,13 @@ export function createClaudePlanner(options: ClaudePlannerOptions): Planner {
         }
 
         if (message.type === "stream_event") {
+          const output = streamedOutput(message);
+          if (output?.start) responseCharacters = 0;
+          if (output?.characters !== undefined) {
+            responseCharacters += output.characters;
+            context.outputTokens(estimateTurnOutputTokens(responseCharacters), false);
+          }
+          if (output?.exact !== undefined) context.outputTokens(output.exact, true);
           const chunk = streamedProse(message);
           if (chunk === null) return;
           streaming = true;

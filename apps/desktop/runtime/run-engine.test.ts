@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { McpCallOptions, McpToolCaller, McpToolOutcome } from "./mcp-types";
-import { RunCancelledError, RunSession } from "./run-engine";
+import { OutputTokenMeter, RunCancelledError, RunSession } from "./run-engine";
 import type { Planner, PlannerContext } from "./run-engine";
 import type { RunEvent, RunRequest } from "../shared/run-events";
 import { isRunEvent } from "../shared/run-events";
@@ -85,6 +85,40 @@ test("event order and seq monotonicity for a simple read-only run", async () => 
     assert.equal(event.runId, "run-1");
   });
   assertAllValid(events);
+});
+
+test("a model's output count reaches the renderer at most once a second, with the provider's own figure always", () => {
+  const meter = new OutputTokenMeter();
+  assert.equal(meter.admit(10, false, 0), true, "the first estimate shows at once");
+  assert.equal(meter.admit(40, false, 400), false, "an estimate within the second waits");
+  assert.equal(meter.admit(90, false, 1_000), true);
+  assert.equal(meter.admit(90, false, 5_000), false, "an unchanged figure says nothing new");
+  assert.equal(meter.admit(120, true, 5_100), true, "the provider's count is never held back");
+  assert.equal(meter.admit(8, false, 5_200), true, "a smaller count is a new response, and the old figure must not stand");
+});
+
+test("output counts travel as valid events and never as steps", async () => {
+  const events: RunEvent[] = [];
+  const session = new RunSession({
+    caller: makeCaller(async () => outcome()),
+    planner: planner(async (ctx) => {
+      ctx.outputTokens(12, false);
+      ctx.outputTokens(13, false);
+      ctx.outputTokens(-1, false);
+      ctx.outputTokens(1.5, true);
+      ctx.outputTokens(30, true);
+      return "done";
+    }),
+    request: makeRequest(),
+    emit: (event) => events.push(event),
+  });
+
+  await session.execute();
+  assertAllValid(events);
+  assert.deepEqual(
+    events.flatMap((event) => event.type === "output-tokens" ? [{ tokens: event.tokens, exact: event.exact }] : []),
+    [{ tokens: 12, exact: false }, { tokens: 30, exact: true }],
+  );
 });
 
 test("the planner receives the bounded conversation attached to its run", async () => {

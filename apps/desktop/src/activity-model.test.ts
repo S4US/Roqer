@@ -5,7 +5,7 @@ import { summarizeToolCall } from "../shared/mcp-tools";
 import type { RunEvent, RunEventBody } from "../shared/run-events";
 import { activitySteps, applyRunEvent, createRunView, type ActivityStep, type RunView } from "./run-view";
 import {
-  activeStepTitle, aggregateDuration, buildActivityModel, currentNodeTitle, elapsedLabel,
+  activeStepTitle, aggregateDuration, buildActivityModel, currentNodeTitle, elapsedLabel, outputTokensLabel,
   mergeFindings, stepStatus, type ActivityNode,
 } from "./activity-model";
 
@@ -385,4 +385,16 @@ test("a live wait reads as whole seconds, and as a clock once it passes a minute
   assert.equal(elapsedLabel(600_000), "10:00");
   // A clock that disagrees with itself between ticks would print a negative.
   assert.equal(elapsedLabel(-5_000), "0s");
+});
+
+test("a live output count is marked as an estimate until the provider reports its own", () => {
+  assert.equal(outputTokensLabel(78, false), "~78 tokens");
+  assert.equal(outputTokensLabel(78, true), "78 tokens");
+  assert.equal(outputTokensLabel(1, true), "1 token");
+  // Thousands shorten, never rounding up past what has streamed.
+  assert.equal(outputTokensLabel(1_000, false), "~1k tokens");
+  assert.equal(outputTokensLabel(1_499, false), "~1.4k tokens");
+  assert.equal(outputTokensLabel(9_999, false), "~9.9k tokens");
+  assert.equal(outputTokensLabel(12_345, true), "12k tokens");
+  assert.equal(outputTokensLabel(99_999, true), "99k tokens");
 });

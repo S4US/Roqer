@@ -45,7 +45,7 @@ import {
   type ChangeGroup, type DiffRow, type SyntaxToken,
 } from "./diff-view";
 import {
-  aggregateDuration, buildActivityModel, currentNodeTitle, elapsedLabel, MAX_VISIBLE_ALERTS,
+  aggregateDuration, buildActivityModel, currentNodeTitle, elapsedLabel, MAX_VISIBLE_ALERTS, outputTokensLabel,
   type ActivityNode, type StepStatus,
 } from "./activity-model";
 import {
@@ -1721,11 +1721,14 @@ const WAITING_REASSURANCE_AFTER_MS = 30_000;
  * The clock is per waiting spell rather than per run: this unmounts whenever
  * the provider stops being the thing that is working, so a tool call or an
  * approval resets it and the number always means "how long has it been quiet".
+ * Beside it, once the model has streamed anything, is how much it has written
+ * in this response: the clock says time is passing, the count says the model
+ * is still producing.
  *
  * Deliberately not a live region. The composer already announces "Thinking…",
  * and one announcement is enough.
  */
-function WaitingNotice({ label, detail }: { label: string; detail?: string }) {
+function WaitingNotice({ label, detail, output }: { label: string; detail?: string; output: RunView["outputTokens"] }) {
   const startedAt = useRef(Date.now());
   const [elapsedMs, setElapsedMs] = useState(0);
   useEffect(() => {
@@ -1737,6 +1740,15 @@ function WaitingNotice({ label, detail }: { label: string; detail?: string }) {
     <p className="waiting-line">
       <span>{label}</span>
       {elapsedMs >= WAITING_ELAPSED_AFTER_MS && <span className="waiting-elapsed">{elapsedLabel(elapsedMs)}</span>}
+      {/* Only once something has streamed: a count sitting at zero reads as
+          more stuck than no count at all, and a model that hides its
+          reasoning sends nothing to count until it answers. */}
+      {output !== null && output.tokens > 0 && <span
+        className="waiting-elapsed"
+        title={output.exact
+          ? "Tokens the model reported for this response."
+          : "Estimated from what the model has streamed so far. Reasoning a model does not show is not counted until it reports its own total."}
+      >{outputTokensLabel(output.tokens, output.exact)}</span>}
     </p>
     {detail !== undefined && detail !== "" && <p className="waiting-detail">{detail}</p>}
     {elapsedMs >= WAITING_REASSURANCE_AFTER_MS && <p className="waiting-detail">
@@ -1764,6 +1776,7 @@ function LiveRun({ view, steps, nodes, explaining, onAnswer, onExplain, onOpenIn
       // planner's own words; the fallback is for a planner that sends none.
       label={view.status?.label ?? "Working"}
       {...(view.status?.detail === undefined ? {} : { detail: view.status.detail })}
+      output={view.outputTokens}
     />}
     {view.pendingQuestion && <QuestionCard question={view.pendingQuestion} explaining={explaining} onAnswer={onAnswer} onExplain={onExplain} />}
     <TaskList tasks={view.tasks} />

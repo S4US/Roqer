@@ -17,6 +17,7 @@ import { buildConversationPrompt, buildFollowUpPrompt, continuesConversation } f
 import type { ProviderSessionStore } from "./provider-sessions";
 import { runDeveloperInstructions } from "./run-instructions";
 import { createProseStream } from "./text-stream";
+import { estimateTurnOutputTokens } from "./model-api/turn-contract";
 import { DEFAULT_STALL_MS, describeStall, watchProgress, type ProgressWatchdog } from "./progress-watchdog";
 
 type JsonRecord = Record<string, unknown>;
@@ -157,6 +158,38 @@ function isCompaction(notification: AppServerNotification): boolean {
   return isRecord(item) && item.type === "contextCompaction";
 }
 
+/**
+ * What a Codex notification says about how much the model has written.
+ *
+ * `characters` is streamed reply or reasoning text; Codex streams reasoning
+ * only as the summary it chooses to show, so an estimate from it runs low.
+ * `exact` is the output count Codex reports once a model response ends,
+ * hidden reasoning included, and the next response counts from zero. A tool
+ * call starting also ends the response it came from.
+ */
+export function codexStreamedOutput(notification: AppServerNotification): { characters?: number; exact?: number; ended?: true } | null {
+  switch (notification.method) {
+    case "item/agentMessage/delta":
+    case "item/reasoning/summaryTextDelta":
+    case "item/reasoning/textDelta": {
+      const delta = notification.params.delta;
+      return typeof delta === "string" && delta.length > 0 ? { characters: delta.length } : null;
+    }
+    case "thread/tokenUsage/updated": {
+      const usage = notification.params.tokenUsage;
+      const last = isRecord(usage) && isRecord(usage.last) ? usage.last : undefined;
+      const exact = last?.outputTokens;
+      return typeof exact === "number" && Number.isSafeInteger(exact) && exact >= 0 ? { exact } : null;
+    }
+    case "item/started": {
+      const item = notification.params.item;
+      return isRecord(item) && item.type === "dynamicToolCall" ? { ended: true } : null;
+    }
+    default:
+      return null;
+  }
+}
+
 function parseDynamicCall(request: AppServerRequest, threadId: string, blender: boolean):
   { operation: string; args: JsonRecord } | null {
   if (request.method !== "item/tool/call" || request.params.threadId !== threadId) return null;
@@ -262,6 +295,8 @@ export function createChatGptPlanner(options: ChatGptPlannerOptions): Planner {
       const prose = createProseStream((text) => context.say(text));
       let turnId: string | null = null;
       let streamedItemId: string | null = null;
+      /** What the model response in progress has streamed, for the waiting line's count. */
+      let responseCharacters = 0;
       let settled = false;
       let failed = false;
       let disconnected = false;
@@ -339,6 +374,13 @@ export function createChatGptPlanner(options: ChatGptPlannerOptions): Planner {
           runSkillTool.clearCache();
           return;
         }
+        const output = codexStreamedOutput(notification);
+        if (output?.characters !== undefined) {
+          responseCharacters += output.characters;
+          context.outputTokens(estimateTurnOutputTokens(responseCharacters), false);
+        }
+        if (output?.exact !== undefined) context.outputTokens(output.exact, true);
+        if (output?.exact !== undefined || output?.ended) responseCharacters = 0;
         if (notification.method === "item/agentMessage/delta") {
           const delta = notification.params.delta;
           if (typeof delta !== "string" || delta === "") return;

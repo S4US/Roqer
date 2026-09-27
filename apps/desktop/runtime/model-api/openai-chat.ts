@@ -166,6 +166,24 @@ function carriesReasoning(delta: Record<string, unknown>): boolean {
     (Array.isArray(delta.reasoning_details) && delta.reasoning_details.length > 0);
 }
 
+/**
+ * How many characters of readable reasoning one delta carries.
+ *
+ * OpenRouter sends the same words twice, as `reasoning` and again inside
+ * `reasoning_details`, and some servers fill both plain fields; the structured
+ * form wins when present, and otherwise the longer plain one, so nothing is
+ * counted twice. Encrypted reasoning is not text and counts nothing.
+ */
+function reasoningCharacters(delta: Record<string, unknown>): number {
+  const length = (value: unknown) => typeof value === "string" ? value.length : 0;
+  if (Array.isArray(delta.reasoning_details) && delta.reasoning_details.length > 0) {
+    return delta.reasoning_details.reduce<number>((total, detail) => isRecord(detail)
+      ? total + length(detail.text) + length(detail.summary)
+      : total, 0);
+  }
+  return Math.max(length(delta.reasoning_content), length(delta.reasoning));
+}
+
 /** Provider-native finish reasons that mean the model tried to call a tool and could not form the call. */
 const MALFORMED_NATIVE_REASONS = /MALFORMED_FUNCTION_CALL|UNEXPECTED_TOOL_CALL/i;
 
@@ -428,7 +446,8 @@ export class OpenAiChatTurns implements TurnTransport {
         if (Array.isArray(delta.reasoning_details)) {
           for (const fragment of delta.reasoning_details) if (isRecord(fragment)) mergeReasoningDetail(reasoningDetails, fragment);
         }
-        yield { kind: "reasoning" };
+        const characters = reasoningCharacters(delta);
+        yield characters > 0 ? { kind: "reasoning", characters } : { kind: "reasoning" };
       }
       if (typeof delta.content === "string" && delta.content.length > 0) {
         produced = true;
@@ -437,7 +456,8 @@ export class OpenAiChatTurns implements TurnTransport {
       }
       if (Array.isArray(delta.tool_calls) && delta.tool_calls.length > 0) {
         produced = true;
-        this.accumulate(pending, delta.tool_calls);
+        const characters = this.accumulate(pending, delta.tool_calls);
+        if (characters > 0) yield { kind: "tool-input", characters };
       }
     }
     if (runSignal.aborted) return;
@@ -485,7 +505,9 @@ export class OpenAiChatTurns implements TurnTransport {
    * anything else continues the last one, which is how servers that omit the
    * index stream them.
    */
-  private accumulate(pending: Map<number, PendingToolCall>, fragments: readonly unknown[]): void {
+  /** Adds streamed call fragments to the calls so far; returns how many argument characters arrived. */
+  private accumulate(pending: Map<number, PendingToolCall>, fragments: readonly unknown[]): number {
+    let added = 0;
     for (const fragment of fragments) {
       if (!isRecord(fragment)) continue;
       const call = isRecord(fragment.function) ? fragment.function : undefined;
@@ -510,8 +532,10 @@ export class OpenAiChatTurns implements TurnTransport {
           throw oversizedToolCall(this.options.label, current.name);
         }
         current.arguments += args;
+        added += args.length;
       }
       pending.set(index, current);
     }
+    return added;
   }
 }

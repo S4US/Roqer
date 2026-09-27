@@ -44,6 +44,7 @@ function contextWith(outcomes: McpToolOutcome[]) {
     say: () => undefined,
     status: () => undefined,
     progress: () => undefined,
+    outputTokens: () => undefined,
     recordChange: (change) => changes.push(change),
     recordEvidence: (item) => evidence.push(item),
     setTasks: () => undefined,
