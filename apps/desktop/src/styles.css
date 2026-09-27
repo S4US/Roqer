@@ -608,62 +608,103 @@ button:focus-visible, textarea:focus-visible, select:focus-visible, input:focus-
 .task-flag { flex: 0 0 auto; margin-left: auto; padding: 1px 6px; color: var(--muted); background: var(--surface); border: 1px solid var(--border-subtle); border-radius: 99px; font-size: var(--type-meta); font-style: normal; }
 
 .modal-backdrop { position: fixed; inset: 0; z-index: 100; display: grid; place-items: center; background: var(--scrim); backdrop-filter: blur(5px); }
-.settings-modal, .name-modal { width: min(480px, calc(100% - 40px)); padding: 20px; color: var(--ink); background: var(--surface-raised); border: 1px solid var(--border-subtle); border-radius: 16px; box-shadow: var(--shadow-lg); }
+.name-modal { width: min(480px, calc(100% - 40px)); padding: 20px; color: var(--ink); background: var(--surface-raised); border: 1px solid var(--border-subtle); border-radius: 16px; box-shadow: var(--shadow-lg); }
 .name-modal { width: min(430px, calc(100% - 40px)); }
 .name-modal > p { margin: 17px 0; color: var(--muted); font-size: var(--type-body); line-height: 1.6; }
-.name-modal > label, .endpoint-setting { display: flex; flex-direction: column; gap: 7px; }
-.name-modal label > span, .endpoint-setting > span { color: var(--muted); font-size: var(--type-label); font-weight: var(--weight-medium); }
-.name-modal input, .endpoint-setting input { width: 100%; height: 39px; padding: 0 11px; color: var(--ink); background: var(--surface-sunken); border: 1px solid var(--border); border-radius: 9px; outline: 0; font-size: var(--type-body); }
-.name-modal input:focus, .endpoint-setting input:focus { background: var(--surface); border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.name-modal > label { display: flex; flex-direction: column; gap: 7px; }
+.name-modal label > span { color: var(--muted); font-size: var(--type-label); font-weight: var(--weight-medium); }
+.name-modal input { width: 100%; height: 39px; padding: 0 11px; color: var(--ink); background: var(--surface-sunken); border: 1px solid var(--border); border-radius: 9px; outline: 0; font-size: var(--type-body); }
+.name-modal input:focus { background: var(--surface); border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
 .modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 20px; }
 .modal-actions button:disabled { cursor: default; opacity: .45; }
 .modal-header { display: flex; align-items: flex-start; justify-content: space-between; padding-bottom: 17px; border-bottom: 1px solid var(--border); }
 .modal-header > div { display: flex; flex-direction: column; }
 .modal-header h2 { margin: 0; color: var(--ink); font-size: 20px; font-weight: var(--weight-semibold); letter-spacing: -.3px; }
-.settings-row { display: grid; grid-template-columns: 32px minmax(0, 1fr) auto; align-items: center; gap: 12px; min-height: 60px; padding: 10px 14px; }
-.settings-row > div:nth-child(2) { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
-.settings-row strong { color: var(--ink); font-size: var(--type-label); font-weight: var(--weight-medium); }
-.settings-row span { color: var(--muted); font-size: var(--type-meta); line-height: 1.45; }
-.settings-actions { display: flex; align-items: center; gap: 7px; }
-.settings-icon { display: grid; place-items: center; width: 32px; height: 32px; color: var(--ink); background: var(--surface-sunken); border-radius: 9px; }
-/* Settings reads as a few subjects, each a titled card of rows. */
-.settings-section { margin-top: 18px; }
-.settings-section > h3 { margin: 0 0 7px 2px; color: var(--muted); font-size: var(--type-meta); font-weight: var(--weight-medium); letter-spacing: .2px; }
-.settings-card { overflow: hidden; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; }
-.settings-card:empty { display: none; }
-.settings-card > * + * { border-top: 1px solid var(--border); }
-.settings-card > .endpoint-setting, .settings-card > .custom-editor { padding: 14px; border-bottom: 0; }
-.settings-card > .custom-message, .settings-card > .custom-hint { margin: 0; padding: 10px 14px; }
-.settings-card > .open-cloud-check { padding: 12px 14px; border-bottom: 0; }
-/* A note that belongs to the row above it reads as part of that row. */
-.settings-card > .settings-note { margin: -4px 0 0; padding: 0 14px 12px 58px; color: var(--muted); border-top: 0; font-size: var(--type-meta); line-height: 1.5; }
-/* A connection belongs to "Your own models", so it sits under it rather than
-   beside it as another setting. */
-.settings-subrow { grid-template-columns: 20px minmax(0, 1fr) auto; min-height: 48px; padding: 7px 14px 7px 58px; border-top-style: dashed !important; }
-.settings-subicon { display: grid; place-items: center; color: var(--muted); }
-.settings-path { overflow: hidden; margin-top: 2px; color: var(--muted); font: var(--weight-regular) 11px/1.5 "Geist Mono Variable", monospace; text-overflow: ellipsis; white-space: nowrap; }
-.settings-advanced > summary { padding: 12px 14px; color: var(--muted); font-size: var(--type-label); font-weight: var(--weight-medium); cursor: pointer; list-style-position: inside; }
-.settings-advanced > summary:hover { color: var(--ink); }
-.settings-advanced > .endpoint-setting { padding: 0 14px 14px; border-bottom: 0; }
+/* Settings is a page of its own over the chat: a sidebar of subjects and one
+   column of grouped rows, instead of a dialog with dialogs stacked on it. */
+.settings-page { position: fixed; inset: 0; z-index: 90; display: flex; min-width: 720px; color: var(--ink); background: var(--canvas); }
+.settings-nav { display: flex; flex: 0 0 240px; flex-direction: column; gap: 2px; padding: 16px 12px; background: var(--sidebar); border-right: 1px solid var(--border-subtle); }
+.settings-nav-back, .settings-nav-item { display: flex; align-items: center; gap: 6px; height: 34px; padding: 0 10px; color: var(--ink-secondary); text-align: left; background: none; border: 0; border-radius: 8px; font-size: var(--type-label); font-weight: var(--weight-medium); }
+.settings-nav-back { margin-bottom: 14px; color: var(--muted); }
+.settings-nav-back:hover, .settings-nav-item:hover { color: var(--ink); background: var(--sidebar-active); }
+.settings-nav-item[aria-current="page"] { color: var(--ink); background: var(--sidebar-selected); }
+.settings-nav button:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.settings-main { flex: 1; min-width: 0; overflow-y: auto; }
+/* Left-aligned beside the sidebar: a centred column left a band of nothing
+   between the two for the eye to cross. */
+.settings-content, .settings-subpage { display: flex; flex-direction: column; gap: 28px; }
+.settings-content { width: min(700px, 100%); padding: 44px 48px 64px; box-sizing: border-box; }
+.settings-page-head { display: flex; flex-direction: column; gap: 4px; }
+.settings-page-head h1 { margin: 0; font-size: 22px; font-weight: var(--weight-semibold); letter-spacing: -.2px; }
+.settings-page-head p { margin: 0; color: var(--muted); font-size: var(--type-label); line-height: 1.5; }
+.settings-back { display: flex; align-self: flex-start; align-items: center; gap: 3px; height: 24px; margin-bottom: 4px; padding: 0 4px 0 0; color: var(--muted); background: none; border: 0; font-size: var(--type-meta); font-weight: var(--weight-medium); }
+.settings-back:hover { color: var(--ink); }
+/* A group is one soft panel with hairlines between its rows. No outlines
+   around it, so the few things that do carry one stand out. */
+.settings-group { display: flex; flex-direction: column; gap: 8px; }
+.settings-group-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 12px; min-height: 24px; padding-left: 2px; }
+.settings-group-head h2 { margin: 0; color: var(--muted); font-size: var(--type-meta); font-weight: var(--weight-semibold); letter-spacing: .2px; }
+.settings-list { overflow: hidden; background: var(--surface); border-radius: 12px; }
+.settings-list > * + * { border-top: 1px solid var(--border-subtle); }
+.settings-footnote { margin: 0; padding-left: 2px; color: var(--faint); font-size: var(--type-meta); line-height: 1.5; }
+.settings-row { display: flex; align-items: center; gap: 16px; width: 100%; min-height: 56px; padding: 11px 16px; box-sizing: border-box; color: inherit; text-align: left; background: none; }
+.settings-row-text { display: flex; flex: 1; flex-direction: column; gap: 2px; min-width: 0; }
+.settings-row-text > strong { color: var(--ink); font-size: var(--type-label); font-weight: var(--weight-medium); }
+.settings-row-text > span { color: var(--muted); font-size: var(--type-meta); line-height: 1.45; }
+/* A row that opens a page is a button, reset to look like its neighbours; the
+   hairline above it is restored after the reset. */
+.settings-list > .settings-link { cursor: pointer; border-width: 0; }
+.settings-list > * + .settings-link { border-top: 1px solid var(--border-subtle); }
+.settings-link:hover { background: var(--surface-raised); }
+.settings-link:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.settings-chevron { flex: none; color: var(--faint); }
+.settings-actions { display: flex; flex: none; align-items: center; gap: 7px; }
+.settings-list > .settings-field { display: grid; grid-template-columns: 140px minmax(0, 1fr); align-items: center; gap: 6px 16px; padding: 10px 16px; }
+.settings-field > span { color: var(--ink-secondary); font-size: var(--type-label); }
+.settings-field input { width: 100%; height: 32px; padding: 0 10px; color: var(--ink); background: var(--surface-sunken); border: 1px solid var(--border); border-radius: 8px; outline: 0; font-size: var(--type-label); }
+.settings-field input.mono { font: var(--weight-regular) 12px/1 "Geist Mono Variable", monospace; }
+.settings-field input:focus { background: var(--surface); border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.settings-field input:disabled { opacity: .6; }
+.settings-field .custom-endpoint-line { margin: 0; }
+.settings-field > .custom-message { grid-column: 2; margin: 0; }
+.settings-segmented { display: inline-flex; justify-self: start; gap: 2px; padding: 2px; background: var(--surface-sunken); border: 1px solid var(--border); border-radius: 9px; }
+.settings-segmented > button { height: 26px; padding: 0 12px; color: var(--muted); background: none; border: 0; border-radius: 7px; font-size: var(--type-meta); font-weight: var(--weight-medium); }
+.settings-segmented > button[aria-pressed="true"] { color: var(--ink); background: var(--surface-raised); box-shadow: 0 0 0 1px var(--border); }
+.settings-segmented > button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.text-button { display: inline-flex; align-items: center; gap: 5px; height: 28px; padding: 0 8px; color: var(--ink); background: none; border: 0; border-radius: 7px; font-size: var(--type-label); font-weight: var(--weight-medium); }
+.text-button:hover { background: var(--surface); }
+.text-button:disabled { cursor: default; opacity: .45; }
+.text-button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+/* What other settings components put in a group sits flush in its panel. */
+.settings-list > .custom-message, .settings-list > .custom-hint, .settings-list > .custom-empty, .settings-list > .custom-editor, .settings-list > .open-cloud-check, .settings-list > .custom-import { margin: 0; padding: 12px 16px; background: none; border: 0; border-radius: 0; }
+.settings-list > * + .custom-message, .settings-list > * + .custom-hint, .settings-list > * + .custom-editor, .settings-list > * + .open-cloud-check, .settings-list > * + .custom-import { border-top: 1px solid var(--border-subtle); }
+.settings-list > .custom-model { background: none; border: 0; border-radius: 0; }
+.settings-list > .custom-model + .custom-model { border-top: 1px solid var(--border-subtle); }
+.settings-path { display: block; overflow: hidden; color: var(--faint); font: var(--weight-regular) 11px/1.5 "Geist Mono Variable", monospace; text-overflow: ellipsis; white-space: nowrap; }
+.settings-danger { display: flex; align-items: center; gap: 10px; padding: 0 2px; color: var(--faint); font-size: var(--type-meta); }
+.settings-danger > span { flex: 1; }
+.small-button.danger-outline { color: var(--danger); background: transparent; border-color: var(--danger-border); }
+/* Appears only once something has changed, and stays in reach while the page
+   scrolls, so saving is never a hunt and an untouched page asks nothing. */
+.settings-savebar { position: sticky; bottom: 16px; z-index: 1; display: flex; align-items: center; gap: 8px; padding: 10px 12px 10px 16px; background: var(--surface-raised); border: 1px solid var(--border); border-radius: 12px; box-shadow: var(--shadow-lg); }
+.settings-savebar > p { flex: 1; min-width: 0; margin: 0; }
+.settings-savebar-note { color: var(--ink-secondary); font-size: var(--type-label); }
+.settings-savebar button:disabled { cursor: default; opacity: .45; }
+@media (max-width: 900px) {
+  .settings-nav { flex-basis: 180px; }
+  .settings-content { padding: 32px 28px 48px; }
+  .settings-list > .settings-field { grid-template-columns: minmax(0, 1fr); }
+  .settings-field > .custom-message { grid-column: 1; }
+}
 .settings-switch { position: relative; flex: none; width: 36px; height: 20px; padding: 0; background: var(--border-strong); border: 0; border-radius: 99px; transition: background .15s ease; }
 .settings-switch::after { position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; background: #fff; border-radius: 50%; box-shadow: 0 1px 2px rgb(0 0 0 / .25); content: ""; transition: transform .15s ease; }
 .settings-switch[aria-checked="true"] { background: var(--success); }
 .settings-switch[aria-checked="true"]::after { transform: translateX(16px); }
 .settings-switch:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .settings-switch:disabled { cursor: default; opacity: .5; }
-.settings-icon.green { color: var(--success); background: var(--success-soft); }
-.status-text { color: var(--success) !important; font-weight: var(--weight-medium); }
-.neutral-status { color: var(--muted) !important; font-size: var(--type-meta) !important; font-weight: var(--weight-regular); }
 .small-button { height: 30px; padding: 0 9px; color: var(--ink); background: var(--surface-sunken); border: 1px solid var(--border); border-radius: 7px; font-size: var(--type-label); font-weight: var(--weight-medium); }
 .small-button:hover { border-color: var(--border-strong); }
-.endpoint-setting { padding: 14px 0; border-bottom: 1px solid var(--border); }
-/* Settings grows with the connections editor, so it scrolls rather than
-   running off a short window. */
-.settings-modal { width: min(580px, calc(100% - 40px)); max-height: calc(100vh - 40px); overflow-y: auto; padding-top: 0; }
-/* The title stays put while the sections scroll under it. */
-.settings-header { position: sticky; top: 0; z-index: 1; padding-top: 20px; background: var(--surface-raised); }
 .custom-editor { display: flex; flex-direction: column; gap: 11px; padding: 14px 0; border-bottom: 1px solid var(--border); }
-.custom-presets { display: flex; flex-wrap: wrap; gap: 6px; }
 .custom-field { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
 .custom-field.grow { flex: 1; }
 .custom-field > span, .custom-number > span { color: var(--muted); font-size: var(--type-meta); font-weight: var(--weight-medium); }
@@ -676,22 +717,7 @@ button:focus-visible, textarea:focus-visible, select:focus-visible, input:focus-
 /* A connection opens in its own dialog above Settings: a fixed header and
    footer, and a body that scrolls, wide enough for a model's line to read as
    one line. */
-.custom-dialog-backdrop { z-index: 110; }
-.custom-dialog { display: flex; flex-direction: column; width: min(720px, calc(100% - 40px)); max-height: calc(100vh - 40px); overflow: hidden; color: var(--ink); background: var(--surface-raised); border: 1px solid var(--border-subtle); border-radius: 16px; box-shadow: var(--shadow-lg); }
-.custom-dialog-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; padding: 18px 20px 14px; border-bottom: 1px solid var(--border); }
-.custom-dialog-header > div { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
-.custom-dialog-header h2 { overflow: hidden; margin: 0; font-size: 18px; font-weight: var(--weight-semibold); letter-spacing: -.2px; text-overflow: ellipsis; white-space: nowrap; }
-.custom-dialog-header span { color: var(--muted); font-size: var(--type-meta); }
-.custom-dialog-body { display: flex; flex-direction: column; gap: 22px; overflow-y: auto; padding: 18px 20px 22px; }
-.custom-dialog-footer { display: flex; align-items: center; justify-content: flex-end; gap: 8px; padding: 12px 20px; background: var(--surface); border-top: 1px solid var(--border); }
-.custom-dialog-footer > .custom-message { flex: 1; min-width: 0; margin: 0; }
-.custom-dialog-footer button:disabled { cursor: default; opacity: .45; }
-.custom-section { display: flex; flex-direction: column; gap: 10px; }
-.custom-section h3 { display: flex; align-items: baseline; gap: 8px; margin: 0; color: var(--ink); font-size: var(--type-label); font-weight: var(--weight-semibold); }
-.custom-section h3 > em { color: var(--muted); font-size: var(--type-meta); font-style: normal; font-weight: var(--weight-regular); }
-.custom-section-header { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; }
 .custom-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
-.custom-grid.endpoint { grid-template-columns: 190px minmax(0, 1fr); }
 .custom-provider-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 8px; }
 .custom-provider { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; min-width: 0; padding: 9px 11px; text-align: left; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; transition: border-color .15s ease, background .15s ease; }
 .custom-provider:hover { border-color: var(--border-strong); }
@@ -745,7 +771,7 @@ button:focus-visible, textarea:focus-visible, select:focus-visible, input:focus-
 .custom-import .settings-actions > .custom-hint { flex: 1; }
 .custom-import-list { display: flex; flex-direction: column; gap: 3px; max-height: 240px; overflow-y: auto; padding: 6px 8px; background: var(--surface-sunken); border: 1px solid var(--border); border-radius: 8px; font-size: var(--type-meta); }
 @media (max-width: 650px) {
-  .custom-grid, .custom-grid.endpoint { grid-template-columns: minmax(0, 1fr); }
+  .custom-grid { grid-template-columns: minmax(0, 1fr); }
   .custom-model-line { flex-wrap: wrap; }
   .custom-model-badges { justify-content: flex-start; }
   .custom-model-details { padding-left: 14px; }

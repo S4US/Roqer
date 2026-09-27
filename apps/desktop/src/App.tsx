@@ -1,6 +1,6 @@
 import {
   AlertCircle, AlertTriangle, Archive, Bot, Boxes, Check, ChevronDown, ChevronRight, CircleStop, Circle, Download,
-  CircleDot, ExternalLink, FileBox, FileCode2, FileText, Folder, FolderPlus, Gamepad2, HardDrive,
+  CircleDot, ExternalLink, FileBox, FileCode2, FileText, Folder, FolderPlus, Gamepad2,
   HelpCircle, Info, ListChecks, Loader2, MessageSquare, MinusCircle, Moon, MoreHorizontal,
   PanelLeftClose, PanelLeftOpen, Paperclip, Pencil, Play, Plus, RotateCw, Search, Send, Settings,
   ShieldCheck, Sparkles, Sun,
@@ -20,8 +20,8 @@ import {
   answerRunQuestion, attachImage, ATTACHABLE_IMAGE_TYPES, steerRun,
   getBridgeState, restartBridge, subscribeToBridge, type McpServerState,
   getUpdateState, installUpdate, subscribeToUpdates, type AppUpdateState,
-  flushWorkspace, getProviderModels, getProviderStatus, loginProvider, openScriptInStudio, respondToRun, saveWorkspace, startRun,
-  submitProviderCode, subscribeToRuns,
+  flushWorkspace, getProviderModels, getProviderStatus, openScriptInStudio, respondToRun, saveWorkspace, startRun,
+  subscribeToRuns,
   type ProviderModelCatalog, type ProviderStatus,
   type StudioStatus,
 } from "./platform";
@@ -34,10 +34,7 @@ import {
 import { QUESTION_ESCAPE_OPTION, type RunQuestion } from "../shared/question";
 import { summarizeTasks, type RunTask, type RunTaskStatus } from "../shared/tasks";
 import { Markdown } from "./markdown-view";
-import { CustomConnectionsSettings } from "./custom-connections";
-import { OpenCloudSettings } from "./open-cloud-settings";
-import { BlenderSettingsRow } from "./blender-settings";
-import { SettingsSection, SettingsSwitch } from "./settings-parts";
+import { SettingsPage } from "./settings-page";
 import { providerCard } from "./provider-card";
 import { approvalCode } from "./approval-code";
 import {
@@ -508,25 +505,6 @@ function App() {
       };
     });
   }, [hydrated, modelCatalog]);
-
-  const connectProvider = async () => {
-    const result = await loginProvider(provider);
-    if (result.ok) {
-      setProviderStatus({ kind: "signed-out", message: result.message });
-      // A flow that still needs a pasted code is finished by the settings
-      // modal, so polling would only overwrite its instructions.
-      if (!result.awaitingCode) window.setTimeout(() => void refreshProviderStatus(), 2_500);
-    } else {
-      setProviderStatus({ kind: "unavailable", message: result.message });
-    }
-    return result;
-  };
-
-  const finishProviderLogin = async (code: string) => {
-    const result = await submitProviderCode(provider, code);
-    await refreshProviderStatus();
-    return result;
-  };
 
   // A finished run becomes one assistant message carrying a compacted record,
   // so the result survives a restart without keeping the whole event stream.
@@ -1161,7 +1139,9 @@ function App() {
 
   return (
     <div className="app-shell" data-theme={theme} data-sidebar={sidebarShown ? "shown" : "hidden"} aria-busy={!hydrated}>
-      <aside className="sidebar" id="sidebar">
+      {/* Settings covers the chat rather than replacing it, so a run keeps
+          streaming underneath; while it is open the chat is unreachable. */}
+      <aside className="sidebar" id="sidebar" inert={showSettings}>
         <div className="brand-row">
           {/* The transparent mark follows the surface theme so its primary ink
               keeps the intended contrast in either appearance. */}
@@ -1234,7 +1214,7 @@ function App() {
           unreachable while the sidebar is away. */}
       <button className="sidebar-scrim" tabIndex={sidebarShown ? 0 : -1} onClick={() => setSidebarShown(false)} aria-label="Hide sidebar" />
 
-      <main className="workspace">
+      <main className="workspace" inert={showSettings}>
         <header className="topbar">
           <button className="icon-button menu-button" onClick={() => setSidebarShown(true)} aria-label="Show sidebar" title="Show sidebar" aria-controls="sidebar" aria-expanded={sidebarShown}><PanelLeftOpen size={20} /></button>
           <div className="chat-heading"><strong>{selectedChat?.title ?? selectedProject?.name ?? "New project"}</strong><span>{selectedProject?.name} · {saveStatus === "saving" ? "saving…" : saveStatus === "error" ? "save failed" : "saved locally"}</span></div>
@@ -1393,7 +1373,7 @@ function App() {
         </div>
       </main>
 
-      {showSettings && <SettingsModal preferences={workspace.preferences} studioStatus={studioStatus} providerStatus={providerStatus} onPreferences={updatePreferences} onRefresh={() => void refreshStudioStatus()} onProviderRefresh={() => void refreshProviderStatus()} onCustomChanged={() => { void refreshProviderStatus(); void refreshProviderModels(); }} onProviderLogin={connectProvider} onProviderCode={finishProviderLogin} onExport={() => void exportChats(storageRecovery.required ? undefined : workspace)} onClose={() => setShowSettings(false)} />}
+      {showSettings && <SettingsPage preferences={workspace.preferences} studioStatus={studioStatus} onPreferences={updatePreferences} onStudioRefresh={() => void refreshStudioStatus()} onProviderChanged={() => { void refreshProviderStatus(); void refreshProviderModels(); }} onExport={() => void exportChats(storageRecovery.required ? undefined : workspace)} onClose={() => setShowSettings(false)} />}
       {renderDialog()}
       {!hydrated && <div className="loading-overlay"><div><span /><strong>Opening your workspace…</strong></div></div>}
     </div>
@@ -2342,95 +2322,6 @@ function RunRecordView({ record, text, latest, onOpenInStudio }: { record: RunRe
       issues={recordGateIssues(record)}
     />}
   </>;
-}
-
-function SettingsModal({ preferences, studioStatus, providerStatus, onPreferences, onRefresh, onProviderRefresh, onCustomChanged, onProviderLogin, onProviderCode, onExport, onClose }: {
-  preferences: WorkspaceState["preferences"];
-  studioStatus: StudioStatus;
-  providerStatus: ProviderStatus;
-  onPreferences: (changes: Partial<WorkspaceState["preferences"]>) => void;
-  onRefresh: () => void;
-  onProviderRefresh: () => void;
-  /** A custom connection was added, edited, or removed. */
-  onCustomChanged: () => void;
-  onProviderLogin: () => Promise<{ ok: boolean; message: string; awaitingCode?: boolean }>;
-  onProviderCode: (code: string) => Promise<{ ok: boolean; message: string }>;
-  onExport: () => void;
-  onClose: () => void;
-}) {
-  const [loginPending, setLoginPending] = useState(false);
-  const [awaitingCode, setAwaitingCode] = useState(false);
-  const [code, setCode] = useState("");
-  const [codeError, setCodeError] = useState<string | null>(null);
-  const providerName = providerLabel(preferences.provider);
-  const availableProviderOptions = providerOptions();
-  const closeSettings = onClose;
-
-  // A half-finished sign-in belongs to the provider it was started for.
-  useEffect(() => {
-    setAwaitingCode(false);
-    setCode("");
-    setCodeError(null);
-  }, [preferences.provider]);
-
-  const startLogin = async () => {
-    setLoginPending(true);
-    setCodeError(null);
-    const result = await onProviderLogin();
-    setAwaitingCode(result.ok && result.awaitingCode === true);
-    setLoginPending(false);
-    return result;
-  };
-
-  const finishLogin = async () => {
-    setLoginPending(true);
-    const result = await onProviderCode(code);
-    setLoginPending(false);
-    if (result.ok) {
-      setAwaitingCode(false);
-      setCode("");
-      setCodeError(null);
-    } else {
-      setCodeError(result.message);
-    }
-  };
-
-  return <div className="modal-backdrop" role="presentation" onMouseDown={closeSettings}><div className="settings-modal" role="dialog" aria-modal="true" aria-label="Settings" onMouseDown={(event) => event.stopPropagation()}>
-    <div className="modal-header settings-header"><div><h2>Settings</h2></div><button className="icon-button" onClick={closeSettings} aria-label="Close settings"><X size={19} /></button></div>
-    <SettingsSection title="Models">
-      {availableProviderOptions.length > 1 && <div className="settings-row"><div className="settings-icon"><Bot size={17} /></div><div><strong>Provider</strong><span>{PROVIDER_TITLES[preferences.provider]}</span></div><select className="small-button" aria-label="Provider" value={preferences.provider} onChange={(event) => onPreferences({ provider: event.target.value as ProviderId })}>{availableProviderOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></div>}
-      {/* A vendor sign-in only: a custom model is set up in the rows below. */}
-      {preferences.provider !== "custom" && <>
-        <div className="settings-row"><div className={`settings-icon ${providerStatus.kind === "signed-in" ? "green" : ""}`}><Sparkles size={17} /></div><div><strong>{providerName}</strong><span>{providerStatus.kind === "signed-in" ? providerStatus.email ?? providerStatus.message : providerStatus.message}</span></div>{providerStatus.kind === "signed-in"
-          ? <button className="small-button" onClick={onProviderRefresh}>{providerStatus.planType ?? "Connected"}</button>
-          : <button className="small-button" disabled={loginPending || providerStatus.kind === "checking"} onClick={() => void startLogin()}>{loginPending ? "Opening…" : "Connect"}</button>}</div>
-        {awaitingCode && providerStatus.kind !== "signed-in" && <label className="endpoint-setting">
-          <span>{`Paste the code ${providerName} showed you`}</span>
-          <input value={code} autoFocus spellCheck={false} placeholder="Authorization code" onChange={(event) => setCode(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && code.trim()) void finishLogin(); }} />
-          <button className="small-button" disabled={loginPending || !code.trim()} onClick={() => void finishLogin()}>{loginPending ? "Finishing…" : "Finish sign-in"}</button>
-          {codeError && <span className="status-text">{codeError}</span>}
-        </label>}
-      </>}
-      <CustomConnectionsSettings onChanged={onCustomChanged} />
-    </SettingsSection>
-    <SettingsSection title="Roblox">
-      <div className="settings-row"><div className={`settings-icon ${studioStatus.kind === "connected" ? "green" : ""}`}><Gamepad2 size={17} /></div><div><strong>Roblox Studio</strong><span>{studioStatus.message}</span></div><button className="small-button" onClick={onRefresh}>Check</button></div>
-      <OpenCloudSettings />
-    </SettingsSection>
-    <SettingsSection title="Modeling">
-      <BlenderSettingsRow />
-    </SettingsSection>
-    <SettingsSection title="App">
-      <div className="settings-row"><div className={`settings-icon ${preferences.discordPresence ? "green" : ""}`}><MessageSquare size={17} /></div><div><strong>Show Roqer on Discord</strong><span>Your profile shows that Roqer is open and whether it is busy. Never your place, scripts, or tasks.</span></div><SettingsSwitch label="Show Roqer on Discord" checked={preferences.discordPresence} onChange={(discordPresence) => onPreferences({ discordPresence })} /></div>
-      <div className="settings-row"><div className="settings-icon"><HardDrive size={17} /></div><div><strong>Local project data</strong><span>Chats and settings stay on this device</span></div><button className="small-button" onClick={onExport}><Download size={15} /> Export chats</button></div>
-      {/* Only someone running their own bridge needs this, so it stays folded
-          away rather than sitting among the settings everybody reads. */}
-      <details className="settings-advanced">
-        <summary>Advanced</summary>
-        <label className="endpoint-setting"><span>MCP endpoint</span><input value={preferences.mcpEndpoint} onChange={(event) => onPreferences({ mcpEndpoint: event.target.value })} spellCheck={false} /></label>
-      </details>
-    </SettingsSection>
-  </div></div>;
 }
 
 /** Escape closes a dialog, the way every other window on the desktop does. */

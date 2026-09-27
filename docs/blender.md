@@ -20,17 +20,17 @@ The integration is off until you turn it on.
   Linux. Anywhere else, you choose it yourself. It has been tested with
   Blender 5.2.
 - **A Roblox Open Cloud API key**, to put models into your place. The key needs
-  the Assets API with Write access; set it up under **Settings → Roblox Open
+  the Assets API with Write access; set it up under **Settings → Roblox → Open
   Cloud** (see [Roblox Open Cloud in Roqer](configuration.md#roblox-open-cloud-in-roqer)).
   Without one, the agent can still model and preview in Blender, but cannot
   upload.
 
 ## Turn it on
 
-1. Open **Settings** in Roqer and find **Blender modeling**.
+1. Open **Settings → Blender** in Roqer.
 2. If Roqer did not find Blender, click **Choose…** and pick the Blender
    executable (`blender.exe` on Windows).
-3. Turn the switch on. Roqer turns it on only once that file answers
+3. Turn on **Use Blender for modeling**. Roqer turns it on only once that file answers
    `--version` as Blender.
 
 While it is on, the agent is offered a `blender` tool. Turning it off takes

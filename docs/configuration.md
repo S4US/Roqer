@@ -54,7 +54,7 @@ Studio to load the matching bundled plugin.
 | `ROBLOX_STUDIO_AUTH_TOKEN` | Auto-generated token file | Explicit shared secret that overrides the token file. |
 | `ROBLOX_STUDIO_NO_AUTH` | Unset | Set to `1` or `true` to disable HTTP tool authentication. This is not recommended. |
 | `ROBLOX_STUDIO_ALLOWED_ORIGINS` | None | Comma-separated browser origins allowed to call the HTTP API cross-origin. |
-| `ROBLOX_OPEN_CLOUD_API_KEY` | None | Roblox Open Cloud key used by features such as audio preview, place version access, and `upload_asset`. Required permissions depend on the tool. Roqer users set it in Settings → Roblox Open Cloud instead; see below. |
+| `ROBLOX_OPEN_CLOUD_API_KEY` | None | Roblox Open Cloud key used by features such as audio preview, place version access, and `upload_asset`. Required permissions depend on the tool. Roqer users set it in Settings → Roblox → Open Cloud instead; see below. |
 | `ROBLOX_CREATOR_USER_ID` / `ROBLOX_CREATOR_GROUP_ID` | None | The user or group `upload_asset` publishes as when the call names neither. A group wins when both are set. |
 | `MCP_PLUGINS_DIR` | Platform Studio Plugins folder | Override the destination used by plugin installation. |
 | `ROBLOX_STUDIO_EXE` | Auto-discovered | Path to `RobloxStudioBeta.exe` for `manage_instance` when discovery under the Roblox `Versions` folder fails, or on a platform without discovery. It is the only way to choose the executable: tool callers cannot. |
@@ -139,7 +139,7 @@ variables keep it so existing setups go on working.
 ### Roblox Open Cloud in Roqer
 
 Roqer keeps an Open Cloud key and the user or group uploads publish as in
-Settings → Roblox Open Cloud. The key is encrypted with the operating system's
+Settings → Roblox → Open Cloud. The key is encrypted with the operating system's
 credential store in `open-cloud.json` in Roqer's data folder and never reaches
 the renderer or the model. Roqer passes the saved values to the bridge it starts
 as `ROBLOX_OPEN_CLOUD_API_KEY` and `ROBLOX_CREATOR_USER_ID` or
@@ -153,7 +153,7 @@ creator; it creates nothing.
 
 ### Blender in Roqer
 
-Settings → Blender modeling turns on the opt-in local Blender worker.
+Settings → Blender turns on the opt-in local Blender worker.
 [3D modeling with Blender](blender.md) covers setting it up, what a job runs
 and checks, and where Roqer keeps its files.
 
