@@ -44,7 +44,7 @@ function catalogModel(connection: CustomConnectionView, model: CustomModel): Pro
 export function customModelCatalog(connections: readonly CustomConnectionView[]): ProviderModelCatalog {
   const models = connections.flatMap((connection) => connection.models.map((model) => catalogModel(connection, model)));
   return models.length === 0
-    ? { models, defaultModelId: null, message: "Add a connection and a model in Settings to use your own endpoint." }
+    ? { models, defaultModelId: null, message: "Add an endpoint and a model in Settings → Models to use your own models." }
     : { models, defaultModelId: models[0].id };
 }
 
@@ -54,8 +54,8 @@ export function customProviderStatus(connections: readonly CustomConnectionView[
     return {
       kind: "signed-out",
       message: connections.length === 0
-        ? "Add a connection to your own model endpoint in Settings."
-        : "Add a model to one of your connections in Settings.",
+        ? "Add an endpoint for your own models in Settings → Models."
+        : "Add a model to one of your endpoints in Settings → Models.",
     };
   }
   return {

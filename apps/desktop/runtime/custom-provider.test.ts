@@ -41,7 +41,7 @@ test("the catalog names each model by its connection, with efforts only where th
 
   const empty = customModelCatalog([]);
   assert.equal(empty.models.length, 0);
-  assert.match(empty.message ?? "", /Add a connection/);
+  assert.match(empty.message ?? "", /Add an endpoint/);
 });
 
 test("the provider reads as connected once there is a model to run", () => {

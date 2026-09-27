@@ -1,6 +1,5 @@
-import { Check, ChevronDown, Download, Eye, KeyRound, Pencil, Plus, Server, Trash2, X } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { createPortal } from "react-dom";
+import { Check, ChevronDown, ChevronLeft, Download, Eye, Plus, X } from "lucide-react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import {
   CUSTOM_API_FORMATS,
@@ -17,6 +16,7 @@ import {
 import {
   importCustomModels, listCustomConnections, removeCustomConnection, saveCustomConnection, testCustomModel,
 } from "./platform";
+import { SettingsGroup } from "./settings-parts";
 
 /**
  * Settings for the user's own model endpoints.
@@ -25,9 +25,10 @@ import {
  * models the user picked. The key is typed here and sent to the main process
  * once; it never comes back, so an edit shows only whether one is saved.
  *
- * Settings lists the connections; adding or editing one opens its own dialog
- * above Settings, because a connection with a handful of models needs more
- * room than a row in a list can give it.
+ * Settings lists the endpoints; adding or editing one opens its own page in
+ * Settings, because an endpoint with a handful of models needs more room than
+ * a row in a list can give it, and a second dialog stacked on the first made
+ * neither feel like a place.
  */
 
 const FORMAT_LABELS: Record<CustomApiFormat, string> = {
@@ -178,16 +179,6 @@ function hostOf(baseUrl: string): string {
   }
 }
 
-function connectionSummary(connection: CustomConnectionView): string {
-  const models = connection.models.length;
-  return [
-    FORMAT_LABELS[connection.format],
-    hostOf(connection.baseUrl),
-    `${models} ${models === 1 ? "model" : "models"}`,
-    connection.hasKey ? "key saved" : "no key",
-  ].join(" · ");
-}
-
 /** "Low – Max" for a run of levels, the one label for a single level. */
 function effortSummary(efforts: readonly CustomReasoningEffort[]): string | undefined {
   if (efforts.length === 0) return undefined;
@@ -205,154 +196,79 @@ function compactTokens(value: string): string | undefined {
   return String(tokens);
 }
 
-export function CustomConnectionsSettings({ onChanged }: { onChanged: () => void }) {
-  const [connections, setConnections] = useState<readonly CustomConnectionView[]>([]);
-  const [draft, setDraft] = useState<Draft | null>(null);
-  const [message, setMessage] = useState<{ ok: boolean; text: string } | null>(null);
-  const [editorMessage, setEditorMessage] = useState<{ ok: boolean; text: string } | null>(null);
-  const [confirmRemove, setConfirmRemove] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-
-  const load = useCallback(async () => {
+/** The endpoints a person has saved, and a way to reload them after a change elsewhere. */
+export function useCustomConnections() {
+  const [connections, setConnections] = useState<readonly CustomConnectionView[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const reload = useCallback(async () => {
     const result = await listCustomConnections();
-    if (result.ok) setConnections(result.connections);
-    else setMessage({ ok: false, text: result.message });
+    if (result.ok) {
+      setConnections(result.connections);
+      setError(null);
+    } else {
+      setError(result.message);
+    }
   }, []);
-
   useEffect(() => {
-    void load();
-  }, [load]);
-
-  /** Save the draft and keep editing it; the saved connection, or undefined when it did not save. */
-  const save = async (): Promise<CustomConnectionView | undefined> => {
-    if (draft === null) return undefined;
-    const request = saveRequest(draft);
-    if (!request.ok) {
-      setEditorMessage({ ok: false, text: request.message });
-      return undefined;
-    }
-    setBusy(true);
-    const result = await saveCustomConnection(request.save);
-    setBusy(false);
-    if (!result.ok) {
-      setEditorMessage({ ok: false, text: result.message });
-      return undefined;
-    }
-    setConnections(result.connections);
-    // Stay in the editor on the saved connection, so Test and Import work next.
-    const saved = request.save.id === undefined
-      ? result.connections.at(-1)
-      : result.connections.find((connection) => connection.id === request.save.id);
-    setDraft(saved === undefined ? null : draftFrom(saved, draft));
-    setEditorMessage({ ok: true, text: "Saved." });
-    onChanged();
-    return saved;
-  };
-
-  const remove = async (connection: CustomConnectionView) => {
-    setConfirmRemove(null);
-    setBusy(true);
-    const result = await removeCustomConnection(connection.id);
-    setBusy(false);
-    if (!result.ok) {
-      setMessage({ ok: false, text: result.message });
-      return;
-    }
-    setConnections(result.connections);
-    if (draft?.id === connection.id) setDraft(null);
-    setMessage(null);
-    onChanged();
-  };
-
-  const open = (next: Draft) => {
-    setDraft(next);
-    setEditorMessage(null);
-    setMessage(null);
-    setConfirmRemove(null);
-  };
-
-  const close = useCallback(() => {
-    setDraft(null);
-    setEditorMessage(null);
-  }, []);
-
-  return <>
-    <div className="settings-row">
-      <div className={`settings-icon ${connections.some((connection) => connection.models.length > 0) ? "green" : ""}`}><Server size={17} /></div>
-      <div>
-        <strong>Your own models</strong>
-        {/* The explanation is for someone who has none yet; once they do, the
-            list below says it better. */}
-        <span>{connections.length === 0
-          ? "An API key for OpenAI, Anthropic, OpenRouter and others, or a model server on this computer. Requests go straight from here to that endpoint."
-          : "Requests go straight from this computer to each endpoint."}</span>
-      </div>
-      <button className="small-button" disabled={busy} onClick={() => open(emptyDraft())}><Plus size={14} /> Add</button>
-    </div>
-    {connections.map((connection) => <div className="settings-row settings-subrow" key={connection.id}>
-      <div className="settings-subicon"><KeyRound size={14} /></div>
-      <div><strong>{connection.name}</strong><span>{connectionSummary(connection)}</span></div>
-      <div className="settings-actions">
-        {confirmRemove === connection.id
-          ? <>
-            <button className="small-button danger" disabled={busy} onClick={() => void remove(connection)}>Remove</button>
-            <button className="small-button" onClick={() => setConfirmRemove(null)}>Keep</button>
-          </>
-          : <>
-            <button className="small-button" disabled={busy} onClick={() => open(draftFrom(connection))} aria-label={`Edit ${connection.name}`}><Pencil size={14} /></button>
-            <button className="small-button" disabled={busy} onClick={() => setConfirmRemove(connection.id)} aria-label={`Remove ${connection.name}`} title="Remove this connection and its saved key"><Trash2 size={14} /></button>
-          </>}
-      </div>
-    </div>)}
-    {message && <p className={`custom-message ${message.ok ? "ok" : "error"}`}>{message.text}</p>}
-    {draft !== null && createPortal(<ConnectionEditor
-      draft={draft}
-      busy={busy}
-      saved={draft.id === undefined ? undefined : connections.find((connection) => connection.id === draft.id)}
-      message={editorMessage}
-      onChange={(next) => { setDraft(next); setEditorMessage(null); }}
-      onSave={save}
-      onClose={close}
-    />, document.body)}
-  </>;
+    void reload();
+  }, [reload]);
+  return { connections, error, setConnections, reload };
 }
 
-function ConnectionEditor({ draft, busy, saved, message, onChange, onSave, onClose }: {
-  draft: Draft;
-  busy: boolean;
-  /** The saved version, when this edits an existing connection; Test and Import work against it. */
-  saved: CustomConnectionView | undefined;
-  message: { ok: boolean; text: string } | null;
-  onChange: (draft: Draft) => void;
-  onSave: () => Promise<CustomConnectionView | undefined>;
-  onClose: () => void;
+/** One line per endpoint; what it says is what the person would otherwise open it to check. */
+export function endpointDetail(connection: CustomConnectionView): string {
+  const models = connection.models.length;
+  const parts = [hostOf(connection.baseUrl), models === 0 ? "no models yet" : `${models} ${models === 1 ? "model" : "models"}`];
+  // Only the exception is worth a word: a saved key is the normal state.
+  const local = PRESETS.some((preset) => preset.local === true && preset.baseUrl === connection.baseUrl);
+  if (!connection.hasKey && !local) parts.push("no key");
+  return parts.join(" · ");
+}
+
+/**
+ * One endpoint, as a page of Settings rather than a dialog above it.
+ *
+ * Adding one starts from where the key is from; editing one starts from what
+ * is saved, since which provider it is was decided when it was added. Nothing
+ * saves until the save bar is used, and the bar only appears once something
+ * has changed, so an untouched page never asks a question.
+ */
+export function EndpointPage({ connection, onBack, onSaved, onRemoved, onDirtyChange }: {
+  /** The saved endpoint being edited, or undefined to add one. */
+  connection: CustomConnectionView | undefined;
+  onBack: () => void;
+  /** Saved: every endpoint now, and the one this page shows. */
+  onSaved: (connections: readonly CustomConnectionView[], saved: CustomConnectionView) => void;
+  onRemoved: (connections: readonly CustomConnectionView[]) => void;
+  onDirtyChange: (dirty: boolean) => void;
 }) {
+  const [draft, setDraft] = useState<Draft>(() => connection === undefined ? emptyDraft() : draftFrom(connection));
+  const [saved, setSaved] = useState<CustomConnectionView | undefined>(connection);
+  const [message, setMessage] = useState<{ ok: boolean; text: string } | null>(null);
+  const [confirmRemove, setConfirmRemove] = useState(false);
+  const [busy, setBusy] = useState(false);
   const [tests, setTests] = useState<Record<string, { pending: boolean; ok?: boolean; text?: string }>>({});
   const [imported, setImported] = useState<readonly string[] | null>(null);
   const [importFilter, setImportFilter] = useState("");
   const [importMessage, setImportMessage] = useState<string | null>(null);
   const [chosen, setChosen] = useState<ReadonlySet<string>>(new Set());
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set());
+  const adding = saved === undefined;
   const activePreset = PRESETS.find((preset) => preset.baseUrl === draft.baseUrl.trim() && preset.format === draft.format);
   // A preset fills the address, so its fields stay folded away until asked for.
   const [showEndpoint, setShowEndpoint] = useState(draft.baseUrl.trim() !== "" && activePreset === undefined);
   const endpointChosen = draft.baseUrl.trim() !== "" || showEndpoint;
   const dirty = isDirty(draft, saved);
-  const dirtyRef = useRef(dirty);
-  dirtyRef.current = dirty;
 
-  // Escape closes the editor, but never throws away edits.
   useEffect(() => {
-    const handle = (event: KeyboardEvent) => {
-      if (event.key !== "Escape") return;
-      event.stopPropagation();
-      if (!dirtyRef.current) onClose();
-    };
-    window.addEventListener("keydown", handle, true);
-    return () => window.removeEventListener("keydown", handle, true);
-  }, [onClose]);
+    onDirtyChange(dirty && (!adding || endpointChosen));
+  }, [dirty, adding, endpointChosen, onDirtyChange]);
+  useEffect(() => () => onDirtyChange(false), [onDirtyChange]);
 
-  const update = (changes: Partial<Draft>) => onChange({ ...draft, ...changes });
+  const update = (changes: Partial<Draft>) => {
+    setDraft((current) => ({ ...current, ...changes }));
+    setMessage(null);
+  };
   const updateModel = (key: string, changes: Partial<DraftModel>) =>
     update({ models: draft.models.map((model) => model.key === key ? { ...model, ...changes } : model) });
   const toggleExpanded = (key: string) => setExpanded((current) => {
@@ -375,30 +291,78 @@ function ConnectionEditor({ draft, busy, saved, message, onChange, onSave, onClo
     setShowEndpoint(true);
   };
 
-  /** The saved connection, saving the draft first when it has changes. */
-  const savedForUse = async (): Promise<CustomConnectionView | undefined> => dirty || saved === undefined ? onSave() : saved;
+  /** Save the draft and keep editing it; the saved endpoint, or undefined when it did not save. */
+  const save = async (): Promise<CustomConnectionView | undefined> => {
+    const request = saveRequest(draft);
+    if (!request.ok) {
+      setMessage({ ok: false, text: request.message });
+      return undefined;
+    }
+    setBusy(true);
+    const result = await saveCustomConnection(request.save);
+    setBusy(false);
+    if (!result.ok) {
+      setMessage({ ok: false, text: result.message });
+      return undefined;
+    }
+    // Stay on the saved endpoint, so Test and Find models work next.
+    const next = request.save.id === undefined
+      ? result.connections.at(-1)
+      : result.connections.find((entry) => entry.id === request.save.id);
+    if (next === undefined) return undefined;
+    setSaved(next);
+    setDraft((current) => draftFrom(next, current));
+    setMessage({ ok: true, text: "Saved." });
+    onSaved(result.connections, next);
+    return next;
+  };
+
+  const discard = () => {
+    if (saved === undefined) {
+      onBack();
+      return;
+    }
+    setDraft(draftFrom(saved, draft));
+    setMessage(null);
+  };
+
+  const remove = async () => {
+    if (saved === undefined) return;
+    setBusy(true);
+    const result = await removeCustomConnection(saved.id);
+    setBusy(false);
+    if (!result.ok) {
+      setConfirmRemove(false);
+      setMessage({ ok: false, text: result.message });
+      return;
+    }
+    onRemoved(result.connections);
+  };
+
+  /** The saved endpoint, saving the draft first when it has changes. */
+  const savedForUse = async (): Promise<CustomConnectionView | undefined> => dirty || saved === undefined ? save() : saved;
 
   const test = async (model: DraftModel) => {
     const id = model.id.trim();
     if (id === "") return;
     setTests((current) => ({ ...current, [id]: { pending: true } }));
-    const connection = await savedForUse();
-    if (connection === undefined) {
+    const endpoint = await savedForUse();
+    if (endpoint === undefined) {
       setTests((current) => ({ ...current, [id]: { pending: false } }));
       return;
     }
-    const result = await testCustomModel(connection.id, id);
+    const result = await testCustomModel(endpoint.id, id);
     setTests((current) => ({ ...current, [id]: { pending: false, ok: result.ok, text: result.message } }));
   };
 
   const loadImport = async () => {
     setImportMessage("Reading the endpoint's model list…");
-    const connection = await savedForUse();
-    if (connection === undefined) {
+    const endpoint = await savedForUse();
+    if (endpoint === undefined) {
       setImportMessage(null);
       return;
     }
-    const result = await importCustomModels(connection.id);
+    const result = await importCustomModels(endpoint.id);
     if (!result.ok) {
       setImportMessage(result.message);
       return;
@@ -430,120 +394,133 @@ function ConnectionEditor({ draft, busy, saved, message, onChange, onSave, onClo
     setExpanded((current) => new Set(current).add(model.key));
   };
 
-  const title = saved === undefined ? "Add a connection" : saved.name;
   const canSave = !busy && draft.name.trim() !== "" && draft.baseUrl.trim() !== "";
   const needsSaveFirst = dirty || saved === undefined;
+  const showSaveBar = endpointChosen && (adding || dirty);
 
-  return <div className="modal-backdrop custom-dialog-backdrop" role="presentation" onMouseDown={() => { if (!dirty) onClose(); }}>
-    <div className="custom-dialog" role="dialog" aria-modal="true" aria-label={title} onMouseDown={(event) => event.stopPropagation()}>
-      <div className="custom-dialog-header">
-        <div>
-          <h2>{title}</h2>
-          <span>Requests go straight from this computer to the endpoint.</span>
-        </div>
-        <button className="icon-button" onClick={onClose} aria-label="Close" title={dirty ? "Close without saving" : "Close"}><X size={19} /></button>
-      </div>
-
-      <div className="custom-dialog-body">
-        <section className="custom-section">
-          <h3>Provider</h3>
-          <div className="custom-provider-grid">
-            {PRESETS.map((preset) => <button
-              key={preset.name}
-              type="button"
-              className="custom-provider"
-              aria-pressed={activePreset === preset}
-              onClick={() => applyPreset(preset)}
-            >
-              <strong>{preset.name}</strong>
-              <span>{preset.local ? "On this computer" : hostOf(preset.baseUrl)}</span>
-            </button>)}
-            <button type="button" className="custom-provider" aria-pressed={activePreset === undefined && showEndpoint} onClick={chooseOther}>
-              <strong>Other</strong>
-              <span>Any endpoint URL</span>
-            </button>
-          </div>
-        </section>
-
-        {endpointChosen && <>
-          <section className="custom-section">
-            <h3>Connection</h3>
-            <div className="custom-grid">
-              <label className="custom-field"><span>Name</span><input value={draft.name} maxLength={60} placeholder="e.g. OpenRouter" onChange={(event) => update({ name: event.target.value })} /></label>
-              <label className="custom-field"><span>API key {activePreset?.local ? "(not needed here)" : ""}</span>
-                <div className="custom-key-row">
-                  <input type="password" value={draft.apiKey} spellCheck={false} autoComplete="off" disabled={draft.removeKey} placeholder={draft.removeKey ? "Removed on save" : draft.hasKey ? "Saved · type to replace" : activePreset?.local ? "Leave empty" : "sk-…"} onChange={(event) => update({ apiKey: event.target.value })} />
-                  {draft.hasKey && <button className="small-button" onClick={() => update({ removeKey: !draft.removeKey, apiKey: "" })}>{draft.removeKey ? "Keep key" : "Remove"}</button>}
-                </div>
-              </label>
-            </div>
-            {showEndpoint || activePreset === undefined
-              ? <div className="custom-grid endpoint">
-                <label className="custom-field"><span>API format</span>
-                  <select value={draft.format} onChange={(event) => update({ format: event.target.value as CustomApiFormat })}>
-                    {CUSTOM_API_FORMATS.map((format) => <option key={format} value={format}>{FORMAT_LABELS[format]}</option>)}
-                  </select>
-                </label>
-                <label className="custom-field"><span>Base URL</span><input value={draft.baseUrl} spellCheck={false} autoFocus={draft.baseUrl === ""} placeholder={draft.format === "anthropic" ? "https://api.anthropic.com/v1" : "https://…/v1"} onChange={(event) => update({ baseUrl: event.target.value })} /></label>
-              </div>
-              : <p className="custom-endpoint-line">
-                <span>{FORMAT_LABELS[draft.format]} · <code>{draft.baseUrl}</code></span>
-                <button className="link-button" onClick={() => setShowEndpoint(true)}>Change</button>
-              </p>}
-          </section>
-
-          <section className="custom-section">
-            <div className="custom-section-header">
-              <h3>Models <em>{draft.models.length} of {MAX_CUSTOM_MODELS}</em></h3>
-              <div className="settings-actions">
-                <button className="small-button" disabled={busy || room <= 0 || !canSave} onClick={() => void loadImport()} title={needsSaveFirst ? "Saves the connection, then reads its model list" : "Read the endpoint's model list"}><Download size={14} /> Import from endpoint</button>
-                <button className="small-button" disabled={room <= 0} onClick={addManual}><Plus size={14} /> Add by id</button>
-              </div>
-            </div>
-            {importMessage && <p className="custom-hint">{importMessage}</p>}
-            {imported !== null && <div className="custom-import">
-              <input value={importFilter} autoFocus placeholder={`Filter ${imported.length} models`} spellCheck={false} onChange={(event) => setImportFilter(event.target.value)} />
-              <div className="custom-import-list">
-                {visibleImports.map((id) => <label key={id}><input type="checkbox" checked={chosen.has(id)} disabled={!chosen.has(id) && chosen.size >= room} onChange={(event) => setChosen((current) => {
-                  const next = new Set(current);
-                  if (event.target.checked) next.add(id); else next.delete(id);
-                  return next;
-                })} /> {id}</label>)}
-                {visibleImports.length === 0 && <span className="custom-hint">No models match.</span>}
-              </div>
-              <div className="settings-actions">
-                <span className="custom-hint">Set images and reasoning for each model after adding it.</span>
-                <button className="small-button" onClick={() => setImported(null)}>Close</button>
-                <button className="small-button primary" disabled={chosen.size === 0} onClick={addChosen}>Add {chosen.size || ""} selected</button>
-              </div>
-            </div>}
-            {draft.models.length === 0 && imported === null && <p className="custom-empty">No models yet. Import them from the endpoint or add one by its id.</p>}
-            <div className="custom-model-list">
-              {draft.models.map((model) => <ModelRow
-                key={model.key}
-                model={model}
-                format={draft.format}
-                open={expanded.has(model.key) || model.id.trim() === ""}
-                test={tests[model.id.trim()]}
-                testLabel={needsSaveFirst ? "Save & test" : "Test"}
-                canTest={canSave && model.id.trim() !== ""}
-                onToggle={() => toggleExpanded(model.key)}
-                onChange={(changes) => updateModel(model.key, changes)}
-                onTest={() => void test(model)}
-                onRemove={() => update({ models: draft.models.filter((entry) => entry.key !== model.key) })}
-              />)}
-            </div>
-            <p className="custom-hint">Roqer works through tool calls, so use models that support them. Small local models may not follow its instructions well.</p>
-          </section>
-        </>}
-      </div>
-
-      <div className="custom-dialog-footer">
-        {message && <p className={`custom-message ${message.ok ? "ok" : "error"}`}>{message.ok ? <Check size={13} /> : null} {message.text}</p>}
-        <button className="secondary-action" onClick={onClose}>{dirty ? "Cancel" : "Close"}</button>
-        <button className="primary-action" disabled={!canSave || !dirty} onClick={() => void onSave()}>{busy ? "Saving…" : saved === undefined ? "Save connection" : "Save changes"}</button>
-      </div>
+  return <div className="settings-subpage">
+    <div className="settings-page-head">
+      <button type="button" className="settings-back" onClick={onBack}><ChevronLeft size={14} /> Models</button>
+      <h1>{adding ? "Add an endpoint" : saved.name}</h1>
+      {adding && <p>Pick where your key is from. Roqer fills in the rest.</p>}
     </div>
+
+    {adding && <div className="custom-provider-grid" role="group" aria-label="Where the key is from">
+      {PRESETS.map((preset) => <button
+        key={preset.name}
+        type="button"
+        className="custom-provider"
+        aria-pressed={activePreset === preset}
+        onClick={() => applyPreset(preset)}
+      >
+        <strong>{preset.name}</strong>
+        <span>{preset.local ? "On this computer" : hostOf(preset.baseUrl)}</span>
+      </button>)}
+      <button type="button" className="custom-provider" aria-pressed={activePreset === undefined && showEndpoint} onClick={chooseOther}>
+        <strong>Other</strong>
+        <span>Any endpoint URL</span>
+      </button>
+    </div>}
+
+    {endpointChosen && <>
+      <SettingsGroup title="Endpoint">
+        <label className="settings-field">
+          <span>Name</span>
+          <input value={draft.name} maxLength={60} placeholder="e.g. OpenRouter" onChange={(event) => update({ name: event.target.value })} />
+        </label>
+        <label className="settings-field">
+          <span>API key</span>
+          <div className="custom-key-row">
+            <input type="password" value={draft.apiKey} spellCheck={false} autoComplete="off" disabled={draft.removeKey} placeholder={draft.removeKey ? "Removed when you save" : draft.hasKey ? "Saved · paste a new one to replace it" : activePreset?.local ? "Not needed for a server on this computer" : "sk-…"} onChange={(event) => update({ apiKey: event.target.value })} />
+            {draft.hasKey && <button type="button" className="small-button" onClick={() => update({ removeKey: !draft.removeKey, apiKey: "" })}>{draft.removeKey ? "Keep key" : "Remove"}</button>}
+          </div>
+        </label>
+        {showEndpoint || activePreset === undefined || !adding
+          ? <>
+            <div className="settings-field">
+              <span id="endpoint-format">Format</span>
+              <div className="settings-segmented" role="group" aria-labelledby="endpoint-format">
+                {CUSTOM_API_FORMATS.map((format) => <button key={format} type="button" aria-pressed={draft.format === format} onClick={() => update({ format })}>{FORMAT_LABELS[format]}</button>)}
+              </div>
+            </div>
+            <label className="settings-field">
+              <span>Base URL</span>
+              <input className="mono" value={draft.baseUrl} spellCheck={false} autoFocus={draft.baseUrl === ""} placeholder={draft.format === "anthropic" ? "https://api.anthropic.com/v1" : "https://…/v1"} onChange={(event) => update({ baseUrl: event.target.value })} />
+            </label>
+          </>
+          : <div className="settings-field">
+            <span>Address</span>
+            <p className="custom-endpoint-line">
+              <span>{FORMAT_LABELS[draft.format]} · <code>{draft.baseUrl}</code></span>
+              <button type="button" className="link-button" onClick={() => setShowEndpoint(true)}>Change</button>
+            </p>
+          </div>}
+      </SettingsGroup>
+
+      <SettingsGroup
+        title={`Models${draft.models.length > 0 ? ` · ${draft.models.length}` : ""}`}
+        action={<div className="settings-actions">
+          <button type="button" className="text-button" disabled={busy || room <= 0 || !canSave} onClick={() => void loadImport()} title={needsSaveFirst ? "Saves the endpoint, then reads its model list" : "Read the endpoint's model list"}><Download size={14} /> Find models</button>
+          <button type="button" className="text-button" disabled={room <= 0} onClick={addManual}><Plus size={14} /> Add by id</button>
+        </div>}
+        footnote="These appear in the composer's model picker. Roqer works through tool calls, so use models that support them; small local models may not follow its instructions well."
+      >
+        {importMessage && <p className="custom-hint">{importMessage}</p>}
+        {imported !== null && <div className="custom-import">
+          <input value={importFilter} autoFocus placeholder={`Filter ${imported.length} models`} spellCheck={false} onChange={(event) => setImportFilter(event.target.value)} />
+          <div className="custom-import-list">
+            {visibleImports.map((id) => <label key={id}><input type="checkbox" checked={chosen.has(id)} disabled={!chosen.has(id) && chosen.size >= room} onChange={(event) => setChosen((current) => {
+              const next = new Set(current);
+              if (event.target.checked) next.add(id); else next.delete(id);
+              return next;
+            })} /> {id}</label>)}
+            {visibleImports.length === 0 && <span className="custom-hint">No models match.</span>}
+          </div>
+          <div className="settings-actions">
+            <span className="custom-hint">Set images and reasoning for each model after adding it.</span>
+            <button type="button" className="small-button" onClick={() => setImported(null)}>Close</button>
+            <button type="button" className="small-button primary" disabled={chosen.size === 0} onClick={addChosen}>Add {chosen.size || ""} selected</button>
+          </div>
+        </div>}
+        {draft.models.length === 0 && imported === null && <p className="custom-empty">No models yet. Find them on the endpoint, or add one by its id.</p>}
+        {draft.models.map((model) => <ModelRow
+          key={model.key}
+          model={model}
+          format={draft.format}
+          open={expanded.has(model.key) || model.id.trim() === ""}
+          test={tests[model.id.trim()]}
+          testLabel={needsSaveFirst ? "Save & test" : "Test"}
+          canTest={canSave && model.id.trim() !== ""}
+          onToggle={() => toggleExpanded(model.key)}
+          onChange={(changes) => updateModel(model.key, changes)}
+          onTest={() => void test(model)}
+          onRemove={() => update({ models: draft.models.filter((entry) => entry.key !== model.key) })}
+        />)}
+      </SettingsGroup>
+    </>}
+
+    {!adding && <div className="settings-danger">
+      {confirmRemove
+        ? <>
+          <span>Remove {saved.name} and its saved key from this computer?</span>
+          <button type="button" className="small-button" disabled={busy} onClick={() => setConfirmRemove(false)}>Keep</button>
+          <button type="button" className="small-button danger" disabled={busy} onClick={() => void remove()}>Remove</button>
+        </>
+        : <>
+          <span>Chats that used this endpoint keep their history.</span>
+          <button type="button" className="small-button danger-outline" disabled={busy} onClick={() => setConfirmRemove(true)}>Remove endpoint…</button>
+        </>}
+    </div>}
+
+    {(showSaveBar || message !== null) && <div className="settings-savebar" role="region" aria-label="Save changes">
+      {message !== null
+        ? <p className={`custom-message ${message.ok ? "ok" : "error"}`}>{message.ok ? <Check size={13} /> : null} {message.text}</p>
+        : <p className="settings-savebar-note">{adding ? "Not added yet." : "You have unsaved changes."}</p>}
+      {showSaveBar && <>
+        <button type="button" className="secondary-action" disabled={busy} onClick={discard}>{adding ? "Cancel" : "Discard"}</button>
+        <button type="button" className="primary-action" disabled={!canSave || !dirty} onClick={() => void save()}>{busy ? "Saving…" : adding ? "Add endpoint" : "Save"}</button>
+      </>}
+    </div>}
   </div>;
 }
 

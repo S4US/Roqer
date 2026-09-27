@@ -1,8 +1,8 @@
-import { Cloud, Pencil } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 
 import type { OpenCloudCheck, OpenCloudSettingsView } from "../shared/open-cloud";
 import { checkOpenCloudKey, getOpenCloudSettings, saveOpenCloudSettings } from "./platform";
+import { SettingsRow } from "./settings-parts";
 
 type Draft = { apiKey: string; removeKey: boolean; kind: "user" | "group"; id: string };
 
@@ -108,19 +108,14 @@ export function OpenCloudSettings() {
   }
   const note = bridgeNote(settings);
   return <>
-    <div className="settings-row">
-      <div className={`settings-icon ${settings.hasKey && settings.creator !== null ? "green" : ""}`}><Cloud size={17} /></div>
-      <div>
-        <strong>Roblox Open Cloud</strong>
-        <span>{summary(settings)}</span>
-      </div>
-      {draft === null && <div className="settings-actions">
+    <SettingsRow title="Open Cloud" detail={summary(settings)}>
+      {draft === null && <>
         {settings.hasKey && <button className="small-button" disabled={busy} onClick={() => void runCheck()}>{busy ? "Checking…" : "Check key"}</button>}
-        <button className="small-button" disabled={busy} onClick={() => { setDraft(draftFrom(settings)); setMessage(null); }} aria-label="Edit Open Cloud settings">
-          {settings.hasKey ? <Pencil size={14} /> : "Set up"}
+        <button className="small-button" disabled={busy} onClick={() => { setDraft(draftFrom(settings)); setMessage(null); }}>
+          {settings.hasKey ? "Change" : "Set up"}
         </button>
-      </div>}
-    </div>
+      </>}
+    </SettingsRow>
     {note !== undefined && draft === null && message === null && <p className="custom-hint">{note}</p>}
     {draft !== null && <div className="custom-editor">
       <label className="custom-field"><span>API key {settings.hasKey && !draft.removeKey ? "(saved; paste a new one to replace it)" : "(from Creator Dashboard → Open Cloud → API Keys)"}</span>
