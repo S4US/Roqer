@@ -18,6 +18,12 @@ import { SettingsSwitch } from "./settings-parts";
  * says its current answer and one menu that changes it.
  */
 
+/** Whether a model offers a choice of thinking effort worth showing. */
+export function takesEffort(model: ProviderModel | null): boolean {
+  const efforts = model?.supportedReasoningEfforts ?? [];
+  return efforts.length > 1 || (efforts.length === 1 && efforts[0].reasoningEffort !== "none");
+}
+
 export function effortLabel(effort: ReasoningEffort): string {
   if (effort === "xhigh") return "Extra high";
   return `${effort[0].toUpperCase()}${effort.slice(1)}`;
@@ -113,6 +119,12 @@ export function ModelMenu({ provider, status, catalog, selectedModel, effort, di
 }) {
   const [others, setOthers] = useState<Partial<Record<ProviderId, OtherProvider>>>({});
   const [query, setQuery] = useState("");
+  // The model just picked, held while the app catches up: picking one from
+  // another provider switches provider, and that provider's catalog is read
+  // again before the app's own selection shows it.
+  const [picked, setPicked] = useState<{ provider: ProviderId; model: ProviderModel } | null>(null);
+  const effortRef = useRef<HTMLDivElement>(null);
+  const chosenModel = selectedModel ?? (picked?.provider === provider ? picked.model : null);
 
   const loadOthers = useCallback(() => {
     for (const other of ENABLED_PROVIDER_IDS) {
@@ -128,7 +140,10 @@ export function ModelMenu({ provider, status, catalog, selectedModel, effort, di
   const groups = useMemo((): Group[] => {
     const result: Group[] = [];
     for (const id of ENABLED_PROVIDER_IDS) {
-      const entry = id === provider ? { status, catalog } : others[id];
+      // Just switched to, this provider is still being read again; what the
+      // menu read when it opened stands in until then, so its list stays put.
+      const settled = status.kind !== "checking" && (status.kind !== "signed-in" || catalog.models.length > 0 || catalog.message !== undefined);
+      const entry = id === provider ? (settled ? { status, catalog } : others[id] ?? { status, catalog }) : others[id];
       const models = entry?.catalog?.models ?? [];
       const note = entry === undefined
         ? "Checking…"
@@ -165,9 +180,18 @@ export function ModelMenu({ provider, status, catalog, selectedModel, effort, di
       }))
       .filter((group) => group.models.length > 0);
 
-  const efforts = selectedModel?.supportedReasoningEfforts ?? [];
-  const takesEffort = efforts.length > 1 || (efforts.length === 1 && efforts[0].reasoningEffort !== "none");
-  const triggerLabel = selectedModel?.displayName
+  const efforts = chosenModel?.supportedReasoningEfforts ?? [];
+  const showEffort = chosenModel !== null && takesEffort(chosenModel);
+
+  // After a pick the effort is the next thing chosen, so it gets the focus.
+  useEffect(() => {
+    if (picked === null) return;
+    const frame = window.requestAnimationFrame(() => {
+      effortRef.current?.querySelector<HTMLElement>("[aria-checked='true']")?.focus();
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [picked]);
+  const triggerLabel = chosenModel?.displayName
     ?? (status.kind === "signed-in" ? catalog.message ? "No models" : "Loading models…" : "Choose a model");
 
   return <ComposerMenu
@@ -175,9 +199,9 @@ export function ModelMenu({ provider, status, catalog, selectedModel, effort, di
     label="Model"
     disabled={disabled}
     title={selectedModel?.runsOn === undefined ? providerLabel(provider) : `${selectedModel.displayName} on ${selectedModel.runsOn}`}
-    trigger={<span className="composer-menu-label">{triggerLabel}{selectedModel !== null && takesEffort && <em>{effortLabel(effort)}</em>}</span>}
+    trigger={<span className="composer-menu-label">{triggerLabel}{showEffort && <em>{effortLabel(effort)}</em>}</span>}
   >
-    {(close) => <MenuBody onOpen={loadOthers}>
+    {(close) => <MenuBody onOpen={loadOthers} onClose={() => setPicked(null)}>
       <label className="model-menu-search">
         <Search size={14} aria-hidden="true" />
         <input autoFocus value={query} placeholder="Find a model" aria-label="Find a model" spellCheck={false} onChange={(event) => setQuery(event.target.value)} />
@@ -186,7 +210,7 @@ export function ModelMenu({ provider, status, catalog, selectedModel, effort, di
         {visible.map((group) => <div key={group.key} className="model-menu-group" role="group" aria-label={group.label}>
           <span className="model-menu-group-label">{group.label}</span>
           {group.models.map((model) => {
-            const chosen = group.provider === provider && model.id === selectedModel?.id;
+            const chosen = group.provider === provider && model.id === chosenModel?.id;
             return <button
               key={model.id}
               type="button"
@@ -194,23 +218,29 @@ export function ModelMenu({ provider, status, catalog, selectedModel, effort, di
               data-menu-option
               className="composer-menu-option"
               title={model.description}
-              onClick={() => { onPick(group.provider, model); close(); }}
+              onClick={() => {
+                onPick(group.provider, model);
+                // A model with a thinking effort to choose keeps the menu open
+                // on that choice; picking the effort then closes it.
+                if (takesEffort(model)) setPicked({ provider: group.provider, model });
+                else close();
+              }}
             ><span className="composer-menu-option-label">{model.displayName}</span>{chosen && <Check size={14} aria-hidden="true" />}</button>;
           })}
           {group.note !== undefined && <button type="button" className="model-menu-note" data-menu-option onClick={() => { close(); onManage(); }}>{group.note}</button>}
         </div>)}
         {visible.length === 0 && <p className="model-menu-empty">No model matches “{query.trim()}”.</p>}
       </div>
-      {selectedModel !== null && takesEffort && <div className="model-menu-effort">
-        <span id="model-menu-effort-label">Thinking effort for {selectedModel.displayName}</span>
-        <div className="composer-segmented" role="radiogroup" aria-labelledby="model-menu-effort-label">
+      {showEffort && <div className="model-menu-effort">
+        <span id="model-menu-effort-label">Thinking effort for {chosenModel.displayName}</span>
+        <div className="composer-segmented" role="radiogroup" aria-labelledby="model-menu-effort-label" ref={effortRef}>
           {efforts.map((entry) => <button
             key={entry.reasoningEffort}
             type="button"
             role="radio"
             aria-checked={entry.reasoningEffort === effort}
             title={entry.description}
-            onClick={() => onEffort(entry.reasoningEffort)}
+            onClick={() => { onEffort(entry.reasoningEffort); close(); }}
           >{effortLabel(entry.reasoningEffort)}</button>)}
         </div>
       </div>}
@@ -219,11 +249,14 @@ export function ModelMenu({ provider, status, catalog, selectedModel, effort, di
   </ComposerMenu>;
 }
 
-/** Runs `onOpen` once, when the panel mounts. */
-function MenuBody({ onOpen, children }: { onOpen: () => void; children: ReactNode }) {
+/** Runs `onOpen` when the panel mounts, and `onClose` when it goes. */
+function MenuBody({ onOpen, onClose, children }: { onOpen: () => void; onClose?: () => void; children: ReactNode }) {
   useEffect(() => {
     onOpen();
   }, [onOpen]);
+  const closeRef = useRef(onClose);
+  closeRef.current = onClose;
+  useEffect(() => () => closeRef.current?.(), []);
   return <>{children}</>;
 }
 
