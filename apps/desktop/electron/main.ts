@@ -48,6 +48,7 @@ import {
 import { createClaudePlanner, type ClaudeSession } from "../runtime/claude-planner";
 import { ProviderSessionStore } from "../runtime/provider-sessions";
 import { CodexAppServerClient } from "../runtime/codex-app-server";
+import { CodexLimitsTracker } from "../runtime/codex-limits";
 import { createInspectionPlanner } from "../runtime/inspection-planner";
 import { McpClient } from "../runtime/mcp-client";
 import { McpEndpointError } from "../runtime/mcp-types";
@@ -81,6 +82,7 @@ import {
   type ProviderModelCatalog,
   type ProviderStatus,
 } from "../shared/provider";
+import { NO_LIMITS, type ProviderLimits } from "../shared/provider-limits";
 import type { OpenStudioScriptRequest, StudioActionResult, StudioStatus } from "../shared/studio-status";
 import { electronSecretProtector } from "./secret-protector";
 
@@ -155,6 +157,7 @@ async function initializeStorage(): Promise<void> {
   return storageReady.catch((error) => { storageReady = undefined; throw error; });
 }
 let codexAppServer: CodexAppServerClient | null = null;
+let codexLimits: CodexLimitsTracker | null = null;
 let claudeCode: ClaudeCodeClient | null = null;
 const clientInstalls = new ClientInstallRunner();
 /** Set from the confirmation onwards, so a second request cannot open a second dialog. */
@@ -774,6 +777,11 @@ function chatGptProvider(): CodexAppServerClient {
   return codexAppServer;
 }
 
+function chatGptLimits(): CodexLimitsTracker {
+  codexLimits ??= new CodexLimitsTracker({ source: chatGptProvider() });
+  return codexLimits;
+}
+
 function claudeProvider(): ClaudeCodeClient {
   claudeCode ??= new ClaudeCodeClient({ cwd: app.getPath("userData") });
   return claudeCode;
@@ -857,7 +865,10 @@ async function loginProvider(event: IpcMainInvokeEvent, value: unknown): Promise
 
     // A new sign-in may be a different account; nothing it did not run may carry over.
     if (provider === "claude") await claudeSessions.closeAll();
-    else await codexThreads.closeAll();
+    else {
+      await codexThreads.closeAll();
+      codexLimits?.forget();
+    }
     const login = provider === "claude"
       ? await claudeProvider().beginLogin()
       : await chatGptProvider().beginChatGptLogin();
@@ -875,6 +886,16 @@ async function loginProvider(event: IpcMainInvokeEvent, value: unknown): Promise
   } catch (error) {
     return { ok: false, message: error instanceof Error ? error.message : `${label} sign-in could not start.` };
   }
+}
+
+/**
+ * The plan's usage limits, as the provider's client reports them. Only Codex
+ * reports them outside a run; the others show no meter rather than a guess.
+ */
+async function getProviderLimits(event: IpcMainInvokeEvent, value: unknown): Promise<ProviderLimits> {
+  if (!isTrusted(event.sender)) return NO_LIMITS;
+  if (providerArgument(value) !== "chatgpt") return NO_LIMITS;
+  return chatGptLimits().read();
 }
 
 /**
@@ -1761,6 +1782,7 @@ app.whenReady().then(async () => {
   ipcMain.handle("provider:login", loginProvider);
   ipcMain.handle("provider:login-code", submitProviderCode);
   ipcMain.handle("provider:install", installProviderClient);
+  ipcMain.handle("provider:limits", getProviderLimits);
   ipcMain.handle("custom-providers:list", listCustomConnections);
   ipcMain.handle("custom-providers:save", saveCustomConnection);
   ipcMain.handle("custom-providers:remove", removeCustomConnection);

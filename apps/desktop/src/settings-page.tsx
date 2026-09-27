@@ -3,12 +3,14 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import type { CustomConnectionView } from "../shared/custom-providers";
 import { ENABLED_PROVIDER_IDS, providerLabel, type ProviderId, type ProviderStatus } from "../shared/provider";
+import { NO_LIMITS, type ProviderLimits } from "../shared/provider-limits";
 import type { StudioStatus } from "../shared/studio-status";
 import type { WorkspaceState } from "./model";
 import { BlenderSettings } from "./blender-settings";
 import { EndpointPage, endpointDetail, useCustomConnections } from "./custom-connections";
 import { OpenCloudSettings } from "./open-cloud-settings";
-import { getProviderStatus, installProviderClient, loginProvider, submitProviderCode } from "./platform";
+import { getProviderLimits, getProviderStatus, installProviderClient, loginProvider, submitProviderCode } from "./platform";
+import { planUsageView } from "./plan-usage";
 import { SettingsGroup, SettingsRow, SettingsSwitch } from "./settings-parts";
 
 /**
@@ -227,10 +229,14 @@ function AccountRow({ provider, onChanged }: { provider: ProviderId; onChanged: 
   const [codeError, setCodeError] = useState<string | null>(null);
   const [installing, setInstalling] = useState(false);
   const [installNote, setInstallNote] = useState<{ message: string; command?: string } | null>(null);
+  const [limits, setLimits] = useState<ProviderLimits>(NO_LIMITS);
   const name = providerLabel(provider);
 
   const refresh = useCallback(async () => {
-    setStatus(await getProviderStatus(provider));
+    const next = await getProviderStatus(provider);
+    setStatus(next);
+    // Usage belongs to a signed-in account; without one there is nothing to show.
+    setLimits(next.kind === "signed-in" ? await getProviderLimits(provider) : NO_LIMITS);
   }, [provider]);
 
   useEffect(() => {
@@ -294,6 +300,7 @@ function AccountRow({ provider, onChanged }: { provider: ProviderId; onChanged: 
       .filter((part): part is string => part !== undefined && part !== "")
       .join(" · ") || status.message
     : installing ? `Installing ${client ?? name}… This can take a few minutes.` : status.message;
+  const usage = signedIn ? planUsageView(limits, client ?? name, Date.now()) : null;
 
   return <>
     <SettingsRow title={name} detail={detail}>
@@ -302,6 +309,17 @@ function AccountRow({ provider, onChanged }: { provider: ProviderId; onChanged: 
         ? <button type="button" className="small-button" disabled={installing} onClick={() => void refresh()}>Check</button>
         : <button type="button" className="small-button" disabled={pending || status.kind === "checking"} onClick={() => void connect()}>{pending ? "Opening…" : "Connect"}</button>}
     </SettingsRow>
+    {usage !== null && <div className="plan-usage">
+      {usage.reached && <p className="plan-usage-reached">{name} reports this plan's usage limit is reached.</p>}
+      {usage.rows.map((row) => <div key={row.label} className={`plan-usage-row ${row.tone}`}>
+        <span className="plan-usage-label">{row.label}</span>
+        <span className="plan-usage-track" role="meter" aria-label={row.label} aria-valuemin={0} aria-valuemax={100} aria-valuenow={row.percent}>
+          <span style={{ width: `${row.percent}%` }} />
+        </span>
+        <span className="plan-usage-detail">{row.detail}</span>
+      </div>)}
+      <p className="plan-usage-note">{usage.footnote}</p>
+    </div>}
     {/* A failed install says why and gives the vendor's command to run by hand;
         a declined one just says so. */}
     {installNote !== null && status.kind === "not-installed" && <p className={`custom-message${installNote.command === undefined ? "" : " error"}`}>

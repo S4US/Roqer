@@ -11,6 +11,7 @@ import {
   type ProviderModelCatalog,
   type ProviderStatus,
 } from "../shared/provider";
+import { isProviderLimits, NO_LIMITS, type ProviderLimits } from "../shared/provider-limits";
 import { isAppUpdateState, type AppUpdateState } from "../shared/app-update";
 import { isMcpServerState, type McpServerState } from "../shared/mcp-server";
 import { isRunEvent, type RunEvent, type RunStartRequest } from "../shared/run-events";
@@ -123,6 +124,11 @@ function connector(provider: ProviderId) {
       return isProviderInstallResult(value)
         ? value
         : { ok: false, message: `The ${label} install request returned an invalid result.` };
+    },
+    /** The plan's usage limits; `none` when the provider reported nothing. */
+    limits: async (): Promise<ProviderLimits> => {
+      const value: unknown = await ipcRenderer.invoke("provider:limits", provider);
+      return isProviderLimits(value) ? value : NO_LIMITS;
     },
     models: async (): Promise<ProviderModelCatalog> => {
       const value: unknown = await ipcRenderer.invoke("provider:models", provider);

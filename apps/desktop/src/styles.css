@@ -715,6 +715,17 @@ button:focus-visible, textarea:focus-visible, select:focus-visible, input:focus-
 .settings-list > .custom-model + .custom-model { border-top: 1px solid var(--border-subtle); }
 .settings-path { display: block; overflow: hidden; color: var(--faint); font: var(--weight-regular) 11px/1.5 "Geist Mono Variable", monospace; text-overflow: ellipsis; white-space: nowrap; }
 .settings-command { font: var(--weight-regular) 11px/1.5 "Geist Mono Variable", monospace; overflow-wrap: anywhere; }
+.settings-list > .plan-usage { display: grid; gap: 8px; padding: 10px 16px 12px; }
+.plan-usage-row { display: grid; grid-template-columns: 110px minmax(60px, 1fr) auto; align-items: center; gap: 12px; font-size: var(--type-meta); }
+.plan-usage-label { color: var(--ink-secondary); }
+.plan-usage-detail { color: var(--muted); font-variant-numeric: tabular-nums; }
+.plan-usage-track { display: flex; height: 4px; overflow: hidden; background: var(--surface-sunken); border-radius: 999px; }
+.plan-usage-track > span { display: block; height: 100%; background: var(--accent); border-radius: 999px; }
+.plan-usage-row.warning .plan-usage-track > span { background: var(--warning); }
+.plan-usage-row.danger .plan-usage-track > span { background: var(--danger); }
+.plan-usage-reached { margin: 0; color: var(--danger); font-size: var(--type-meta); }
+.plan-usage-note { margin: 0; color: var(--faint); font-size: var(--type-meta); line-height: 1.45; }
+@media (max-width: 520px) { .plan-usage-row { grid-template-columns: 1fr auto; } .plan-usage-track { grid-column: 1 / -1; grid-row: 2; } }
 .settings-danger { display: flex; align-items: center; gap: 10px; padding: 0 2px; color: var(--faint); font-size: var(--type-meta); }
 .settings-danger > span { flex: 1; }
 .small-button.danger-outline { color: var(--danger); background: transparent; border-color: var(--danger-border); }
