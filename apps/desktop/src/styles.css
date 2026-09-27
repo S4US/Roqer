@@ -977,26 +977,31 @@ button:focus-visible, textarea:focus-visible, select:focus-visible, input:focus-
   tab-size: 2;
 }
 .artifact-change + .artifact-change .code-surface { border-top-color: var(--border); }
-.code-lines { width: max-content; min-width: 100%; padding: 4px 0 5px; }
+.code-lines { display: flex; width: max-content; min-width: 100%; padding: 4px 0 5px; }
 
-/* One grid per line, sharing a template, so the three columns stay independent
- * and a long code line scrolls without dragging the coordinates with it. The
+/* Two columns side by side: the gutter, pinned as one element, and the code,
+ * which scrolls under it. Every row is 22px in both, so they stay aligned. The
  * coordinates sit on the row's own background rather than a darker rail: a
  * changed line then reads as one continuous band from number to code, which is
  * what makes the panel look like an editor instead of a review table. */
-.code-line { --row: var(--code-bg); display: grid; grid-template-columns: calc(var(--gutter) + 18px) 16px minmax(max-content, 1fr); width: max-content; min-width: 100%; height: 22px; color: var(--ink-secondary); background: var(--row); }
+.code-rail { position: sticky; left: 0; z-index: 1; flex: none; background: var(--code-bg); user-select: none; }
+.code-rail-row { --row: var(--code-bg); display: grid; grid-template-columns: calc(var(--gutter) + 18px) 16px; height: 22px; background: var(--row); }
+.code-rows { flex: 1 0 auto; }
+.code-line { --row: var(--code-bg); height: 22px; color: var(--ink-secondary); background: var(--row); }
 .code-add { --row: var(--code-add); }
 .code-remove { --row: var(--code-remove); }
 
-.code-gutter, .code-sign { position: sticky; z-index: 1; background: var(--row); user-select: none; }
-.code-gutter { left: 0; overflow: hidden; padding: 0 8px 0 10px; color: color-mix(in srgb, var(--faint) 78%, transparent); text-align: right; }
-.code-sign { left: calc(var(--gutter) + 18px); color: var(--faint); text-align: center; font-weight: var(--weight-medium); }
-.code-text { min-width: 0; padding: 0 18px 0 8px; color: inherit; font: inherit; white-space: pre; }
+.code-gutter { overflow: hidden; padding: 0 8px 0 10px; color: color-mix(in srgb, var(--faint) 78%, transparent); text-align: right; }
+.code-sign { color: var(--faint); text-align: center; font-weight: var(--weight-medium); }
+.code-text { display: block; padding: 0 18px 0 8px; color: inherit; font: inherit; white-space: pre; }
 .code-add .code-sign { color: var(--success); }
 .code-remove .code-sign { color: var(--danger); }
 
-.code-fold { display: flex; width: max-content; min-width: 100%; background: color-mix(in srgb, var(--surface-raised) 46%, var(--code-bg)); border-top: 1px solid var(--border-subtle); border-bottom: 1px solid var(--border-subtle); }
-.code-fold-body { position: sticky; left: 0; display: flex; align-items: center; gap: 8px; height: 22px; padding: 0 12px 0 10px; color: var(--faint); font-size: 11.5px; }
+.code-fold { display: flex; background: color-mix(in srgb, var(--surface-raised) 46%, var(--code-bg)); border-top: 1px solid var(--border-subtle); border-bottom: 1px solid var(--border-subtle); }
+.code-fold-spacer { height: 22px; }
+/* Kept in view beside the gutter while the code scrolls sideways; there are
+ * only a few of these per diff. */
+.code-fold-body { position: sticky; left: calc(var(--gutter) + 34px); display: flex; align-items: center; gap: 8px; height: 22px; padding: 0 12px 0 8px; color: var(--faint); font-size: 11.5px; }
 .code-fold-mark { color: color-mix(in srgb, var(--faint) 70%, transparent); letter-spacing: .1em; }
 .code-fold-range { color: color-mix(in srgb, var(--faint) 66%, transparent); }
 .code-fold-cut { background: color-mix(in srgb, var(--warning-soft) 52%, var(--code-bg)); }
