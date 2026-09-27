@@ -8,7 +8,7 @@ import type { WorkspaceState } from "./model";
 import { BlenderSettings } from "./blender-settings";
 import { EndpointPage, endpointDetail, useCustomConnections } from "./custom-connections";
 import { OpenCloudSettings } from "./open-cloud-settings";
-import { getProviderStatus, loginProvider, submitProviderCode } from "./platform";
+import { getProviderStatus, installProviderClient, loginProvider, submitProviderCode } from "./platform";
 import { SettingsGroup, SettingsRow, SettingsSwitch } from "./settings-parts";
 
 /**
@@ -215,8 +215,9 @@ function PageHead({ title, lede }: { title: string; lede?: string }) {
 
 /**
  * One subscription account: whether it is signed in, and signing in when it
- * is not. Each row asks about its own provider, so both accounts show their
- * real state whichever one the composer is using.
+ * is not, or installing the client it runs through when that is missing. Each
+ * row asks about its own provider, so both accounts show their real state
+ * whichever one the composer is using.
  */
 function AccountRow({ provider, onChanged }: { provider: ProviderId; onChanged: () => void }) {
   const [status, setStatus] = useState<ProviderStatus>({ kind: "checking", message: "Checking…" });
@@ -224,6 +225,8 @@ function AccountRow({ provider, onChanged }: { provider: ProviderId; onChanged: 
   const [awaitingCode, setAwaitingCode] = useState(false);
   const [code, setCode] = useState("");
   const [codeError, setCodeError] = useState<string | null>(null);
+  const [installing, setInstalling] = useState(false);
+  const [installNote, setInstallNote] = useState<{ message: string; command?: string } | null>(null);
   const name = providerLabel(provider);
 
   const refresh = useCallback(async () => {
@@ -253,6 +256,19 @@ function AccountRow({ provider, onChanged }: { provider: ProviderId; onChanged: 
     }
   };
 
+  const install = async () => {
+    setInstalling(true);
+    setInstallNote(null);
+    const result = await installProviderClient(provider);
+    setInstalling(false);
+    if (!result.ok) {
+      setInstallNote({ message: result.message, ...(result.command === undefined ? {} : { command: result.command }) });
+      return;
+    }
+    await refresh();
+    onChanged();
+  };
+
   const finish = async () => {
     setPending(true);
     const result = await submitProviderCode(provider, code);
@@ -272,18 +288,26 @@ function AccountRow({ provider, onChanged }: { provider: ProviderId; onChanged: 
   // Signing in needs the client, so without it the row can only look again.
   const canCheckOnly = signedIn || status.kind === "not-installed";
   const client = ACCOUNT_CLIENTS[provider];
+  const installable = status.kind === "not-installed" && status.installable === true;
   const detail = signedIn
     ? [status.planType === undefined ? undefined : capitalized(status.planType), status.email, client === undefined ? undefined : `through ${client}`]
       .filter((part): part is string => part !== undefined && part !== "")
       .join(" · ") || status.message
-    : status.message;
+    : installing ? `Installing ${client ?? name}… This can take a few minutes.` : status.message;
 
   return <>
     <SettingsRow title={name} detail={detail}>
+      {installable && <button type="button" className="small-button" disabled={installing} onClick={() => void install()}>{installing ? "Installing…" : "Install"}</button>}
       {canCheckOnly
-        ? <button type="button" className="small-button" onClick={() => void refresh()}>Check</button>
+        ? <button type="button" className="small-button" disabled={installing} onClick={() => void refresh()}>Check</button>
         : <button type="button" className="small-button" disabled={pending || status.kind === "checking"} onClick={() => void connect()}>{pending ? "Opening…" : "Connect"}</button>}
     </SettingsRow>
+    {/* A failed install says why and gives the vendor's command to run by hand;
+        a declined one just says so. */}
+    {installNote !== null && status.kind === "not-installed" && <p className={`custom-message${installNote.command === undefined ? "" : " error"}`}>
+      {installNote.message}
+      {installNote.command !== undefined && <><br />To install it yourself, run this in PowerShell: <code className="settings-command">{installNote.command}</code></>}
+    </p>}
     {awaitingCode && !signedIn && <label className="settings-field">
       <span>{`Paste the code ${name} showed you`}</span>
       <div className="custom-key-row">

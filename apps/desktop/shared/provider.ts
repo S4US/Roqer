@@ -49,8 +49,12 @@ export function providerLabel(provider: ProviderId): string {
 /** Sanitized provider state that is safe to expose to the renderer. */
 export type ProviderStatus =
   | { kind: "checking"; message: string }
-  /** The client the subscription runs through (Codex, Claude Code) was not found. */
-  | { kind: "not-installed"; message: string }
+  /**
+   * The client the subscription runs through (Codex, Claude Code) was not
+   * found. `installable` is set by the main process where Roqer can run the
+   * client's official installer for the user.
+   */
+  | { kind: "not-installed"; message: string; installable?: boolean }
   /** The client is there but failing; installing it again is not the answer. */
   | { kind: "unavailable"; message: string }
   | { kind: "signed-out"; message: string }
@@ -72,6 +76,15 @@ export type ProviderStatus =
 export type ProviderLoginResult =
   | { ok: true; message: string; awaitingCode?: boolean }
   | { ok: false; message: string };
+
+/**
+ * The result of installing a subscription's client. A failure carries the
+ * official install command, when there is one, so the user can run it
+ * themselves.
+ */
+export type ProviderInstallResult =
+  | { ok: true; message: string }
+  | { ok: false; message: string; command?: string };
 
 export const REASONING_EFFORTS = ["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"] as const;
 export type ReasoningEffort = typeof REASONING_EFFORTS[number];
@@ -112,6 +125,7 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
 export function isProviderStatus(value: unknown): value is ProviderStatus {
   if (!isRecord(value) || typeof value.kind !== "string" || typeof value.message !== "string") return false;
   if (!["checking", "not-installed", "unavailable", "signed-out", "signed-in"].includes(value.kind)) return false;
+  if (value.kind === "not-installed") return value.installable === undefined || typeof value.installable === "boolean";
   if (value.kind !== "signed-in") return true;
   return (value.email === undefined || typeof value.email === "string") &&
     (value.planType === undefined || typeof value.planType === "string");
@@ -120,6 +134,12 @@ export function isProviderStatus(value: unknown): value is ProviderStatus {
 export function isProviderLoginResult(value: unknown): value is ProviderLoginResult {
   if (!isRecord(value) || typeof value.ok !== "boolean" || typeof value.message !== "string") return false;
   return value.awaitingCode === undefined || typeof value.awaitingCode === "boolean";
+}
+
+export function isProviderInstallResult(value: unknown): value is ProviderInstallResult {
+  if (!isRecord(value) || typeof value.ok !== "boolean" || typeof value.message !== "string") return false;
+  if (value.ok) return value.command === undefined;
+  return value.command === undefined || typeof value.command === "string";
 }
 
 export function isReasoningEffort(value: unknown): value is ReasoningEffort {

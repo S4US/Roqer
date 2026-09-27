@@ -13,6 +13,7 @@ import type { BlenderSettingsResult } from "../shared/blender";
 import {
   providerLabel,
   type ProviderId,
+  type ProviderInstallResult,
   type ProviderLoginResult,
   type ProviderModelCatalog,
   type ProviderStatus,
@@ -154,6 +155,13 @@ export async function submitProviderCode(provider: ProviderId, code: string): Pr
   const bridge = connector(provider);
   if (!bridge) return { ok: false, message: `${providerLabel(provider)} sign-in needs the desktop app.` };
   return bridge.submitCode(code);
+}
+
+/** Install the client a subscription runs through, after the user confirms. */
+export async function installProviderClient(provider: ProviderId): Promise<ProviderInstallResult> {
+  const bridge = connector(provider);
+  if (!bridge) return { ok: false, message: `Installing ${providerLabel(provider)}'s client needs the desktop app.` };
+  return bridge.install();
 }
 
 export async function getProviderModels(provider: ProviderId): Promise<ProviderModelCatalog> {

@@ -14,8 +14,11 @@ const capitalized = (text: string) => `${text[0]?.toUpperCase() ?? ""}${text.sli
 
 export function providerCard(provider: ProviderId, status: ProviderStatus, desktop: boolean): ProviderCard {
   if (!desktop) return { title: "Studio access", detail: "Preview mode", badge: "Demo" };
-  if (status.kind !== "signed-in") return { title: "Studio access", detail: status.message, badge: "Local" };
   const client = CLIENTS[provider];
+  if (status.kind === "not-installed" && status.installable === true && client !== undefined) {
+    return { title: "Studio access", detail: `Install ${client} in Settings to use ${providerLabel(provider)}`, badge: "Local" };
+  }
+  if (status.kind !== "signed-in") return { title: "Studio access", detail: status.message, badge: "Local" };
   if (client === undefined) return { title: providerLabel(provider) === "Custom" ? "Your own models" : providerLabel(provider), detail: status.message };
   const plan = status.planType?.trim();
   return {

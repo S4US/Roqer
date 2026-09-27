@@ -55,6 +55,8 @@ npm run start:desktop
 
 Roqer installs its Studio plugin when it starts. Open (or restart) Roblox Studio so it loads the plugin, then open a place, pick a model in Roqer, and ask for something.
 
+If you use ChatGPT or Claude and don't have Codex or Claude Code yet, open Settings in Roqer and choose Install next to your account. Roqer runs OpenAI's or Anthropic's official installer after you confirm, then you connect your subscription.
+
 ## Use the Studio tools from another AI client
 
 Roqer's Studio tools are a standalone [MCP](https://modelcontextprotocol.io) server, so you can also use them from Claude Code, Codex, Cursor, or any other MCP client, without Roqer. After building:

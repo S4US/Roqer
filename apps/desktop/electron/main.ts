@@ -1,4 +1,7 @@
-import { app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme, shell, type IpcMainEvent, type IpcMainInvokeEvent, type WebContents } from "electron";
+import {
+  app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme, shell,
+  type IpcMainEvent, type IpcMainInvokeEvent, type MessageBoxOptions, type WebContents,
+} from "electron";
 import { autoUpdater } from "electron-updater";
 import { spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
@@ -39,6 +42,9 @@ import {
   type CustomModelTestResult,
 } from "../shared/custom-providers";
 import { ClaudeCodeClient } from "../runtime/claude-cli";
+import {
+  ClientInstallRunner, clientInstallerFor, clientInstallSupported, installCommand, type ClientInstaller,
+} from "../runtime/client-installer";
 import { createClaudePlanner, type ClaudeSession } from "../runtime/claude-planner";
 import { ProviderSessionStore } from "../runtime/provider-sessions";
 import { CodexAppServerClient } from "../runtime/codex-app-server";
@@ -70,6 +76,7 @@ import {
   isReasoningEffort,
   providerLabel,
   type ProviderId,
+  type ProviderInstallResult,
   type ProviderLoginResult,
   type ProviderModelCatalog,
   type ProviderStatus,
@@ -149,6 +156,9 @@ async function initializeStorage(): Promise<void> {
 }
 let codexAppServer: CodexAppServerClient | null = null;
 let claudeCode: ClaudeCodeClient | null = null;
+const clientInstalls = new ClientInstallRunner();
+/** Set from the confirmation onwards, so a second request cannot open a second dialog. */
+let clientInstallRequested = false;
 /**
  * Each chat's subscription conversation, kept between its messages so a
  * follow-up does not replay the chat or re-read Studio. In memory only.
@@ -810,7 +820,11 @@ async function getProviderStatus(event: IpcMainInvokeEvent, value: unknown): Pro
   if (!isTrusted(event.sender)) return { kind: "unavailable", message: "This window may not access providers." };
   const provider = providerArgument(value);
   if (!provider) return { kind: "unavailable", message: "Unknown provider." };
-  return readProviderStatus(provider);
+  const status = await readProviderStatus(provider);
+  // Whether an install can be offered is decided here, where it would run.
+  return status.kind === "not-installed" && clientInstallSupported() && clientInstallerFor(provider) !== null
+    ? { ...status, installable: true }
+    : status;
 }
 
 async function getProviderModels(event: IpcMainInvokeEvent, value: unknown): Promise<ProviderModelCatalog> {
@@ -861,6 +875,55 @@ async function loginProvider(event: IpcMainInvokeEvent, value: unknown): Promise
   } catch (error) {
     return { ok: false, message: error instanceof Error ? error.message : `${label} sign-in could not start.` };
   }
+}
+
+/**
+ * Install the client a subscription runs through by running its vendor's
+ * official installer. The renderer only names the provider: the command is
+ * fixed in the runtime, and the user confirms it in a dialog the main process
+ * shows, so a page cannot start an install on its own.
+ */
+async function installProviderClient(event: IpcMainInvokeEvent, value: unknown): Promise<ProviderInstallResult> {
+  if (!isTrusted(event.sender)) return { ok: false, message: "This window may not install software." };
+  const provider = providerArgument(value);
+  const installer = provider === null ? null : clientInstallerFor(provider);
+  if (!provider || !installer) return { ok: false, message: "Unknown provider." };
+  if (!clientInstallSupported()) return { ok: false, message: `Installing ${installer.client} from Roqer is available on Windows only.` };
+  if (clientInstallRequested || clientInstalls.busy) return { ok: false, message: "Another install is already running." };
+  clientInstallRequested = true;
+  try {
+    return await confirmAndInstall(event, provider, installer);
+  } finally {
+    clientInstallRequested = false;
+  }
+}
+
+async function confirmAndInstall(event: IpcMainInvokeEvent, provider: ProviderId, installer: ClientInstaller): Promise<ProviderInstallResult> {
+  // Nothing to run if the client turned up since the page last looked, and a
+  // client that is there but failing is not fixed by installing it again.
+  const current = await readProviderStatus(provider);
+  if (current.kind === "signed-in" || current.kind === "signed-out") {
+    return { ok: true, message: `${installer.client} is already installed.` };
+  }
+  if (current.kind !== "not-installed") return { ok: false, message: current.message };
+
+  const command = installCommand(installer);
+  const options: MessageBoxOptions = {
+    type: "question",
+    buttons: [`Install ${installer.client}`, "Cancel"],
+    defaultId: 0,
+    cancelId: 1,
+    noLink: true,
+    title: `Install ${installer.client}`,
+    message: `Install ${installer.client} from ${installer.publisher}?`,
+    detail: `Roqer will download ${installer.publisher}'s official installer and run it, as you would in PowerShell:\n\n${command}\n\n` +
+      `${installer.client} is installed for your Windows account only. No administrator rights are needed.`,
+  };
+  const window = BrowserWindow.fromWebContents(event.sender);
+  const choice = window ? await dialog.showMessageBox(window, options) : await dialog.showMessageBox(options);
+  if (choice.response !== 0) return { ok: false, message: "Install cancelled." };
+
+  return clientInstalls.install(installer);
 }
 
 async function submitProviderCode(event: IpcMainInvokeEvent, payload: unknown): Promise<ProviderLoginResult> {
@@ -1697,6 +1760,7 @@ app.whenReady().then(async () => {
   ipcMain.handle("provider:models", getProviderModels);
   ipcMain.handle("provider:login", loginProvider);
   ipcMain.handle("provider:login-code", submitProviderCode);
+  ipcMain.handle("provider:install", installProviderClient);
   ipcMain.handle("custom-providers:list", listCustomConnections);
   ipcMain.handle("custom-providers:save", saveCustomConnection);
   ipcMain.handle("custom-providers:remove", removeCustomConnection);
@@ -1748,6 +1812,7 @@ app.on("before-quit", () => {
   // in Roblox Studio" standing in a profile until Discord notices the socket.
   presence.dispose();
   cancelAllRuns();
+  clientInstalls.stop();
   void claudeSessions.closeAll();
   void codexThreads.closeAll();
   void customConversations.closeAll();

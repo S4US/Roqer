@@ -1,10 +1,12 @@
 import { contextBridge, ipcRenderer, type IpcRendererEvent } from "electron";
 import {
+  isProviderInstallResult,
   isProviderLoginResult,
   isProviderModelCatalog,
   isProviderStatus,
   providerLabel,
   type ProviderId,
+  type ProviderInstallResult,
   type ProviderLoginResult,
   type ProviderModelCatalog,
   type ProviderStatus,
@@ -114,6 +116,13 @@ function connector(provider: ProviderId) {
       return isProviderLoginResult(value)
         ? value
         : { ok: false, message: `The ${label} sign-in request returned an invalid result.` };
+    },
+    /** Install the client this subscription runs through; the main process asks the user first. */
+    install: async (): Promise<ProviderInstallResult> => {
+      const value: unknown = await ipcRenderer.invoke("provider:install", provider);
+      return isProviderInstallResult(value)
+        ? value
+        : { ok: false, message: `The ${label} install request returned an invalid result.` };
     },
     models: async (): Promise<ProviderModelCatalog> => {
       const value: unknown = await ipcRenderer.invoke("provider:models", provider);
