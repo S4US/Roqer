@@ -1,17 +1,17 @@
 import {
-  AlertCircle, AlertTriangle, Archive, Bot, Boxes, Check, ChevronDown, ChevronRight, CircleStop, Circle, Download,
+  AlertCircle, AlertTriangle, Archive, Boxes, Check, ChevronDown, ChevronRight, Circle, Download,
   CircleDot, ExternalLink, FileBox, FileCode2, FileText, Folder, FolderPlus, Gamepad2,
   HelpCircle, Info, ListChecks, Loader2, MessageSquare, MinusCircle, Moon, MoreHorizontal,
-  PanelLeftClose, PanelLeftOpen, Paperclip, Pencil, Play, Plus, RotateCw, Search, Send, Settings,
+  ArrowUp, Maximize2, Minimize2, PanelLeftClose, PanelLeftOpen, Paperclip, Pencil, Play, Plus, RotateCw, Search, Settings, Square,
   ShieldCheck, Sparkles, Sun,
   Trash2, X, Zap,
 } from "lucide-react";
-import { Fragment, memo, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { Fragment, memo, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import {
   appendMessage, chatStudioInstanceId, createChat, createId, createInitialWorkspace, createProject,
   deleteChat, deleteProject, modelPreference, normalizeWorkspace, renameChat,
-  renameProject, selectedModelId, setChatStudioInstance, type ApprovalMode,
+  renameProject, selectedModelId, setChatStudioInstance,
   type AssetAttachment, type ChatMessage, type WorkspaceState,
 } from "./model";
 import {
@@ -35,6 +35,12 @@ import { QUESTION_ESCAPE_OPTION, type RunQuestion } from "../shared/question";
 import { summarizeTasks, type RunTask, type RunTaskStatus } from "../shared/tasks";
 import { Markdown } from "./markdown-view";
 import { SettingsPage } from "./settings-page";
+import { ModelMenu, RunMenu } from "./composer-menus";
+import { blockPreview, characterCount, composedMessage, isLongPaste, lineCount, textSize, type PastedBlock } from "./composer-text";
+
+/** The key that sends with Enter, named the way this computer's keyboard names it. */
+const SEND_MODIFIER = typeof navigator !== "undefined" && /Mac/.test(navigator.userAgent) ? "⌘" : "Ctrl";
+
 import { providerCard } from "./provider-card";
 import { approvalCode } from "./approval-code";
 import {
@@ -61,44 +67,7 @@ import type {
 } from "../shared/run-events";
 import { connectedStudios, resolveInstanceId } from "../shared/studio-status";
 import type { StorageStatus } from "../shared/workspace-storage";
-import {
-  ENABLED_PROVIDER_IDS,
-  providerLabel,
-  type ProviderId,
-  type ReasoningEffort,
-} from "../shared/provider";
-
-type SelectOption = {
-  value: string;
-  label: string;
-  title?: string;
-};
-
-const APPROVAL_OPTIONS: SelectOption[] = [
-  { value: "Ask first", label: "Ask first", title: "Confirm every change before it reaches your project." },
-  { value: "Auto approve", label: "Auto approve", title: "Ordinary, recoverable edits run unattended. Anything that cannot be undone still asks." },
-  { value: "Full auto", label: "Full auto", title: "Nothing asks: publishing, asset spend, and arbitrary Luau all run unattended." },
-  { value: "Read only", label: "Read only", title: "Inspect the place and block every change to it." },
-];
-
-const PROVIDER_TITLES: Record<ProviderId, string> = {
-  chatgpt: "Use your ChatGPT subscription through the Codex app. Codex must be installed on this computer.",
-  claude: "Use your Claude subscription through Claude Code. Claude Code must be installed on this computer.",
-  custom: "Use a model on your own endpoint: an API key from OpenAI, Anthropic, OpenRouter and others, or a model server on this computer. Set it up in Settings.",
-};
-
-function providerOptions(): SelectOption[] {
-  return ENABLED_PROVIDER_IDS.map((provider) => ({
-    value: provider,
-    label: providerLabel(provider),
-    title: PROVIDER_TITLES[provider],
-  }));
-}
-
-function effortLabel(effort: ReasoningEffort): string {
-  if (effort === "xhigh") return "Extra high";
-  return `${effort[0].toUpperCase()}${effort.slice(1)}`;
-}
+import { providerLabel, type ProviderId } from "../shared/provider";
 
 /**
  * The one dialog that can be open, and what it is about.
@@ -196,12 +165,41 @@ function App() {
   const [storageBusy, setStorageBusy] = useState(false);
   const [expandedProjects, setExpandedProjects] = useState(() => new Set<string>());
   const [composer, setComposer] = useState("");
+  /** Long pastes, folded out of the text so what was typed stays readable. Sent first, in order. */
+  const [pastedBlocks, setPastedBlocks] = useState<PastedBlock[]>([]);
+  const [composerExpanded, setComposerExpanded] = useState(false);
   const [attachments, setAttachments] = useState<AssetAttachment[]>([]);
   const [runView, setRunView] = useState<RunView | null>(null);
   const [runStarting, setRunStarting] = useState(false);
   /** The callId of a pending question being answered in the composer, if any. */
   const [explainingQuestion, setExplainingQuestion] = useState<string | null>(null);
   const composerRef = useRef<HTMLTextAreaElement>(null);
+  const clearComposer = useCallback(() => {
+    setComposer("");
+    setPastedBlocks([]);
+    setComposerExpanded(false);
+  }, []);
+  // The box grows with what is typed, up to a limit the stylesheet sets, and
+  // scrolls after that; the expanded editor fills its space instead.
+  useLayoutEffect(() => {
+    const box = composerRef.current;
+    if (box === null) return;
+    box.style.height = "";
+    if (!composerExpanded) box.style.height = `${box.scrollHeight}px`;
+  }, [composer, composerExpanded, pastedBlocks.length]);
+  // The transcript keeps room for the composer below its last message, so a
+  // composer grown by a long draft never hides what it is replying to.
+  const dockRef = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    const dock = dockRef.current;
+    const workspaceElement = dock?.parentElement;
+    if (!dock || !workspaceElement || composerExpanded) return;
+    const measure = () => workspaceElement.style.setProperty("--dock-height", `${Math.ceil(dock.getBoundingClientRect().height)}px`);
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(dock);
+    return () => observer.disconnect();
+  }, [composerExpanded]);
   // Choosing to explain moves the person's attention from the card to the
   // box, so the box takes focus rather than waiting to be clicked.
   useEffect(() => {
@@ -601,7 +599,7 @@ function App() {
 
   const sendPrompt = async () => {
     if (steering) { await sendSteer(); return; }
-    const prompt = composer.trim();
+    const prompt = composedMessage(pastedBlocks, composer);
     if (!prompt || isRunning || !hydrated || !storageAvailable || storageRecovery.required) return;
     if (prompt.length > 64_000) { setAttachmentError("Shorten the message to 64,000 characters before sending."); return; }
     if (hasDesktopRuntime() && providerStatus.kind !== "signed-in") {
@@ -633,7 +631,7 @@ function App() {
     });
     setWorkspace(next);
     setExpandedProjects((current) => new Set(current).add(projectId));
-    setComposer("");
+    clearComposer();
     setAttachments([]);
 
     const request: RunStartRequest = {
@@ -754,8 +752,8 @@ function App() {
     const next = createChat(workspace);
     setWorkspace(next);
     setExpandedProjects((current) => new Set(current).add(next.selectedProjectId));
-    setComposer(""); void releaseAttachments(attachments.map((asset) => asset.id)); setAttachments([]); dismissOverlaySidebar();
-  }, [workspace, attachments, hydrated, storageAvailable, storageRecovery.required, dismissOverlaySidebar]);
+    clearComposer(); void releaseAttachments(attachments.map((asset) => asset.id)); setAttachments([]); dismissOverlaySidebar();
+  }, [workspace, attachments, hydrated, storageAvailable, storageRecovery.required, dismissOverlaySidebar, clearComposer]);
 
   const closeDialog = useCallback(() => setDialog(null), []);
 
@@ -765,7 +763,7 @@ function App() {
     setWorkspace(next);
     setExpandedProjects((current) => new Set(current).add(next.selectedProjectId));
     closeDialog();
-    setComposer("");
+    clearComposer();
   };
 
   /**
@@ -778,7 +776,7 @@ function App() {
     if (!storageAvailable || storageRecovery.required) return;
     if (runTarget.current?.projectId === projectId && runTarget.current.chatId === chatId) resetRun(true);
     setWorkspace((current) => deleteChat(current, projectId, chatId));
-    setComposer("");
+    clearComposer();
     setAttachments([]);
     closeDialog();
   };
@@ -792,14 +790,14 @@ function App() {
       next.delete(projectId);
       return next;
     });
-    setComposer("");
+    clearComposer();
     setAttachments([]);
     closeDialog();
   };
 
   const selectChat = (projectId: string, chatId: string) => {
     setWorkspace((current) => ({ ...current, selectedProjectId: projectId, selectedChatId: chatId }));
-    setComposer("");
+    clearComposer();
     void releaseAttachments(attachments.map((asset) => asset.id)); setAttachments([]); dismissOverlaySidebar();
   };
 
@@ -1038,30 +1036,25 @@ function App() {
     : runView === null && runStarting);
   const autoPlaytest = workspace.preferences.autoPlaytest;
   const card = providerCard(provider, providerStatus, hasDesktopRuntime());
-  const availableProviderOptions = providerOptions();
-  const showProviderChoice = availableProviderOptions.length > 1;
   const imagesReachModel = hasDesktopRuntime();
   const selectedModel = modelCatalog.models
     .find((model) => model.id === selectedModelId(workspace.preferences, provider)) ?? null;
-  const modelOptions: SelectOption[] = modelCatalog.models.length > 0
-    ? modelCatalog.models.map((model) => ({
-      value: model.id,
-      label: model.displayName,
-      title: model.description,
-    }))
-    : [{
-      value: "",
-      label: providerStatus.kind === "signed-in"
-        ? modelCatalog.message ? "Models unavailable" : "Loading models…"
-        : "Connect",
-    }];
-  const effortOptions: SelectOption[] = selectedModel
-    ? selectedModel.supportedReasoningEfforts.map((entry) => ({
-      value: entry.reasoningEffort,
-      label: effortLabel(entry.reasoningEffort),
-      title: entry.description,
-    }))
-    : [{ value: "medium", label: "Medium" }];
+  /** Exactly what Send would send. */
+  const message = composedMessage(pastedBlocks, composer);
+  // Offered once there is enough to want more room, and never in the way before.
+  const canExpand = !isRunning && (pastedBlocks.length > 0 || lineCount(composer) >= 4 || composer.length >= 400);
+  const composerHint: ReactNode = message.length >= 1_000
+    ? characterCount(message.length)
+    : composer.trim() !== "" && !isRunning
+      ? <><kbd>{SEND_MODIFIER}</kbd> <kbd>Enter</kbd> to send</>
+      : null;
+  /** A pasted block is edited as text: every block goes back into the box, in order, and the box opens large. */
+  const editPastedText = () => {
+    setComposer(composedMessage(pastedBlocks, composer));
+    setPastedBlocks([]);
+    setComposerExpanded(true);
+    window.requestAnimationFrame(() => composerRef.current?.focus());
+  };
 
   const onlyProject = workspace.projects.length < 2;
   const projectMenuItems: readonly RowMenuItem[] = [
@@ -1309,7 +1302,7 @@ function App() {
             </div></section></div>}
         </div></div>
 
-        <div className="composer-dock">
+        <div className={`composer-dock${composerExpanded ? " expanded" : ""}`} ref={dockRef}>
           {pendingApproval && <div className="approval-dock"><ApprovalCard pending={pendingApproval} onApprove={() => answerApproval("approved")} onReject={() => answerApproval("rejected")} /></div>}
           <div
             className={`composer-card${draggingImage ? " dropping" : ""}`}
@@ -1328,6 +1321,13 @@ function App() {
               void attachImages(images);
             }}
           >
+            {composerExpanded
+              ? <div className="composer-expanded-head">
+                <strong>Message</strong>
+                <span>{textSize(message)}</span>
+                <button type="button" className="text-button" onClick={() => { setComposerExpanded(false); composerRef.current?.focus(); }}><Minimize2 size={14} aria-hidden="true" /> Collapse</button>
+              </div>
+              : canExpand && <button type="button" className="icon-button composer-expand" onClick={() => { setComposerExpanded(true); composerRef.current?.focus(); }} aria-label="Open the larger editor" title="Open the larger editor"><Maximize2 size={15} /></button>}
             {thinking && <div className="composer-status" role="status"><Loader2 size={13} /><span>Thinking…</span></div>}
             {/* A disabled composer with no reason reads as a broken one. This
                 says where the run is and offers the two things that can be done
@@ -1341,33 +1341,63 @@ function App() {
             {draggingImage && <div className="composer-drop-hint">Drop an image to attach it</div>}
             {attachmentError && <div className="attachment-notice" role="alert">{attachmentError}<button onClick={() => setAttachmentError(null)} aria-label="Dismiss attachment error"><X size={14} /></button></div>}
             {attachments.length > 0 && <div className="attachment-row">{attachments.map((attachment) => <div className="attachment-chip" key={attachment.id}>{attachment.thumbnailDataUrl ? <img className="attachment-thumbnail" src={attachment.thumbnailDataUrl} alt="" /> : <FileBox size={16} />}<div><strong>{attachment.name}</strong><span>{formatBytes(attachment.size)} · {attachmentDetail(attachment, imagesReachModel)}</span></div><button onClick={() => { void releaseAttachments([attachment.id]); setAttachments((current) => current.filter((item) => item.id !== attachment.id)); }} aria-label={`Remove ${attachment.name}`}><X size={14} /></button></div>)}</div>}
-            <textarea ref={composerRef} value={composer} onChange={(event) => setComposer(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) void sendPrompt(); }} onPaste={(event) => {
+            {pastedBlocks.map((block) => <div className="pasted-block" key={block.id}>
+              <FileText size={17} aria-hidden="true" />
+              <div><strong>Pasted text</strong><span>{textSize(block.text)} · <code>{blockPreview(block.text)}</code></span></div>
+              <button type="button" className="small-button" onClick={editPastedText}>Edit</button>
+              <button type="button" className="icon-button" onClick={() => setPastedBlocks((current) => current.filter((entry) => entry.id !== block.id))} aria-label="Remove pasted text"><X size={14} /></button>
+            </div>)}
+            <textarea ref={composerRef} value={composer} onChange={(event) => setComposer(event.target.value)} onKeyDown={(event) => {
+              if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) { event.preventDefault(); void sendPrompt(); }
+              if (event.key === "Escape" && composerExpanded) { event.preventDefault(); setComposerExpanded(false); }
+            }} onPaste={(event) => {
               const images = droppedImages(event.clipboardData?.files);
-              if (images.length === 0) return;
+              if (images.length > 0) {
+                event.preventDefault();
+                void attachImages(images);
+                return;
+              }
+              // A note or an answer stays plain text: it is short by nature,
+              // and it is sent the moment it is written.
+              if (steering || explaining) return;
+              const text = event.clipboardData?.getData("text/plain") ?? "";
+              if (!isLongPaste(text)) return;
               event.preventDefault();
-              void attachImages(images);
-            }} placeholder={runElsewhere ? "Roqer is busy in another chat" : explaining ? "Your answer, in your own words" : steering ? "Add a note — Roqer reads it at its next step" : "Describe what you want to build or change…"} aria-label="Message" disabled={isRunning && !steering} />
+              setPastedBlocks((current) => [...current, { id: createId("paste"), text }]);
+            }} placeholder={runElsewhere ? "Roqer is busy in another chat" : explaining ? "Your answer, in your own words" : steering ? "Add a note. Roqer reads it at its next step." : "Describe what you want to build or change…"} aria-label="Message" disabled={isRunning && !steering} />
             <div className="composer-toolbar">
               {/* A note carries words only; a picture cannot be attached to a
                   turn that is already in progress. */}
-              <button className="attach-button" onClick={() => void attachAsset()} title="Attach an asset pack" disabled={isRunning}><Paperclip size={18} /></button><div className="toolbar-divider" />
-              {showProviderChoice && <ComposerSelect className="compact provider-control" label="Provider" value={provider} options={availableProviderOptions} icon={<Bot size={15} />} title={PROVIDER_TITLES[provider]} disabled={isRunning} showChevron onChange={(value) => updatePreferences({ provider: value as ProviderId })} />}
-              <ComposerSelect className="model-control" label="Model selector" value={selectedModel?.id ?? ""} options={modelOptions} icon={<Sparkles size={15} />} title={modelCatalog.message ?? providerStatus.message} disabled={isRunning || providerStatus.kind !== "signed-in" || !selectedModel} showChevron onChange={(value) => {
-                const model = modelCatalog.models.find((candidate) => candidate.id === value);
-                if (!model) return;
-                const effort = model.supportedReasoningEfforts.some((entry) => entry.reasoningEffort === workspace.preferences.reasoningEffort)
-                  ? workspace.preferences.reasoningEffort
-                  : model.defaultReasoningEffort;
-                updatePreferences({ ...modelPreference(provider, model.id), reasoningEffort: effort });
-              }} />
-              <ComposerSelect className="compact effort-control" label="Effort" value={workspace.preferences.reasoningEffort} options={effortOptions} title={selectedModel ? `${selectedModel.displayName} reasoning effort` : "Reasoning effort"} disabled={isRunning || !selectedModel} showChevron onChange={(value) => updatePreferences({ reasoningEffort: value as ReasoningEffort })} />
-              <ComposerSelect className={`approval ${approvalMode === "Auto approve" ? "auto" : approvalMode === "Full auto" ? "full-auto" : ""}`} label="Approval mode" value={approvalMode} options={APPROVAL_OPTIONS} icon={<ShieldCheck size={15} />} disabled={isRunning} onChange={(value) => updatePreferences({ approvalMode: value as ApprovalMode })} />
-              <button className={`playtest-toggle ${autoPlaytest ? "enabled" : ""}`} disabled={isRunning} onClick={() => updatePreferences({ autoPlaytest: !autoPlaytest })} aria-pressed={autoPlaytest}><Gamepad2 size={16} /><span className="playtest-label">Auto-playtest</span><span className="toggle-track"><span /></span></button>
+              <button className="attach-button" onClick={() => void attachAsset()} title="Attach an asset pack" aria-label="Attach an asset pack" disabled={isRunning}><Paperclip size={17} /></button>
+              <ModelMenu
+                provider={provider}
+                status={providerStatus}
+                catalog={modelCatalog}
+                selectedModel={selectedModel}
+                effort={workspace.preferences.reasoningEffort}
+                disabled={isRunning}
+                onManage={() => setShowSettings(true)}
+                onEffort={(reasoningEffort) => updatePreferences({ reasoningEffort })}
+                onPick={(nextProvider, model) => {
+                  const effort = model.supportedReasoningEfforts.some((entry) => entry.reasoningEffort === workspace.preferences.reasoningEffort)
+                    ? workspace.preferences.reasoningEffort
+                    : model.defaultReasoningEffort;
+                  updatePreferences({ provider: nextProvider, ...modelPreference(nextProvider, model.id), reasoningEffort: effort });
+                }}
+              />
+              <RunMenu
+                approvalMode={approvalMode}
+                autoPlaytest={autoPlaytest}
+                disabled={isRunning}
+                onApprovalMode={(mode) => updatePreferences({ approvalMode: mode })}
+                onAutoPlaytest={(on) => updatePreferences({ autoPlaytest: on })}
+              />
               <div className="toolbar-spacer" />
-              {showRunControls && <button className="send-button stop" onClick={stopRun} aria-label="Stop run"><CircleStop size={20} /></button>}
+              {composerHint !== null && <span className="composer-hint">{composerHint}</span>}
+              {showRunControls && <button className="stop-button" onClick={stopRun}><Square size={11} fill="currentColor" aria-hidden="true" /> Stop</button>}
               {steering
-                ? <button className="send-button" onClick={() => void sendSteer()} disabled={!composer.trim()} aria-label="Send note to the running task"><Send size={19} /></button>
-                : !showRunControls && <button className="send-button" onClick={() => void sendPrompt()} disabled={!hydrated || !storageAvailable || storageRecovery.required || isRunning || !composer.trim() || (hasDesktopRuntime() && providerStatus.kind === "signed-in" && !selectedModel)} aria-label="Send message"><Send size={19} /></button>}
+                ? <button className="send-button" onClick={() => void sendSteer()} disabled={!composer.trim()} aria-label="Send note to the running task"><ArrowUp size={18} /></button>
+                : !showRunControls && <button className="send-button" onClick={() => void sendPrompt()} disabled={!hydrated || !storageAvailable || storageRecovery.required || isRunning || message === "" || (hasDesktopRuntime() && providerStatus.kind === "signed-in" && !selectedModel)} aria-label="Send message"><ArrowUp size={18} /></button>}
             </div>
           </div>
         </div>
@@ -1378,68 +1408,6 @@ function App() {
       {!hydrated && <div className="loading-overlay"><div><span /><strong>Opening your workspace…</strong></div></div>}
     </div>
   );
-}
-
-function ComposerSelect({ className = "", label, value, options, icon, title, disabled = false, showChevron = false, onChange }: { className?: string; label: string; value: string; options: readonly SelectOption[]; icon?: React.ReactNode; title?: string; disabled?: boolean; showChevron?: boolean; onChange?: (value: string) => void }) {
-  const [open, setOpen] = useState(false);
-  const [activeIndex, setActiveIndex] = useState(() => Math.max(0, options.findIndex((option) => option.value === value)));
-  const rootRef = useRef<HTMLDivElement>(null);
-  const triggerRef = useRef<HTMLButtonElement>(null);
-  const optionRefs = useRef<Array<HTMLButtonElement | null>>([]);
-
-  const focusOption = useCallback((index: number) => {
-    const nextIndex = (index + options.length) % options.length;
-    setActiveIndex(nextIndex);
-    window.requestAnimationFrame(() => optionRefs.current[nextIndex]?.focus());
-  }, [options.length]);
-
-  const closeMenu = useCallback((restoreFocus = false) => {
-    setOpen(false);
-    if (restoreFocus) window.requestAnimationFrame(() => triggerRef.current?.focus());
-  }, []);
-
-  const openMenu = useCallback(() => {
-    if (disabled || options.length < 2) return;
-    const selectedIndex = Math.max(0, options.findIndex((option) => option.value === value));
-    setOpen(true);
-    focusOption(selectedIndex);
-  }, [disabled, focusOption, options, value]);
-
-  useEffect(() => {
-    if (!open) return;
-    const handlePointerDown = (event: PointerEvent) => {
-      if (rootRef.current && !rootRef.current.contains(event.target as Node)) closeMenu();
-    };
-    document.addEventListener("pointerdown", handlePointerDown);
-    return () => document.removeEventListener("pointerdown", handlePointerDown);
-  }, [closeMenu, open]);
-
-  useEffect(() => {
-    if (disabled) setOpen(false);
-  }, [disabled]);
-
-  const choose = (option: SelectOption) => {
-    onChange?.(option.value);
-    closeMenu(true);
-  };
-
-  const handleOptionKeyDown = (event: React.KeyboardEvent<HTMLButtonElement>) => {
-    if (event.key === "ArrowDown") { event.preventDefault(); focusOption(activeIndex + 1); }
-    if (event.key === "ArrowUp") { event.preventDefault(); focusOption(activeIndex - 1); }
-    if (event.key === "Home") { event.preventDefault(); focusOption(0); }
-    if (event.key === "End") { event.preventDefault(); focusOption(options.length - 1); }
-    if (event.key === "Escape") { event.preventDefault(); closeMenu(true); }
-  };
-
-  const selected = options.find((option) => option.value === value) ?? options[0];
-  return <div className={`select-control ${className} ${open ? "open" : ""} ${disabled ? "disabled" : ""}`} ref={rootRef}>
-    <button className="select-trigger" type="button" ref={triggerRef} disabled={disabled} title={title ?? selected?.title} aria-label={`${label}: ${selected?.label ?? value}`} aria-haspopup="listbox" aria-expanded={open} onClick={() => open ? closeMenu() : openMenu()} onKeyDown={(event) => { if (event.key === "ArrowDown" || event.key === "ArrowUp") { event.preventDefault(); openMenu(); } }}>
-      {icon && <span className="select-leading">{icon}</span>}<span className="select-value">{selected?.label ?? value}</span>{(showChevron || options.length > 1) && <ChevronDown className="select-chevron" size={14} />}
-    </button>
-    {open && <div className="select-menu" role="listbox" aria-label={label}>
-      {options.map((option, index) => <button className={`select-option ${option.value === value ? "selected" : ""}`} type="button" role="option" aria-selected={option.value === value} title={option.title} key={option.value} ref={(element) => { optionRefs.current[index] = element; }} onClick={() => choose(option)} onKeyDown={handleOptionKeyDown}><Check className="select-option-check" size={14} /><span className="select-option-label">{option.label}</span></button>)}
-    </div>}
-  </div>;
 }
 
 type RowMenuItem = {

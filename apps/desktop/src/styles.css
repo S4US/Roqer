@@ -327,7 +327,7 @@ button:focus-visible, textarea:focus-visible, select:focus-visible, input:focus-
 .app-shell[data-sidebar="hidden"] .menu-button { width: 34px; margin-right: 8px; opacity: 1; visibility: visible; transition: width var(--sidebar-motion), margin-right var(--sidebar-motion), opacity .18s ease .1s, visibility 0s; }
 
 .conversation-scroll { flex: 1; min-height: 0; overflow-y: auto; scroll-behavior: smooth; }
-.conversation { width: min(900px, calc(100% - 72px)); min-height: 100%; margin: 0 auto; padding: 30px 0 210px; }
+.conversation { width: min(900px, calc(100% - 72px)); min-height: 100%; margin: 0 auto; padding: 30px 0 calc(var(--dock-height, 180px) + 30px); }
 .conversation-history { display: flex; justify-content: center; margin: 0 0 24px; }
 .conversation-history button { height: 32px; padding: 0 13px; color: var(--muted); background: var(--surface-raised); border: 1px solid var(--border-subtle); border-radius: 999px; font-size: var(--type-label); font-weight: var(--weight-medium); }
 .conversation-history button:hover { color: var(--ink); border-color: var(--border-strong); }
@@ -414,36 +414,88 @@ button:focus-visible, textarea:focus-visible, select:focus-visible, input:focus-
 .run-elsewhere button:first-of-type { margin-left: 4px; }
 .run-elsewhere button:hover { color: var(--ink); background: var(--surface-raised); }
 .composer-card .composer-status + textarea { padding-top: 8px; }
-.composer-card { width: min(900px, 100%); margin: 0 auto; background: var(--surface-raised); border: 1px solid var(--border-subtle); border-radius: 16px; box-shadow: var(--shadow-md); transition: border-color .18s ease, box-shadow .18s ease; }
+.composer-card { position: relative; display: flex; flex-direction: column; width: min(900px, 100%); margin: 0 auto; background: var(--surface-raised); border: 1px solid var(--border-subtle); border-radius: 16px; box-shadow: var(--shadow-md); transition: border-color .18s ease, box-shadow .18s ease; }
 .composer-card:focus-within { border-color: var(--accent-border); box-shadow: var(--shadow-md); }
 .composer-card textarea:focus-visible { outline: 0; }
-.composer-card textarea { display: block; width: 100%; min-height: 67px; max-height: 130px; padding: 17px 18px 9px; color: var(--ink); background: transparent; border: 0; outline: 0; resize: none; font-size: var(--type-body); line-height: 1.55; }
+/* Grows with what is typed (the height is set as it changes) up to about
+   two fifths of the window, then scrolls: five lines was too little to edit a
+   real prompt in. */
+.composer-card textarea { display: block; width: 100%; min-height: 67px; max-height: min(40vh, 380px); overflow-y: auto; padding: 17px 18px 9px; color: var(--ink); background: transparent; border: 0; outline: 0; resize: none; font-size: var(--type-body); line-height: 1.55; }
 .composer-card textarea::placeholder { color: var(--faint); }
-.composer-toolbar { display: flex; align-items: center; min-height: 48px; padding: 5px 8px 7px 10px; }
+.composer-toolbar { display: flex; align-items: center; gap: 4px; min-height: 48px; padding: 5px 8px 7px 10px; }
 .attach-button { display: grid; place-items: center; width: 31px; height: 31px; color: var(--muted); background: transparent; border: 0; border-radius: 8px; }
 .attach-button:hover { color: var(--ink); background: var(--surface-sunken); }
-.toolbar-divider { width: 1px; height: 22px; margin: 0 7px; background: var(--border); }
-.select-control { position: relative; flex: 0 0 auto; height: 31px; color: var(--muted); background: transparent; border: 1px solid transparent; border-radius: 8px; }
-.select-control:hover:not(.disabled) { color: var(--ink-secondary); background: var(--surface-sunken); }
-.select-control.open, .select-control.open:hover { color: var(--ink-secondary); background: color-mix(in srgb, var(--surface-sunken) 55%, var(--surface-raised)); }
-.select-trigger { display: flex; align-items: center; gap: 6px; height: 100%; padding: 0 7px; color: inherit; background: transparent; border: 0; border-radius: inherit; white-space: nowrap; }
-.select-trigger:focus-visible { outline-offset: 1px; }
-.select-leading { display: inline-flex; flex: 0 0 auto; }
-.select-value { color: var(--ink-secondary); font-size: var(--type-label); font-weight: var(--weight-medium); }
-.select-chevron { flex: 0 0 auto; margin-left: 4px; color: var(--muted); transition: transform .16s ease; }
-.select-control.open .select-chevron { transform: rotate(180deg); }
-.select-control.disabled { opacity: .62; }
-.select-control.disabled .select-trigger { cursor: default; }
-.select-menu { position: absolute; bottom: calc(100% + 7px); left: 0; z-index: 60; min-width: max(154px, 100%); padding: 4px; color: var(--ink-secondary); background: var(--surface-raised); border: 1px solid var(--border-subtle); border-radius: 9px; box-shadow: var(--shadow-lg); }
-.select-option { display: grid; grid-template-columns: 16px minmax(0,1fr); align-items: center; gap: 6px; width: 100%; min-height: 32px; padding: 0 8px 0 6px; color: var(--ink-secondary); background: transparent; border: 0; border-radius: 6px; font-size: var(--type-label); font-weight: var(--weight-medium); text-align: left; white-space: nowrap; }
-.select-option:hover, .select-option:focus-visible { color: var(--ink); background: var(--accent-soft); outline: 0; }
-.select-option.selected { color: var(--accent); background: var(--accent-soft); }
-.select-option-check { opacity: 0; }
-.select-option.selected .select-option-check { opacity: 1; }
-/* The row never wraps, so without this a long label runs out of its column.
-   The grid column can shrink; the text has to be told to stop. */
-.select-option-label { overflow: hidden; text-overflow: ellipsis; }
-.select-menu { max-width: min(340px, 80vw); }
+/* The composer's two menus: which model answers, and how the run behaves. Each
+   button shows its current answer; the panel opens above the composer. */
+.composer-menu { position: relative; flex: 0 1 auto; min-width: 0; }
+.composer-menu-trigger { display: flex; align-items: center; gap: 6px; max-width: 100%; height: 32px; padding: 0 9px; color: var(--ink-secondary); background: transparent; border: 0; border-radius: 9px; font-size: var(--type-label); font-weight: var(--weight-medium); white-space: nowrap; }
+.composer-menu-trigger:hover:not(:disabled), .composer-menu.open .composer-menu-trigger { color: var(--ink); background: var(--surface-sunken); }
+.composer-menu-trigger:disabled { cursor: default; opacity: .6; }
+.composer-menu-trigger:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.composer-menu-label { display: flex; align-items: center; gap: 6px; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.composer-menu-label > svg { flex: none; }
+.composer-menu-label em { color: var(--faint); font-style: normal; }
+.run-menu .composer-menu-label em::before { content: "· "; }
+.composer-menu-chevron { flex: none; color: var(--faint); transition: transform .16s ease; }
+.composer-menu.open .composer-menu-chevron { transform: rotate(180deg); }
+.run-menu.auto .composer-menu-label > svg { color: var(--success); }
+/* Full auto runs what cannot be undone without asking, so it wears the warning
+   colour the whole time it is chosen. */
+.run-menu.full-auto .composer-menu-label { color: var(--warning); }
+.composer-menu-panel { position: absolute; bottom: calc(100% + 8px); left: 0; z-index: 60; display: flex; flex-direction: column; width: min(350px, 80vw); max-height: min(480px, 70vh); padding: 6px; color: var(--ink); font-size: var(--type-label); background: var(--surface-raised); border: 1px solid var(--border); border-radius: 12px; box-shadow: var(--shadow-lg); animation: fade .12s ease both; }
+.run-menu .composer-menu-panel { width: min(370px, 80vw); }
+.model-menu-search { display: flex; flex: none; align-items: center; gap: 8px; height: 34px; margin-bottom: 4px; padding: 0 10px; color: var(--faint); background: var(--surface-sunken); border-radius: 8px; }
+.model-menu-search input { flex: 1; min-width: 0; color: var(--ink); background: transparent; border: 0; outline: 0; font-size: var(--type-label); }
+.model-menu-list { flex: 1 1 auto; min-height: 0; overflow-y: auto; }
+.model-menu-group { display: flex; flex-direction: column; }
+.model-menu-group-label { padding: 8px 10px 3px; color: var(--faint); font-size: 11.5px; font-weight: var(--weight-semibold); }
+.composer-menu-option { display: flex; align-items: center; gap: 10px; width: 100%; min-height: 32px; padding: 6px 10px; color: var(--ink); text-align: left; background: transparent; border: 0; border-radius: 7px; font-size: var(--type-label); }
+.composer-menu-option-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.composer-menu-option > svg { flex: none; color: var(--accent); }
+.composer-menu-option:hover, .composer-menu-option:focus-visible { background: var(--surface-sunken); outline: 0; }
+.composer-menu-option[aria-pressed="true"] { background: var(--accent-soft); }
+.model-menu-note { align-self: flex-start; padding: 3px 10px 6px; color: var(--muted); text-align: left; background: none; border: 0; font-size: var(--type-meta); }
+.model-menu-note:hover, .model-menu-note:focus-visible { color: var(--ink); text-decoration: underline; outline: 0; }
+.model-menu-empty { margin: 10px; color: var(--muted); font-size: var(--type-meta); }
+.model-menu-effort { display: flex; flex: none; flex-direction: column; gap: 8px; margin: 6px -6px 0; padding: 10px 16px 8px; border-top: 1px solid var(--border); }
+.model-menu-effort > span { color: var(--faint); font-size: 11.5px; font-weight: var(--weight-semibold); }
+.composer-segmented { display: flex; gap: 2px; padding: 2px; background: var(--surface-sunken); border: 1px solid var(--border); border-radius: 9px; }
+.composer-segmented > button { flex: 1; height: 26px; color: var(--muted); background: transparent; border: 0; border-radius: 7px; font-size: var(--type-meta); font-weight: var(--weight-medium); white-space: nowrap; }
+.composer-segmented > button[aria-checked="true"] { color: var(--ink); background: var(--surface-raised); box-shadow: 0 0 0 1px var(--border); }
+.composer-segmented > button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.composer-menu-footer { flex: none; margin: 6px -6px -6px; padding: 10px 16px; color: var(--muted); text-align: left; background: none; border: 0; border-top: 1px solid var(--border); border-radius: 0 0 12px 12px; font-size: var(--type-meta); }
+.composer-menu-footer:hover, .composer-menu-footer:focus-visible { color: var(--ink); background: var(--surface-sunken); outline: 0; }
+.run-choice { align-items: flex-start; }
+.run-choice > svg { margin-top: 2px; }
+.run-choice-text { display: flex; flex: 1; flex-direction: column; gap: 1px; min-width: 0; white-space: normal; }
+.run-choice-text > strong { color: var(--ink); font-weight: var(--weight-medium); }
+.run-choice-text > span { color: var(--muted); font-size: var(--type-meta); line-height: 1.45; }
+.run-choice.full-auto .run-choice-text > strong { color: var(--warning); }
+.run-menu-playtest { display: flex; flex: none; align-items: center; gap: 12px; margin: 6px -6px -6px; padding: 12px 16px; border-top: 1px solid var(--border); }
+/* A long paste, folded so the words around it stay readable. It is still part
+   of the message, sent before what was typed. */
+.pasted-block { display: flex; align-items: center; gap: 12px; margin: 12px 14px 0; padding: 9px 8px 9px 12px; color: var(--muted); background: var(--surface-sunken); border: 1px solid var(--border-subtle); border-radius: 11px; }
+.pasted-block > div { display: flex; flex: 1; flex-direction: column; min-width: 0; }
+.pasted-block strong { color: var(--ink); font-size: var(--type-label); font-weight: var(--weight-medium); }
+.pasted-block span { overflow: hidden; color: var(--muted); font-size: var(--type-meta); text-overflow: ellipsis; white-space: nowrap; }
+.pasted-block code { color: var(--faint); font: var(--weight-regular) 11.5px/1.4 "Geist Mono Variable", monospace; }
+.pasted-block .icon-button { width: 28px; height: 28px; }
+.composer-expand { position: absolute; top: 10px; right: 10px; z-index: 1; width: 30px; height: 30px; }
+.composer-card:has(> .composer-expand) > textarea, .composer-card:has(> .composer-expand) > .pasted-block:first-of-type { margin-right: 44px; }
+.composer-card:has(> .composer-expand) > textarea { width: calc(100% - 44px); }
+/* The larger editor fills the workspace below the top bar, and
+   Escape or Collapse gives the chat back. */
+.composer-dock.expanded { top: 76px; display: flex; flex-direction: column; padding-top: 20px; background: var(--canvas); }
+.composer-dock.expanded .composer-card { flex: 1; min-height: 0; width: min(980px, 100%); }
+.composer-dock.expanded .composer-card textarea { flex: 1; max-height: none; }
+.composer-expanded-head { display: flex; align-items: center; gap: 10px; padding: 10px 10px 10px 18px; border-bottom: 1px solid var(--border-subtle); }
+.composer-expanded-head > strong { color: var(--ink); font-size: var(--type-label); font-weight: var(--weight-semibold); }
+.composer-expanded-head > span { color: var(--faint); font-size: var(--type-meta); }
+.composer-expanded-head > .text-button { margin-left: auto; color: var(--ink-secondary); }
+.composer-hint { flex: none; margin-right: 10px; color: var(--faint); font-size: var(--type-meta); white-space: nowrap; }
+.composer-hint kbd { padding: 1px 5px; color: var(--muted); border: 1px solid var(--border); border-radius: 4px; font: var(--weight-regular) 11px/1.4 "Geist Mono Variable", monospace; }
+.stop-button { display: flex; flex: none; align-items: center; gap: 7px; height: 36px; padding: 0 13px; color: var(--danger); background: var(--danger-soft); border: 1px solid var(--danger-border); border-radius: 10px; font-size: var(--type-label); font-weight: var(--weight-medium); }
+.stop-button:hover { border-color: var(--danger); }
 
 /* Row menus sit in the body rather than in the row that opened them, so they
  * are positioned against the viewport and cannot be clipped by a scrolling
@@ -461,29 +513,10 @@ button:focus-visible, textarea:focus-visible, select:focus-visible, input:focus-
 .row-menu-item:disabled, .row-menu-item:disabled > svg { color: var(--faint); cursor: default; }
 .row-menu-trigger.open { color: var(--ink); background: var(--surface-sunken); }
 .sidebar .row-menu-trigger.open { background: var(--sidebar-current); }
-.select-control.approval { margin-left: 2px; }
-.select-control.approval.auto { background: transparent; border-color: transparent; }
-.select-control.approval.auto:hover { background: var(--surface-sunken); border-color: transparent; }
-.select-control.approval.auto .select-leading { color: var(--success); }
-/* Full auto is the only mode that runs unrecoverable actions without asking, so
- * the control carries the warning colour the whole time it is selected. */
-.select-control.approval.full-auto { background: transparent; border-color: transparent; }
-.select-control.approval.full-auto:hover { background: var(--surface-sunken); border-color: transparent; }
-.select-control.approval.full-auto .select-leading, .select-control.approval.full-auto .select-value { color: var(--warning); }
-.playtest-toggle { display: flex; align-items: center; gap: 5px; height: 31px; margin-left: 5px; padding: 0 8px; color: var(--muted); background: transparent; border: 1px solid transparent; border-radius: 8px; font-size: var(--type-label); font-weight: var(--weight-medium); }
-.playtest-toggle:hover { color: var(--ink-secondary); background: var(--surface-sunken); }
-.playtest-toggle.enabled { color: var(--ink-secondary); background: transparent; border-color: transparent; }
-.playtest-toggle.enabled > svg { color: var(--success); }
-.toggle-track { position: relative; width: 23px; height: 13px; margin-left: 2px; background: var(--border-strong); border-radius: 999px; }
-.toggle-track span { position: absolute; top: 2px; left: 2px; width: 9px; height: 9px; background: var(--toggle-thumb); border-radius: 50%; box-shadow: 0 1px 2px rgba(0,0,0,.2); transition: .2s ease; }
-.playtest-toggle.enabled .toggle-track { background: var(--success); }
-.playtest-toggle.enabled .toggle-track span { transform: translateX(10px); }
-.playtest-toggle:disabled { cursor: default; opacity: .62; }
 .toolbar-spacer { flex: 1; }
 .send-button { display: grid; place-items: center; width: 36px; height: 36px; color: var(--action-ink); background: var(--action); border: 0; border-radius: 10px; transition: .18s ease; }
 .send-button:hover { background: var(--action-hover); }
 .send-button:disabled { cursor: default; opacity: .35; }
-.send-button.stop { color: var(--danger); background: var(--danger-soft); border: 1px solid var(--danger-border); }
 .attachment-row { display: flex; flex-wrap: wrap; gap: 7px; padding: 10px 10px 0; }
 .attachment-chip { display: grid; grid-template-columns: 27px 1fr 22px; align-items: center; width: fit-content; min-width: 250px; padding: 7px 7px 7px 9px; color: var(--muted); background: var(--surface-sunken); border: 1px solid var(--border); border-radius: 9px; }
 .attachment-chip div { display: flex; flex-direction: column; }
@@ -1005,9 +1038,7 @@ button:focus-visible, textarea:focus-visible, select:focus-visible, input:focus-
 
 @media (max-width: 1050px) {
   .connection-detail { display: none; }
-  .playtest-label { display: none; }
-  .playtest-toggle { gap: 2px; }
-  .select-control.compact { display: none; }
+  .composer-hint { display: none; }
 }
 
 @media (max-width: 840px) {
@@ -1030,9 +1061,7 @@ button:focus-visible, textarea:focus-visible, select:focus-visible, input:focus-
   .conversation { width: calc(100% - 24px); padding-top: 20px; }
   .user-prompt { max-width: 100%; }
   .suggestion-grid { grid-template-columns: 1fr; }
-  .select-control.model-control { display: none; }
-  .select-control.approval { max-width: 105px; }
-  .playtest-toggle { display: none; }
+  .run-menu .composer-menu-label em { display: none; }
   .composer-dock { padding-right: 10px; padding-left: 10px; }
   /* The header stays one row at every width: the filename gives up space and
    * the action collapses to its icon rather than wrapping. */
