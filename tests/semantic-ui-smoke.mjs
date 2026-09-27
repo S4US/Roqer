@@ -552,6 +552,15 @@ await runTest('semantic runtime UI inspection', async ({ track }) => {
     });
     assert(clippedSubtree.elements[0]?.visibleRect === null, 'subtree inspection retains external clipping context');
 
+    // The occlusion checks above hid ActiveOccluder to click what it covered.
+    // The audit asserts that it covers OccludedUnderlying's label, so it is
+    // shown again first; hidden, it paints nothing and covers nothing.
+    const showOccluder = await client.callTool('eval_client_runtime', {
+      target,
+      code: `local RunService = game:GetService("RunService") local gui = game:GetService("Players").LocalPlayer.PlayerGui:FindFirstChild("${FIXTURE_NAME}") gui.ActiveOccluder.Visible = true RunService.RenderStepped:Wait() return true`,
+    });
+    assert(showOccluder.ok === true && showOccluder.result === 'true', 'the occluder is shown again for the audit');
+
     const audited = await client.callTool('inspect_ui', {
       mode: 'audit',
       target,
