@@ -21,7 +21,7 @@
 
 ## Made with Roqer
 
-The Eclipse Blade, a sword combat system with a combo, a dash, and two special attacks, in a Studio playtest against training dummies.
+a sword combat system with a combo, a dash, and two special attacks, in a Studio playtest against training dummies.
 
 <p align="center">
   <img src="docs/media/eclipse-blade.webp" alt="A Roblox Studio playtest of the Eclipse Blade: the player draws the sword, dashes, lands a hit combo on training dummies, and uses the Crescent and Eclipse attacks, with ability cooldowns in the hotbar" width="900">
