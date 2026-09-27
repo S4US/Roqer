@@ -19,6 +19,14 @@
   <img src="docs/media/roqer-run.webp" alt="Roqer working on a request to build a drivable go-kart in Blender and Roblox Studio: its five-step plan with the first step done, the activity log, and Full auto mode with playtests on" width="900">
 </p>
 
+## Made with Roqer
+
+The Eclipse Blade, a sword combat system with a combo, a dash, and two special attacks, in a Studio playtest against training dummies.
+
+<p align="center">
+  <img src="docs/media/eclipse-blade.webp" alt="A Roblox Studio playtest of the Eclipse Blade: the player draws the sword, dashes, lands a hit combo on training dummies, and uses the Crescent and Eclipse attacks, with ability cooldowns in the hotbar" width="900">
+</p>
+
 ## Features
 
 - **Your own model.** ChatGPT through the Codex app, Claude through Claude Code, or any OpenAI- or Anthropic-compatible endpoint, including local models.
