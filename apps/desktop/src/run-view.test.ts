@@ -86,6 +86,27 @@ const started: RunEventBody = {
  * "Completed · 0 tool calls" under a one-line answer makes a conversation look
  * like a build.
  */
+test("an output count is live state for the response in progress, cleared when the turn moves on", () => {
+  const events = stream(
+    started,
+    { type: "status", label: "Thinking with Claude", transient: true },
+    { type: "output-tokens", tokens: 78, exact: false },
+    { type: "output-tokens", tokens: 412, exact: true },
+    { type: "tool-proposed", proposal: proposal("call-1") },
+    { type: "output-tokens", tokens: 9, exact: false },
+    { type: "run-completed", outcome: "completed", summary: "Done." },
+  );
+  const upTo = (count: number) => fold(events.slice(0, count));
+
+  assert.deepEqual(upTo(3).outputTokens, { tokens: 78, exact: false });
+  assert.deepEqual(upTo(4).outputTokens, { tokens: 412, exact: true });
+  assert.deepEqual(upTo(4).timeline, [], "a count is never a step");
+  // A tool taking over ends that response; the next one counts afresh.
+  assert.equal(upTo(5).outputTokens, null);
+  assert.deepEqual(upTo(6).outputTokens, { tokens: 9, exact: false });
+  assert.equal(upTo(7).outputTokens, null, "a finished run shows no count");
+});
+
 test("a run that only answered carries no completion card, live or recorded", () => {
   const answered = fold(stream(
     started,

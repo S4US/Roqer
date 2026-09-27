@@ -298,3 +298,21 @@ export function elapsedLabel(milliseconds: number): string {
   if (seconds < 60) return `${seconds}s`;
   return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
 }
+
+/**
+ * How much the model has written so far, beside the waiting clock.
+ *
+ * An estimate carries a `~`: it is counted from the characters that streamed,
+ * so it is rough, and it misses reasoning a model does not show. The
+ * provider's own figure, once reported, is printed without one. Thousands
+ * shorten to one decimal, since the figure is read as it climbs.
+ */
+export function outputTokensLabel(tokens: number, exact: boolean): string {
+  const whole = Math.max(0, Math.floor(tokens));
+  const count = whole < 1_000
+    ? String(whole)
+    : whole < 10_000
+      ? `${(Math.floor(whole / 100) / 10).toFixed(1).replace(/\.0$/, "")}k`
+      : `${Math.floor(whole / 1_000)}k`;
+  return `${exact ? "" : "~"}${count} ${whole === 1 ? "token" : "tokens"}`;
+}

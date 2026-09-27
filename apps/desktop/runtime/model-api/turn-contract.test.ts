@@ -164,6 +164,14 @@ test("stream events accept only the gateway's own shapes", () => {
   assert.equal(isTurnEvent({ kind: "failed", code: "boom", message: "x" }), false);
   assert.equal(isTurnEvent({ kind: "usage", usage: { inputTokens: 1, outputTokens: 1 } }), false);
   assert.equal(isTurnEvent({ kind: "tool-call", call: { id: "call_1", name: "studio" } }), false);
+  // Reasoning and arguments are counted, never carried.
+  assert.equal(isTurnEvent({ kind: "reasoning" }), true);
+  assert.equal(isTurnEvent({ kind: "reasoning", characters: 40 }), true);
+  assert.equal(isTurnEvent({ kind: "reasoning", characters: 0 }), false);
+  assert.equal(isTurnEvent({ kind: "reasoning", text: "Think" }), false);
+  assert.equal(isTurnEvent({ kind: "tool-input", characters: 12 }), true);
+  assert.equal(isTurnEvent({ kind: "tool-input", characters: 1.5 }), false);
+  assert.equal(isTurnEvent({ kind: "tool-input", characters: 12, text: "{\"op" }), false);
   assert.equal(isTurnUsage({ inputTokens: -1, outputTokens: 0 }), false);
   assert.equal(isTurnUsage({ inputTokens: 0, outputTokens: 0, costUsd: 1 }), false);
 });

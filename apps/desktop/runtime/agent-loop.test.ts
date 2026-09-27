@@ -48,13 +48,15 @@ type Recorded = {
   /** The detail each progress label came with, in the same order. */
   progressDetails: Array<string | undefined>;
   statuses: Array<{ label: string; detail?: string }>;
+  /** Every output count the loop reported, in order. */
+  outputTokens: Array<{ tokens: number; exact: boolean }>;
   /** Notes queued for the planner, drained by `takeSteers` the way the engine's are. */
   steers: string[];
 };
 
 function makeContext(controller: AbortController, outcome?: (tool: string) => McpToolOutcome) {
   const recorded: Recorded = {
-    calls: [], said: [], tasks: [], changes: [], evidence: [], questions: [], progress: [], progressDetails: [], statuses: [], steers: [],
+    calls: [], said: [], tasks: [], changes: [], evidence: [], questions: [], progress: [], progressDetails: [], statuses: [], outputTokens: [], steers: [],
   };
   let currentTasks: RunTask[] = [];
   const context: PlannerContext = {
@@ -69,6 +71,7 @@ function makeContext(controller: AbortController, outcome?: (tool: string) => Mc
       recorded.progress.push(label);
       recorded.progressDetails.push(detail);
     },
+    outputTokens: (tokens, exact) => recorded.outputTokens.push({ tokens, exact }),
     say: (text) => recorded.said.push(text),
     recordChange: (change) => {
       recorded.changes.push({ ...change, id: `change_${recorded.changes.length + 1}` });
@@ -924,6 +927,29 @@ test("a turn whose reasoning is streaming says so once, so a thinking model is n
   const reasoning = recorded.progressDetails.filter((detail) => detail?.startsWith("The model is reasoning"));
   assert.equal(reasoning.length, 1);
   assert.equal(recorded.progress[recorded.progressDetails.indexOf(reasoning[0])], "Thinking with Roqer", "the waiting label stays the turn's own");
+});
+
+test("a turn's output is counted as it streams, then replaced by the provider's own count", async () => {
+  const controller = new AbortController();
+  const { context, recorded } = makeContext(controller);
+  const writing: TurnTransport = {
+    async *streamTurn() {
+      yield { kind: "reasoning", characters: 40 } as TurnEvent;
+      // Encrypted reasoning is progress with nothing to count.
+      yield { kind: "reasoning" } as TurnEvent;
+      yield { kind: "delta", text: "Main prints hi." };
+      yield { kind: "tool-input", characters: 21 } as TurnEvent;
+      yield { kind: "completed", stopReason: "end", usage: { inputTokens: 900, outputTokens: 57 } };
+    },
+  };
+
+  await planner(writing).run(context);
+  assert.deepEqual(recorded.outputTokens, [
+    { tokens: 10, exact: false },
+    { tokens: 14, exact: false },
+    { tokens: 19, exact: false },
+    { tokens: 57, exact: true },
+  ]);
 });
 
 /** A planner that keeps its chat's conversation in `sessions`, as the Custom provider does. */

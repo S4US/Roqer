@@ -112,6 +112,14 @@ export type PlannerContext = {
    * one thing the agent did.
    */
   progress(label: string, detail?: string): void;
+  /**
+   * How much the model has written in the response it is producing now: an
+   * estimate from what has streamed, or `exact` once the provider reports its
+   * own count. Shown beside the waiting line and never kept. A planner may
+   * call this for every chunk; the engine passes on at most one estimate a
+   * second.
+   */
+  outputTokens(tokens: number, exact: boolean): void;
   /** Record a change the agent made. */
   recordChange(change: Omit<RunChange, "id">): void;
   /** Record evidence supporting the result. */
@@ -250,6 +258,30 @@ function defaultIdGenerator(): (prefix: string) => string {
   };
 }
 
+/** How often an estimated output count may reach the renderer. */
+const OUTPUT_ESTIMATE_INTERVAL_MS = 1_000;
+
+/**
+ * Decides which output counts are worth an event.
+ *
+ * A planner reports a count per streamed chunk, which on a fast model is
+ * dozens a second; each would cross IPC and re-render the run. An estimate is
+ * a rough figure anyway, so one a second is all the waiting line needs. The
+ * provider's own count always passes, as does a smaller count, since that is
+ * a new response starting and the old figure would otherwise stand.
+ */
+export class OutputTokenMeter {
+  private last: { tokens: number; exact: boolean; atMs: number } | undefined;
+
+  admit(tokens: number, exact: boolean, nowMs: number): boolean {
+    const last = this.last;
+    if (last !== undefined && last.tokens === tokens && last.exact === exact) return false;
+    if (last !== undefined && !exact && tokens > last.tokens && nowMs - last.atMs < OUTPUT_ESTIMATE_INTERVAL_MS) return false;
+    this.last = { tokens, exact, atMs: nowMs };
+    return true;
+  }
+}
+
 /** A promise plus the callbacks needed to settle it from the outside. */
 type Deferred<T> = {
   promise: Promise<T>;
@@ -280,6 +312,7 @@ export class RunSession {
   private readonly createId: (prefix: string) => string;
 
   private readonly abortController = new AbortController();
+  private readonly outputMeter = new OutputTokenMeter();
   private seq = 0;
   private completed = false;
   private cancelled = false;
@@ -347,6 +380,11 @@ export class RunSession {
       say: (text) => this.emit({ type: "message-delta", text }),
       status: (label, detail) => this.emit({ type: "status", label, detail }),
       progress: (label, detail) => this.emit({ type: "status", label, detail, transient: true }),
+      outputTokens: (tokens, exact) => {
+        if (!Number.isSafeInteger(tokens) || tokens < 0) return;
+        if (!this.outputMeter.admit(tokens, exact, Date.now())) return;
+        this.emit({ type: "output-tokens", tokens, exact });
+      },
       recordChange: (change) => {
         const taskId = this.currentTasks.find((task) => task.status === "active")?.id;
         const recorded: RunChange = {

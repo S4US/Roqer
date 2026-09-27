@@ -4,7 +4,7 @@ import http from "node:http";
 import path from "node:path";
 import test from "node:test";
 
-import { createClaudePlanner, type ClaudeSession } from "./claude-planner";
+import { createClaudePlanner, streamedOutput, type ClaudeSession } from "./claude-planner";
 import type { AgentDefinition } from "./agent-definition";
 import type { McpToolOutcome } from "./mcp-types";
 import type { PlannerContext } from "./run-engine";
@@ -65,6 +65,7 @@ function makeContext(controller: AbortController, outcome?: (tool: string) => Mc
     signal: controller.signal,
     status: () => undefined,
     progress: () => undefined,
+    outputTokens: () => undefined,
     say: (text) => recorded.said.push(text),
     recordChange: (change) => recorded.changes.push(change),
     recordEvidence: (item) => recorded.evidence.push(item),
@@ -922,4 +923,19 @@ test("with Blender on, Claude may call the blender tool, and a call is one engin
   );
   assert.deepEqual(recorded.calls, ["run_blender_script"]);
   assert.match(blenderResult, /Blender job finished/);
+});
+
+test("Claude Code's stream is counted for the waiting line: what streamed, then the API's own figure", () => {
+  const event = (value: Record<string, unknown>, parent: string | null = null) =>
+    streamedOutput({ type: "stream_event", parent_tool_use_id: parent, event: value });
+
+  assert.deepEqual(event({ type: "message_start", message: { usage: { output_tokens: 1 } } }), { start: true });
+  assert.deepEqual(event({ type: "content_block_delta", index: 0, delta: { type: "thinking_delta", thinking: "Plan the shop." } }), { characters: 14 });
+  assert.deepEqual(event({ type: "content_block_delta", index: 1, delta: { type: "text_delta", text: "Adding it." } }), { characters: 10 });
+  assert.deepEqual(event({ type: "content_block_delta", index: 2, delta: { type: "input_json_delta", partial_json: "{\"operation\":" } }), { characters: 13 });
+  assert.deepEqual(event({ type: "message_delta", delta: { stop_reason: "tool_use" }, usage: { output_tokens: 412 } }), { exact: 412 });
+  // A signature is not written output, and a sub-agent's stream is not the main reply's.
+  assert.equal(event({ type: "content_block_delta", index: 0, delta: { type: "signature_delta", signature: "sig" } }), null);
+  assert.equal(event({ type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "Sub-agent" } }, "toolu_1"), null);
+  assert.equal(event({ type: "message_delta", usage: { output_tokens: -1 } }), null);
 });

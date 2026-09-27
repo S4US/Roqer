@@ -265,9 +265,17 @@ export type TurnEvent =
    * The model is reasoning. It carries no text on purpose: reasoning is not
    * written for the user and never reaches the reply. What it carries is the
    * fact of progress, so a model thinking for minutes before its first word
-   * is not mistaken for one that has stopped.
+   * is not mistaken for one that has stopped, and, when the reasoning arrived
+   * as readable text, how many characters of it did: a count, which is all the
+   * waiting line needs. Encrypted reasoning and keep-alives carry none.
    */
-  | Readonly<{ kind: "reasoning" }>
+  | Readonly<{ kind: "reasoning"; characters?: number }>
+  /**
+   * Part of a tool call's arguments arrived: how many characters, never what
+   * they say. The call itself is handed over whole with `tool-call` once the
+   * turn ends; this is what shows a model writing a long script is working.
+   */
+  | Readonly<{ kind: "tool-input"; characters: number }>
   | Readonly<{ kind: "tool-call"; call: TurnToolCall }>
   /** `usage` is absent when the provider did not report it; it is never invented. */
   | Readonly<{ kind: "completed"; stopReason: TurnStopReason; usage?: TurnUsage }>
@@ -283,6 +291,7 @@ export type TurnEventKind = TurnEvent["kind"];
 const TURN_EVENT_KIND_SET: Readonly<Record<TurnEventKind, true>> = {
   delta: true,
   reasoning: true,
+  "tool-input": true,
   "tool-call": true,
   completed: true,
   failed: true,
@@ -432,13 +441,19 @@ export function isTurnUsage(value: unknown): value is TurnUsage {
     (value.cachedInputTokens as number) <= (value.inputTokens as number);
 }
 
+const isCharacterCount = (value: unknown): boolean =>
+  Number.isSafeInteger(value) && (value as number) > 0;
+
 export function isTurnEvent(value: unknown): value is TurnEvent {
   if (!isRecord(value)) return false;
   switch (value.kind) {
     case "delta":
       return hasOnlyKeys(value, ["kind", "text"]) && isTurnText(value.text, MAX_TURN_TEXT);
     case "reasoning":
-      return hasOnlyKeys(value, ["kind"]);
+      return hasOnlyKeys(value, ["kind", "characters"]) &&
+        (value.characters === undefined || isCharacterCount(value.characters));
+    case "tool-input":
+      return hasOnlyKeys(value, ["kind", "characters"]) && isCharacterCount(value.characters);
     case "tool-call":
       return hasOnlyKeys(value, ["kind", "call"]) && isTurnToolCall(value.call);
     case "completed":

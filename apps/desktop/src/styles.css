@@ -537,6 +537,7 @@ button:focus-visible, textarea:focus-visible, select:focus-visible, input:focus-
 .waiting-line { display: flex; align-items: baseline; gap: 8px; margin: 0; color: var(--muted); font-size: 13px; }
 /* Tabular figures so a ticking counter does not shuffle the label beside it. */
 .waiting-elapsed { font-variant-numeric: tabular-nums; opacity: .8; }
+.waiting-elapsed + .waiting-elapsed::before { content: "·"; margin-right: 8px; }
 .waiting-detail { margin: 0; color: var(--muted); font-size: 12px; opacity: .85; }
 .working-label { display: flex; align-items: center; gap: 5px; color: var(--muted) !important; }
 .working-label i { width: 6px; height: 6px; background: var(--ink); border-radius: 50%; animation: pulse 1.2s ease-in-out infinite; }

@@ -91,6 +91,12 @@ export type RunView = {
   planner: string;
   approvalMode: ApprovalMode;
   status: { label: string; detail?: string } | null;
+  /**
+   * How much the model has written in the response it is producing now. Live
+   * state for the waiting line: anything that hands the turn to a tool, an
+   * approval, or the user clears it, since the next response counts afresh.
+   */
+  outputTokens: { tokens: number; exact: boolean } | null;
   text: string;
   activities: RunActivity[];
   /** What the agent did, in order. Resolve it with `activitySteps`. */
@@ -130,6 +136,7 @@ export function createRunView(runId: string, prompt: string, approvalMode: Appro
     planner: "",
     approvalMode,
     status: null,
+    outputTokens: null,
     text: "",
     activities: [],
     timeline: [],
@@ -190,11 +197,14 @@ export function applyRunEvent(view: RunView, event: RunEvent): RunView {
           detail: event.detail,
         }],
       };
+    case "output-tokens":
+      return { ...base, outputTokens: { tokens: event.tokens, exact: event.exact } };
     case "message-delta":
       return { ...base, text: base.text + event.text };
     case "tool-proposed":
       return {
         ...base,
+        outputTokens: null,
         activities: [...base.activities, {
           callId: event.proposal.callId,
           tool: event.proposal.tool,
@@ -212,6 +222,7 @@ export function applyRunEvent(view: RunView, event: RunEvent): RunView {
       return {
         ...base,
         pendingApproval: { callId: event.callId, proposal: event.proposal, reason: event.reason },
+        outputTokens: null,
         activities: updateActivity(base, event.callId, { state: "awaiting-approval" }),
       };
     case "approval-resolved":
@@ -227,6 +238,7 @@ export function applyRunEvent(view: RunView, event: RunEvent): RunView {
     case "tool-result":
       return {
         ...base,
+        outputTokens: null,
         activities: updateActivity(base, event.callId, {
           state: event.ok ? "done" : "failed",
           durationMs: event.durationMs,
@@ -264,6 +276,7 @@ export function applyRunEvent(view: RunView, event: RunEvent): RunView {
       return {
         ...base,
         pendingQuestion: event.question,
+        outputTokens: null,
         timeline: [...base.timeline, {
           type: "note",
           key: `note-${event.seq}`,
@@ -297,6 +310,7 @@ export function applyRunEvent(view: RunView, event: RunEvent): RunView {
         verification: event.verification,
         finishedAt: event.at,
         status: null,
+        outputTokens: null,
         // A finished run has nothing left to approve or ask.
         pendingApproval: null,
         pendingQuestion: null,

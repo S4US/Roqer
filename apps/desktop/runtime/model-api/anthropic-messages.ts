@@ -478,9 +478,10 @@ export class AnthropicMessagesTurns implements TurnTransport {
             throw oversizedToolCall(label, current.name);
           }
           current.arguments += delta.partial_json;
+          if (delta.partial_json.length > 0) yield { kind: "tool-input", characters: delta.partial_json.length };
         } else if (delta?.type === "thinking_delta" && typeof delta.thinking === "string" && current?.kind === "thinking") {
           current.thinking += delta.thinking;
-          yield { kind: "reasoning" };
+          yield delta.thinking.length > 0 ? { kind: "reasoning", characters: delta.thinking.length } : { kind: "reasoning" };
         } else if (delta?.type === "signature_delta" && typeof delta.signature === "string" && current?.kind === "thinking") {
           current.signature += delta.signature;
           yield { kind: "reasoning" };

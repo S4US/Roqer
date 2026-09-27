@@ -1,6 +1,7 @@
 import {
   ContextOverflowError,
   estimateTurnInputTokens,
+  estimateTurnOutputTokens,
   TransientTurnError,
   UnusableToolCallError,
   TURN_IMAGE_MEDIA_TYPES,
@@ -814,6 +815,13 @@ export function createAgentLoopPlanner(options: AgentLoopPlannerOptions): Planne
 
           const turnStartedAt = Date.now();
           let reasoningShown = false;
+          // Everything this try has streamed, reply, reasoning and arguments
+          // alike, for the waiting line's count. A retried try starts again.
+          let streamedCharacters = 0;
+          const streamed = (characters: number) => {
+            streamedCharacters += characters;
+            context.outputTokens(estimateTurnOutputTokens(streamedCharacters), false);
+          };
           const watchdog = watchProgress(context.signal, stallMs);
           try {
             for await (const event of transport.streamTurn(request, watchdog.signal)) {
@@ -832,9 +840,15 @@ export function createAgentLoopPlanner(options: AgentLoopPlannerOptions): Planne
                   reasoningShown = true;
                   context.progress(waitingLabel, REASONING_DETAIL);
                 }
+                if (event.characters !== undefined) streamed(event.characters);
+                continue;
+              }
+              if (event.kind === "tool-input") {
+                streamed(event.characters);
                 continue;
               }
               if (event.kind === "delta") {
+                streamed(event.text.length);
                 firstTextMs ??= elapsed;
                 spoken += event.text;
                 prose.push(event.text);
@@ -855,6 +869,7 @@ export function createAgentLoopPlanner(options: AgentLoopPlannerOptions): Planne
               stopReason = event.stopReason;
               usage = event.usage;
               turnUsage = event.usage;
+              if (event.usage !== undefined) context.outputTokens(event.usage.outputTokens, true);
             }
           } catch (error) {
             // A cancellation or a stall ends the run exactly as before: a stall
