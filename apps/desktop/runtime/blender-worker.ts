@@ -939,7 +939,10 @@ export class BlenderWorker {
   private async savedScene(id: string): Promise<Readonly<{ directory: string; scene: string }> | undefined> {
     const entries = await fs.readdir(this.options.jobsRoot).catch(() => [] as string[]);
     const name = entries.find((entry) => entry.endsWith(`-${id}`));
-    if (name === undefined) return undefined;
+    return name === undefined ? undefined : this.savedSceneIn(name, id);
+  }
+
+  private async savedSceneIn(name: string, id: string): Promise<Readonly<{ directory: string; scene: string }> | undefined> {
     const directory = path.join(this.options.jobsRoot, name);
     let record: unknown;
     try {
@@ -950,6 +953,17 @@ export class BlenderWorker {
     if (!isRecord(record) || record.id !== id || record.scope !== this.scope) return undefined;
     const scene = path.join(directory, "scene.blend");
     return (await fs.stat(scene).catch(() => undefined))?.isFile() === true ? { directory, scene } : undefined;
+  }
+
+  /** The ids of this scope's jobs that saved a scene, newest first. Folder names start with the job's start time. */
+  private async savedJobIds(): Promise<string[]> {
+    const entries = (await fs.readdir(this.options.jobsRoot).catch(() => [] as string[])).sort().reverse();
+    const ids: string[] = [];
+    for (const name of entries) {
+      const id = name.slice(name.lastIndexOf("-") + 1);
+      if (isBlenderJobId(id) && await this.savedSceneIn(name, id) !== undefined) ids.push(id);
+    }
+    return ids;
   }
 
   /** Run a script the engine has already approved. Never throws for the script's own failures. */
@@ -967,19 +981,35 @@ export class BlenderWorker {
       : DEFAULT_BLENDER_JOB_SECONDS;
     const seconds = Math.min(Math.max(Math.round(requested), 5), MAX_BLENDER_JOB_SECONDS);
 
-    const continueFrom = args.continue_from;
-    if (continueFrom !== undefined && !isBlenderJobId(continueFrom)) {
+    const requestedBase = args.continue_from;
+    if (requestedBase !== undefined && !isBlenderJobId(requestedBase)) {
       return failure("continue_from must be the id of an earlier job, exactly as that job's result gave it.", "invalid_arguments", started, this.now);
     }
+    let continueFrom = requestedBase;
+    let notContinued: string | undefined;
     const base = continueFrom === undefined ? undefined : await this.savedScene(continueFrom);
     if (continueFrom !== undefined && base === undefined) {
-      return failure(
-        `There is no saved scene from job ${continueFrom} in this chat. A job saves its scene only when its script finishes, and job folders are cleared after ${JOB_RETENTION_MS / 86_400_000} days or once ${MAX_KEPT_JOBS} newer jobs exist. Continue from a later job that worked, or start from an empty scene without continue_from.`,
-        "scene_not_found",
-        started,
-        this.now,
-      );
+      const saved = await this.savedJobIds();
+      if (saved.length > 0) {
+        // Picking one of these for the model would be a guess about which
+        // stage it meant, so it is told what exists and chooses.
+        return failure(
+          `There is no saved scene from job ${continueFrom} in this chat. This chat's saved scenes, newest first: ${saved.slice(0, 5).join(", ")}. Continue from one of those, or leave continue_from out to start from an empty scene. A job saves its scene only when its script finishes, and job folders are cleared after ${JOB_RETENTION_MS / 86_400_000} days or once ${MAX_KEPT_JOBS} newer jobs exist.`,
+          "scene_not_found",
+          started,
+          this.now,
+          { savedJobs: saved.slice(0, 5) },
+        );
+      }
+      // With no saved scene in this chat an empty scene is the only one the
+      // script can start from. A model's first job sometimes names a
+      // placeholder such as 00000000 for "nothing yet", and refusing it only
+      // had the same script sent back until the run gave up. The result says
+      // plainly that nothing was continued.
+      notContinued = `Job ${continueFrom} was not continued: this chat has no saved Blender scene yet, so the script ran on an empty scene. No id stands for an empty scene; leave continue_from out for a chat's first job.`;
+      continueFrom = undefined;
     }
+    const beforeFailure = notContinued === undefined ? "" : `${notContinued} `;
 
     await this.prune(base?.directory).catch(() => undefined);
     const jobId = randomBytes(4).toString("hex");
@@ -1015,14 +1045,14 @@ export class BlenderWorker {
       return failure(`Blender could not be started: ${run.spawnError}. Check the Blender setting in Roqer's Settings.`, "blender_unavailable", started, this.now);
     }
     if (run.timedOut) {
-      return failure(`The script ran past ${seconds} seconds and Blender was stopped. Simplify the geometry or raise timeout_seconds (at most ${MAX_BLENDER_JOB_SECONDS}).`, "timeout", started, this.now, { jobDirectory, log });
+      return failure(`${beforeFailure}The script ran past ${seconds} seconds and Blender was stopped. Simplify the geometry or raise timeout_seconds (at most ${MAX_BLENDER_JOB_SECONDS}).`, "timeout", started, this.now, { jobDirectory, log });
     }
     if (run.output.includes(BASE_FAILED_MARKER)) {
       return failure(`Blender could not open the scene job ${String(continueFrom)} saved, so the script did not run. Continue from another job, or start from an empty scene. The end of Blender's output:\n${log}`, "scene_not_opened", started, this.now, { jobDirectory, log });
     }
     if (run.exitCode !== 0 || run.output.includes(FAILED_MARKER) || !run.output.includes(DONE_MARKER)) {
       return failure(
-        `The script failed in Blender (exit ${run.exitCode ?? "unknown"}), so nothing was saved${continueFrom === undefined ? "" : `; the scene of job ${continueFrom} is unchanged`}. The end of Blender's output:\n${log}`,
+        `${beforeFailure}The script failed in Blender (exit ${run.exitCode ?? "unknown"}), so nothing was saved${continueFrom === undefined ? "" : `; the scene of job ${continueFrom} is unchanged`}. The end of Blender's output:\n${log}`,
         "script_failed",
         started,
         this.now,
@@ -1044,7 +1074,7 @@ export class BlenderWorker {
     const others = entries.filter((name) => !models.includes(name) && !renders.includes(name));
     if (models.length === 0 && renders.length === 0 && !sceneSaved) {
       return failure(
-        `The script finished but left no model (.glb, .gltf, .fbx or .obj) or PNG image in OUTPUT_DIR. Export the model there, for example bpy.ops.export_scene.gltf(filepath=os.path.join(OUTPUT_DIR, "model.glb"), export_format="GLB", export_apply=True, use_visible=True), or render the image there.${others.length > 0 ? ` It left: ${others.join(", ")}.` : ""}`,
+        `${beforeFailure}The script finished but left no model (.glb, .gltf, .fbx or .obj) or PNG image in OUTPUT_DIR. Export the model there, for example bpy.ops.export_scene.gltf(filepath=os.path.join(OUTPUT_DIR, "model.glb"), export_format="GLB", export_apply=True, use_visible=True), or render the image there.${others.length > 0 ? ` It left: ${others.join(", ")}.` : ""}`,
         "no_model_exported",
         started,
         this.now,
@@ -1128,7 +1158,7 @@ export class BlenderWorker {
     const previews = images.length;
     images.push(...renderImages);
     const durationMs = this.now() - started;
-    const lines = [`Blender job ${jobId} finished in ${(durationMs / 1000).toFixed(1)} s.`];
+    const lines = [`Blender job ${jobId} finished in ${(durationMs / 1000).toFixed(1)} s.`, ...(notContinued === undefined ? [] : [notContinued])];
     if (inspectScene) {
       lines.push(
         "Nothing was exported, so Roqer checked the scene this job saved, measured as it would export (modifiers applied, curves as the meshes they become, hidden objects left out):",

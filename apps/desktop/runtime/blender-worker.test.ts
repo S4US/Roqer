@@ -414,13 +414,28 @@ test("a scene is continued only by its own chat, and only when the job that save
     const chatA = new BlenderWorker({ executable: EXECUTABLE, jobsRoot, scope: "chat-a", spawn: saving.spawn, killTree: saving.killTree, env: {} });
     const saved = (await chatA.run({ script: "import bpy" })).data as { jobId: string };
 
-    // Another chat cannot build on it, and cannot learn from the answer that it exists.
-    const other = fakeBlender(async () => ({ output: "ROQER_SCENE_SAVED\nROQER_SCRIPT_DONE\n" }));
-    const chatB = new BlenderWorker({ executable: EXECUTABLE, jobsRoot, scope: "chat-b", spawn: other.spawn, killTree: other.killTree, env: {} });
-    const refused = await chatB.run({ script: "import bpy", continue_from: saved.jobId });
-    assert.equal(refused.errorCode, "scene_not_found");
-    assert.match(refused.text, new RegExp(`no saved scene from job ${saved.jobId} in this chat`));
-    assert.equal(other.calls.length, 0, "nothing ran");
+    // Another chat cannot build on it, and cannot learn from the answer that it
+    // exists: with no scene of its own, it starts from an empty one either way.
+    const other = savingBlender();
+    const freshChat = (scope: string) => new BlenderWorker({ executable: EXECUTABLE, jobsRoot, scope, spawn: other.spawn, killTree: other.killTree, env: {} });
+    const borrowed = await freshChat("chat-b").run({ script: "import bpy", continue_from: saved.jobId });
+    // A first job that names a placeholder for "nothing yet" runs too.
+    const invented = await freshChat("chat-c").run({ script: "import bpy", continue_from: "00000000" });
+    for (const [outcome, id] of [[borrowed, saved.jobId], [invented, "00000000"]] as const) {
+      assert.equal(outcome.ok, true, outcome.text);
+      assert.match(outcome.text, new RegExp(`Job ${id} was not continued: this chat has no saved Blender scene yet, so the script ran on an empty scene`));
+      assert.doesNotMatch(outcome.text, /continuing job/);
+      assert.equal((outcome.data as { continuedFrom?: string }).continuedFrom, undefined);
+    }
+    const runs = other.calls.filter((call) => call.args.some((arg) => arg.endsWith("roqer_runner.py")));
+    assert.equal(runs.length, 2);
+    for (const run of runs) assert.equal(argAfterDashes(run.args, 1), undefined, "no base scene is opened");
+    // If that script then fails, the answer still says it did not continue anything.
+    const failingFresh = fakeBlender(async () => ({ output: "KeyError: 'Chassis'\nROQER_SCRIPT_FAILED\n", exitCode: 1 }));
+    const chatD = new BlenderWorker({ executable: EXECUTABLE, jobsRoot, scope: "chat-d", spawn: failingFresh.spawn, killTree: failingFresh.killTree, env: {} });
+    const failedFresh = await chatD.run({ script: "bpy.data.objects['Chassis']", continue_from: "00000000" });
+    assert.equal(failedFresh.errorCode, "script_failed");
+    assert.match(failedFresh.text, /^Job 00000000 was not continued: .* The script failed in Blender/);
 
     // A script that failed saved nothing, so there is nothing to continue.
     const failing = fakeBlender(async () => ({ output: "Traceback\nROQER_SCRIPT_FAILED\n", exitCode: 1 }));
@@ -432,7 +447,11 @@ test("a scene is continued only by its own chat, and only when the job that save
     assert.equal((await chatA.run({ script: "import bpy", continue_from: failedId })).errorCode, "scene_not_found");
 
     assert.equal((await chatA.run({ script: "import bpy", continue_from: "../../etc" })).errorCode, "invalid_arguments");
-    assert.equal((await chatA.run({ script: "import bpy", continue_from: "0123abcd" })).errorCode, "scene_not_found");
+    // Once the chat has saved scenes, an unknown id is not guessed at: the answer names the real ones.
+    const unknown = await chatA.run({ script: "import bpy", continue_from: "0123abcd" });
+    assert.equal(unknown.errorCode, "scene_not_found");
+    assert.match(unknown.text, new RegExp(`no saved scene from job 0123abcd in this chat. This chat's saved scenes, newest first: ${saved.jobId}\\.`));
+    assert.deepEqual((unknown.data as { savedJobs: string[] }).savedJobs, [saved.jobId]);
   });
 });
 
