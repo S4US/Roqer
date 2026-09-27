@@ -984,7 +984,7 @@ async function resolveCustomRun(modelKey: string | null): Promise<CustomRun | { 
 }
 
 /** The agent that drives a run, chosen by the provider the user connected. */
-function plannerFor(request: RunStartRequest, agentRuntime: AgentRuntime, runId: string, custom?: CustomRun, blender = false): Planner {
+function plannerFor(request: RunStartRequest, agentRuntime: AgentRuntime, runId: string, modelName: string | undefined, custom?: CustomRun, blender = false): Planner {
   const cwd = app.getPath("userData");
   // A conversation kept by one provider has not seen what another provider
   // does in the same chat, so a run on any other provider retires it.
@@ -1005,6 +1005,7 @@ function plannerFor(request: RunStartRequest, agentRuntime: AgentRuntime, runId:
       skillLibrary: agentRuntime.skillLibrary,
       plannerId: "custom-endpoint",
       label: custom.connection.name,
+      modelName: custom.model.displayName,
       images: custom.model.images,
       toolOutputBudget: toolOutputBudgetFor(custom.model.contextWindow),
       ...(custom.model.contextWindow === undefined ? {} : { contextWindow: custom.model.contextWindow }),
@@ -1028,6 +1029,7 @@ function plannerFor(request: RunStartRequest, agentRuntime: AgentRuntime, runId:
       // The catalog was read to resolve this model moments ago, so the client
       // still holds the listing that says whether it takes an effort.
       supportsEffort: client.modelSupportsEffort(request.model!),
+      ...(modelName === undefined ? {} : { modelName }),
       agent: agentRuntime.definition,
       skillLibrary: agentRuntime.skillLibrary,
       chatId: request.chatId,
@@ -1039,6 +1041,7 @@ function plannerFor(request: RunStartRequest, agentRuntime: AgentRuntime, runId:
     appServer: chatGptProvider(),
     cwd,
     model: request.model!,
+    ...(modelName === undefined ? {} : { modelName }),
     effort: request.effort,
     agent: agentRuntime.definition,
     skillLibrary: agentRuntime.skillLibrary,
@@ -1222,6 +1225,8 @@ async function startRun(event: IpcMainInvokeEvent, payload: unknown): Promise<Ru
 
     const label = providerLabel(request.provider);
     let resolvedRequest = request;
+    /** What the picker calls the model, for the waiting line. */
+    let modelName: string | undefined;
     if (catalogRead !== undefined) {
       const catalogResult = await catalogRead;
       if (!catalogResult.ok) {
@@ -1253,6 +1258,7 @@ async function startRun(event: IpcMainInvokeEvent, payload: unknown): Promise<Ru
         return { ok: false, message: `${model.displayName} does not support the selected reasoning effort.` };
       }
       resolvedRequest = { ...request, model: model.id, effort };
+      modelName = model.displayName;
     }
 
     const runId = `run-${randomUUID()}`;
@@ -1268,13 +1274,14 @@ async function startRun(event: IpcMainInvokeEvent, payload: unknown): Promise<Ru
       const resolved = await resolveCustomRun(resolvedRequest.model);
       if ("message" in resolved) return { ok: false, message: resolved.message };
       customRun = resolved;
+      modelName = resolved.model.displayName;
       if (cancelled()) return stopped;
     }
     // The Blender tool is offered only when the user has it on and it answers;
     // the job itself checks again, so switching it off mid-run stops new jobs.
     const blender = !smokeTest && (await blenderSettings().ready().catch(() => undefined)) !== undefined;
     if (cancelled()) return stopped;
-    const planner = smokeTest ? createInspectionPlanner() : plannerFor(resolvedRequest, agentRuntime, runId, customRun, blender);
+    const planner = smokeTest ? createInspectionPlanner() : plannerFor(resolvedRequest, agentRuntime, runId, modelName, customRun, blender);
     journalId = runId;
     await runJournal().start(runId, request, request.prompt, request.approvalMode);
     if (cancelled()) return stopped;

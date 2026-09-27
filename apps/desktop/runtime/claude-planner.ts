@@ -72,6 +72,8 @@ export type ClaudePlannerOptions = {
   getStatus(): Promise<ProviderStatus>;
   cwd: string;
   model: string;
+  /** What the model picker calls `model`, for the waiting line. Defaults to the provider's name. */
+  modelName?: string;
   effort: ReasoningEffort;
   /** Whether Claude Code listed `model` as taking `--effort`; passing it otherwise is an error. */
   supportsEffort: boolean;
@@ -415,6 +417,7 @@ export function createClaudePlanner(options: ClaudePlannerOptions): Planner {
     async run(context: PlannerContext): Promise<string> {
       if (context.signal.aborted) throw new Error("Run was cancelled.");
       context.progress("Connecting to Claude", "Using your managed Claude Code sign-in");
+      const waitingLabel = `Thinking with ${options.modelName ?? "Claude"}`;
       const account = await options.getStatus();
       if (account.kind !== "signed-in") throw new Error(account.message);
       if (context.signal.aborted) throw new Error("Run was cancelled.");
@@ -522,7 +525,7 @@ export function createClaudePlanner(options: ClaudePlannerOptions): Planner {
             fail(new Error("Claude Code did not load the Roqer tools."));
             return;
           }
-          context.progress("Thinking with Claude");
+          context.progress(waitingLabel);
           return;
         }
 
@@ -591,7 +594,9 @@ export function createClaudePlanner(options: ClaudePlannerOptions): Planner {
         session ??= await ClaudeSession.open(options, key, context.autoPlaytest, context.signal);
         if (settled) return await completion.promise;
         if (context.signal.aborted) throw new Error("Run was cancelled.");
-        if (resumed) context.progress("Continuing with Claude", "Claude still has this chat's earlier work in context");
+        // A kept process is already connected, so there is nothing to wait for
+        // but the model.
+        if (resumed) context.progress(waitingLabel);
 
         session.bind({
           invoke: async (name, args) => {
