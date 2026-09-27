@@ -31,6 +31,8 @@ export type ChatGptPlannerOptions = {
   appServer: ChatGptAppServer;
   cwd: string;
   model: string;
+  /** What the model picker calls `model`, for the waiting line. Defaults to the provider's name. */
+  modelName?: string;
   effort: ReasoningEffort;
   agent: AgentDefinition;
   skillLibrary: SkillLibrary;
@@ -485,10 +487,7 @@ export function createChatGptPlanner(options: ChatGptPlannerOptions): Planner {
       try {
         if (settled) await completion.promise;
         checkCancelled();
-        context.progress(
-          resumed ? "Continuing with ChatGPT" : "Thinking with ChatGPT",
-          resumed ? "ChatGPT still has this chat's earlier work in context" : undefined,
-        );
+        context.progress(`Thinking with ${options.modelName ?? "ChatGPT"}`);
         const turnStarted = options.appServer.request("turn/start", {
           threadId,
           input: [

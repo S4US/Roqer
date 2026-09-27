@@ -1010,7 +1010,9 @@ test("a Custom chat's next message continues the conversation it left, tool resu
   const opening = sent[4].content[0];
   assert.equal(opening.kind === "text" && opening.text.includes("Make it print bye"), true);
   assert.equal(opening.kind === "text" && opening.text.includes("Prior conversation context"), false, "the chat is not replayed as text");
-  assert.ok(recorded.progress.includes("Continuing with Roqer"));
+  // A kept conversation is an implementation detail, not something to announce.
+  assert.deepEqual([...new Set(recorded.progress)], ["Thinking with Roqer"]);
+  assert.equal(recorded.progressDetails.some((detail) => detail?.includes("earlier work")), false);
 });
 
 test("a kept conversation is not continued under other settings, after a failed run, or once the chat moved on", async () => {
@@ -1811,6 +1813,7 @@ test("a model that accepts no images is sent none, and told to stop capturing", 
     skillLibrary: SKILLS,
     plannerId: "custom-endpoint",
     label: "Ollama",
+    modelName: "Qwen2.5 Coder",
     images: false,
   });
 
@@ -1822,7 +1825,9 @@ test("a model that accepts no images is sent none, and told to stop capturing", 
   const result = bridge.requests[1].messages[2].content.find((block) => block.kind === "tool-result");
   assert.match(result?.kind === "tool-result" ? result.content : "", /does not accept images[\s\S]*inspect_ui/);
   assert.ok(recorded.statuses.some((status) => status.label === "Images not sent to the model"));
-  assert.ok(recorded.progress.includes("Thinking with Ollama"));
+  // The waiting line names the model that was picked, not the service it runs on.
+  assert.ok(recorded.progress.includes("Thinking with Qwen2.5 Coder"));
+  assert.equal(recorded.progress.includes("Thinking with Ollama"), false);
 });
 
 test("the blender tool is offered only while enabled, and a call becomes one engine operation with its preview", async () => {

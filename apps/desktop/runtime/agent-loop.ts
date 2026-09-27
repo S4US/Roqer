@@ -120,6 +120,8 @@ export type AgentLoopPlannerOptions = {
   plannerId?: string;
   /** Who the model is, in progress and error text. Defaults to "Roqer". */
   label?: string;
+  /** What the picker calls the model, for the waiting line. Defaults to `label`. */
+  modelName?: string;
   /** False for a model that accepts no images: attachments and screenshots are withheld from it. */
   images?: boolean;
   /** How much tool output the conversation may carry. Defaults to the standard budget. */
@@ -513,6 +515,9 @@ function boundRetainedImages(messages: TurnMessage[], requests: ReadonlySet<Turn
 /** A model-driven planner running Roqer's own loop over a turn transport. */
 export function createAgentLoopPlanner(options: AgentLoopPlannerOptions): Planner {
   const label = options.label ?? "Roqer";
+  // The waiting line names the model the person chose, not the service it
+  // runs on: "Thinking with OpenRouter" says nothing about which of hundreds.
+  const waitingLabel = `Thinking with ${options.modelName ?? label}`;
   const acceptsImages = options.images !== false;
   return {
     id: options.plannerId ?? "agent-loop",
@@ -748,12 +753,7 @@ export function createAgentLoopPlanner(options: AgentLoopPlannerOptions): Planne
       let sameFailures = 0;
       for (let turn = 0; ; turn += 1) {
         if (context.signal.aborted) throw new RunCancelledError();
-        const waitingLabel = turn === 0 && session !== undefined ? `Continuing with ${label}` : `Thinking with ${label}`;
-        if (turn === 0 && session !== undefined) {
-          context.progress(waitingLabel, `${label} still has this chat's earlier work in context`);
-        } else {
-          context.progress(waitingLabel);
-        }
+        context.progress(waitingLabel);
         // A stuck run's last turn is spent on a report rather than one more
         // try: a run stopped with no answer loses everything the person would
         // need to decide whether to continue it.
@@ -950,7 +950,7 @@ export function createAgentLoopPlanner(options: AgentLoopPlannerOptions): Planne
           );
           prose.beginSegment();
           await pause(delay, context.signal);
-          context.progress(`Thinking with ${label}`);
+          context.progress(waitingLabel);
         }
         if (context.signal.aborted) throw new RunCancelledError();
         if (stalled) {
