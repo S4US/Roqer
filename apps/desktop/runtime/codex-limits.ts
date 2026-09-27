@@ -49,7 +49,7 @@ export type CodexLimitsSource = {
 };
 
 /** The bucket Codex meters ordinary use in, which the meter shows. */
-const DEFAULT_LIMIT_ID = "codex";
+export const DEFAULT_LIMIT_ID = "codex";
 
 /** How often the backend is asked, at most; updates Codex pushes arrive in between. */
 const READ_INTERVAL_MS = 60_000;

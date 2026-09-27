@@ -19,6 +19,7 @@ import { runDeveloperInstructions } from "./run-instructions";
 import { createProseStream } from "./text-stream";
 import { estimateTurnOutputTokens } from "./model-api/turn-contract";
 import { DEFAULT_STALL_MS, describeStall, watchProgress, type ProgressWatchdog } from "./progress-watchdog";
+import { codexLimitWarnings, LimitWarnings } from "./limit-warnings";
 
 type JsonRecord = Record<string, unknown>;
 const STEER_POLL_MS = 50;
@@ -360,7 +361,13 @@ export function createChatGptPlanner(options: ChatGptPlannerOptions): Planner {
         }
       };
 
+      const limitWarnings = new LimitWarnings("ChatGPT", (label, detail) => context.status(label, detail));
       const stopNotifications = options.appServer.subscribe((notification: AppServerNotification) => {
+        // Usage belongs to the account, not a thread, so it is not filtered by one.
+        if (notification.method === "account/rateLimits/updated") {
+          if (!settled) for (const warning of codexLimitWarnings(notification.params.rateLimits)) limitWarnings.warn(warning);
+          return;
+        }
         if (settled || notification.params.threadId !== threadId) return;
         // Every notification on this thread is progress, reasoning included.
         watchdog.progressed();

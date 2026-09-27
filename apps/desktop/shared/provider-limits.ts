@@ -30,6 +30,9 @@ export type ProviderLimits =
 
 export const NO_LIMITS: ProviderLimits = { kind: "none" };
 
+/** The share of a window from which Roqer calls it close to its limit. */
+export const LIMIT_WARNING_PERCENT = 80;
+
 const MAX_WINDOWS = 8;
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>

@@ -25,6 +25,7 @@ import { runDeveloperInstructions } from "./run-instructions";
 import { createProseStream } from "./text-stream";
 import { estimateTurnOutputTokens } from "./model-api/turn-contract";
 import { DEFAULT_STALL_MS, describeStall, watchProgress } from "./progress-watchdog";
+import { claudeLimitWarning, LimitWarnings } from "./limit-warnings";
 import {
   startWorkbenchMcpServer, type WorkbenchMcpServerHandle, type WorkbenchMcpToolResult,
 } from "./workbench-mcp-server";
@@ -511,11 +512,20 @@ export function createClaudePlanner(options: ClaudePlannerOptions): Planner {
         }
       };
 
+      const limitWarnings = new LimitWarnings("Claude", (label, detail) => context.status(label, detail));
       const onMessage = (message: JsonRecord) => {
         if (settled || context.signal.aborted) return;
         // Any output is progress: with partial messages on, thinking streams
         // as events too, so a long silent-looking turn is still talking.
         watchdog.progressed();
+
+        if (message.type === "rate_limit_event") {
+          // A reached limit ends the turn with Claude Code's own message,
+          // which says when it resets; this is only the warning before it.
+          const warning = claudeLimitWarning(message.rate_limit_info);
+          if (warning !== null) limitWarnings.warn(warning);
+          return;
+        }
 
         if (message.type === "system" && message.subtype === "init") {
           // Claude Code announces its tools at the start of every turn, so a

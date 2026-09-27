@@ -1,4 +1,4 @@
-import { formatResetTime, usageWindowLabel, type ProviderLimits } from "../shared/provider-limits";
+import { formatResetTime, LIMIT_WARNING_PERCENT, usageWindowLabel, type ProviderLimits } from "../shared/provider-limits";
 
 export type PlanUsageRow = Readonly<{
   label: string;
@@ -14,8 +14,6 @@ export type PlanUsageView = Readonly<{
   /** What the numbers cover and how old they are. */
   footnote: string;
 }>;
-
-const WARNING_PERCENT = 80;
 
 /**
  * What the Settings account row shows of a plan's usage: one line per window,
@@ -36,7 +34,7 @@ export function planUsageView(limits: ProviderLimits, client: string, now: numbe
         label: `${usageWindowLabel(window.windowMinutes)} limit`,
         percent,
         detail: `${percent}% used${resets}`,
-        tone: percent >= 100 ? "danger" : percent >= WARNING_PERCENT ? "warning" : "normal",
+        tone: percent >= 100 ? "danger" : percent >= LIMIT_WARNING_PERCENT ? "warning" : "normal",
       };
     });
   const observed = new Intl.DateTimeFormat(undefined, {
