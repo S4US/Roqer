@@ -253,7 +253,32 @@ const NARROWING_HINT: Readonly<Record<string, string>> = {
   get_runtime_logs: "Pass tail, filter, or since to read a different window.",
   grep_scripts: "Narrow it with path, classFilter, or a more specific pattern to see the rest.",
   search_objects: "Use a more specific query to see the rest.",
+  get_project_structure: "Pass one of their paths, or a smaller maxDepth, to see the rest.",
 };
+
+/**
+ * How many left-out entries a trim note names. A few large entries are the case
+ * that needs it: one oversized subtree used to leave a tree showing only the
+ * small entries before it, with nothing to say what the rest were called, so the
+ * model could not ask for them. Past this many, narrowing the request is the
+ * better answer, and a partial list would read as the whole of what was cut.
+ */
+const MAX_NAMED_OMISSIONS = 20;
+const MAX_OMISSION_LABEL_CHARS = 160;
+
+/** What to call an entry the note names: the path to ask for it by, or failing that its name. */
+function entryLabel(entry: unknown): string | undefined {
+  if (!isRecord(entry)) return undefined;
+  const label = [entry.path, entry.instancePath, entry.name].find((value) => typeof value === "string" && value !== "");
+  return typeof label === "string" ? truncateText(label, MAX_OMISSION_LABEL_CHARS) : undefined;
+}
+
+/** Every left-out entry by name, or nothing when they are too many or not all nameable. */
+function omittedLabels(omitted: readonly unknown[]): string[] | undefined {
+  if (omitted.length === 0 || omitted.length > MAX_NAMED_OMISSIONS) return undefined;
+  const labels = omitted.map(entryLabel);
+  return labels.every((label) => label !== undefined) ? labels as string[] : undefined;
+}
 
 /** The top-level array of a payload that takes the most room, if there is one. */
 function largestArrayField(payload: JsonRecord): string | undefined {
@@ -270,12 +295,21 @@ function largestArrayField(payload: JsonRecord): string | undefined {
   return largest;
 }
 
-function describeTrim(operation: string, field: string, kept: number, total: number, newestLast: boolean): string {
-  const omitted = total - kept;
+function describeTrim(
+  operation: string,
+  field: string,
+  kept: number,
+  total: number,
+  newestLast: boolean,
+  omitted: readonly unknown[],
+): string {
+  const omittedCount = total - kept;
   const shown = newestLast ? `the newest ${kept}` : `the first ${kept}`;
-  const left = `${omitted} ${newestLast ? "older " : ""}${omitted === 1 ? "entry was" : "entries were"}`;
+  const left = `${omittedCount} ${newestLast ? "older " : ""}${omittedCount === 1 ? "entry was" : "entries were"}`;
+  const labels = omittedLabels(omitted);
+  const named = labels === undefined ? "" : `: ${labels.join(", ")}`;
   const hint = NARROWING_HINT[operation] ?? "Narrow the request to see the rest.";
-  return `data.${field} shows ${shown} of ${total} entries; ${left} left out to fit the result budget. ${hint}`;
+  return `data.${field} shows ${shown} of ${total} entries; ${left} left out to fit the result budget${named}. ${hint}`;
 }
 
 /**
@@ -307,13 +341,19 @@ function fitEnvelope(
   const newestLast = NEWEST_LAST.has(operation);
   const trimmed = (kept: number) => render(envelope(
     { ...record, [field]: newestLast ? entries.slice(entries.length - kept) : entries.slice(0, kept) },
-    describeTrim(operation, field, kept, entries.length, newestLast),
+    describeTrim(
+      operation, field, kept, entries.length, newestLast,
+      newestLast ? entries.slice(0, entries.length - kept) : entries.slice(kept),
+    ),
   ));
 
   const empty = trimmed(0);
   if (empty.length > budget) return truncateText(empty, budget);
   // The whole array did not fit, so the answer is below its length. Each probe
   // is checked against the budget, so the count this settles on always fits.
+  // Naming what was left out makes a shorter note for a longer kept prefix, so
+  // the length is not strictly monotonic; the search can then settle a little
+  // short of the longest prefix that fits, never past it.
   let kept = 0;
   let high = entries.length - 1;
   while (kept < high) {

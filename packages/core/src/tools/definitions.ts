@@ -96,7 +96,7 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
       properties: {
         path: {
           type: 'string',
-          description: 'Root; defaults to Workspace.'
+          description: 'Root; omit for service overview.'
         },
         maxDepth: {
           type: 'number',
