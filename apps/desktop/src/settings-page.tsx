@@ -3,12 +3,17 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import type { CustomConnectionView } from "../shared/custom-providers";
 import { ENABLED_PROVIDER_IDS, providerLabel, type ProviderId, type ProviderStatus } from "../shared/provider";
+import { NO_LIMITS, type ProviderLimits } from "../shared/provider-limits";
 import type { StudioStatus } from "../shared/studio-status";
 import type { WorkspaceState } from "./model";
 import { BlenderSettings } from "./blender-settings";
 import { EndpointPage, endpointDetail, useCustomConnections } from "./custom-connections";
 import { OpenCloudSettings } from "./open-cloud-settings";
-import { getProviderStatus, loginProvider, submitProviderCode } from "./platform";
+import {
+  cancelProviderLogin, getProviderLimits, getProviderStatus, installProviderClient, loginProvider, openProviderLogin, submitProviderCode,
+  waitForProviderLogin,
+} from "./platform";
+import { planUsageView } from "./plan-usage";
 import { SettingsGroup, SettingsRow, SettingsSwitch } from "./settings-parts";
 
 /**
@@ -36,6 +41,12 @@ const SECTIONS: ReadonlyArray<{ id: SettingsSectionId; label: string }> = [
 const ACCOUNT_PROVIDERS = ENABLED_PROVIDER_IDS.filter((provider) => provider !== "custom");
 
 const ACCOUNT_CLIENTS: Partial<Record<ProviderId, string>> = { chatgpt: "Codex", claude: "Claude Code" };
+
+/**
+ * What a plan's limits cover: ChatGPT meters Codex apart from chat, while
+ * Claude's limits are shared by every Claude app.
+ */
+const USAGE_SCOPES: Partial<Record<ProviderId, string>> = { chatgpt: "Codex", claude: "Claude" };
 
 /**
  * The endpoint page on screen. `key` names the visit, not the endpoint: a new
@@ -215,8 +226,9 @@ function PageHead({ title, lede }: { title: string; lede?: string }) {
 
 /**
  * One subscription account: whether it is signed in, and signing in when it
- * is not. Each row asks about its own provider, so both accounts show their
- * real state whichever one the composer is using.
+ * is not, or installing the client it runs through when that is missing. Each
+ * row asks about its own provider, so both accounts show their real state
+ * whichever one the composer is using.
  */
 function AccountRow({ provider, onChanged }: { provider: ProviderId; onChanged: () => void }) {
   const [status, setStatus] = useState<ProviderStatus>({ kind: "checking", message: "Checking…" });
@@ -224,10 +236,20 @@ function AccountRow({ provider, onChanged }: { provider: ProviderId; onChanged: 
   const [awaitingCode, setAwaitingCode] = useState(false);
   const [code, setCode] = useState("");
   const [codeError, setCodeError] = useState<string | null>(null);
+  const [installing, setInstalling] = useState(false);
+  const [installNote, setInstallNote] = useState<{ message: string; command?: string } | null>(null);
+  const [limits, setLimits] = useState<ProviderLimits>(NO_LIMITS);
+  /** What the row says while a sign-in is open in the browser; null when none is. */
+  const [waitingMessage, setWaitingMessage] = useState<string | null>(null);
+  /** Bumped when a sign-in is cancelled, replaced, or settled by a pasted code, so an older wait cannot touch the row. */
+  const loginAttempt = useRef(0);
   const name = providerLabel(provider);
 
   const refresh = useCallback(async () => {
-    setStatus(await getProviderStatus(provider));
+    const next = await getProviderStatus(provider);
+    setStatus(next);
+    // Usage belongs to a signed-in account; without one there is nothing to show.
+    setLimits(next.kind === "signed-in" ? await getProviderLimits(provider) : NO_LIMITS);
   }, [provider]);
 
   useEffect(() => {
@@ -245,12 +267,51 @@ function AccountRow({ provider, onChanged }: { provider: ProviderId; onChanged: 
       setStatus({ kind: "unavailable", message: result.message });
       return;
     }
-    setStatus({ kind: "signed-out", message: result.message });
     setAwaitingCode(result.awaitingCode === true);
-    // A browser sign-in finishes on its own; look again shortly after.
-    if (result.awaitingCode !== true) {
-      window.setTimeout(() => void refresh().then(onChanged), 2_500);
+    // Connect the moment the sign-in finishes in the browser, not on the
+    // row's next status check; Claude's code field stays as the fallback.
+    const attempt = ++loginAttempt.current;
+    setWaitingMessage(result.message);
+    const done = await waitForProviderLogin(provider);
+    if (loginAttempt.current !== attempt) return;
+    setWaitingMessage(null);
+    setAwaitingCode(false);
+    setCode("");
+    setCodeError(null);
+    if (!done.ok) {
+      setStatus({ kind: "signed-out", message: done.message });
+      return;
     }
+    await refresh();
+    onChanged();
+  };
+
+  const openLoginPage = async () => {
+    const result = await openProviderLogin(provider);
+    setCodeError(result.ok ? null : result.message);
+  };
+
+  const cancel = async () => {
+    loginAttempt.current += 1;
+    setWaitingMessage(null);
+    setAwaitingCode(false);
+    setCode("");
+    setCodeError(null);
+    await cancelProviderLogin(provider);
+    await refresh();
+  };
+
+  const install = async () => {
+    setInstalling(true);
+    setInstallNote(null);
+    const result = await installProviderClient(provider);
+    setInstalling(false);
+    if (!result.ok) {
+      setInstallNote({ message: result.message, ...(result.command === undefined ? {} : { command: result.command }) });
+      return;
+    }
+    await refresh();
+    onChanged();
   };
 
   const finish = async () => {
@@ -261,6 +322,9 @@ function AccountRow({ provider, onChanged }: { provider: ProviderId; onChanged: 
       setCodeError(result.message);
       return;
     }
+    // The code settled it; the browser wait ending too changes nothing.
+    loginAttempt.current += 1;
+    setWaitingMessage(null);
     setAwaitingCode(false);
     setCode("");
     setCodeError(null);
@@ -269,25 +333,58 @@ function AccountRow({ provider, onChanged }: { provider: ProviderId; onChanged: 
   };
 
   const signedIn = status.kind === "signed-in";
+  // Signing in needs the client, so without it the row can only look again.
+  const canCheckOnly = signedIn || status.kind === "not-installed";
   const client = ACCOUNT_CLIENTS[provider];
+  const installable = status.kind === "not-installed" && status.installable === true;
   const detail = signedIn
     ? [status.planType === undefined ? undefined : capitalized(status.planType), status.email, client === undefined ? undefined : `through ${client}`]
       .filter((part): part is string => part !== undefined && part !== "")
       .join(" · ") || status.message
-    : status.message;
+    : installing ? `Installing ${client ?? name}… This can take a few minutes.` : waitingMessage ?? status.message;
+  const usage = signedIn ? planUsageView(limits, USAGE_SCOPES[provider] ?? name, Date.now()) : null;
 
   return <>
     <SettingsRow title={name} detail={detail}>
-      {signedIn
-        ? <button type="button" className="small-button" onClick={() => void refresh()}>Check</button>
-        : <button type="button" className="small-button" disabled={pending || status.kind === "checking"} onClick={() => void connect()}>{pending ? "Opening…" : "Connect"}</button>}
+      {installable && <button type="button" className="small-button" disabled={installing} onClick={() => void install()}>{installing ? "Installing…" : "Install"}</button>}
+      {waitingMessage !== null && !signedIn
+        ? <>
+          <button type="button" className="small-button" disabled>Waiting…</button>
+          <button type="button" className="small-button" onClick={() => void cancel()}>Cancel</button>
+        </>
+        : canCheckOnly
+          ? <button type="button" className="small-button" disabled={installing} onClick={() => void refresh()}>Check</button>
+          : <button type="button" className="small-button" disabled={pending || status.kind === "checking"} onClick={() => void connect()}>{pending ? "Opening…" : "Connect"}</button>}
     </SettingsRow>
+    {usage !== null && <div className="plan-usage">
+      {usage.reached && <p className="plan-usage-reached">{name} reports this plan's usage limit is reached.</p>}
+      {usage.rows.map((row) => <div key={row.label} className={`plan-usage-row ${row.tone}`}>
+        <span className="plan-usage-label">{row.label}</span>
+        <span className="plan-usage-track" role="meter" aria-label={row.label} aria-valuemin={0} aria-valuemax={100} aria-valuenow={row.percent}>
+          <span style={{ width: `${row.percent}%` }} />
+        </span>
+        <span className="plan-usage-detail">{row.detail}</span>
+      </div>)}
+      <p className="plan-usage-note">{usage.footnote}</p>
+    </div>}
+    {/* A failed install says why and gives the vendor's command to run by hand;
+        a declined one just says so. */}
+    {installNote !== null && status.kind === "not-installed" && <p className={`custom-message${installNote.command === undefined ? "" : " error"}`}>
+      {installNote.message}
+      {installNote.command !== undefined && <><br />To install it yourself, run this in PowerShell: <code className="settings-command">{installNote.command}</code></>}
+    </p>}
+    {/* The fallback: a page that shows a code, opened only on request, so the
+        tab Claude Code opened is the only one unless it failed to appear. */}
     {awaitingCode && !signedIn && <label className="settings-field">
-      <span>{`Paste the code ${name} showed you`}</span>
+      <span>{`Or paste the code ${name} shows you`}</span>
       <div className="custom-key-row">
-        <input value={code} autoFocus spellCheck={false} placeholder="Authorization code" onChange={(event) => setCode(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && code.trim()) void finish(); }} />
+        <input value={code} spellCheck={false} placeholder="Authorization code" onChange={(event) => setCode(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && code.trim()) void finish(); }} />
         <button type="button" className="small-button" disabled={pending || !code.trim()} onClick={() => void finish()}>{pending ? "Finishing…" : "Finish sign-in"}</button>
       </div>
+      <span className="custom-message">
+        Browser didn&apos;t open?{" "}
+        <button type="button" className="link-button" onClick={() => void openLoginPage()}>Open the sign-in page</button>
+      </span>
       {codeError !== null && <span className="custom-message error">{codeError}</span>}
     </label>}
   </>;

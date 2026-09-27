@@ -4,6 +4,7 @@ import { PassThrough } from "node:stream";
 import test from "node:test";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 
+import { ClientNotInstalledError } from "./client-not-installed";
 import { CodexAppServerClient, codexAppServerArgs, codexChildEnvironment } from "./codex-app-server";
 
 type FakeProcess = ChildProcessWithoutNullStreams & {
@@ -63,6 +64,39 @@ test("app-server initializes and sanitizes a managed ChatGPT account", async () 
   });
   assert.deepEqual(methods.slice(0, 3), ["initialize", "initialized", "account/read"]);
   client.close();
+});
+
+test("app-server tells a missing Codex from a failing one, and notices it once installed", async () => {
+  let installed = false;
+  const client = new CodexAppServerClient({
+    spawnProcess: () => {
+      if (!installed) throw new ClientNotInstalledError("Codex could not be found.");
+      return fakeProcess((message, send) => {
+        if (message.method === "initialize") send({ id: message.id, result: {} });
+        if (message.method === "account/read") send({ id: message.id, result: { account: null } });
+      });
+    },
+  });
+
+  const missing = await client.getChatGptStatus();
+  assert.equal(missing.kind, "not-installed");
+  assert.match(missing.message, /Codex was not found on this computer/);
+
+  installed = true;
+  assert.equal((await client.getChatGptStatus()).kind, "signed-out");
+  client.close();
+});
+
+test("app-server keeps a Codex that fails to start unavailable, not missing", async () => {
+  const client = new CodexAppServerClient({
+    spawnProcess: () => {
+      throw new Error("spawn EACCES");
+    },
+  });
+
+  const status = await client.getChatGptStatus();
+  assert.equal(status.kind, "unavailable");
+  assert.match(status.message, /EACCES/);
 });
 
 test("app-server refuses a local API credential because Roqer accepts ChatGPT subscriptions only", async () => {
@@ -268,4 +302,76 @@ test("app-server runs in Roqer's own Codex home without the bridge credential", 
   assert.equal(environment.PATH, "/bin");
   // Without a home of Roqer's own, Codex keeps whatever the user set.
   assert.equal(codexChildEnvironment({ CODEX_HOME: "/elsewhere" }).CODEX_HOME, "/elsewhere");
+});
+
+/** An app-server that answers sign-in requests and lets a test send its notifications. */
+function loginServer(options: { signedIn?: () => boolean } = {}) {
+  const methods: Array<{ method: string; params: unknown }> = [];
+  let send: ((message: unknown) => void) | null = null;
+  const child = fakeProcess((message, reply) => {
+    send = reply;
+    const method = typeof message.method === "string" ? message.method : "";
+    methods.push({ method, params: message.params });
+    if (method === "initialize") reply({ id: message.id, result: {} });
+    if (method === "account/login/start") {
+      reply({ id: message.id, result: { type: "chatgpt", loginId: "login-1", authUrl: "https://auth.openai.com/oauth/authorize?x=1" } });
+    }
+    if (method === "account/login/cancel") reply({ id: message.id, result: { status: "canceled" } });
+    if (method === "account/read") {
+      reply({ id: message.id, result: { account: options.signedIn?.() ? { type: "chatgpt", planType: "plus" } : null } });
+    }
+  });
+  const client = new CodexAppServerClient({ spawnProcess: () => child });
+  return { client, methods, notify: (method: string, params: unknown) => send?.({ method, params }) };
+}
+
+test("a ChatGPT sign-in connects the moment Codex says it completed, and only for its own login", async () => {
+  const server = loginServer();
+  const { loginId } = await server.client.beginChatGptLogin();
+  let settled = false;
+  const waited = server.client.waitForChatGptLogin(loginId, { pollMs: 60_000 }).then((result) => { settled = true; return result; });
+
+  server.notify("account/login/completed", { loginId: "another-login", success: true, error: null });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(settled, false);
+
+  server.notify("account/login/completed", { loginId, success: true, error: null });
+  assert.deepEqual(await waited, { ok: true, message: "Signed in with ChatGPT." });
+  server.client.close();
+});
+
+test("a failed or cancelled ChatGPT sign-in says so, and cancelling tells Codex", async () => {
+  const failed = loginServer();
+  const first = await failed.client.beginChatGptLogin();
+  const failing = failed.client.waitForChatGptLogin(first.loginId, { pollMs: 60_000 });
+  failed.notify("account/login/completed", { loginId: first.loginId, success: false, error: "Access denied" });
+  assert.deepEqual(await failing, { ok: false, message: "Access denied" });
+  failed.client.close();
+
+  const cancelled = loginServer();
+  const second = await cancelled.client.beginChatGptLogin();
+  const cancelling = cancelled.client.waitForChatGptLogin(second.loginId, { pollMs: 60_000 });
+  await cancelled.client.cancelChatGptLogin(second.loginId);
+  assert.deepEqual(await cancelling, { ok: false, message: "Sign-in cancelled." });
+  assert.deepEqual(cancelled.methods.find(({ method }) => method === "account/login/cancel")?.params, { loginId: second.loginId });
+  cancelled.client.close();
+});
+
+test("a ChatGPT sign-in is still noticed without Codex's notice, and gives up in time", async () => {
+  let signedIn = false;
+  const polled = loginServer({ signedIn: () => signedIn });
+  const login = await polled.client.beginChatGptLogin();
+  const noticed = polled.client.waitForChatGptLogin(login.loginId, { pollMs: 10 });
+  signedIn = true;
+  assert.deepEqual(await noticed, { ok: true, message: "Plus connected through Codex" });
+  polled.client.close();
+
+  const idle = loginServer();
+  const stale = await idle.client.beginChatGptLogin();
+  const expired = await idle.client.waitForChatGptLogin(stale.loginId, { pollMs: 60_000, timeoutMs: 20 });
+  assert.equal(expired.ok, false);
+  assert.match(expired.message, /not finished in time/);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.ok(idle.methods.some(({ method }) => method === "account/login/cancel"));
+  idle.client.close();
 });

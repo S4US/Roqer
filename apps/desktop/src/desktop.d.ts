@@ -1,7 +1,8 @@
 import type { AssetAttachment, WorkspaceState } from "./model";
 import type { RunEvent, RunStartRequest } from "../shared/run-events";
 import type { OpenStudioScriptRequest, StudioActionResult, StudioStatus } from "../shared/studio-status";
-import type { ProviderLoginResult, ProviderModelCatalog, ProviderStatus } from "../shared/provider";
+import type { ProviderInstallResult, ProviderLoginResult, ProviderModelCatalog, ProviderStatus } from "../shared/provider";
+import type { ProviderLimits } from "../shared/provider-limits";
 import type { StorageStatus } from "../shared/workspace-storage";
 import type { McpServerState } from "../shared/mcp-server";
 import type { AppUpdateState } from "../shared/app-update";
@@ -15,6 +16,11 @@ type ProviderConnector = {
   status(): Promise<ProviderStatus>;
   login(): Promise<ProviderLoginResult>;
   submitCode(code: string): Promise<ProviderLoginResult>;
+  waitForLogin(): Promise<ProviderLoginResult>;
+  openLogin(): Promise<ProviderLoginResult>;
+  cancelLogin(): Promise<ProviderLoginResult>;
+  install(): Promise<ProviderInstallResult>;
+  limits(): Promise<ProviderLimits>;
   models(): Promise<ProviderModelCatalog>;
 };
 

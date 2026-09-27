@@ -341,12 +341,12 @@ class ManualAppServer extends FakeAppServer {
 function lifecycleRun(
   appServer: ChatGptAppServer,
   signal = new AbortController().signal,
-  overrides: { stallMs?: number; askUser?: PlannerContext["askUser"] } = {},
+  overrides: { stallMs?: number; askUser?: PlannerContext["askUser"]; status?: PlannerContext["status"] } = {},
 ) {
   const context: PlannerContext = {
     prompt: "Inspect Studio", conversation: { messages: [], truncated: false }, images: [],
     instanceId: null, autoPlaytest: false, signal,
-    progress: () => undefined, outputTokens: () => undefined, status: () => undefined, say: () => undefined,
+    progress: () => undefined, outputTokens: () => undefined, status: overrides.status ?? (() => undefined), say: () => undefined,
     recordChange: () => undefined, recordEvidence: () => undefined, setTasks: () => undefined,
     tasks: () => [], changes: () => [], evidence: () => [], decisions: () => [], takeSteers: () => [],
     askUser: overrides.askUser ?? (async (_question, options) => options[0]),
@@ -503,6 +503,39 @@ test("ChatGPT interrupts terminal errors and releases handlers", async () => {
     { method: "turn/interrupt", params: { threadId: "thread-1", turnId: "turn-1" } },
   ]);
   assert.equal(appServer.requestHandler, null);
+});
+
+test("ChatGPT warns once as the plan nears a limit, and ends on Codex's own limit message", async () => {
+  const appServer = new ManualAppServer();
+  const statuses: Array<{ label: string; detail?: string }> = [];
+  const run = lifecycleRun(appServer, undefined, { status: (label, detail) => statuses.push({ label, detail }) });
+  const limitMessage = "You’ve hit your usage limit. Try again at 3:40 PM.";
+  const rejected = assert.rejects(run, (error: Error) => error.message === limitMessage);
+  await appServer.turnStarted.promise;
+  appServer.turnResponse.resolve({ turn: { id: "turn-1" } });
+  await new Promise((resolve) => setImmediate(resolve));
+
+  // Usage is the account's, so the update carries no thread.
+  const usage = (usedPercent: number) => appServer.notificationListener?.({
+    method: "account/rateLimits/updated",
+    params: { rateLimits: { limitId: "codex", primary: { usedPercent, windowDurationMins: 300, resetsAt: null }, secondary: null } },
+  });
+  usage(62);
+  usage(84);
+  usage(91);
+  assert.deepEqual(statuses, [{
+    label: "Close to your ChatGPT usage limit",
+    detail: "5-hour limit: 84% used. The run stops if the limit is reached.",
+  }]);
+
+  appServer.notificationListener?.({
+    method: "error",
+    params: {
+      threadId: "thread-1", turnId: "turn-1", willRetry: false,
+      error: { message: limitMessage, codexErrorInfo: "usageLimitExceeded" },
+    },
+  });
+  await rejected;
 });
 
 test("ChatGPT cancellation before turn/start responds settles promptly and interrupts its late turn", async () => {

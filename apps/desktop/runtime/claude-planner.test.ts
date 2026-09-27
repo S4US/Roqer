@@ -462,6 +462,47 @@ test("Claude planner reports a failed turn instead of returning its text", async
   await assert.rejects(() => planner.run(context), /Usage limit reached/);
 });
 
+test("Claude planner warns once as the plan nears a limit, and ends on Claude Code's own limit message", async () => {
+  const controller = new AbortController();
+  const { context } = makeContext(controller);
+  const statuses: Array<{ label: string; detail?: string }> = [];
+  context.status = (label, detail) => statuses.push({ label, detail });
+  const limitMessage = "You've hit your session limit · resets 3:40pm";
+  const resetsAt = Math.floor(Date.now() / 1000) + 3600;
+  const rateLimit = (status: string) => ({
+    type: "rate_limit_event",
+    rate_limit_info: { status, rateLimitType: "five_hour", resetsAt, utilization: 0.91 },
+    uuid: "u", session_id: "s",
+  });
+
+  const planner = createClaudePlanner({
+    ...AGENT_OPTIONS,
+    launcher: {
+      launch: async () => {
+        const child = new FakeChildProcess();
+        child.writeLine({ type: "system", subtype: "init", tools: PROVIDER_TOOLS });
+        child.writeLine(rateLimit("allowed"));
+        child.writeLine(rateLimit("allowed_warning"));
+        child.writeLine(rateLimit("allowed_warning"));
+        child.writeLine(rateLimit("rejected"));
+        child.writeLine({ type: "result", subtype: "success", is_error: true, result: limitMessage });
+        child.finish(1);
+        return child.asChild();
+      },
+    },
+    getStatus: async () => ({ kind: "signed-in", message: "Pro connected" }),
+    cwd: process.cwd(),
+    model: "opus",
+    effort: "high",
+  });
+
+  await assert.rejects(() => planner.run(context), (error: Error) => error.message === limitMessage);
+  assert.equal(statuses.length, 1);
+  assert.equal(statuses[0].label, "Close to your Claude usage limit");
+  // Claude's utilization scale is undocumented, so no percentage is claimed.
+  assert.match(statuses[0].detail ?? "", /^5-hour limit, resets .+\. The run stops if the limit is reached\.$/);
+});
+
 test("Claude planner refuses to start without a connected account", async () => {
   const controller = new AbortController();
   const { context } = makeContext(controller);

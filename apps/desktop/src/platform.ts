@@ -10,9 +10,11 @@ import type {
 } from "../shared/custom-providers";
 import type { OpenCloudCheckResult, OpenCloudSave, OpenCloudSettingsResult } from "../shared/open-cloud";
 import type { BlenderSettingsResult } from "../shared/blender";
+import { NO_LIMITS, type ProviderLimits } from "../shared/provider-limits";
 import {
   providerLabel,
   type ProviderId,
+  type ProviderInstallResult,
   type ProviderLoginResult,
   type ProviderModelCatalog,
   type ProviderStatus,
@@ -149,11 +151,43 @@ export async function loginProvider(provider: ProviderId): Promise<ProviderLogin
   return bridge.login();
 }
 
+/** Wait for a sign-in that finishes in the browser, so the account connects the moment it does. */
+export async function waitForProviderLogin(provider: ProviderId): Promise<ProviderLoginResult> {
+  const bridge = connector(provider);
+  if (!bridge) return { ok: false, message: `${providerLabel(provider)} sign-in needs the desktop app.` };
+  return bridge.waitForLogin();
+}
+
+/** Open the fallback sign-in page, for when the browser the CLI opens did not appear. */
+export async function openProviderLogin(provider: ProviderId): Promise<ProviderLoginResult> {
+  const bridge = connector(provider);
+  if (!bridge) return { ok: false, message: `${providerLabel(provider)} sign-in needs the desktop app.` };
+  return bridge.openLogin();
+}
+
+export async function cancelProviderLogin(provider: ProviderId): Promise<ProviderLoginResult> {
+  const bridge = connector(provider);
+  if (!bridge) return { ok: false, message: `${providerLabel(provider)} sign-in needs the desktop app.` };
+  return bridge.cancelLogin();
+}
+
 /** Finish a sign-in that came back with `awaitingCode`. */
 export async function submitProviderCode(provider: ProviderId, code: string): Promise<ProviderLoginResult> {
   const bridge = connector(provider);
   if (!bridge) return { ok: false, message: `${providerLabel(provider)} sign-in needs the desktop app.` };
   return bridge.submitCode(code);
+}
+
+/** Install the client a subscription runs through, after the user confirms. */
+export async function installProviderClient(provider: ProviderId): Promise<ProviderInstallResult> {
+  const bridge = connector(provider);
+  if (!bridge) return { ok: false, message: `Installing ${providerLabel(provider)}'s client needs the desktop app.` };
+  return bridge.install();
+}
+
+/** The plan's usage limits, or `none` outside the desktop app or when nothing was reported. */
+export async function getProviderLimits(provider: ProviderId): Promise<ProviderLimits> {
+  return connector(provider)?.limits() ?? NO_LIMITS;
 }
 
 export async function getProviderModels(provider: ProviderId): Promise<ProviderModelCatalog> {

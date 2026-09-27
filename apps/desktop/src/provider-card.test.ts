@@ -18,4 +18,9 @@ test("your own models say what is set up, and a signed-out card says what to do"
   assert.deepEqual(providerCard("claude", { kind: "signed-out", message: "Connect Claude in Settings." }, true),
     { title: "Studio access", detail: "Connect Claude in Settings.", badge: "Local" });
   assert.equal(providerCard("claude", { kind: "signed-out", message: "x" }, false).badge, "Demo");
+  assert.deepEqual(providerCard("chatgpt", { kind: "not-installed", message: "Codex was not found on this computer. Install it to use ChatGPT." }, true),
+    { title: "Studio access", detail: "Codex was not found on this computer. Install it to use ChatGPT.", badge: "Local" });
+  // Where Roqer can install it, the card says where.
+  assert.deepEqual(providerCard("claude", { kind: "not-installed", message: "Claude Code was not found on this computer.", installable: true }, true),
+    { title: "Studio access", detail: "Install Claude Code in Settings to use Claude", badge: "Local" });
 });

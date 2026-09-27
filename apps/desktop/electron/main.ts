@@ -1,4 +1,7 @@
-import { app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme, shell, type IpcMainEvent, type IpcMainInvokeEvent, type WebContents } from "electron";
+import {
+  app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme, shell,
+  type IpcMainEvent, type IpcMainInvokeEvent, type MessageBoxOptions, type WebContents,
+} from "electron";
 import { autoUpdater } from "electron-updater";
 import { spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
@@ -39,9 +42,14 @@ import {
   type CustomModelTestResult,
 } from "../shared/custom-providers";
 import { ClaudeCodeClient } from "../runtime/claude-cli";
+import { ClaudeLimitsTracker } from "../runtime/claude-limits";
+import {
+  ClientInstallRunner, clientInstallerFor, clientInstallSupported, installCommand, type ClientInstaller,
+} from "../runtime/client-installer";
 import { createClaudePlanner, type ClaudeSession } from "../runtime/claude-planner";
 import { ProviderSessionStore } from "../runtime/provider-sessions";
 import { CodexAppServerClient } from "../runtime/codex-app-server";
+import { CodexLimitsTracker } from "../runtime/codex-limits";
 import { createInspectionPlanner } from "../runtime/inspection-planner";
 import { McpClient } from "../runtime/mcp-client";
 import { McpEndpointError } from "../runtime/mcp-types";
@@ -70,10 +78,12 @@ import {
   isReasoningEffort,
   providerLabel,
   type ProviderId,
+  type ProviderInstallResult,
   type ProviderLoginResult,
   type ProviderModelCatalog,
   type ProviderStatus,
 } from "../shared/provider";
+import { NO_LIMITS, type ProviderLimits } from "../shared/provider-limits";
 import type { OpenStudioScriptRequest, StudioActionResult, StudioStatus } from "../shared/studio-status";
 import { electronSecretProtector } from "./secret-protector";
 
@@ -148,7 +158,14 @@ async function initializeStorage(): Promise<void> {
   return storageReady.catch((error) => { storageReady = undefined; throw error; });
 }
 let codexAppServer: CodexAppServerClient | null = null;
+let codexLimits: CodexLimitsTracker | null = null;
+let claudeLimits: ClaudeLimitsTracker | null = null;
 let claudeCode: ClaudeCodeClient | null = null;
+const clientInstalls = new ClientInstallRunner();
+/** A ChatGPT sign-in waiting in the browser, and how it ends. */
+let pendingChatGptLogin: { loginId: string; done: Promise<ProviderLoginResult> } | null = null;
+/** Set from the confirmation onwards, so a second request cannot open a second dialog. */
+let clientInstallRequested = false;
 /**
  * Each chat's subscription conversation, kept between its messages so a
  * follow-up does not replay the chat or re-read Studio. In memory only.
@@ -764,9 +781,19 @@ function chatGptProvider(): CodexAppServerClient {
   return codexAppServer;
 }
 
+function chatGptLimits(): CodexLimitsTracker {
+  codexLimits ??= new CodexLimitsTracker({ source: chatGptProvider() });
+  return codexLimits;
+}
+
 function claudeProvider(): ClaudeCodeClient {
   claudeCode ??= new ClaudeCodeClient({ cwd: app.getPath("userData") });
   return claudeCode;
+}
+
+function claudePlanLimits(): ClaudeLimitsTracker {
+  claudeLimits ??= new ClaudeLimitsTracker({ source: claudeProvider() });
+  return claudeLimits;
 }
 
 /**
@@ -810,7 +837,11 @@ async function getProviderStatus(event: IpcMainInvokeEvent, value: unknown): Pro
   if (!isTrusted(event.sender)) return { kind: "unavailable", message: "This window may not access providers." };
   const provider = providerArgument(value);
   if (!provider) return { kind: "unavailable", message: "Unknown provider." };
-  return readProviderStatus(provider);
+  const status = await readProviderStatus(provider);
+  // Whether an install can be offered is decided here, where it would run.
+  return status.kind === "not-installed" && clientInstallSupported() && clientInstallerFor(provider) !== null
+    ? { ...status, installable: true }
+    : status;
 }
 
 async function getProviderModels(event: IpcMainInvokeEvent, value: unknown): Promise<ProviderModelCatalog> {
@@ -842,25 +873,158 @@ async function loginProvider(event: IpcMainInvokeEvent, value: unknown): Promise
     if (provider === "custom") return { ok: false, message: current.message };
 
     // A new sign-in may be a different account; nothing it did not run may carry over.
-    if (provider === "claude") await claudeSessions.closeAll();
-    else await codexThreads.closeAll();
-    const login = provider === "claude"
+    if (provider === "claude") {
+      await claudeSessions.closeAll();
+      claudeLimits?.forget();
+    } else {
+      await codexThreads.closeAll();
+      codexLimits?.forget();
+    }
+    const login: { authUrl: string; loginId?: string } = provider === "claude"
       ? await claudeProvider().beginLogin()
       : await chatGptProvider().beginChatGptLogin();
-    const authUrl = new URL(login.authUrl);
-    if (authUrl.protocol !== "https:" || !SIGN_IN_HOSTS[provider].includes(authUrl.hostname)) {
+    const authUrl = allowedSignInUrl(provider, login.authUrl);
+    if (authUrl === null) {
+      if (provider === "claude") claudeProvider().cancelLogin();
       return { ok: false, message: `${label} returned an unexpected sign-in address.` };
     }
-    await shell.openExternal(authUrl.href);
+    if (login.loginId !== undefined) {
+      // Listen before the browser opens, so a quick sign-in is not missed. A
+      // sign-in started earlier and never finished is replaced by this one.
+      const client = chatGptProvider();
+      if (pendingChatGptLogin !== null) void client.cancelChatGptLogin(pendingChatGptLogin.loginId);
+      pendingChatGptLogin = { loginId: login.loginId, done: client.waitForChatGptLogin(login.loginId) };
+    }
+    // `claude auth login` opens the browser itself, at an address that
+    // finishes through its local callback. The address it printed is the
+    // fallback that shows a code to paste, so opening it too gave two tabs;
+    // the row offers it only for when the browser did not open.
+    if (provider !== "claude") await shell.openExternal(authUrl.href);
 
-    // Claude Code's flow hands the authorization code to a hosted page instead
-    // of finishing in the browser, so the user has to bring the code back.
     return provider === "claude"
-      ? { ok: true, message: "Sign in with Claude, then paste the code it gives you.", awaitingCode: true }
+      ? { ok: true, message: "Claude Code opened your browser. Finish signing in there, and Roqer connects by itself.", awaitingCode: true }
       : { ok: true, message: "Finish signing in with ChatGPT in your browser." };
   } catch (error) {
     return { ok: false, message: error instanceof Error ? error.message : `${label} sign-in could not start.` };
   }
+}
+
+/**
+ * The plan's usage limits, as the provider's client reports them. Custom
+ * endpoints have no plan, and show no meter rather than a guess.
+ */
+async function getProviderLimits(event: IpcMainInvokeEvent, value: unknown): Promise<ProviderLimits> {
+  if (!isTrusted(event.sender)) return NO_LIMITS;
+  const provider = providerArgument(value);
+  if (provider === "chatgpt") return chatGptLimits().read();
+  if (provider === "claude") return claudePlanLimits().read();
+  return NO_LIMITS;
+}
+
+/**
+ * Install the client a subscription runs through by running its vendor's
+ * official installer. The renderer only names the provider: the command is
+ * fixed in the runtime, and the user confirms it in a dialog the main process
+ * shows, so a page cannot start an install on its own.
+ */
+async function installProviderClient(event: IpcMainInvokeEvent, value: unknown): Promise<ProviderInstallResult> {
+  if (!isTrusted(event.sender)) return { ok: false, message: "This window may not install software." };
+  const provider = providerArgument(value);
+  const installer = provider === null ? null : clientInstallerFor(provider);
+  if (!provider || !installer) return { ok: false, message: "Unknown provider." };
+  if (!clientInstallSupported()) return { ok: false, message: `Installing ${installer.client} from Roqer is available on Windows only.` };
+  if (clientInstallRequested || clientInstalls.busy) return { ok: false, message: "Another install is already running." };
+  clientInstallRequested = true;
+  try {
+    return await confirmAndInstall(event, provider, installer);
+  } finally {
+    clientInstallRequested = false;
+  }
+}
+
+async function confirmAndInstall(event: IpcMainInvokeEvent, provider: ProviderId, installer: ClientInstaller): Promise<ProviderInstallResult> {
+  // Nothing to run if the client turned up since the page last looked, and a
+  // client that is there but failing is not fixed by installing it again.
+  const current = await readProviderStatus(provider);
+  if (current.kind === "signed-in" || current.kind === "signed-out") {
+    return { ok: true, message: `${installer.client} is already installed.` };
+  }
+  if (current.kind !== "not-installed") return { ok: false, message: current.message };
+
+  const command = installCommand(installer);
+  const options: MessageBoxOptions = {
+    type: "question",
+    buttons: [`Install ${installer.client}`, "Cancel"],
+    defaultId: 0,
+    cancelId: 1,
+    noLink: true,
+    title: `Install ${installer.client}`,
+    message: `Install ${installer.client} from ${installer.publisher}?`,
+    detail: `Roqer will download ${installer.publisher}'s official installer and run it, as you would in PowerShell:\n\n${command}\n\n` +
+      `${installer.client} is installed for your Windows account only. No administrator rights are needed.`,
+  };
+  const window = BrowserWindow.fromWebContents(event.sender);
+  const choice = window ? await dialog.showMessageBox(window, options) : await dialog.showMessageBox(options);
+  if (choice.response !== 0) return { ok: false, message: "Install cancelled." };
+
+  return clientInstalls.install(installer);
+}
+
+/** A sign-in address from a provider CLI, if it is one the user may be sent to. */
+function allowedSignInUrl(provider: ProviderId, address: string): URL | null {
+  try {
+    const url = new URL(address);
+    return url.protocol === "https:" && SIGN_IN_HOSTS[provider].includes(url.hostname) ? url : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Open the fallback sign-in page of the Claude sign-in in progress, for when
+ * the browser Claude Code opens did not appear. The address is the one main
+ * already checked; the renderer only names the provider.
+ */
+async function openProviderLogin(event: IpcMainInvokeEvent, value: unknown): Promise<ProviderLoginResult> {
+  if (!isTrusted(event.sender)) return { ok: false, message: "This window may not open sign-in." };
+  if (providerArgument(value) !== "claude") return { ok: false, message: "Unknown provider." };
+  const address = claudeProvider().pendingLoginUrl();
+  const url = address === null ? null : allowedSignInUrl("claude", address);
+  if (url === null) return { ok: false, message: "No Claude sign-in is waiting. Choose Connect to start one." };
+  await shell.openExternal(url.href);
+  return { ok: true, message: "Opened the sign-in page. If Claude shows you a code, paste it here." };
+}
+
+/**
+ * Wait for a sign-in to finish in the browser, so the account row connects
+ * the moment it does instead of on its next status check.
+ */
+async function waitForProviderLogin(event: IpcMainInvokeEvent, value: unknown): Promise<ProviderLoginResult> {
+  if (!isTrusted(event.sender)) return { ok: false, message: "This window may not finish sign-in." };
+  const provider = providerArgument(value);
+  if (provider === "claude") return claudeProvider().waitForLogin();
+  if (provider !== "chatgpt") return { ok: false, message: "This sign-in does not finish in the browser." };
+  const pending = pendingChatGptLogin;
+  if (pending === null) {
+    // Already finished and collected, or never started: the account says which.
+    const status = await readProviderStatus("chatgpt");
+    return status.kind === "signed-in" ? { ok: true, message: status.message } : { ok: false, message: "No ChatGPT sign-in is waiting." };
+  }
+  const result = await pending.done;
+  if (pendingChatGptLogin === pending) pendingChatGptLogin = null;
+  return result;
+}
+
+async function cancelProviderLogin(event: IpcMainInvokeEvent, value: unknown): Promise<ProviderLoginResult> {
+  if (!isTrusted(event.sender)) return { ok: false, message: "This window may not cancel sign-in." };
+  const provider = providerArgument(value);
+  if (provider === "claude") {
+    claudeProvider().cancelLogin();
+    return { ok: true, message: "Sign-in cancelled." };
+  }
+  if (provider !== "chatgpt" || pendingChatGptLogin === null) return { ok: true, message: "Nothing to cancel." };
+  await chatGptProvider().cancelChatGptLogin(pendingChatGptLogin.loginId);
+  return { ok: true, message: "Sign-in cancelled." };
 }
 
 async function submitProviderCode(event: IpcMainInvokeEvent, payload: unknown): Promise<ProviderLoginResult> {
@@ -1697,6 +1861,11 @@ app.whenReady().then(async () => {
   ipcMain.handle("provider:models", getProviderModels);
   ipcMain.handle("provider:login", loginProvider);
   ipcMain.handle("provider:login-code", submitProviderCode);
+  ipcMain.handle("provider:login-wait", waitForProviderLogin);
+  ipcMain.handle("provider:login-open", openProviderLogin);
+  ipcMain.handle("provider:login-cancel", cancelProviderLogin);
+  ipcMain.handle("provider:install", installProviderClient);
+  ipcMain.handle("provider:limits", getProviderLimits);
   ipcMain.handle("custom-providers:list", listCustomConnections);
   ipcMain.handle("custom-providers:save", saveCustomConnection);
   ipcMain.handle("custom-providers:remove", removeCustomConnection);
@@ -1748,6 +1917,7 @@ app.on("before-quit", () => {
   // in Roblox Studio" standing in a profile until Discord notices the socket.
   presence.dispose();
   cancelAllRuns();
+  clientInstalls.stop();
   void claudeSessions.closeAll();
   void codexThreads.closeAll();
   void customConversations.closeAll();

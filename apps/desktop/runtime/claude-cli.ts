@@ -11,6 +11,7 @@ import {
   type ReasoningEffort,
 } from "../shared/provider";
 import { resolveClaudeExecutable } from "./claude-executable";
+import { ClientNotInstalledError } from "./client-not-installed";
 
 /**
  * Roqer's client for the locally installed Claude Code CLI.
@@ -27,6 +28,8 @@ const STATUS_TIMEOUT_MS = 20_000;
 const LOGIN_URL_TIMEOUT_MS = 45_000;
 const MAX_LOGIN_OUTPUT_LENGTH = 64 * 1024;
 const LOGIN_FINISH_TIMEOUT_MS = 180_000;
+/** How long a sign-in may wait in the browser before it is given up. */
+const LOGIN_WAIT_TIMEOUT_MS = 10 * 60_000;
 const MAX_LOGIN_CODE_LENGTH = 512;
 
 const isRecord = (value: unknown): value is JsonRecord =>
@@ -86,7 +89,7 @@ const RECOMMENDED_ALIAS = "default";
  * models an account can use does not change between two messages.
  */
 const MODEL_CATALOG_TTL_MS = 10 * 60_000;
-const MODEL_LIST_TIMEOUT_MS = 30_000;
+const CONTROL_TIMEOUT_MS = 30_000;
 
 /**
  * How long a signed-in status is reused.
@@ -274,6 +277,9 @@ export class ClaudeCodeClient implements ClaudeLauncher {
     try {
       output = await this.collect(["auth", "status", "--json"], STATUS_TIMEOUT_MS);
     } catch (error) {
+      if (error instanceof ClientNotInstalledError) {
+        return { kind: "not-installed", message: "Claude Code was not found on this computer. Install it to use Claude." };
+      }
       const detail = error instanceof Error ? error.message : String(error);
       return { kind: "unavailable", message: `Claude Code is unavailable: ${detail}` };
     }
@@ -317,8 +323,14 @@ export class ClaudeCodeClient implements ClaudeLauncher {
 
   /**
    * Start the subscription sign-in and return the authorization URL the CLI
-   * printed. The child is kept alive: Claude Code's flow ends with the user
-   * pasting a code back, which `submitLoginCode` writes to its stdin.
+   * printed. `claude auth login` opens the browser itself, at an address that
+   * returns to its local callback; the one it prints is the fallback, whose
+   * page shows a code to paste instead, so it is for when the browser did not
+   * open and should not be opened as well.
+   *
+   * The child is kept alive until the sign-in ends: the browser reaches the
+   * callback and the CLI exits by itself (`waitForLogin` notices), or the user
+   * pastes the code, which `submitLoginCode` writes to its stdin.
    */
   async beginLogin(): Promise<{ authUrl: string }> {
     this.cancelLogin();
@@ -414,6 +426,50 @@ export class ClaudeCodeClient implements ClaudeLauncher {
     return { ok: false, message: "Claude Code did not accept that code. Try connecting again." };
   }
 
+  /**
+   * Wait for the pending sign-in to end, however it ends, and report whether
+   * the account is now signed in. The Claude Code process exits once the
+   * browser has reached its callback, so the row can connect then instead of
+   * on its next status check.
+   */
+  async waitForLogin(timeoutMs = LOGIN_WAIT_TIMEOUT_MS): Promise<ProviderLoginResult> {
+    const login = this.pendingLogin;
+    if (!login) {
+      const status = await this.getStatus();
+      return status.kind === "signed-in" ? { ok: true, message: status.message } : { ok: false, message: "No Claude sign-in is waiting." };
+    }
+    const ended = await new Promise<boolean>((resolve) => {
+      if (login.child.exitCode !== null || (login.child.signalCode ?? null) !== null) {
+        resolve(true);
+        return;
+      }
+      const timer = setTimeout(() => {
+        login.child.off("exit", onExit);
+        resolve(false);
+      }, timeoutMs);
+      const onExit = () => {
+        clearTimeout(timer);
+        resolve(true);
+      };
+      login.child.once("exit", onExit);
+    });
+    if (!ended) {
+      if (this.pendingLogin === login) this.cancelLogin();
+      return { ok: false, message: "The Claude sign-in was not finished in time. Choose Connect to try again." };
+    }
+    if (this.pendingLogin === login) this.pendingLogin = null;
+    // Confirmed by a fresh read, never by the exit alone.
+    this.forgetStatus();
+    const status = await this.getStatus();
+    if (status.kind === "signed-in") return { ok: true, message: status.message };
+    return { ok: false, message: "The Claude sign-in did not finish. Choose Connect to try again." };
+  }
+
+  /** The printed fallback address of the sign-in in progress, if one is. */
+  pendingLoginUrl(): string | null {
+    return this.pendingLogin?.authUrl ?? null;
+  }
+
   cancelLogin(): void {
     if (!this.pendingLogin) return;
     const { child } = this.pendingLogin;
@@ -461,21 +517,58 @@ export class ClaudeCodeClient implements ClaudeLauncher {
    * called.
    */
   private async readInitializeModels(): Promise<unknown> {
+    const response = await this.control("models", [{ subtype: "initialize" }], {
+      timeout: "Claude Code did not list its models in time.",
+      exited: "Claude Code exited before listing its models.",
+      refused: "Claude Code refused to list its models.",
+    });
+    return response.models;
+  }
+
+  /**
+   * The data behind Claude Code's `/usage`: the claude.ai plan's five-hour and
+   * weekly windows. No model is called, and the scan of local transcripts that
+   * only `/usage` itself shows is skipped.
+   *
+   * `get_usage` is marked experimental in Claude Code's SDK and may be renamed
+   * or reshaped. Roqer uses it until a stable way exists; a Claude Code that
+   * refuses it, or answers in a shape the reader does not know, just leaves the
+   * meter empty.
+   */
+  async readUsage(): Promise<unknown> {
+    // Sent after `initialize`, as Claude Code's own SDK always does.
+    return this.control("usage", [{ subtype: "initialize" }, { subtype: "get_usage", skip_behaviors: true }], {
+      timeout: "Claude Code did not report its usage in time.",
+      exited: "Claude Code exited before reporting its usage.",
+      refused: "Claude Code did not report its usage.",
+    });
+  }
+
+  /**
+   * Send stream-json control requests to a short-lived Claude Code process and
+   * return the answer to the last one. The process is stopped either way.
+   */
+  private async control(
+    purpose: string,
+    requests: readonly JsonRecord[],
+    errors: { timeout: string; exited: string; refused: string },
+  ): Promise<JsonRecord> {
     const child = await this.launch(INITIALIZE_ARGS);
-    const requestId = `roqer-models-${this.now()}`;
+    const requestIds = requests.map((_, index) => `roqer-${purpose}-${this.now()}-${index}`);
+    const awaited = requestIds[requestIds.length - 1];
     try {
-      return await new Promise<unknown>((resolve, reject) => {
-        const timer = setTimeout(() => finish(new Error("Claude Code did not list its models in time.")), MODEL_LIST_TIMEOUT_MS);
+      return await new Promise<JsonRecord>((resolve, reject) => {
+        const timer = setTimeout(() => finish(new Error(errors.timeout)), CONTROL_TIMEOUT_MS);
         const lines = readline.createInterface({ input: child.stdout, crlfDelay: Infinity });
         let settled = false;
         let stderr = "";
-        const finish = (error: Error | null, models?: unknown) => {
+        const finish = (error: Error | null, response?: JsonRecord) => {
           if (settled) return;
           settled = true;
           clearTimeout(timer);
           lines.close();
           if (error) reject(error);
-          else resolve(models);
+          else resolve(response ?? {});
         };
         child.stderr.setEncoding("utf8");
         child.stderr.on("data", (chunk: string) => { stderr = `${stderr}${chunk}`.slice(-500); });
@@ -483,7 +576,7 @@ export class ClaudeCodeClient implements ClaudeLauncher {
         child.once("error", (error) => finish(error));
         lines.once("close", () => {
           const detail = stderr.trim();
-          finish(new Error(`Claude Code exited before listing its models.${detail ? ` ${detail}` : ""}`));
+          finish(new Error(`${errors.exited}${detail ? ` ${detail}` : ""}`));
         });
         lines.on("line", (line) => {
           let message: unknown;
@@ -494,18 +587,16 @@ export class ClaudeCodeClient implements ClaudeLauncher {
           }
           if (!isRecord(message) || message.type !== "control_response" || !isRecord(message.response)) return;
           const response = message.response;
-          if (response.request_id !== requestId) return;
+          if (response.request_id !== awaited) return;
           if (response.subtype !== "success" || !isRecord(response.response)) {
-            finish(new Error(typeof response.error === "string" ? response.error : "Claude Code refused to list its models."));
+            finish(new Error(typeof response.error === "string" ? response.error : errors.refused));
             return;
           }
-          finish(null, response.response.models);
+          finish(null, response.response);
         });
-        child.stdin.write(`${JSON.stringify({
-          type: "control_request",
-          request_id: requestId,
-          request: { subtype: "initialize" },
-        })}\n`);
+        requests.forEach((request, index) => {
+          child.stdin.write(`${JSON.stringify({ type: "control_request", request_id: requestIds[index], request })}\n`);
+        });
       });
     } finally {
       child.stdin.end();

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { ClaudeCodeClient, parseClaudeModels } from "./claude-cli";
+import { ClientNotInstalledError } from "./client-not-installed";
 import { FakeChildProcess } from "./test-child-process";
 
 /** Script one child per spawn, in order, and record the arguments used. */
@@ -74,6 +75,37 @@ test("Claude status surfaces unreadable output instead of claiming a sign-in", a
   assert.equal(status.kind, "unavailable");
 });
 
+test("Claude status tells a missing Claude Code from a failing one, and notices it once installed", async () => {
+  let installed = false;
+  const client = new ClaudeCodeClient({
+    spawnProcess: () => {
+      if (!installed) throw new ClientNotInstalledError("Claude Code could not be found.");
+      const child = new FakeChildProcess();
+      queueMicrotask(() => statusStep({ loggedIn: false, authMethod: "none" }, 1)(child));
+      return child.asChild();
+    },
+  });
+
+  const missing = await client.getStatus();
+  assert.equal(missing.kind, "not-installed");
+  assert.match(missing.message, /Claude Code was not found on this computer/);
+
+  installed = true;
+  assert.equal((await client.getStatus()).kind, "signed-out");
+});
+
+test("Claude status keeps a client that fails to launch unavailable, not missing", async () => {
+  const client = new ClaudeCodeClient({
+    spawnProcess: () => {
+      throw Object.assign(new Error("spawn EACCES"), { code: "EACCES" });
+    },
+  });
+
+  const status = await client.getStatus();
+  assert.equal(status.kind, "unavailable");
+  assert.match(status.message, /EACCES/);
+});
+
 /**
  * A message used to start `claude auth status` three times in a row before
  * anything reached the model: to admit the run, inside the model listing, and
@@ -140,13 +172,70 @@ test("Claude sign-in returns the authorization URL and finishes with a pasted co
   );
   const client = new ClaudeCodeClient({ spawnProcess: script.spawnProcess });
 
+  assert.equal(client.pendingLoginUrl(), null);
   const login = await client.beginLogin();
   assert.equal(login.authUrl, "https://claude.com/cai/oauth/authorize?code=true");
   assert.deepEqual(script.calls[0], ["auth", "login", "--claudeai"]);
+  // The printed address is kept as the fallback page the row can open on request.
+  assert.equal(client.pendingLoginUrl(), login.authUrl);
 
   const result = await client.submitLoginCode("code-123#state");
   assert.equal(result.ok, true);
+  assert.equal(client.pendingLoginUrl(), null);
   assert.match(result.message, /Max connected through Claude Code/);
+});
+
+test("Claude sign-in connects the moment the browser reaches Claude Code's callback, without a code", async () => {
+  let loginChild: FakeChildProcess | null = null;
+  const script = scripted(
+    (child) => {
+      loginChild = child;
+      child.write("Opening browser to sign in…\nIf the browser didn't open, visit: https://claude.com/cai/oauth/authorize?code=true\nPaste code here if prompted > ");
+    },
+    statusStep({ loggedIn: true, authMethod: "claude.ai", subscriptionType: "pro" }),
+  );
+  const client = new ClaudeCodeClient({ spawnProcess: script.spawnProcess });
+  await client.beginLogin();
+
+  let settled = false;
+  const waited = client.waitForLogin().then((result) => { settled = true; return result; });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(settled, false);
+
+  // The callback page says "good to go" and Claude Code exits by itself.
+  loginChild!.finish(0);
+  const result = await waited;
+  assert.equal(result.ok, true);
+  assert.match(result.message, /Pro connected through Claude Code/);
+  // Confirmed by a fresh status read, not by the exit alone.
+  assert.deepEqual(script.calls[1], ["auth", "status", "--json"]);
+});
+
+test("a Claude sign-in that ends without an account, or is never finished, reports it", async () => {
+  const script = scripted(
+    (child) => {
+      child.write("visit: https://claude.com/cai/oauth/authorize\n");
+      queueMicrotask(() => child.finish(1));
+    },
+    statusStep({ loggedIn: false, authMethod: "none" }, 1),
+  );
+  const client = new ClaudeCodeClient({ spawnProcess: script.spawnProcess });
+  await client.beginLogin();
+  const ended = await client.waitForLogin();
+  assert.equal(ended.ok, false);
+  assert.match(ended.message, /did not finish/);
+
+  let kept: FakeChildProcess | null = null;
+  const lingering = scripted((child) => {
+    kept = child;
+    child.write("visit: https://claude.com/cai/oauth/authorize\n");
+  });
+  const waiting = new ClaudeCodeClient({ spawnProcess: lingering.spawnProcess });
+  await waiting.beginLogin();
+  const expired = await waiting.waitForLogin(20);
+  assert.equal(expired.ok, false);
+  assert.match(expired.message, /not finished in time/);
+  assert.equal(kept!.killed, true);
 });
 
 test("Claude sign-in rejects a code that was never asked for, and malformed codes", async () => {
@@ -257,6 +346,52 @@ function initializeStep(models: unknown) {
 }
 
 const SIGNED_IN = { loggedIn: true, authMethod: "claude.ai", subscriptionType: "pro" };
+
+/** Answer `initialize` and then `get_usage`, recording each request as Claude Code received it. */
+function usageStep(answer: (request: Record<string, unknown>) => Record<string, unknown>, received: Array<Record<string, unknown>>) {
+  return (child: FakeChildProcess) => {
+    child.stdin.setEncoding("utf8");
+    child.stdin.on("data", (chunk: string) => {
+      for (const line of chunk.split("\n").filter(Boolean)) {
+        const message = JSON.parse(line) as { type: string; request_id: string; request: Record<string, unknown> };
+        assert.equal(message.type, "control_request");
+        received.push(message.request);
+        const response = message.request.subtype === "initialize"
+          ? { subtype: "success", request_id: message.request_id, response: { models: [] } }
+          : { request_id: message.request_id, ...answer(message.request) };
+        child.writeLine({ type: "control_response", response });
+      }
+    });
+  };
+}
+
+const CLAUDE_USAGE = {
+  subscription_type: "max",
+  rate_limits_available: true,
+  rate_limits: {
+    five_hour: { utilization: 38, resets_at: "2026-09-27T15:40:00Z" },
+    seven_day: { utilization: 71.5, resets_at: "2026-09-30T09:00:00Z" },
+  },
+  behaviors: null,
+};
+
+test("Claude usage is read with get_usage after initialize, without the transcript scan", async () => {
+  const received: Array<Record<string, unknown>> = [];
+  const script = scripted(usageStep(() => ({ subtype: "success", response: CLAUDE_USAGE }), received));
+  const client = new ClaudeCodeClient({ spawnProcess: script.spawnProcess });
+
+  assert.deepEqual(await client.readUsage(), CLAUDE_USAGE);
+  assert.deepEqual(received, [{ subtype: "initialize" }, { subtype: "get_usage", skip_behaviors: true }]);
+  // The same short-lived, tool-less process the model listing uses.
+  assert.ok(script.calls[0].includes("--print") && script.calls[0].includes("--strict-mcp-config"));
+});
+
+test("a Claude Code that does not know get_usage is an error, not an empty report", async () => {
+  const script = scripted(usageStep(() => ({ subtype: "error", error: "Unknown control request subtype: get_usage" }), []));
+  const client = new ClaudeCodeClient({ spawnProcess: script.spawnProcess });
+
+  await assert.rejects(() => client.readUsage(), /Unknown control request subtype: get_usage/);
+});
 
 test("The Claude catalog is the list Claude Code itself offers the account", async () => {
   const script = scripted(statusStep(SIGNED_IN), initializeStep(INITIALIZE_MODELS));

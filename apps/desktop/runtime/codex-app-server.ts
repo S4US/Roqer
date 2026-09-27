@@ -7,7 +7,9 @@ import {
   type ChatGptModel,
   type ChatGptModelCatalog,
   type ChatGptStatus,
+  type ProviderLoginResult,
 } from "../shared/provider";
+import { ClientNotInstalledError } from "./client-not-installed";
 import { resolveCodexExecutable } from "./codex-executable";
 
 type JsonRecord = Record<string, unknown>;
@@ -106,6 +108,11 @@ function rpcError(value: unknown): Error {
   return new Error("Codex app-server returned an error.");
 }
 
+/** How often a sign-in in the browser is checked for, besides Codex's own notice. */
+const LOGIN_POLL_MS = 3_000;
+/** How long a sign-in may wait in the browser before it is given up. */
+const LOGIN_TIMEOUT_MS = 10 * 60_000;
+
 /**
  * Small JSON-RPC client for the supported Codex app-server stdio protocol.
  * It owns the child process and keeps every credential inside Codex itself.
@@ -124,6 +131,7 @@ export class CodexAppServerClient {
   private readonly requestHandlers = new Set<AppServerRequestHandler>();
   private readonly disconnectListeners = new Set<(error: Error) => void>();
   private disconnectError: Error | null = null;
+  private readonly loginWaits = new Map<string, (result: ProviderLoginResult) => void>();
   private stderrTail = "";
 
   constructor(options: CodexAppServerOptions = {}) {
@@ -188,6 +196,9 @@ export class CodexAppServerClient {
         ...(planType ? { planType } : {}),
       };
     } catch (error) {
+      if (error instanceof ClientNotInstalledError) {
+        return { kind: "not-installed", message: "Codex was not found on this computer. Install it to use ChatGPT." };
+      }
       const detail = error instanceof Error ? error.message : String(error);
       return { kind: "unavailable", message: `Codex app-server is unavailable: ${detail}` };
     }
@@ -204,6 +215,69 @@ export class CodexAppServerClient {
       throw new Error("Codex did not return a ChatGPT sign-in URL.");
     }
     return { loginId: result.loginId, authUrl: result.authUrl };
+  }
+
+  /**
+   * Wait for a sign-in started with `beginChatGptLogin` to finish in the
+   * browser. Codex announces it with `account/login/completed` the moment its
+   * callback is reached, so Roqer can connect then rather than on its next
+   * status check. Call it before opening the browser, so a quick sign-in is
+   * not missed.
+   *
+   * The account is also read every few seconds in case the notification never
+   * arrives. The wait ends, and the sign-in is cancelled, after `timeoutMs`.
+   */
+  waitForChatGptLogin(
+    loginId: string,
+    options: { timeoutMs?: number; pollMs?: number } = {},
+  ): Promise<ProviderLoginResult> {
+    return new Promise((resolve) => {
+      let settled = false;
+      const settle = (result: ProviderLoginResult) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timeout);
+        clearInterval(poll);
+        stopNotifications();
+        stopDisconnect();
+        this.loginWaits.delete(loginId);
+        resolve(result);
+      };
+      this.loginWaits.set(loginId, settle);
+      const stopNotifications = this.subscribe((notification) => {
+        if (notification.method !== "account/login/completed") return;
+        const id = notification.params.loginId;
+        if (typeof id === "string" && id !== loginId) return;
+        if (notification.params.success === true) {
+          settle({ ok: true, message: "Signed in with ChatGPT." });
+          return;
+        }
+        const error = notification.params.error;
+        settle({ ok: false, message: typeof error === "string" && error !== "" ? error : "The ChatGPT sign-in did not finish." });
+      });
+      const stopDisconnect = this.onDisconnect(() => {
+        settle({ ok: false, message: "Codex stopped before the ChatGPT sign-in finished." });
+      });
+      const poll = setInterval(() => {
+        void this.getChatGptStatus().then((status) => {
+          if (status.kind === "signed-in") settle({ ok: true, message: status.message });
+        });
+      }, options.pollMs ?? LOGIN_POLL_MS);
+      const timeout = setTimeout(() => {
+        settle({ ok: false, message: "The ChatGPT sign-in was not finished in time. Choose Connect to try again." });
+        void this.cancelChatGptLogin(loginId);
+      }, options.timeoutMs ?? LOGIN_TIMEOUT_MS);
+    });
+  }
+
+  /** Stop a sign-in waiting in the browser; its wait ends as cancelled. */
+  async cancelChatGptLogin(loginId: string): Promise<void> {
+    this.loginWaits.get(loginId)?.({ ok: false, message: "Sign-in cancelled." });
+    try {
+      await this.request("account/login/cancel", { loginId });
+    } catch {
+      // Already finished, or Codex is gone: either way nothing is waiting.
+    }
   }
 
   async listChatGptModels(): Promise<ChatGptModelCatalog> {
