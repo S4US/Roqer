@@ -2025,30 +2025,46 @@ function lineNumber(row: DiffRow): { text: string; title?: string } {
  * real context lines and folds only over long unchanged regions, so a hunk
  * reads as a region of a file rather than as a pair of coloured lines, and
  * `diff-view.ts` supplies the Luau tokens.
+ *
+ * The gutter is one pinned column beside the code rather than a pinned cell on
+ * every row. Pinning each row's cells cost the browser two sticky elements per
+ * line, and a long chat's diffs carried over a thousand, reworked on every
+ * frame: typing, scrolling and opening a group all lagged with them.
  */
 function CodeSurface({ rows, language, label }: { rows: DiffRow[]; language?: string; label: string }) {
   const tokens = useMemo(() => highlightRows(rows, language), [rows, language]);
   const style = { "--gutter": gutterWidth(rows) } as CSSProperties;
+  const folded = (row: DiffRow) => row.kind === "collapse" || row.kind === "truncated";
+  const foldClass = (row: DiffRow) => `code-fold${row.kind === "truncated" ? " code-fold-cut" : ""}`;
 
   return <div className="code-surface" role="region" aria-label={label}>
     <div className="code-lines" style={style}>
-      {rows.map((row, index) => {
-        if (row.kind === "collapse" || row.kind === "truncated") {
-          return <div className={`code-fold${row.kind === "truncated" ? " code-fold-cut" : ""}`} key={index}>
-            <span className="code-fold-body">
-              <span className="code-fold-mark" aria-hidden="true">⋯</span>
-              <span>{row.text}</span>
-              {row.hidden && <span className="code-fold-range">{row.hidden.newFrom}–{row.hidden.newTo}</span>}
-            </span>
+      <div className="code-rail" aria-hidden="true">
+        {rows.map((row, index) => {
+          if (folded(row)) return <div className={foldClass(row)} key={index}><span className="code-fold-spacer" /></div>;
+          const number = lineNumber(row);
+          return <div className={`code-rail-row code-${row.kind}`} key={index}>
+            <span className="code-gutter" title={number.title}>{number.text}</span>
+            <span className="code-sign">{row.marker === " " ? "" : row.marker}</span>
           </div>;
-        }
-        const number = lineNumber(row);
-        return <div className={`code-line code-${row.kind}`} key={index}>
-          <span className="code-gutter" aria-hidden="true" title={number.title}>{number.text}</span>
-          <span className="code-sign" aria-hidden="true">{row.marker === " " ? "" : row.marker}</span>
-          <code className="code-text"><CodeTokens tokens={tokens[index]} /></code>
-        </div>;
-      })}
+        })}
+      </div>
+      <div className="code-rows">
+        {rows.map((row, index) => {
+          if (folded(row)) {
+            return <div className={foldClass(row)} key={index}>
+              <span className="code-fold-body">
+                <span className="code-fold-mark" aria-hidden="true">⋯</span>
+                <span>{row.text}</span>
+                {row.hidden && <span className="code-fold-range">{row.hidden.newFrom}–{row.hidden.newTo}</span>}
+              </span>
+            </div>;
+          }
+          return <div className={`code-line code-${row.kind}`} key={index}>
+            <code className="code-text"><CodeTokens tokens={tokens[index]} /></code>
+          </div>;
+        })}
+      </div>
     </div>
   </div>;
 }
