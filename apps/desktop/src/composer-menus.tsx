@@ -147,9 +147,11 @@ export function ModelMenu({ provider, status, catalog, selectedModel, effort, di
       const models = entry?.catalog?.models ?? [];
       const note = entry === undefined
         ? "Checking…"
-        : entry.status.kind !== "signed-in"
-          ? id === "custom" ? "No endpoints yet" : "Not connected"
-          : models.length === 0 ? entry.catalog?.message ?? "Loading models…" : undefined;
+        : entry.status.kind === "not-installed"
+          ? "Not installed"
+          : entry.status.kind !== "signed-in"
+            ? id === "custom" ? "No endpoints yet" : "Not connected"
+            : models.length === 0 ? entry.catalog?.message ?? "Loading models…" : undefined;
       if (id === "custom" && models.length > 0) {
         // Your own models are grouped by the endpoint they run on.
         const byEndpoint = new Map<string, ProviderModel[]>();

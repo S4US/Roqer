@@ -8,6 +8,7 @@ import {
   type ChatGptModelCatalog,
   type ChatGptStatus,
 } from "../shared/provider";
+import { ClientNotInstalledError } from "./client-not-installed";
 import { resolveCodexExecutable } from "./codex-executable";
 
 type JsonRecord = Record<string, unknown>;
@@ -188,6 +189,9 @@ export class CodexAppServerClient {
         ...(planType ? { planType } : {}),
       };
     } catch (error) {
+      if (error instanceof ClientNotInstalledError) {
+        return { kind: "not-installed", message: "Codex was not found on this computer. Install it to use ChatGPT." };
+      }
       const detail = error instanceof Error ? error.message : String(error);
       return { kind: "unavailable", message: `Codex app-server is unavailable: ${detail}` };
     }

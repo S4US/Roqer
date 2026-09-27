@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { ClaudeCodeClient, parseClaudeModels } from "./claude-cli";
+import { ClientNotInstalledError } from "./client-not-installed";
 import { FakeChildProcess } from "./test-child-process";
 
 /** Script one child per spawn, in order, and record the arguments used. */
@@ -72,6 +73,37 @@ test("Claude status surfaces unreadable output instead of claiming a sign-in", a
 
   const status = await client.getStatus();
   assert.equal(status.kind, "unavailable");
+});
+
+test("Claude status tells a missing Claude Code from a failing one, and notices it once installed", async () => {
+  let installed = false;
+  const client = new ClaudeCodeClient({
+    spawnProcess: () => {
+      if (!installed) throw new ClientNotInstalledError("Claude Code could not be found.");
+      const child = new FakeChildProcess();
+      queueMicrotask(() => statusStep({ loggedIn: false, authMethod: "none" }, 1)(child));
+      return child.asChild();
+    },
+  });
+
+  const missing = await client.getStatus();
+  assert.equal(missing.kind, "not-installed");
+  assert.match(missing.message, /Claude Code was not found on this computer/);
+
+  installed = true;
+  assert.equal((await client.getStatus()).kind, "signed-out");
+});
+
+test("Claude status keeps a client that fails to launch unavailable, not missing", async () => {
+  const client = new ClaudeCodeClient({
+    spawnProcess: () => {
+      throw Object.assign(new Error("spawn EACCES"), { code: "EACCES" });
+    },
+  });
+
+  const status = await client.getStatus();
+  assert.equal(status.kind, "unavailable");
+  assert.match(status.message, /EACCES/);
 });
 
 /**

@@ -269,6 +269,8 @@ function AccountRow({ provider, onChanged }: { provider: ProviderId; onChanged: 
   };
 
   const signedIn = status.kind === "signed-in";
+  // Signing in needs the client, so without it the row can only look again.
+  const canCheckOnly = signedIn || status.kind === "not-installed";
   const client = ACCOUNT_CLIENTS[provider];
   const detail = signedIn
     ? [status.planType === undefined ? undefined : capitalized(status.planType), status.email, client === undefined ? undefined : `through ${client}`]
@@ -278,7 +280,7 @@ function AccountRow({ provider, onChanged }: { provider: ProviderId; onChanged: 
 
   return <>
     <SettingsRow title={name} detail={detail}>
-      {signedIn
+      {canCheckOnly
         ? <button type="button" className="small-button" onClick={() => void refresh()}>Check</button>
         : <button type="button" className="small-button" disabled={pending || status.kind === "checking"} onClick={() => void connect()}>{pending ? "Opening…" : "Connect"}</button>}
     </SettingsRow>

@@ -49,6 +49,9 @@ export function providerLabel(provider: ProviderId): string {
 /** Sanitized provider state that is safe to expose to the renderer. */
 export type ProviderStatus =
   | { kind: "checking"; message: string }
+  /** The client the subscription runs through (Codex, Claude Code) was not found. */
+  | { kind: "not-installed"; message: string }
+  /** The client is there but failing; installing it again is not the answer. */
   | { kind: "unavailable"; message: string }
   | { kind: "signed-out"; message: string }
   | {
@@ -108,7 +111,7 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
 
 export function isProviderStatus(value: unknown): value is ProviderStatus {
   if (!isRecord(value) || typeof value.kind !== "string" || typeof value.message !== "string") return false;
-  if (!["checking", "unavailable", "signed-out", "signed-in"].includes(value.kind)) return false;
+  if (!["checking", "not-installed", "unavailable", "signed-out", "signed-in"].includes(value.kind)) return false;
   if (value.kind !== "signed-in") return true;
   return (value.email === undefined || typeof value.email === "string") &&
     (value.planType === undefined || typeof value.planType === "string");

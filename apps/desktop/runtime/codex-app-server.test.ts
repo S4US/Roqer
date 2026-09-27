@@ -4,6 +4,7 @@ import { PassThrough } from "node:stream";
 import test from "node:test";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 
+import { ClientNotInstalledError } from "./client-not-installed";
 import { CodexAppServerClient, codexAppServerArgs, codexChildEnvironment } from "./codex-app-server";
 
 type FakeProcess = ChildProcessWithoutNullStreams & {
@@ -63,6 +64,39 @@ test("app-server initializes and sanitizes a managed ChatGPT account", async () 
   });
   assert.deepEqual(methods.slice(0, 3), ["initialize", "initialized", "account/read"]);
   client.close();
+});
+
+test("app-server tells a missing Codex from a failing one, and notices it once installed", async () => {
+  let installed = false;
+  const client = new CodexAppServerClient({
+    spawnProcess: () => {
+      if (!installed) throw new ClientNotInstalledError("Codex could not be found.");
+      return fakeProcess((message, send) => {
+        if (message.method === "initialize") send({ id: message.id, result: {} });
+        if (message.method === "account/read") send({ id: message.id, result: { account: null } });
+      });
+    },
+  });
+
+  const missing = await client.getChatGptStatus();
+  assert.equal(missing.kind, "not-installed");
+  assert.match(missing.message, /Codex was not found on this computer/);
+
+  installed = true;
+  assert.equal((await client.getChatGptStatus()).kind, "signed-out");
+  client.close();
+});
+
+test("app-server keeps a Codex that fails to start unavailable, not missing", async () => {
+  const client = new CodexAppServerClient({
+    spawnProcess: () => {
+      throw new Error("spawn EACCES");
+    },
+  });
+
+  const status = await client.getChatGptStatus();
+  assert.equal(status.kind, "unavailable");
+  assert.match(status.message, /EACCES/);
 });
 
 test("app-server refuses a local API credential because Roqer accepts ChatGPT subscriptions only", async () => {

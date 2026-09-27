@@ -11,6 +11,7 @@ import {
   type ReasoningEffort,
 } from "../shared/provider";
 import { resolveClaudeExecutable } from "./claude-executable";
+import { ClientNotInstalledError } from "./client-not-installed";
 
 /**
  * Roqer's client for the locally installed Claude Code CLI.
@@ -274,6 +275,9 @@ export class ClaudeCodeClient implements ClaudeLauncher {
     try {
       output = await this.collect(["auth", "status", "--json"], STATUS_TIMEOUT_MS);
     } catch (error) {
+      if (error instanceof ClientNotInstalledError) {
+        return { kind: "not-installed", message: "Claude Code was not found on this computer. Install it to use Claude." };
+      }
       const detail = error instanceof Error ? error.message : String(error);
       return { kind: "unavailable", message: `Claude Code is unavailable: ${detail}` };
     }

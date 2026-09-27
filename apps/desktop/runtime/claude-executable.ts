@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 
+import { ClientNotInstalledError } from "./client-not-installed";
 import { windowsNpmPackageRoots } from "./windows-npm";
 
 export type ClaudeExecutableLookupOptions = {
@@ -82,7 +83,7 @@ export async function resolveClaudeExecutable(options: ClaudeExecutableLookupOpt
       if (await isFile(candidate, NPM_PLACEHOLDER_BYTES)) return candidate;
     }
   }
-  throw new Error(
+  throw new ClientNotInstalledError(
     "Claude Code could not be found. Install it from claude.com/claude-code, or set WORKBENCH_CLAUDE_EXECUTABLE to the claude executable.",
   );
 }

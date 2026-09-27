@@ -5,6 +5,7 @@ import path from "node:path";
 import test from "node:test";
 
 import { resolveClaudeExecutable } from "./claude-executable";
+import { ClientNotInstalledError } from "./client-not-installed";
 
 test("Claude executable discovery finds the native Windows install outside PATH", async () => {
   const temporary = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-claude-"));
@@ -117,6 +118,6 @@ test("Claude executable discovery honors the explicit main-process override", as
 test("Claude executable discovery reports a usable error when nothing is installed", async () => {
   await assert.rejects(
     () => resolveClaudeExecutable({ env: { PATH: "", USERPROFILE: "Z:\\nonexistent" }, platform: "win32" }),
-    /WORKBENCH_CLAUDE_EXECUTABLE/,
+    (error) => error instanceof ClientNotInstalledError && /WORKBENCH_CLAUDE_EXECUTABLE/.test(error.message),
   );
 });

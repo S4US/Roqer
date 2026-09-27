@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
+import { ClientNotInstalledError } from "./client-not-installed";
 import { resolveCodexExecutable } from "./codex-executable";
 
 test("Codex executable discovery finds the versioned Windows desktop install", async () => {
@@ -111,7 +112,7 @@ test("Codex executable discovery reports a usable error when nothing is installe
         platform: "win32",
         arch: "x64",
       }),
-      /WORKBENCH_CODEX_EXECUTABLE/,
+      (error) => error instanceof ClientNotInstalledError && /WORKBENCH_CODEX_EXECUTABLE/.test(error.message),
     );
   });
 });

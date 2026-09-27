@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 
+import { ClientNotInstalledError } from "./client-not-installed";
 import { windowsNpmPackageRoots } from "./windows-npm";
 
 export type CodexExecutableLookupOptions = {
@@ -106,7 +107,7 @@ export async function resolveCodexExecutable(options: CodexExecutableLookupOptio
   for (const candidate of candidates) {
     if (await isFile(candidate)) return candidate;
   }
-  throw new Error(
+  throw new ClientNotInstalledError(
     "Codex could not be found. Install Codex or the Codex desktop app, or set WORKBENCH_CODEX_EXECUTABLE to codex.exe.",
   );
 }
