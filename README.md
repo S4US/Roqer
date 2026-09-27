@@ -27,6 +27,12 @@ a sword combat system with a combo, a dash, and two special attacks, in a Studio
   <img src="docs/media/eclipse-blade.webp" alt="A Roblox Studio playtest of the Eclipse Blade: the player draws the sword, dashes, lands a hit combo on training dummies, and uses the Crescent and Eclipse attacks, with ability cooldowns in the hotbar" width="900">
 </p>
 
+a second weapon, the Scarlet Requiem, with its own combo, a flash step, and three special attacks, ending in a red domain that slashes every dummy inside it.
+
+<p align="center">
+  <img src="docs/media/scarlet-requiem.webp" alt="A Roblox Studio playtest of the Scarlet Requiem: the player uses its combo, Flash Step, Rift, and Lotus attacks on training, moving, and heavy dummies, then casts Requiem, a red domain that slashes every dummy inside it, with ability cooldowns in the hotbar" width="900">
+</p>
+
 ## Features
 
 - **Your own model.** ChatGPT through the Codex app, Claude through Claude Code, or any OpenAI- or Anthropic-compatible endpoint, including local models.
