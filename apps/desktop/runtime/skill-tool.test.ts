@@ -215,12 +215,28 @@ test("a batch request is validated before anything is read", async () => {
     () => run({ name: "roblox-test", resource: "a.md", resources: ["b.md"] }),
     /either `resource` or `resources`, not both/,
   );
-  await assert.rejects(() => run({ name: "roblox-test", resources: [] }), /non-empty array/);
+  await assert.rejects(() => run({ name: "roblox-test", resources: "b.md" }), /must be an array/);
   await assert.rejects(() => run({ name: "roblox-test", resources: [7] }), /only relative skill-resource paths/);
   await assert.rejects(
     () => run({ name: "roblox-test", resources: Array.from({ length: 9 }, (_, i) => `${i}.md`) }),
     /at most 8 resources per call/,
   );
+});
+
+test("an optional field a model filled with null or nothing is read as left out", async () => {
+  // OpenAI's models send every property in the schema and null the ones they
+  // mean to omit. Each of these used to be refused, the last two as "not both",
+  // and a model that retried the same way reported the skill would not load.
+  const run = createSkillToolRunner(library);
+  assert.match(await run({ name: "roblox-test", resource: null }), /resource="SKILL.md"/);
+  assert.match(await createSkillToolRunner(library)({ name: "roblox-test", resources: null }), /resource="SKILL.md"/);
+  assert.match(await createSkillToolRunner(library)({ name: "roblox-test", resource: "", resources: [] }), /resource="SKILL.md"/);
+  assert.match(await createSkillToolRunner(library)({ name: "roblox-test", resource: null, resources: null }), /resource="SKILL.md"/);
+  const batch = await createSkillToolRunner(library)({ name: "roblox-test", resource: null, resources: ["a.md", "b.md"] });
+  assert.match(batch, /resource="a.md"/);
+  assert.match(batch, /resource="b.md"/);
+  const single = await createSkillToolRunner(library)({ name: "roblox-test", resource: "a.md", resources: null });
+  assert.match(single, /resource="a.md"/);
 });
 
 test("a resource repeated inside one call is read once and answered once", async () => {

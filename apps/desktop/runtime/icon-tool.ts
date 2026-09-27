@@ -203,12 +203,15 @@ export function parseIconToolInput(value: unknown): { queries: string[]; categor
   if (value.queries.some((query) => typeof query !== "string" || query.trim() === "")) {
     throw new Error("resolve_icon `queries` must contain only non-empty strings.");
   }
-  if (value.categoryHint !== undefined && typeof value.categoryHint !== "string") {
+  // A model that fills every schema property sends `null` or "" for a hint it
+  // does not have, which means the same as leaving it out.
+  const hint = value.categoryHint === null || value.categoryHint === "" ? undefined : value.categoryHint;
+  if (hint !== undefined && typeof hint !== "string") {
     throw new Error("resolve_icon `categoryHint` must be a catalog category name.");
   }
   return {
     queries: (value.queries as string[]).map((query) => query.trim()),
-    ...(typeof value.categoryHint === "string" ? { categoryHint: value.categoryHint } : {}),
+    ...(typeof hint === "string" ? { categoryHint: hint } : {}),
   };
 }
 

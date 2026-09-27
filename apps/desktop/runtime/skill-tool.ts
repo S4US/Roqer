@@ -81,16 +81,33 @@ export type SkillToolRunner = {
   isLoaded(name: string, resource?: string): boolean;
 };
 
-export function parseSkillToolInput(value: unknown): SkillToolRequest {
-  if (!isRecord(value) || typeof value.name !== "string") {
+/**
+ * An optional field the model filled with nothing.
+ *
+ * Some models, OpenAI's especially, send every property in a tool's schema and
+ * mark the ones they mean to leave out with `null`, or with an empty string or
+ * list. Read as values, those turned every such call into a refusal, one
+ * saying `resource` and `resources` were both given when neither was, and a
+ * model that retried the same way concluded the guidance could not be loaded.
+ */
+const omitted = (value: unknown): boolean =>
+  value === undefined || value === null || value === "" || (Array.isArray(value) && value.length === 0);
+
+export function parseSkillToolInput(input: unknown): SkillToolRequest {
+  if (!isRecord(input) || typeof input.name !== "string") {
     throw new Error("load_skill requires a skill name.");
   }
+  const value = {
+    name: input.name,
+    resource: omitted(input.resource) ? undefined : input.resource,
+    resources: omitted(input.resources) ? undefined : input.resources,
+  };
   if (value.resource !== undefined && value.resources !== undefined) {
     throw new Error("load_skill takes either `resource` or `resources`, not both. Put every path in `resources`.");
   }
   if (value.resources !== undefined) {
-    if (!Array.isArray(value.resources) || value.resources.length === 0) {
-      throw new Error("load_skill `resources` must be a non-empty array of relative skill-resource paths.");
+    if (!Array.isArray(value.resources)) {
+      throw new Error("load_skill `resources` must be an array of relative skill-resource paths.");
     }
     if (value.resources.length > MAX_SKILL_RESOURCES) {
       throw new Error(`load_skill accepts at most ${MAX_SKILL_RESOURCES} resources per call; ${value.resources.length} were requested.`);
