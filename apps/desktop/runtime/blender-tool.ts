@@ -39,7 +39,7 @@ export function blenderToolDefinition(): Readonly<{ name: typeof BLENDER_TOOL_NA
         continue_from: {
           type: "string",
           pattern: BLENDER_JOB_ID_PATTERN,
-          description: "The id of an earlier job in this chat whose saved scene the script starts from, as that job's result gave it. Omit to start from an empty scene.",
+          description: "The id of an earlier job in this chat whose saved scene the script starts from, as that job's result gave it. Leave it out to start from an empty scene, as a chat's first job always does: no id stands for an empty scene.",
         },
         timeout_seconds: {
           type: "number",

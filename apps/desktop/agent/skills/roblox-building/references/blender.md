@@ -14,7 +14,8 @@ background. `bpy` is imported and `OUTPUT_DIR` is defined. The script starts on
 an empty scene, or, with `continue_from` set to an earlier job's id, on the
 scene that job saved. Every job whose script finishes saves its scene, and its
 result gives the job's id and lists the scene's objects by name, size and
-centre, so the next job reads what exists rather than recalling it.
+centre, so the next job reads what exists rather than recalling it. A chat's
+first job leaves `continue_from` out: no id stands for an empty scene.
 
 A small prop is one job. A detailed model is built in stages, one job per
 stage, each continuing from the last: for a vehicle, the frame; then the body
