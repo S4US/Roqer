@@ -154,6 +154,12 @@ test("a failed catalog read stays retryable", async () => {
   assert.match(await run({ queries: ["coin"] }), /Coin \(Currency\)/);
 });
 
+test("a category hint a model filled with null or nothing is read as left out", async () => {
+  const run = createIconToolRunner(fakeLibrary(FILES));
+  assert.equal(await run({ queries: ["Coin"], categoryHint: null }), await run({ queries: ["Coin"] }));
+  assert.equal(await run({ queries: ["Coin"], categoryHint: "" }), await run({ queries: ["Coin"] }));
+});
+
 test("a malformed request is refused before the catalog is read", async () => {
   const run = createIconToolRunner(fakeLibrary(FILES));
   await assert.rejects(() => run({ queries: [] }), /non-empty `queries` array/);
