@@ -42,6 +42,7 @@ import {
   type CustomModelTestResult,
 } from "../shared/custom-providers";
 import { ClaudeCodeClient } from "../runtime/claude-cli";
+import { ClaudeLimitsTracker } from "../runtime/claude-limits";
 import {
   ClientInstallRunner, clientInstallerFor, clientInstallSupported, installCommand, type ClientInstaller,
 } from "../runtime/client-installer";
@@ -158,6 +159,7 @@ async function initializeStorage(): Promise<void> {
 }
 let codexAppServer: CodexAppServerClient | null = null;
 let codexLimits: CodexLimitsTracker | null = null;
+let claudeLimits: ClaudeLimitsTracker | null = null;
 let claudeCode: ClaudeCodeClient | null = null;
 const clientInstalls = new ClientInstallRunner();
 /** Set from the confirmation onwards, so a second request cannot open a second dialog. */
@@ -787,6 +789,11 @@ function claudeProvider(): ClaudeCodeClient {
   return claudeCode;
 }
 
+function claudePlanLimits(): ClaudeLimitsTracker {
+  claudeLimits ??= new ClaudeLimitsTracker({ source: claudeProvider() });
+  return claudeLimits;
+}
+
 /**
  * Sign-in hosts a provider CLI is allowed to send the user to. A vendor tool
  * that returns anything else is not opened: the address comes from a child
@@ -864,8 +871,10 @@ async function loginProvider(event: IpcMainInvokeEvent, value: unknown): Promise
     if (provider === "custom") return { ok: false, message: current.message };
 
     // A new sign-in may be a different account; nothing it did not run may carry over.
-    if (provider === "claude") await claudeSessions.closeAll();
-    else {
+    if (provider === "claude") {
+      await claudeSessions.closeAll();
+      claudeLimits?.forget();
+    } else {
       await codexThreads.closeAll();
       codexLimits?.forget();
     }
@@ -889,13 +898,15 @@ async function loginProvider(event: IpcMainInvokeEvent, value: unknown): Promise
 }
 
 /**
- * The plan's usage limits, as the provider's client reports them. Only Codex
- * reports them outside a run; the others show no meter rather than a guess.
+ * The plan's usage limits, as the provider's client reports them. Custom
+ * endpoints have no plan, and show no meter rather than a guess.
  */
 async function getProviderLimits(event: IpcMainInvokeEvent, value: unknown): Promise<ProviderLimits> {
   if (!isTrusted(event.sender)) return NO_LIMITS;
-  if (providerArgument(value) !== "chatgpt") return NO_LIMITS;
-  return chatGptLimits().read();
+  const provider = providerArgument(value);
+  if (provider === "chatgpt") return chatGptLimits().read();
+  if (provider === "claude") return claudePlanLimits().read();
+  return NO_LIMITS;
 }
 
 /**

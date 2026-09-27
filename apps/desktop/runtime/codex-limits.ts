@@ -1,5 +1,6 @@
-import { NO_LIMITS, type ProviderLimits, type UsageWindow } from "../shared/provider-limits";
+import type { ProviderLimits, UsageWindow } from "../shared/provider-limits";
 import type { AppServerNotification } from "./codex-app-server";
+import { LimitsCache } from "./limits-cache";
 
 type JsonRecord = Record<string, unknown>;
 
@@ -61,59 +62,33 @@ const READ_INTERVAL_MS = 60_000;
  * so a meter polled from the interface costs almost nothing.
  */
 export class CodexLimitsTracker {
-  private readonly source: CodexLimitsSource;
-  private readonly now: () => number;
-  private readonly readIntervalMs: number;
-  private latest: (CodexLimitSnapshot & { observedAt: number }) | null = null;
-  private lastAttemptAt = Number.NEGATIVE_INFINITY;
-  private reading: Promise<void> | null = null;
-  private generation = 0;
+  private readonly cache: LimitsCache<CodexLimitSnapshot>;
 
   constructor(options: { source: CodexLimitsSource; now?: () => number; readIntervalMs?: number }) {
-    this.source = options.source;
-    this.now = options.now ?? Date.now;
-    this.readIntervalMs = options.readIntervalMs ?? READ_INTERVAL_MS;
-    this.source.subscribe((notification) => this.onNotification(notification));
+    const { source } = options;
+    this.cache = new LimitsCache({
+      intervalMs: options.readIntervalMs ?? READ_INTERVAL_MS,
+      ...(options.now === undefined ? {} : { now: options.now }),
+      fetch: async () => {
+        // `null`, not `{}`: releases before the method took parameters accept only that.
+        const result = await source.request("account/rateLimits/read", null);
+        if (!isRecord(result)) return null;
+        const snapshot = parseCodexRateLimitSnapshot(result.rateLimits);
+        if (snapshot === null) return null;
+        // The backend's own verdict on ordinary use outranks the snapshot's.
+        return { ...snapshot, limitReached: snapshot.limitReached || result.ordinaryUsageAllowed === false };
+      },
+    });
+    source.subscribe((notification) => this.onNotification(notification));
   }
 
-  async read(): Promise<ProviderLimits> {
-    if (this.now() - this.lastAttemptAt >= this.readIntervalMs) {
-      this.reading ??= this.fetch().finally(() => { this.reading = null; });
-      await this.reading;
-    }
-    const latest = this.latest;
-    if (latest === null) return NO_LIMITS;
-    return { kind: "reported", observedAt: latest.observedAt, windows: latest.windows, limitReached: latest.limitReached };
+  read(): Promise<ProviderLimits> {
+    return this.cache.read();
   }
 
   /** Drop what is known, because the account may have changed. */
   forget(): void {
-    this.generation += 1;
-    this.latest = null;
-    this.lastAttemptAt = Number.NEGATIVE_INFINITY;
-  }
-
-  private async fetch(): Promise<void> {
-    const generation = this.generation;
-    this.lastAttemptAt = this.now();
-    let result: unknown;
-    try {
-      // `null`, not `{}`: releases before the method took parameters accept only that.
-      result = await this.source.request("account/rateLimits/read", null);
-    } catch {
-      // Signed out, an older Codex without the method, or the backend is down.
-      // What was last reported stays, with the time it was reported.
-      return;
-    }
-    if (generation !== this.generation || !isRecord(result)) return;
-    const snapshot = parseCodexRateLimitSnapshot(result.rateLimits);
-    if (snapshot === null) return;
-    this.latest = {
-      ...snapshot,
-      // The backend's own verdict on ordinary use outranks the snapshot's.
-      limitReached: snapshot.limitReached || result.ordinaryUsageAllowed === false,
-      observedAt: this.now(),
-    };
+    this.cache.forget();
   }
 
   private onNotification(notification: AppServerNotification): void {
@@ -122,9 +97,9 @@ export class CodexLimitsTracker {
     if (snapshot === null) return;
     // Codex also meters some models in buckets of their own; only the bucket
     // the meter shows may replace it.
-    const current = this.latest;
+    const current = this.cache.latest;
     const shown = current?.limitId ?? DEFAULT_LIMIT_ID;
     if (snapshot.limitId !== null && snapshot.limitId !== shown) return;
-    this.latest = { ...snapshot, limitId: snapshot.limitId ?? current?.limitId ?? null, observedAt: this.now() };
+    this.cache.replace({ ...snapshot, limitId: snapshot.limitId ?? current?.limitId ?? null });
   }
 }

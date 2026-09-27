@@ -290,6 +290,52 @@ function initializeStep(models: unknown) {
 
 const SIGNED_IN = { loggedIn: true, authMethod: "claude.ai", subscriptionType: "pro" };
 
+/** Answer `initialize` and then `get_usage`, recording each request as Claude Code received it. */
+function usageStep(answer: (request: Record<string, unknown>) => Record<string, unknown>, received: Array<Record<string, unknown>>) {
+  return (child: FakeChildProcess) => {
+    child.stdin.setEncoding("utf8");
+    child.stdin.on("data", (chunk: string) => {
+      for (const line of chunk.split("\n").filter(Boolean)) {
+        const message = JSON.parse(line) as { type: string; request_id: string; request: Record<string, unknown> };
+        assert.equal(message.type, "control_request");
+        received.push(message.request);
+        const response = message.request.subtype === "initialize"
+          ? { subtype: "success", request_id: message.request_id, response: { models: [] } }
+          : { request_id: message.request_id, ...answer(message.request) };
+        child.writeLine({ type: "control_response", response });
+      }
+    });
+  };
+}
+
+const CLAUDE_USAGE = {
+  subscription_type: "max",
+  rate_limits_available: true,
+  rate_limits: {
+    five_hour: { utilization: 38, resets_at: "2026-09-27T15:40:00Z" },
+    seven_day: { utilization: 71.5, resets_at: "2026-09-30T09:00:00Z" },
+  },
+  behaviors: null,
+};
+
+test("Claude usage is read with get_usage after initialize, without the transcript scan", async () => {
+  const received: Array<Record<string, unknown>> = [];
+  const script = scripted(usageStep(() => ({ subtype: "success", response: CLAUDE_USAGE }), received));
+  const client = new ClaudeCodeClient({ spawnProcess: script.spawnProcess });
+
+  assert.deepEqual(await client.readUsage(), CLAUDE_USAGE);
+  assert.deepEqual(received, [{ subtype: "initialize" }, { subtype: "get_usage", skip_behaviors: true }]);
+  // The same short-lived, tool-less process the model listing uses.
+  assert.ok(script.calls[0].includes("--print") && script.calls[0].includes("--strict-mcp-config"));
+});
+
+test("a Claude Code that does not know get_usage is an error, not an empty report", async () => {
+  const script = scripted(usageStep(() => ({ subtype: "error", error: "Unknown control request subtype: get_usage" }), []));
+  const client = new ClaudeCodeClient({ spawnProcess: script.spawnProcess });
+
+  await assert.rejects(() => client.readUsage(), /Unknown control request subtype: get_usage/);
+});
+
 test("The Claude catalog is the list Claude Code itself offers the account", async () => {
   const script = scripted(statusStep(SIGNED_IN), initializeStep(INITIALIZE_MODELS));
   const client = new ClaudeCodeClient({ spawnProcess: script.spawnProcess });

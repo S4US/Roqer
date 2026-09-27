@@ -19,9 +19,10 @@ export type PlanUsageView = Readonly<{
  * What the Settings account row shows of a plan's usage: one line per window,
  * shortest first. Nothing at all when the provider reported nothing, and a
  * reset time only while it is still ahead: once it has passed, the numbers
- * wait for the next report instead of being assumed to have reset.
+ * wait for the next report instead of being assumed to have reset. `scope`
+ * names what the limits cover, such as "Codex" or "Claude".
  */
-export function planUsageView(limits: ProviderLimits, client: string, now: number, timeZone?: string): PlanUsageView | null {
+export function planUsageView(limits: ProviderLimits, scope: string, now: number, timeZone?: string): PlanUsageView | null {
   if (limits.kind !== "reported" || limits.windows.length === 0) return null;
   const rows = [...limits.windows]
     .sort((left, right) => (left.windowMinutes ?? Infinity) - (right.windowMinutes ?? Infinity))
@@ -46,6 +47,6 @@ export function planUsageView(limits: ProviderLimits, client: string, now: numbe
   return {
     rows,
     reached: limits.limitReached,
-    footnote: `Your plan's usage everywhere you use ${client} on this account, as of ${observed}.`,
+    footnote: `Your plan's usage everywhere you use ${scope} on this account, as of ${observed}.`,
   };
 }

@@ -87,7 +87,7 @@ const RECOMMENDED_ALIAS = "default";
  * models an account can use does not change between two messages.
  */
 const MODEL_CATALOG_TTL_MS = 10 * 60_000;
-const MODEL_LIST_TIMEOUT_MS = 30_000;
+const CONTROL_TIMEOUT_MS = 30_000;
 
 /**
  * How long a signed-in status is reused.
@@ -465,21 +465,58 @@ export class ClaudeCodeClient implements ClaudeLauncher {
    * called.
    */
   private async readInitializeModels(): Promise<unknown> {
+    const response = await this.control("models", [{ subtype: "initialize" }], {
+      timeout: "Claude Code did not list its models in time.",
+      exited: "Claude Code exited before listing its models.",
+      refused: "Claude Code refused to list its models.",
+    });
+    return response.models;
+  }
+
+  /**
+   * The data behind Claude Code's `/usage`: the claude.ai plan's five-hour and
+   * weekly windows. No model is called, and the scan of local transcripts that
+   * only `/usage` itself shows is skipped.
+   *
+   * `get_usage` is marked experimental in Claude Code's SDK and may be renamed
+   * or reshaped. Roqer uses it until a stable way exists; a Claude Code that
+   * refuses it, or answers in a shape the reader does not know, just leaves the
+   * meter empty.
+   */
+  async readUsage(): Promise<unknown> {
+    // Sent after `initialize`, as Claude Code's own SDK always does.
+    return this.control("usage", [{ subtype: "initialize" }, { subtype: "get_usage", skip_behaviors: true }], {
+      timeout: "Claude Code did not report its usage in time.",
+      exited: "Claude Code exited before reporting its usage.",
+      refused: "Claude Code did not report its usage.",
+    });
+  }
+
+  /**
+   * Send stream-json control requests to a short-lived Claude Code process and
+   * return the answer to the last one. The process is stopped either way.
+   */
+  private async control(
+    purpose: string,
+    requests: readonly JsonRecord[],
+    errors: { timeout: string; exited: string; refused: string },
+  ): Promise<JsonRecord> {
     const child = await this.launch(INITIALIZE_ARGS);
-    const requestId = `roqer-models-${this.now()}`;
+    const requestIds = requests.map((_, index) => `roqer-${purpose}-${this.now()}-${index}`);
+    const awaited = requestIds[requestIds.length - 1];
     try {
-      return await new Promise<unknown>((resolve, reject) => {
-        const timer = setTimeout(() => finish(new Error("Claude Code did not list its models in time.")), MODEL_LIST_TIMEOUT_MS);
+      return await new Promise<JsonRecord>((resolve, reject) => {
+        const timer = setTimeout(() => finish(new Error(errors.timeout)), CONTROL_TIMEOUT_MS);
         const lines = readline.createInterface({ input: child.stdout, crlfDelay: Infinity });
         let settled = false;
         let stderr = "";
-        const finish = (error: Error | null, models?: unknown) => {
+        const finish = (error: Error | null, response?: JsonRecord) => {
           if (settled) return;
           settled = true;
           clearTimeout(timer);
           lines.close();
           if (error) reject(error);
-          else resolve(models);
+          else resolve(response ?? {});
         };
         child.stderr.setEncoding("utf8");
         child.stderr.on("data", (chunk: string) => { stderr = `${stderr}${chunk}`.slice(-500); });
@@ -487,7 +524,7 @@ export class ClaudeCodeClient implements ClaudeLauncher {
         child.once("error", (error) => finish(error));
         lines.once("close", () => {
           const detail = stderr.trim();
-          finish(new Error(`Claude Code exited before listing its models.${detail ? ` ${detail}` : ""}`));
+          finish(new Error(`${errors.exited}${detail ? ` ${detail}` : ""}`));
         });
         lines.on("line", (line) => {
           let message: unknown;
@@ -498,18 +535,16 @@ export class ClaudeCodeClient implements ClaudeLauncher {
           }
           if (!isRecord(message) || message.type !== "control_response" || !isRecord(message.response)) return;
           const response = message.response;
-          if (response.request_id !== requestId) return;
+          if (response.request_id !== awaited) return;
           if (response.subtype !== "success" || !isRecord(response.response)) {
-            finish(new Error(typeof response.error === "string" ? response.error : "Claude Code refused to list its models."));
+            finish(new Error(typeof response.error === "string" ? response.error : errors.refused));
             return;
           }
-          finish(null, response.response.models);
+          finish(null, response.response);
         });
-        child.stdin.write(`${JSON.stringify({
-          type: "control_request",
-          request_id: requestId,
-          request: { subtype: "initialize" },
-        })}\n`);
+        requests.forEach((request, index) => {
+          child.stdin.write(`${JSON.stringify({ type: "control_request", request_id: requestIds[index], request })}\n`);
+        });
       });
     } finally {
       child.stdin.end();

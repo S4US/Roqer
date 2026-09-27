@@ -40,6 +40,12 @@ const ACCOUNT_PROVIDERS = ENABLED_PROVIDER_IDS.filter((provider) => provider !==
 const ACCOUNT_CLIENTS: Partial<Record<ProviderId, string>> = { chatgpt: "Codex", claude: "Claude Code" };
 
 /**
+ * What a plan's limits cover: ChatGPT meters Codex apart from chat, while
+ * Claude's limits are shared by every Claude app.
+ */
+const USAGE_SCOPES: Partial<Record<ProviderId, string>> = { chatgpt: "Codex", claude: "Claude" };
+
+/**
  * The endpoint page on screen. `key` names the visit, not the endpoint: a new
  * endpoint keeps its page when its first save gives it an id, so a model list
  * that save was made to fetch still lands on the page that asked for it.
@@ -300,7 +306,7 @@ function AccountRow({ provider, onChanged }: { provider: ProviderId; onChanged: 
       .filter((part): part is string => part !== undefined && part !== "")
       .join(" · ") || status.message
     : installing ? `Installing ${client ?? name}… This can take a few minutes.` : status.message;
-  const usage = signedIn ? planUsageView(limits, client ?? name, Date.now()) : null;
+  const usage = signedIn ? planUsageView(limits, USAGE_SCOPES[provider] ?? name, Date.now()) : null;
 
   return <>
     <SettingsRow title={name} detail={detail}>
