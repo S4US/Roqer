@@ -383,7 +383,7 @@ function getProjectStructure(requestData: Record<string, unknown>) {
 		const services: Record<string, unknown>[] = [];
 		const mainServices = [
 			"Workspace", "ServerScriptService", "ServerStorage", "ReplicatedStorage",
-			"StarterGui", "StarterPack", "StarterPlayer", "Players",
+			"ReplicatedFirst", "StarterGui", "StarterPack", "StarterPlayer", "Players",
 		];
 
 		for (const serviceName of mainServices) {
@@ -413,19 +413,17 @@ function getProjectStructure(requestData: Record<string, unknown>) {
 		return { error: instanceRef ? `Instance reference is invalid or no longer live: ${instanceRef}` : `Path not found: ${startPath}` };
 	}
 
-	function getStructure(instance: Instance, depth: number): Record<string, unknown> {
-		if (depth > maxDepth) {
-			return {
-				name: instance.Name,
-				className: instance.ClassName,
-				path: getInstancePath(instance),
-				instanceRef: getInstanceReference(instance),
-				childCount: instance.GetChildren().size(),
-				hasMore: true,
-				note: "Max depth reached - use this path to explore further",
-			};
-		}
+	// Scripts often sit under containers that are not Folders: StarterPlayerScripts,
+	// a ScreenGui, a Tool, a Model, an Actor. Keeping only scripts and Folders hid
+	// every one of those, and every script beneath it, so a scripts-only listing
+	// keeps any child that is a script or holds one.
+	function isScriptOrHoldsOne(instance: Instance): boolean {
+		return instance.IsA("LuaSourceContainer") || instance.FindFirstChildWhichIsA("LuaSourceContainer", true) !== undefined;
+	}
 
+	let reachedMaxDepth = false;
+
+	function getStructure(instance: Instance, depth: number): Record<string, unknown> {
 		const node: Record<string, unknown> = {
 			name: instance.Name,
 			className: instance.ClassName,
@@ -456,14 +454,24 @@ function getProjectStructure(requestData: Record<string, unknown>) {
 
 		let children = instance.GetChildren();
 		if (showScriptsOnly) {
-			children = children.filter(
-				(child) => child.IsA("BaseScript") || child.IsA("Folder") || child.IsA("ModuleScript"),
-			);
+			children = children.filter(isScriptOrHoldsOne);
+		}
+
+		const childCount = children.size();
+		if (childCount === 0) return node;
+
+		// The frontier says how much lies below it rather than listing it. One
+		// entry per child here made a place of a few hundred models return
+		// thousands of entries, more than any client could read.
+		if (depth >= maxDepth) {
+			node.childCount = childCount;
+			node.hasMore = true;
+			reachedMaxDepth = true;
+			return node;
 		}
 
 		const nodeChildren: Record<string, unknown>[] = [];
-		const childCount = children.size();
-		if (childCount > 20 && depth < maxDepth) {
+		if (childCount > 20) {
 			const classGroups = new Map<string, Instance[]>();
 			for (const child of children) {
 				const cn = child.ClassName;
@@ -500,9 +508,7 @@ function getProjectStructure(requestData: Record<string, unknown>) {
 				nodeChildren.push(getStructure(child, depth + 1));
 			}
 		}
-		if (nodeChildren.size() > 0) {
-			node.children = nodeChildren;
-		}
+		node.children = nodeChildren;
 
 		return node;
 	}
@@ -512,6 +518,9 @@ function getProjectStructure(requestData: Record<string, unknown>) {
 	result.maxDepth = maxDepth;
 	result.scriptsOnly = showScriptsOnly;
 	result.timestamp = tick();
+	if (reachedMaxDepth) {
+		result.note = "Entries with hasMore list only their childCount; pass one as path to see its children.";
+	}
 
 	return result;
 }

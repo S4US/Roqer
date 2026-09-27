@@ -1033,6 +1033,64 @@ test("a search too large for the budget keeps its first results and every other 
   assert.match(envelope.truncated, /more specific query/);
 });
 
+/**
+ * A tree whose later subtrees are each larger than the budget used to come back
+ * as the small entries ahead of them and a count, with nothing to say what the
+ * rest were called: a place's Workspace read as its Camera, Terrain, and spawn,
+ * and the model could not ask for the map it never learned existed.
+ */
+test("a tree trimmed around oversized subtrees names every entry it left out", () => {
+  const leaf = (path: string) => ({ name: path.split(".").at(-1), className: "Part", path, instanceRef: "ir:0:1" });
+  const big = (name: string) => ({
+    name,
+    className: "Folder",
+    path: `game.Workspace.${name}`,
+    children: Array.from({ length: 400 }, (_, index) => leaf(`game.Workspace.${name}.Part${index}`)),
+  });
+  const tree = {
+    name: "Workspace",
+    className: "Workspace",
+    path: "game.Workspace",
+    children: [leaf("game.Workspace.Camera"), leaf("game.Workspace.Terrain"), big("Map"), big("NPCs"), big("Coins")],
+    requestedPath: "game.Workspace",
+    maxDepth: 3,
+  };
+  const text = studioToolResultText("get_project_structure", ok(tree));
+
+  assert.ok(text.length <= 24_000);
+  const envelope = JSON.parse(text) as { truncated: string; data: { children: Array<{ name: string }>; requestedPath: string } };
+  assert.deepEqual(envelope.data.children.map((child) => child.name), ["Camera", "Terrain"]);
+  assert.equal(envelope.data.requestedPath, "game.Workspace");
+  assert.match(
+    envelope.truncated,
+    /first 2 of 5 entries; 3 entries were left out to fit the result budget: game\.Workspace\.Map, game\.Workspace\.NPCs, game\.Workspace\.Coins\. Pass one of their paths/,
+  );
+});
+
+test("a trim that leaves out many entries counts them rather than listing a few", () => {
+  const results = Array.from({ length: 1_000 }, (_, index) => ({
+    name: `Part${index}`, className: "Part", path: `game.Workspace.Model.Part${index}`,
+  }));
+  const text = studioToolResultText("search_objects", ok({ results, count: 1_000 }));
+
+  const envelope = JSON.parse(text) as { truncated: string };
+  assert.match(envelope.truncated, /entries were left out to fit the result budget\. Use a more specific query/);
+  assert.doesNotMatch(envelope.truncated, /Part999/);
+});
+
+test("a trim names left-out entries only when every one of them can be named", () => {
+  const entries = [
+    { name: "Small", path: "game.Workspace.Small" },
+    { path: "game.Workspace.Big", blob: "x ".repeat(15_000) },
+    { blob: "y ".repeat(15_000) },
+  ];
+  const text = studioToolResultText("get_project_structure", ok({ children: entries }));
+
+  const envelope = JSON.parse(text) as { truncated: string; data: { children: unknown[] } };
+  assert.equal(envelope.data.children.length, 1);
+  assert.match(envelope.truncated, /2 entries were left out to fit the result budget\. Pass one of their paths/);
+});
+
 test("a result with no array to shorten is still cut to the budget", () => {
   const text = studioToolResultText("get_instance_properties", ok({ properties: { Text: "a long label ".repeat(3_000) } }));
 

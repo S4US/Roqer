@@ -615,6 +615,7 @@ return true
     const scriptNode = fullTree.children.find((child) => child.name === 'SmokeScript');
     const nestedNode = scriptNode?.children?.find((child) => child.name === 'NestedModule');
     assert(partNode && !Object.hasOwn(partNode, 'children'), 'get_project_structure omits children from a leaf');
+    assert(!Object.hasOwn(partNode, 'hasMore'), 'get_project_structure never marks a leaf as having more');
     assert(Array.isArray(scriptNode?.children), 'get_project_structure preserves a branch children array');
     assert(
       nestedNode && !Object.hasOwn(nestedNode, 'children'),
@@ -626,13 +627,70 @@ return true
       maxDepth: 0,
       instance_id: instanceId,
     });
-    const truncatedPart = truncatedTree.children?.find((child) => child.name === 'SmokePart');
+    assertNoError(truncatedTree, 'get_project_structure returns a depth-limited smoke fixture');
     assert(
-      truncatedPart?.hasMore === true &&
-        truncatedPart.childCount === 0 &&
-        !Object.hasOwn(truncatedPart, 'children'),
-      'get_project_structure preserves max-depth markers when children are omitted',
+      truncatedTree.hasMore === true &&
+        truncatedTree.childCount === 2 &&
+        !Object.hasOwn(truncatedTree, 'children'),
+      `get_project_structure marks the max-depth frontier with its child count instead of listing it (${JSON.stringify(truncatedTree)})`,
     );
+
+    // Scripts under a container that is not a Folder -- a Model here, as in a
+    // Tool, a ScreenGui, or StarterPlayerScripts -- used to vanish from a
+    // scripts-only listing together with the container.
+    const scriptedSetup = await client.callTool('execute_luau', {
+      target: 'edit',
+      instance_id: instanceId,
+      code: `
+local folder = workspace.__RSMCP_ToolingSmoke
+local scripted = Instance.new("Model")
+scripted.Name = "ScriptedModel"
+local modelScript = Instance.new("LocalScript")
+modelScript.Name = "ModelScript"
+modelScript.Parent = scripted
+scripted.Parent = folder
+local bare = Instance.new("Model")
+bare.Name = "BareModel"
+Instance.new("Part").Parent = bare
+bare.Parent = folder
+return true
+`,
+    });
+    assert(scriptedSetup.success === true && String(scriptedSetup.returnValue) === 'true', 'execute_luau creates scripts-only fixtures');
+    try {
+      const scriptsTree = await client.callTool('get_project_structure', {
+        path: folderPath,
+        maxDepth: 3,
+        scriptsOnly: true,
+        instance_id: instanceId,
+      });
+      assertNoError(scriptsTree, 'get_project_structure lists scripts only');
+      const listed = (scriptsTree.children ?? []).map((child) => child.name).sort();
+      assert(
+        JSON.stringify(listed) === JSON.stringify(['ScriptedModel', 'SmokeScript']),
+        `get_project_structure scriptsOnly keeps script holders and drops the rest (${JSON.stringify(listed)})`,
+      );
+      const scriptedNode = scriptsTree.children.find((child) => child.name === 'ScriptedModel');
+      assert(
+        scriptedNode?.children?.length === 1 &&
+          scriptedNode.children[0].name === 'ModelScript' &&
+          scriptedNode.children[0].scriptType === 'LocalScript',
+        'get_project_structure scriptsOnly lists a script inside a Model',
+      );
+    } finally {
+      await client.callTool('execute_luau', {
+        target: 'edit',
+        instance_id: instanceId,
+        code: `
+local folder = workspace.__RSMCP_ToolingSmoke
+for _, name in { "ScriptedModel", "BareModel" } do
+  local child = folder:FindFirstChild(name)
+  if child then child:Destroy() end
+end
+return true
+`,
+      });
+    }
 
     const setProp = await client.callTool('set_properties', {
       instancePath: partPath,

@@ -44,7 +44,7 @@ export type ToolSchema = {
 };
 
 /** sha256 of `packages/core/src/tools/definitions.ts` with LF newlines. */
-export const TOOL_DEFINITIONS_DIGEST = "13a6d5a6bc5d247ffc0e44d2bdd1de92ba2cc9a8545032b12d56d472577987e6";
+export const TOOL_DEFINITIONS_DIGEST = "1ad4237d0438ba153f2093b99aea6d704fc140a32efc56014293affd2ee26dd1";
 
 export const TOOL_SCHEMAS: Readonly<Record<string, ToolSchema>> = {
   breakpoints: {
@@ -284,7 +284,7 @@ export const TOOL_SCHEMAS: Readonly<Record<string, ToolSchema>> = {
   get_project_structure: {
     description: "Use to inspect a subtree.",
     parameters: [
-      { name: "path", type: "string", required: false, description: "Root; defaults to Workspace." },
+      { name: "path", type: "string", required: false, description: "Root; omit for service overview." },
       { name: "maxDepth", type: "number", required: false, description: "Depth; defaults to 3." },
       { name: "scriptsOnly", type: "boolean", required: false, description: "Only scripts." },
       { name: "instance_id", type: "string", required: false, description: "Connected place ID; required with multiple places." },
