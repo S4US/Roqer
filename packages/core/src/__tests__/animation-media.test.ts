@@ -1,3 +1,4 @@
+import { roundedBox } from '../animation/box-rig.js';
 import { renderContactSheet, sheetTimes } from '../animation/contact-sheet.js';
 import { GLB_SAMPLE_RATE, glbSampleTimes, renderRigGlb } from '../animation/rig-glb.js';
 import { compilePoseAnimation, type KeyframeSequenceDescription } from '../animation/pose-compiler.js';
@@ -48,12 +49,12 @@ function floats(glb: { json: GltfJson; binary: Buffer }, accessor: number): numb
 
 describe('contact sheet', () => {
   test('shows a loop without its wrap and a one-shot with its last frame', () => {
-    expect(sheetTimes(raise(true))).toEqual([0, 1 / 6, 2 / 6, 3 / 6, 4 / 6, 5 / 6]);
-    expect(sheetTimes(raise(false))).toEqual([0, 0.2, 0.4, 0.6, 0.8, 1]);
+    expect(sheetTimes(raise(true))).toEqual([0, 0.2, 0.4, 0.6, 0.8]);
+    expect(sheetTimes(raise(false))).toEqual([0, 0.25, 0.5, 0.75, 1]);
     const still = compiled({ name: 'Stand', rig: 'R15', keyframes: [{ time: 0, joints: { Neck: {} } }] });
     const sheet = renderContactSheet(still);
     expect(sheet.times).toEqual([0]);
-    expect([sheet.width, sheet.height]).toEqual([176, 472]);
+    expect([sheet.width, sheet.height]).toEqual([172, 508]);
   });
 
   test('draws the same figure the same way every time', () => {
@@ -64,14 +65,37 @@ describe('contact sheet', () => {
   });
 });
 
+describe('block rig meshes', () => {
+  test('are rounded boxes of the part’s size, closed, wound outward, with unit normals', () => {
+    const mesh = roundedBox([2, 1, 1], 0.2);
+    const xs = mesh.positions.filter((_value, index) => index % 3 === 0);
+    const ys = mesh.positions.filter((_value, index) => index % 3 === 1);
+    expect([Math.min(...xs), Math.max(...xs), Math.min(...ys), Math.max(...ys)].map((value) => Math.round(value * 1e6) / 1e6)).toEqual([-1, 1, -0.5, 0.5]);
+    for (let index = 0; index < mesh.normals.length; index += 3) {
+      expect(Math.hypot(mesh.normals[index], mesh.normals[index + 1], mesh.normals[index + 2])).toBeCloseTo(1, 6);
+    }
+    // Every triangle faces away from the centre: its winding agrees with its vertices' normals.
+    for (let index = 0; index < mesh.indices.length; index += 3) {
+      const [a, b, c] = [0, 1, 2].map((offset) => mesh.indices[index + offset]);
+      const p = (i: number) => mesh.positions.slice(i * 3, i * 3 + 3);
+      const [pa, pb, pc] = [p(a), p(b), p(c)];
+      const u = pb.map((value, axis) => value - pa[axis]);
+      const v = pc.map((value, axis) => value - pa[axis]);
+      const face = [u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0]];
+      const normal = mesh.normals.slice(a * 3, a * 3 + 3);
+      if (Math.hypot(...face) > 1e-9) expect(face[0] * normal[0] + face[1] * normal[1] + face[2] * normal[2]).toBeGreaterThan(0);
+    }
+  });
+});
+
 describe('rig GLB', () => {
-  test('is one self-contained glTF 2.0 file with a box for every part but the root', () => {
+  test('is one self-contained glTF 2.0 file with a rounded mesh for every part but the root', () => {
     const glb = parseGlb(renderRigGlb(raise(false), 'Raise'));
     expect(glb.json.asset.version).toBe('2.0');
     expect(glb.json.buffers).toEqual([{ byteLength: glb.binary.length }]);
-    const boxes = glb.json.nodes.filter((node: { mesh?: number }) => node.mesh !== undefined);
-    expect(boxes.map((node: { name: string }) => node.name).sort()).toEqual(
-      Object.keys(R15_RIG.parts).filter((part) => part !== 'HumanoidRootPart').map((part) => `${part} box`).sort(),
+    const drawn = glb.json.nodes.filter((node: { mesh?: number }) => node.mesh !== undefined);
+    expect(drawn.map((node: { name: string }) => node.name).sort()).toEqual(
+      Object.keys(R15_RIG.parts).filter((part) => part !== 'HumanoidRootPart').map((part) => `${part} mesh`).sort(),
     );
     expect(glb.json.nodes[glb.json.scenes[0].nodes[0]].rotation).toEqual([0, 1, 0, 0]);
   });

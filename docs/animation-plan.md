@@ -395,19 +395,27 @@ interpolation.
 
 What was built:
 
+- **The figure** (`animation/box-rig.ts`).
+  - The R15 rig as Roblox's block rig draws it: every part a box with rounded
+    edges, at the stock rig's part sizes, in light grey.
+  - The left limbs are a shade darker, so the legs and arms can still be told
+    apart.
+  - The geometry is generated in core, not taken from Roblox's assets. A probe
+    found Studio lets a plugin read the default body meshes but not the
+    default dynamic head, so real meshes would have needed a stand-in head and
+    Studio for every check.
 - **The contact sheet** (`animation/contact-sheet.ts`).
-  - A z-buffered software rasteriser draws the R15 rig as boxes, posed by
-    core's own sampler, at the same scale in every frame.
-  - There are six moments across one pass: a loop's wrap is left out, and a
+  - A software rasteriser with a depth buffer and smooth shading draws that
+    figure, posed by core's own sampler, at the same scale in every frame. The
+    background is dark, with a soft shadow under the body.
+  - There are five moments across one pass: a loop's wrap is left out, and a
     one-shot's last frame is kept. The top row shows the front three-quarter,
-    the bottom row the right side, facing right. Left limbs are blue and right
-    limbs orange, so a gait's phase reads at a glance, and a line marks the
-    ground.
+    the bottom row the right side, facing right.
   - `check` and `build` return it as an image, with a note in the result on how
     to read it. A model that sees images can check the motion; the numeric
     checks stay enough without it.
 - **The 3D preview** (`animation/rig-glb.ts`).
-  - The same box rig as one self-contained GLB, every joint's rotation and
+  - The same figure as one self-contained GLB, every joint's rotation and
     translation sampled 30 times a second from the same sampler.
   - It travels as a host-only resource block. The MCP transport strips it, so
     MCP clients never receive it; only the desktop's HTTP surface keeps it.
@@ -416,12 +424,16 @@ What was built:
     a job folder beside Blender's, under the same id shape. So it is served,
     checked again and expired exactly as a Blender preview is, and older
     builds still load the records.
-  - The sheet becomes an "Animation preview" in the answer, whose 3D view plays
-    the animation.
+  - In the answer, the latest animation plays inline in the previews card, with
+    its playback bar underneath, and opens in the full viewer.
+  - Chromium keeps only a few WebGL contexts alive, so the inline view mounts
+    only while the card is on screen and the viewer is closed; otherwise the
+    card shows the contact sheet.
 - **The viewer.**
   - It plays any GLB that carries an animation: looping, with play/pause, a
     keyboard-operable scrub bar and the time.
-  - Under reduced motion it waits to be played.
+  - Opened in the full viewer it plays at once. Inline, it waits under reduced
+    motion.
   - A GLB baked by Blender plays the same way, once a Blender job exports one.
 - **Not built: a Blender-rendered sheet.** The box-rig sheet needs no Blender,
   and a Blender sheet waits for the proposed Blender step.

@@ -129,11 +129,11 @@ describe('RobloxStudioTools.animation', () => {
     const { tools } = toolsWith({});
     const result = await tools.animation({ action: 'check', animation: wave() });
     const [text, image, resource] = result.content as ToolContent[];
-    expect(JSON.parse(text.text!).sheet).toMatchObject({ times: [0, 0.167, 0.333, 0.5, 0.667, 0.833] });
+    expect(JSON.parse(text.text!).sheet).toMatchObject({ times: [0, 0.2, 0.4, 0.6, 0.8] });
     expect(image).toMatchObject({ type: 'image', mimeType: 'image/png' });
     const png = Buffer.from(image.data!, 'base64');
     expect(png.subarray(1, 4).toString()).toBe('PNG');
-    expect([png.readUInt32BE(16), png.readUInt32BE(20)]).toEqual([1056, 472]);
+    expect([png.readUInt32BE(16), png.readUInt32BE(20)]).toEqual([860, 508]);
     expect(resource).toMatchObject({ type: 'resource', resource: { mimeType: 'model/gltf-binary' } });
     // An invalid animation has nothing to show.
     expect((await tools.animation({ action: 'check', animation: { ...wave(), keyframes: [] } })).content).toHaveLength(1);

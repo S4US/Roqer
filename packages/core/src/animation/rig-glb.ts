@@ -1,9 +1,9 @@
-// The box rig with an animation baked in, as one self-contained GLB the
-// desktop viewer can play: every part a box, every joint a node whose rotation
-// and translation are sampled from core's own sampler.
+// The block rig with an animation baked in, as one self-contained GLB the
+// desktop viewer can play: every part a rounded box, every joint a node whose
+// rotation and translation are sampled from core's own sampler.
 //
-// Node layout, per part: an unscaled frame node, holding the part's box as a
-// scaled child and its child joints; each joint node carries the joint's
+// Node layout, per part: a frame node, holding the part's mesh and its child
+// joints; each joint node carries the joint's
 // Transform on top of its offset in the parent part, and holds the child
 // part's frame, offset back by the joint's attachment in the child:
 //   frame(parent) -> joint (offsetInParent + Transform) -> frame(child) (-offsetInChild)
@@ -13,7 +13,7 @@
 // glTF models half a turn onto Roblox's axes, so the figure ends up facing -Z,
 // as it does in Studio.
 
-import { drawnParts, partColor } from './box-rig.js';
+import { drawnParts, partColor, partMesh } from './box-rig.js';
 import { buildTracks, rotationQuaternion, sampleTrack, sequenceDuration, type MotionSequence } from './motion.js';
 import { R15_RIG, type Rig } from './r15-rig.js';
 
@@ -76,31 +76,6 @@ class BinaryBuilder {
   }
 }
 
-/** A unit box centred on the origin: four vertices a face, so each face has its own normal. */
-function unitBox(): { positions: number[]; normals: number[]; indices: number[] } {
-  const positions: number[] = [];
-  const normals: number[] = [];
-  const indices: number[] = [];
-  const faces: [number[], number[][]][] = [
-    [[1, 0, 0], [[1, -1, -1], [1, 1, -1], [1, 1, 1], [1, -1, 1]]],
-    [[-1, 0, 0], [[-1, -1, 1], [-1, 1, 1], [-1, 1, -1], [-1, -1, -1]]],
-    [[0, 1, 0], [[-1, 1, -1], [-1, 1, 1], [1, 1, 1], [1, 1, -1]]],
-    [[0, -1, 0], [[-1, -1, 1], [-1, -1, -1], [1, -1, -1], [1, -1, 1]]],
-    [[0, 0, 1], [[1, -1, 1], [1, 1, 1], [-1, 1, 1], [-1, -1, 1]]],
-    [[0, 0, -1], [[-1, -1, -1], [-1, 1, -1], [1, 1, -1], [1, -1, -1]]],
-  ];
-  for (const [normal, corners] of faces) {
-    const base = positions.length / 3;
-    for (const corner of corners) {
-      positions.push(corner[0] / 2, corner[1] / 2, corner[2] / 2);
-      normals.push(...normal);
-    }
-    // The corners run counter-clockwise seen from outside, as glTF front faces do.
-    indices.push(base, base + 1, base + 2, base, base + 2, base + 3);
-  }
-  return { positions, normals, indices };
-}
-
 function glb(json: Record<string, unknown>, binary: Buffer): Buffer {
   let text = Buffer.from(JSON.stringify(json), 'utf8');
   const textPadding = (4 - (text.length % 4)) % 4;
@@ -129,25 +104,36 @@ export function glbSampleTimes(sequence: MotionSequence): number[] {
 
 export function renderRigGlb(sequence: MotionSequence, name: string, rig: Rig = R15_RIG): Buffer {
   const builder = new BinaryBuilder();
-  const box = unitBox();
-  const position = builder.floats(box.positions, 'VEC3', { target: ARRAY_BUFFER, bounds: true });
-  const normal = builder.floats(box.normals, 'VEC3', { target: ARRAY_BUFFER });
-  const indices = builder.indices(box.indices);
 
-  // One material and mesh per colour; parts of a colour share them.
+  // One material per colour, and one mesh per part: a part's rounded edges
+  // keep their radius at its own size, so meshes cannot be shared by scaling.
   const materials: Record<string, unknown>[] = [];
-  const meshes: Record<string, unknown>[] = [];
-  const meshByColor = new Map<string, number>();
-  const meshFor = (part: string): number => {
+  const materialByColor = new Map<string, number>();
+  const materialFor = (part: string): number => {
     const color = partColor(part);
     const key = color.join(',');
-    const existing = meshByColor.get(key);
+    const existing = materialByColor.get(key);
     if (existing !== undefined) return existing;
     materials.push({
-      pbrMetallicRoughness: { baseColorFactor: [...color.map((value) => (value / 255) ** 2.2), 1], metallicFactor: 0, roughnessFactor: 0.85 },
+      pbrMetallicRoughness: { baseColorFactor: [...color.map((value) => (value / 255) ** 2.2), 1], metallicFactor: 0, roughnessFactor: 0.72 },
     });
-    meshes.push({ primitives: [{ attributes: { POSITION: position, NORMAL: normal }, indices, material: materials.length - 1 }] });
-    meshByColor.set(key, meshes.length - 1);
+    materialByColor.set(key, materials.length - 1);
+    return materials.length - 1;
+  };
+  const meshes: Record<string, unknown>[] = [];
+  const meshFor = (part: string): number => {
+    const mesh = partMesh(part, rig);
+    meshes.push({
+      name: part,
+      primitives: [{
+        attributes: {
+          POSITION: builder.floats(mesh.positions, 'VEC3', { target: ARRAY_BUFFER, bounds: true }),
+          NORMAL: builder.floats(mesh.normals, 'VEC3', { target: ARRAY_BUFFER }),
+        },
+        indices: builder.indices(mesh.indices),
+        material: materialFor(part),
+      }],
+    });
     return meshes.length - 1;
   };
 
@@ -161,7 +147,7 @@ export function renderRigGlb(sequence: MotionSequence, name: string, rig: Rig = 
   const frame = (part: string, offset?: readonly number[]): number => {
     const index = addNode({ name: part, ...(offset ? { translation: [-offset[0], -offset[1], -offset[2]] } : {}) });
     const children: number[] = [];
-    if (drawn.has(part)) children.push(addNode({ name: `${part} box`, mesh: meshFor(part), scale: [...rig.parts[part]] }));
+    if (drawn.has(part)) children.push(addNode({ name: `${part} mesh`, mesh: meshFor(part) }));
     for (const joint of rig.joints.filter((candidate) => candidate.parentPart === part)) {
       const jointIndex = addNode({ name: joint.name, translation: [...joint.parentOffset] });
       jointNodes.set(joint.name, jointIndex);

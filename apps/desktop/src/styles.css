@@ -989,6 +989,15 @@ a.small-button:focus-visible { outline: 2px solid var(--accent); outline-offset:
 .preview-tile[data-role="rail"] .preview-chip { bottom: 6px; left: 6px; height: 20px; padding: 0 7px 0 6px; font-size: 11px; }
 .preview-expand { position: absolute; right: 8px; bottom: 8px; display: grid; place-items: center; width: 28px; height: 28px; color: #edf0f4; background: rgba(10, 12, 16, .74); border-radius: 8px; }
 /* Top right, clear of the chip and the expand mark: this picture also opens in 3D. */
+/* An animation playing in the answer: the chip and the expand button move up, clear of its playback bar. */
+.preview-tile[data-live="true"] { cursor: default; background: #0f1115; }
+.preview-tile[data-live="true"] .preview-chip { top: 8px; bottom: auto; }
+.preview-tile[data-live="true"] .preview-expand { top: 8px; bottom: auto; border: 0; cursor: zoom-in; }
+.preview-tile[data-live="true"] .preview-expand:hover { background: rgba(32, 36, 44, .92); }
+.preview-tile[data-live="true"] .preview-expand:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.model-viewer[data-compact="true"] { border: 0; border-radius: 0; box-shadow: none; }
+.model-viewer[data-compact="true"] .model-viewer-canvas canvas { cursor: default; }
+.model-viewer[data-compact="true"] .model-viewer-playback { left: 8px; right: 8px; bottom: 8px; width: auto; transform: none; }
 .preview-badge { position: absolute; top: 8px; right: 8px; display: inline-flex; align-items: center; gap: 4px; height: 20px; box-sizing: border-box; padding: 0 7px 0 6px; color: #edf0f4; background: rgba(10, 12, 16, .74); border-radius: 6px; font-size: 11px; font-style: normal; font-weight: var(--weight-medium); letter-spacing: .02em; }
 .preview-tile[data-role="rail"] .preview-badge { top: 6px; right: 6px; height: 18px; padding: 0 6px 0 5px; font-size: 10.5px; }
 .preview-more { position: absolute; inset: 0; display: grid; place-items: center; color: #fff; background: rgba(10, 12, 16, .62); font-size: 16px; font-weight: var(--weight-semibold); font-variant-numeric: tabular-nums; }

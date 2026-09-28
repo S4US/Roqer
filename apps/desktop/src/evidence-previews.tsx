@@ -1,6 +1,6 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { Box, Camera, ChevronLeft, ChevronRight, Gamepad2, ImageIcon, Maximize2, Rotate3d, X } from "lucide-react";
+import { Box, Camera, ChevronLeft, ChevronRight, Gamepad2, ImageIcon, Maximize2, PersonStanding, Rotate3d, X } from "lucide-react";
 import type { RunChange, RunEvidence } from "../shared/run-events";
 import { ModelViewer } from "./model-viewer";
 import {
@@ -38,7 +38,9 @@ export const PreviewsCard = memo(function PreviewsCard({ evidence, changes }: {
   const latest = images[images.length - 1];
   const caption = previewCaption(latest, changes);
   const tile = (item: PreviewTile, role: "lead" | "rail" | "even") => (
-    <PreviewTileButton key={item.evidence.id} tile={item} role={role} count={images.length} onOpen={show} />
+    role === "lead" && playsInline(item.evidence)
+      ? <LiveAnimationTile key={item.evidence.id} tile={item} count={images.length} paused={open !== null} onOpen={show} />
+      : <PreviewTileButton key={item.evidence.id} tile={item} role={role} count={images.length} onOpen={show} />
   );
   return <section className="previews-card" aria-label="Previews">
     <div className="previews-header">
@@ -69,9 +71,59 @@ export const PreviewsCard = memo(function PreviewsCard({ evidence, changes }: {
 function SourceIcon({ evidence, size }: { evidence: RunEvidence; size: number }) {
   switch (previewSource(evidence)) {
     case "blender": return <Box size={size} aria-hidden="true" />;
+    case "animation": return <PersonStanding size={size} aria-hidden="true" />;
     case "playtest": return <Gamepad2 size={size} aria-hidden="true" />;
     default: return <Camera size={size} aria-hidden="true" />;
   }
+}
+
+/** An animation leads the card as itself, playing, rather than as its contact sheet. */
+function playsInline(evidence: RunEvidence): boolean {
+  return previewSource(evidence) === "animation" && hasModelPreview(evidence);
+}
+
+/**
+ * The card's lead animation, playing in the answer with its playback bar.
+ *
+ * Chromium keeps only a handful of WebGL contexts alive, so the 3D view is
+ * mounted only while the tile is on screen and the full viewer is closed;
+ * otherwise the tile shows the contact sheet. A long chat of animations thus
+ * holds one or two live views at most.
+ */
+function LiveAnimationTile({ tile, count, paused, onOpen }: {
+  tile: PreviewTile;
+  count: number;
+  paused: boolean;
+  onOpen: (index: number, from: HTMLElement) => void;
+}) {
+  const host = useRef<HTMLDivElement>(null);
+  const [visible, setVisible] = useState(false);
+  useEffect(() => {
+    const element = host.current;
+    if (element === null || typeof IntersectionObserver === "undefined") return;
+    const observer = new IntersectionObserver(([entry]) => setVisible(entry.isIntersecting), { threshold: 0.25 });
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, []);
+  return <div className="preview-tile" data-role="lead" data-source="animation" data-live="true" ref={host}>
+    {visible && !paused
+      ? <ModelViewer evidence={tile.evidence} onShowPicture={() => undefined} compact />
+      : <img src={tile.evidence.imageDataUrl} alt="" draggable={false} />}
+    <span className="preview-chip">
+      <span className="preview-chip-index">{tile.index + 1}</span>
+      <SourceIcon evidence={tile.evidence} size={13} />
+      <span>{previewSourceLabel(tile.evidence)}</span>
+    </span>
+    <button
+      type="button"
+      className="preview-expand"
+      aria-label={previewTileLabel(tile, count)}
+      aria-haspopup="dialog"
+      onClick={(event) => onOpen(tile.index, event.currentTarget)}
+    >
+      <Maximize2 size={14} aria-hidden="true" />
+    </button>
+  </div>;
 }
 
 function PreviewTileButton({ tile, role, count, onOpen }: {
@@ -156,11 +208,15 @@ function PreviewViewer({ images, changes, index, onIndex, onClose }: {
       <span className="preview-viewer-count">{index + 1} of {images.length}</span>
       <div className="preview-viewer-title">
         <strong><SourceIcon evidence={current} size={15} />{current.title}</strong>
-        <span>{caption ?? (previewSource(current) !== "blender"
-          ? previewSourceLabel(current)
-          : inModel
-            ? "The job's model in 3D, on Roblox's axes; not in the place yet"
-            : "Rendered by Blender from the job's output; not in the place yet")}</span>
+        <span>{caption ?? (previewSource(current) === "animation"
+          ? inModel
+            ? "The animation on the R15 block rig, as checked"
+            : "Five moments of the animation, front three-quarter and side"
+          : previewSource(current) !== "blender"
+            ? previewSourceLabel(current)
+            : inModel
+              ? "The job's model in 3D, on Roblox's axes; not in the place yet"
+              : "Rendered by Blender from the job's output; not in the place yet")}</span>
       </div>
       {model && <div className="preview-viewer-mode" role="group" aria-label="Show as">
         <button type="button" aria-pressed={inModel} onClick={() => setPictureAt(null)}><Rotate3d size={14} aria-hidden="true" />3D</button>
@@ -175,7 +231,7 @@ function PreviewViewer({ images, changes, index, onIndex, onClose }: {
       {images.length > 1 && <button type="button" className="preview-viewer-step" onClick={() => onIndex(index - 1)} disabled={atStart} aria-label="Previous image"><ChevronLeft size={20} /></button>}
       <div className="preview-viewer-frame" data-view={inModel ? "model" : "picture"}>
         {inModel
-          ? <ModelViewer key={current.id} evidence={current} onShowPicture={showPicture} />
+          ? <ModelViewer key={current.id} evidence={current} onShowPicture={showPicture} autoplay />
           : <img src={current.imageDataUrl} alt={current.title} draggable={false} />}
       </div>
       {images.length > 1 && <button type="button" className="preview-viewer-step" onClick={() => onIndex(index + 1)} disabled={atEnd} aria-label="Next image"><ChevronRight size={20} /></button>}

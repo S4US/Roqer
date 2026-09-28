@@ -55,7 +55,7 @@ export function previewSource(evidence: RunEvidence): PreviewSource {
 export function previewSourceLabel(evidence: RunEvidence): string {
   switch (previewSource(evidence)) {
     case "blender": return "Blender · before upload";
-    case "animation": return "Animation · box rig";
+    case "animation": return "Animation · R15";
     case "playtest": return "Playtest";
     case "studio": return "Studio";
     default: return evidence.title;

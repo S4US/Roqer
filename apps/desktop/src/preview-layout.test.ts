@@ -57,10 +57,10 @@ test("a picture is labelled by where the host says it came from", () => {
   ]);
 });
 
-test("an animation's contact sheet is labelled as the box rig, and opens in 3D when its model was kept", () => {
+test("an animation's contact sheet is labelled as an R15 animation, and opens in 3D when its model was kept", () => {
   const sheet: RunEvidence = { id: "a", kind: "inspection", title: ANIMATION_PREVIEW_TITLE, imageDataUrl: image };
   assert.equal(previewSource(sheet), "animation");
-  assert.equal(previewSourceLabel(sheet), "Animation · box rig");
+  assert.equal(previewSourceLabel(sheet), "Animation · R15");
   assert.equal(hasModelPreview(sheet), false);
   assert.equal(hasModelPreview({ ...sheet, modelPreviewId: "a1b2c3d4-0" }), true);
 });

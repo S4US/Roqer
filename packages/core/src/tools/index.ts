@@ -1826,7 +1826,7 @@ export class RobloxStudioTools {
             ...body,
             sheet: {
               times: sheet.times.map((time) => Math.round(time * 1000) / 1000),
-              reading: 'Box rig, one column per time. Top row from the front three-quarter, bottom row from its right side facing right; left limbs blue, right limbs orange; the grey line is the ground.',
+              reading: 'Block rig, one column per time. Top row from the front three-quarter, bottom row from its right side facing right; left limbs are the darker grey; the shadow marks the ground under the body.',
             },
           }),
         },
