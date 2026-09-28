@@ -61,7 +61,8 @@ answers four questions on a real Studio before later steps depend on them:
 The upload is opt-in, because it creates a real asset. The script writes a JSON
 report and also captures the R15 rest pose, which step 5 uses as reference data.
 If a question comes back "no", steps 7 and 8 change before anything is built on
-it. Results are recorded below.
+it. Results are recorded below. A fifth question, added for step 5, asks
+whether the engine skips the pose compiler's weight-0 placeholders.
 
 ### 3. Thumbnails in the answer — implemented
 
@@ -146,7 +147,7 @@ answer, and in the viewer it is one switch away ("3D | Picture").
   that steps through them. That needs each stage's job kept together, and is
   left for later.
 
-### 5. Pose compiler (core)
+### 5. Pose compiler (core) — implemented
 
 It turns a compact pose description (joint rotations per keyframe, easing,
 loop, priority, rig type) into a `KeyframeSequence` description:
@@ -155,6 +156,42 @@ loop, priority, rig type) into a `KeyframeSequence` description:
 - It knows the R15 joint tree, taken from the step 2 rest pose.
 - It is pure TypeScript with no Studio or Blender dependency, so it is
   unit-tested here.
+
+What was built, in `packages/core/src/animation/`:
+
+- **`r15-rig.ts`** holds the rig from the second spike run: 16 parts with
+  their sizes, 15 joints with their attachment offsets, and the hip height.
+- **`pose-compiler.ts`** takes the description and returns either the whole
+  sequence or every problem found, each with its path. It never returns part
+  of a sequence.
+- **The description.**
+  - Joints are named as in the rig ("RightShoulder"). A part name gets an
+    error that names the joint that moves it.
+  - Each keyed joint takes a rotation in degrees about its parent part's
+    axes, applied as `CFrame.Angles` does. An empty pose is the rest pose.
+  - Only `Root` takes a position, which offsets the whole body.
+  - Easing falls back field by field: joint, then keyframe, then animation,
+    then the engine's default (Linear, In).
+- **Validation.**
+  - The first keyframe is at time 0, and times increase.
+  - A joint keyed anywhere is keyed in the first keyframe, so its motion
+    starts from a stated pose.
+  - Unknown fields are refused, so a misspelt field cannot be silently
+    dropped.
+  - Limits: 240 keyframes, 60 seconds, ±360° per axis, ±20 studs for `Root`.
+    At most 20 problems are listed.
+  - Judging the motion itself is step 6's job.
+- **The output.**
+  - Poses are keyed by part name, the part each joint moves.
+  - Each keyframe's poses nest from `HumanoidRootPart` down, and only the
+    branches that reach a keyed part are included.
+  - A pose on the way to a keyed part is a placeholder: weight 0, identity,
+    so it keys nothing itself.
+  - CFrames are given as the 12 numbers `CFrame.new` takes.
+- **Placeholders observed live.** The engine skips a weight-0 placeholder
+  instead of keying its joint to the identity. The spike's fifth question
+  showed it against a weight-1 control; see the third run under "Live
+  results".
 
 ### 6. Motion checks
 
@@ -324,3 +361,37 @@ Part sizes in studs (x × y × z), with HipHeight 2.19:
 - Head 1.16 × 1.18 × 1.16.
 - UpperArm 1.00 × 1.24 × 1.00; LowerArm 1.00 × 1.12 × 1.00; Hand 0.98 × 0.32 × 1.03.
 - UpperLeg 0.99 × 1.36 × 0.97; LowerLeg 0.99 × 1.30 × 0.97; Foot 1.01 × 0.31 × 1.00.
+
+### 2026-09-28: third spike run, Studio 0.740.19
+
+Run without the upload, to answer the fifth question: does the engine skip a
+weight-0 `Pose` that only keeps the hierarchy? The pose compiler writes the
+poses between the root and a keyed part that way.
+
+The probe keys the right shoulder at 60° at 0 s and 2 s. At 1 s the upper arm
+is only the parent of a keyed elbow: a weight-0 identity pose in one sequence
+and a weight-1 identity pose in the control. Each was played on the edit-mode
+dummy and stepped by hand, measuring the shoulder from its rest.
+
+| Time | Weight-0 placeholder | Weight-1 control |
+| --- | --- | --- |
+| 0.5 s | 60° | 30° |
+| 1.0 s | 60° | 0° |
+| 1.5 s | 60° | 30° |
+| 2.0 s | 60° | 60° |
+
+- **Answer: yes.** The weight-0 pose keys nothing, and the shoulder holds its
+  60° keys throughout. The control returns to rest at 1 s, which shows the
+  measurement would have seen a keyed identity.
+- **A probe bug on the way.** The first attempt measured from the joint's
+  `Transform` before playing, and came back "inconclusive". A stopped track
+  leaves its last pose on the joint until something else moves it, so that
+  reading was stale. The probe now measures from the identity, the joint's
+  true rest.
+
+What this settles:
+
+- The pose compiler's placeholders are safe. A keyframe can key a hand without
+  pinning the arm, torso or root above it.
+- Step 7 must measure from the identity, not from whatever pose a previous
+  preview left on the joint.
