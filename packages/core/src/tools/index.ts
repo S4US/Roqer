@@ -23,6 +23,14 @@ import { rgbaToJpeg } from '../jpeg-encoder.js';
 import { rgbaToPng } from '../png-encoder.js';
 import { createUISnapshot, normalizeUIInspection } from '../ui-semantics.js';
 import { auditUI } from '../ui-audit.js';
+import {
+  compactChecks,
+  describeAnimation,
+  expectedCounts,
+  prepareAnimation,
+  previewSampleTimes,
+  verifyPlayback,
+} from '../animation/animation-tool.js';
 import * as fs from 'fs';
 import * as path from 'path';
 
@@ -1693,6 +1701,101 @@ export class RobloxStudioTools {
     }
     const response = await this._callSingle('/api/build-instances', { path, operations }, undefined, instance_id);
     return { content: [{ type: 'text', text: JSON.stringify(response) }] };
+  }
+
+  /**
+   * Check a pose description, or build it as a KeyframeSequence in Studio.
+   *
+   * Both compile the description and run the motion checks here, without
+   * Studio. `build` then refuses unless every check passed or was waived, has
+   * the plugin preview the sequence on a temporary dummy, and writes it only if
+   * Studio played it as the checks measured it. The write is one undo step and
+   * is read back; replacing a sequence needs the revision its build returned.
+   */
+  async animation(
+    action: unknown,
+    animation: unknown,
+    parent: unknown,
+    expected_revision: unknown,
+    waive: unknown,
+    locomotion: unknown,
+    instance_id?: string,
+  ) {
+    if (action !== 'check' && action !== 'build') {
+      throw new Error('animation action must be "check" or "build"');
+    }
+    if (action === 'build' && (typeof parent !== 'string' || parent.trim() === '')) {
+      throw new Error('parent (the instance the KeyframeSequence goes in) is required to build an animation');
+    }
+    if (expected_revision !== undefined && typeof expected_revision !== 'string') {
+      throw new Error('expected_revision must be the revision string a previous build returned');
+    }
+
+    const prepared = prepareAnimation(animation, { locomotion, waive });
+    if (!prepared.ok) {
+      return this._textResult({
+        ...(action === 'check' ? { valid: false } : { error: 'The animation is not valid; nothing was built.' }),
+        errors: prepared.errors,
+      });
+    }
+    const { sequence, report, failing, waived } = prepared.value;
+    const checks = {
+      passed: failing.length === 0,
+      results: compactChecks(report),
+      ...(waived.length > 0 ? { waived } : {}),
+    };
+    if (action === 'check') {
+      return this._textResult({ valid: true, animation: describeAnimation(sequence), checks });
+    }
+    if (failing.length > 0) {
+      return this._textResult({
+        error: `${failing.length === 1 ? 'A motion check' : `${failing.length} motion checks`} failed (${failing.join(', ')}); nothing was built. Fix the motion, or waive a failure you intend.`,
+        checks,
+      });
+    }
+
+    const payload = { name: sequence.name, loop: sequence.loop, priority: sequence.priority, keyframes: sequence.keyframes };
+    const preview = await this._callSingle(
+      '/api/preview-animation',
+      { sequence: payload, sampleTimes: previewSampleTimes(sequence) },
+      undefined,
+      instance_id,
+    );
+    if (preview?.error) {
+      return this._textResult({ error: `Studio could not preview the animation: ${preview.error} Nothing was built.` });
+    }
+    const playback = verifyPlayback(sequence, preview?.samples);
+    if (!playback.verified) {
+      return this._textResult({ error: `The preview did not play as checked: ${playback.reason}. Nothing was built.`, playback });
+    }
+
+    const written = await this._callSingle(
+      '/api/build-animation',
+      { parentPath: parent, sequence: payload, expectedRevision: expected_revision },
+      undefined,
+      instance_id,
+    );
+    if (written?.error) return this._textResult({ ...written, playback });
+
+    const expected = expectedCounts(sequence);
+    return this._textResult({
+      built: true,
+      path: written.path,
+      instanceRef: written.instanceRef,
+      revision: written.revision,
+      replaced: written.replaced === true,
+      undoable: written.undoable !== false,
+      animation: describeAnimation(sequence),
+      readBack: {
+        keyframes: written.keyframes,
+        poses: written.poses,
+        matchesCompiled: written.keyframes === expected.keyframes
+          && written.poses === expected.poses
+          && written.stampMatches === true,
+      },
+      playback,
+      checks,
+    });
   }
 
 

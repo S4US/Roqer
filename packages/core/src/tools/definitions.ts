@@ -1,5 +1,14 @@
 import type { ToolAnnotations } from '@modelcontextprotocol/server';
 import { MAX_PNG_BASE64_CHARACTERS } from '../image-decode.js';
+import { ANIMATION_PRIORITIES } from '../animation/pose-compiler.js';
+import { MOTION_CHECK_IDS } from '../animation/animation-tool.js';
+
+// Styles and directions are listed in the tool guide and in the compiler's
+// errors; spelling the enums out twice here would cost more than they save.
+const POSE_EASING_SCHEMA = {
+  type: 'object',
+  description: '{style, direction} toward the next key; default Linear, In.',
+} as const;
 
 export type ToolCategory = 'read' | 'write';
 
@@ -138,6 +147,72 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
         }
       },
       required: ['instancePath', 'properties']
+    }
+  },
+  {
+    name: 'animation',
+    category: 'write',
+    description: 'Use to check a character animation, or build it as a KeyframeSequence.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        action: {
+          type: 'string',
+          enum: ['check', 'build'],
+          description: 'check measures without Studio; build previews, writes, reads back.'
+        },
+        animation: {
+          type: 'object',
+          description: 'Pose description for an R15 rig.',
+          properties: {
+            name: { type: 'string', description: 'KeyframeSequence name.' },
+            rig: { type: 'string', enum: ['R15'], description: 'Rig type.' },
+            loop: { type: 'boolean', description: 'Default false.' },
+            priority: { type: 'string', enum: [...ANIMATION_PRIORITIES], description: 'Default Action.' },
+            easing: POSE_EASING_SCHEMA,
+            keyframes: {
+              type: 'array',
+              description: 'First at time 0; times rise; at most 240, 60 s.',
+              items: {
+                type: 'object',
+                properties: {
+                  time: { type: 'number', description: 'Seconds.' },
+                  name: { type: 'string', description: 'Name KeyframeReached reports.' },
+                  easing: POSE_EASING_SCHEMA,
+                  joints: {
+                    type: 'object',
+                    description: 'Joint name -> {rotation:[x,y,z] degrees, position?, easing?}.'
+                  },
+                },
+                required: ['time', 'joints'],
+              },
+            },
+          },
+          required: ['name', 'rig', 'keyframes'],
+        },
+        locomotion: {
+          type: 'boolean',
+          description: 'A gait: adds ground, foot, and symmetry checks.'
+        },
+        parent: {
+          type: 'string',
+          description: 'Build: instance the KeyframeSequence goes in.'
+        },
+        expected_revision: {
+          type: 'string',
+          description: 'Build: revision its last build returned; required to replace it.'
+        },
+        waive: {
+          type: 'array',
+          items: { type: 'string', enum: [...MOTION_CHECK_IDS] },
+          description: 'Failed checks to accept.'
+        },
+        instance_id: {
+          type: 'string',
+          description: 'Connected place ID; required with multiple places.'
+        }
+      },
+      required: ['action', 'animation']
     }
   },
   {

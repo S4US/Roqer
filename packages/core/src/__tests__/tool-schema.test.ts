@@ -348,6 +348,7 @@ describe('Tool schema compatibility', () => {
       get_project_structure: 'getProjectStructure',
       set_properties: 'setProperties',
       build_instances: 'buildInstances',
+      animation: 'animation',
       grep_scripts: 'grepScripts',
       get_script_source: 'getScriptSource',
       set_script_source: 'setScriptSource',

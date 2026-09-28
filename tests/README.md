@@ -271,6 +271,7 @@ the plan.
 
 | File | What it checks |
 |---|---|
+| `animation-tool.mjs` | `animation` checks a pose description without Studio, then builds it in a temporary ServerStorage folder: the preview plays as checked and leaves nothing in Workspace, the write reads back and is one undo step, a rebuild needs the current revision, a sequence edited after its build or not built by the tool is never replaced, and a failing motion check changes nothing |
 | `codex-wsl-environment.mjs` | The supported Codex wrapper validates Windows interop and advertises the retained process-identity launcher from a sanitized WSL environment without launching Studio |
 | `eval-bridge-error-preservation.mjs` | `eval_server_runtime` / `eval_client_runtime` surface actual user errors instead of Roblox's generic `"Requested module experienced an error while loading"` wrapper for explicit errors, nil derefs, parser errors, and nested `require()` module-load failures |
 | `eval-context-routing.mjs` | `execute_luau target=server/client-N` runs in plugin context on the selected peer, while `eval_server_runtime` / `eval_client_runtime` run through the server Script and client LocalScript eval bridges |

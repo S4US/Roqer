@@ -34,6 +34,7 @@ const FULL_TESTS = [
   'path-resolution.mjs',
   'property-value-conversion.mjs',
   'studio-tooling-smoke.mjs',
+  'animation-tool.mjs',
   'semantic-ui-smoke.mjs',
   'eval-bridge-error-preservation.mjs',
   'eval-context-routing.mjs',

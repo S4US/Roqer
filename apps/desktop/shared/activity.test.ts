@@ -90,6 +90,16 @@ test("checking an upload operation reads as a lookup, not another upload", () =>
   assert.equal(activityLabel("upload_asset", null, true), "Edited an asset");
 });
 
+test("an animation reads as checking or building, whatever its summary says", () => {
+  const animation = { name: "Run", rig: "R15", keyframes: [{ time: 0, joints: {} }] };
+  const check = activityTarget("animation", summarizeToolCall("animation", { action: "check", animation }));
+  const build = activityTarget("animation", summarizeToolCall("animation", { action: "build", animation, parent: "game.ServerStorage" }));
+  assert.equal(activityLabel("animation", check, true), "Checked an animation");
+  assert.equal(activityLabel("animation", build, false), "Building an animation");
+  assert.equal(activityKind("animation", check), "read");
+  assert.equal(activityKind("animation", build), "edit");
+});
+
 test("every phase can name itself in both tenses", () => {
   const phases = [
     "connect", "explore", "scripts", "edit", "run", "verify", "note",

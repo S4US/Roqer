@@ -42,6 +42,7 @@ const ROUTED_TOOLS = new Set([
   'generate_model',
   'simulate_mouse_input',
   'simulate_keyboard_input',
+  'animation',
 ]);
 
 let confirmedAutoAssignedPrimary;

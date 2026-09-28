@@ -74,6 +74,7 @@ const KIND_BY_TOOL: Readonly<Record<string, ToolActivityKind>> = {
   import_rbxm: "edit",
   export_rbxm: "edit",
   upload_asset: "edit",
+  animation: "edit",
   generate_model: "edit",
   breakpoints: "edit",
 
@@ -102,6 +103,8 @@ const KIND_BY_TOOL: Readonly<Record<string, ToolActivityKind>> = {
  */
 export function activityKind(tool: string, target: string | null = null): ToolActivityKind {
   if (tool === "upload_asset" && target === "status") return "read";
+  // An animation summary starts with its action; checking reads nothing but writes nothing either.
+  if (tool === "animation" && target?.startsWith("check ")) return "read";
   return Object.prototype.hasOwnProperty.call(KIND_BY_TOOL, tool) ? KIND_BY_TOOL[tool] : "run";
 }
 
@@ -249,6 +252,7 @@ const TOOL_PHRASE: Readonly<Record<string, string>> = {
   execute_luau: "Luau in Studio",
   set_properties: "properties",
   build_instances: "instances",
+  animation: "an animation",
   set_script_source: "the script source",
   edit_script_lines: "script lines",
   edit_script_batch: "several parts of the script",
@@ -282,6 +286,10 @@ export function activityLabel(tool: string, target: string | null, past: boolean
   if (tool === "upload_asset" && target === "status") return `${verb} upload status`;
   if (tool === "upload_asset" && target === "upload") return past ? "Uploaded an asset" : "Uploading an asset";
   if (tool === "run_blender_script") return past ? "Modeled in Blender" : "Modeling in Blender";
+  if (tool === "animation") {
+    if (target?.startsWith("build ")) return past ? "Built an animation" : "Building an animation";
+    return past ? "Checked an animation" : "Checking an animation";
+  }
   if (target === null) return `${verb} ${toolPhrase(tool)}`;
   if (kind === "search") {
     // A search's identifying argument is a query, not a path: unquoted it reads

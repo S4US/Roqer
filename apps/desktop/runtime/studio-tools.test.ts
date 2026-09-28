@@ -1029,6 +1029,52 @@ test("a refused build records nothing and tells the model which step failed", as
   assert.deepEqual(evidence, []);
 });
 
+test("a built animation is one change, verified by its preview and read-back", async () => {
+  const { context, changes, evidence } = contextWith([
+    ok({
+      built: true,
+      path: "game.ServerStorage.Animations.Run",
+      replaced: true,
+      undoable: true,
+      animation: { name: "Run", duration: 0.6, keyframes: 5, loop: true },
+      readBack: { keyframes: 5, poses: 35, matchesCompiled: true },
+      playback: { verified: true, samples: 8, maxDegrees: 0.4, maxStuds: 0 },
+      checks: { passed: true, waived: ["rootDrift"] },
+    }),
+  ]);
+  const run = createStudioToolRunner(context);
+
+  const result = await run("animation", { action: "build", animation: { name: "Run" }, parent: "game.ServerStorage.Animations" });
+
+  assert.equal(result.ok, true);
+  assert.deepEqual(changes.map((change) => [change.kind, change.target, change.summary]), [
+    ["instance", "game.ServerStorage.Animations.Run", "Rebuilt an animation in one undoable step: 5 keyframes, 0.6 s, looping."],
+  ]);
+  assert.equal(evidence.length, 1);
+  assert.equal(evidence[0].passed, true);
+  assert.deepEqual(evidence[0].metadata, [
+    { label: "Motion checks", value: "Passed, with rootDrift waived" },
+    { label: "Preview", value: "Within 0.4° of the checked model" },
+    { label: "Read back", value: "Matches what was compiled" },
+    { label: "Undo", value: "One Studio undo step" },
+  ]);
+});
+
+test("an animation that was only checked, or refused, records nothing", async () => {
+  const { context, changes, evidence } = contextWith([
+    ok({ valid: true, checks: { passed: true } }),
+    ok({ error: "A motion check failed (jointLimits); nothing was built." }),
+  ]);
+  const run = createStudioToolRunner(context);
+
+  assert.equal((await run("animation", { action: "check", animation: { name: "Run" } })).ok, true);
+  const refused = await run("animation", { action: "build", animation: { name: "Run" }, parent: "game.ServerStorage" });
+  assert.equal(refused.ok, false);
+  assert.match(refused.text, /nothing was built/);
+  assert.deepEqual(changes, []);
+  assert.deepEqual(evidence, []);
+});
+
 test("a call the server rejects over its arguments comes back with that operation's schema", () => {
   const text = studioToolResultText("solo_playtest", {
     ok: false,
