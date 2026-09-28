@@ -190,6 +190,37 @@ node scripts/studio-lifecycle.mjs launch
 node scripts/studio-lifecycle.mjs wait-connected --variant main --version <expected-version>
 ```
 
+## Animation spike
+
+`tests/animation-spike.mjs` is step 2 of the [animation plan](../docs/animation-plan.md).
+It is a research probe, not a regression test, and belongs to neither runner
+profile. It answers four questions on a real Studio:
+
+1. Can the stock R15 dummy be built in memory in edit mode?
+2. Do temporary animation IDs play, in edit mode and in a playtest?
+3. Does Open Cloud accept a `KeyframeSequence` exported from Studio as an
+   Animation asset?
+4. Can the just-published animation be read back and played?
+
+```bash
+npm run test:spike:animation
+
+# Also upload one small test animation to your account (questions 3 and 4)
+ROQER_SPIKE_UPLOAD=1 ROBLOX_OPEN_CLOUD_API_KEY=... ROBLOX_CREATOR_USER_ID=... \
+  npm run test:spike:animation
+```
+
+The upload is off unless `ROQER_SPIKE_UPLOAD=1` is set, because it creates a
+real asset. The key needs the Assets API with write access. The asset is named
+"Roqer animation spike" and can be archived afterwards in the Creator Dashboard.
+
+The answers are findings, not assertions. A "no" still exits 0; the script
+fails only when it cannot ask a question or cannot clean up. It works in a
+temporary `Workspace.__RoqerAnimationSpike` folder that it removes on every
+path, and stops the playtest it starts. The report, which also records the
+dummy's R15 joints and part sizes for the pose compiler, is written to
+`tmp/animation-spike/report-<time>.json`.
+
 ## What each test exercises
 
 | File | What it checks |
