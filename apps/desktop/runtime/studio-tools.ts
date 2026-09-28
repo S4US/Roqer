@@ -11,7 +11,10 @@ import {
   type ArgumentProblem,
 } from "../shared/mcp-tool-help";
 import { boundedCode, diffDeletedRange, diffText, normalizeNewlines } from "../shared/text-diff";
-import type { RunChange, RunEvidence } from "../shared/run-events";
+import {
+  BLENDER_PREVIEW_TITLE, SCREENSHOT_VIEW_LABEL, SCREENSHOT_VIEW_PLAYTEST,
+  type RunChange, type RunEvidence,
+} from "../shared/run-events";
 import type { McpToolImage, McpToolOutcome } from "./mcp-types";
 import type { PlannerContext } from "./run-engine";
 import { compactValue, truncateText } from "./result-summary";
@@ -463,7 +466,7 @@ function auditEvidence(data: unknown): ObservationEvidence | undefined {
  */
 const BLENDER_PREVIEW_EVIDENCE: ObservationEvidence = {
   kind: "inspection",
-  title: "Blender result, before upload",
+  title: BLENDER_PREVIEW_TITLE,
   detail: "Rendered by Blender from the job's output. A Studio screenshot shows what is in the place.",
 };
 
@@ -478,11 +481,17 @@ async function evidencePreview(context: PlannerContext, outcome: McpToolOutcome)
   }
 }
 
-/** Evidence supplied by observable Studio operations, never inferred by the model. */
+/**
+ * Evidence supplied by observable Studio operations, never inferred by the model.
+ *
+ * `playtestRunning` is whether a playtest this run started is still running,
+ * as far as this run's own calls say; a screenshot taken then is marked so.
+ */
 function observationEvidence(
   operation: string,
   args: JsonRecord,
   outcome: McpToolOutcome,
+  playtestRunning = false,
 ): ObservationEvidence | undefined {
   if (!outcome.ok) return undefined;
   const target = typeof args.target === "string" ? args.target : undefined;
@@ -500,17 +509,20 @@ function observationEvidence(
         passed: true,
         detail,
       };
-    case "capture_screenshot":
+    case "capture_screenshot": {
+      const metadata = [
+        ...(outcome.images?.length ? [{ label: "Images returned", value: String(outcome.images.length) }] : []),
+        ...(playtestRunning ? [{ label: SCREENSHOT_VIEW_LABEL, value: SCREENSHOT_VIEW_PLAYTEST }] : []),
+      ];
       return {
         kind: "screenshot",
         requirement: "visual",
         title: target ? `Studio screenshot (${target})` : "Studio screenshot",
         passed: true,
         detail,
-        metadata: outcome.images?.length
-          ? [{ label: "Images returned", value: String(outcome.images.length) }]
-          : undefined,
+        metadata: metadata.length > 0 ? metadata : undefined,
       };
+    }
     case "inspect_ui": {
       const audit = args.mode === "audit" ? auditEvidence(outcome.data) : undefined;
       if (audit !== undefined) return audit;
@@ -1059,6 +1071,10 @@ export function createStudioToolRunner(context: PlannerContext): StudioToolRunne
   const scriptReads = new Map<string, ScriptSnapshot>();
   const changedScripts = new Map<string, string | undefined>();
   const recordedAssetIds = new Set<string>();
+  // Whether a playtest this runner started is still running. Only this run's
+  // own start and stop calls move it, so a playtest someone else started is
+  // never claimed.
+  let playtestRunning = false;
 
   const recordVerification = (
     target: string,
@@ -1214,7 +1230,11 @@ export function createStudioToolRunner(context: PlannerContext): StudioToolRunne
     const outcome = await context.call(operation, args);
     let modelNote: string | undefined;
 
-    const observed = observationEvidence(operation, args, outcome);
+    if (outcome.ok && (operation === "solo_playtest" || operation === "multiplayer_playtest")) {
+      if (args.action === "start") playtestRunning = true;
+      else if (args.action === "stop" || args.action === "end") playtestRunning = false;
+    }
+    const observed = observationEvidence(operation, args, outcome, playtestRunning);
     const preview = observed !== undefined || operation === BLENDER_OPERATION
       ? await evidencePreview(context, outcome)
       : undefined;

@@ -860,6 +860,32 @@ test("a Blender preview is shown as the job's output and never counts as Studio 
   assert.equal(evidence[0].imageDataUrl, PREVIEW);
 });
 
+test("a screenshot taken while this run's own playtest runs says so, and only then", async () => {
+  const screenshot = () => ({ ...ok({}), images: [{ data: "QUJD", mediaType: "image/png" as const }] });
+  const { context, evidence } = contextWith([
+    screenshot(),
+    ok({ success: true }),
+    screenshot(),
+    ok({ success: true }),
+    screenshot(),
+    unavailable(),
+    screenshot(),
+  ]);
+  const run = createStudioToolRunner(context);
+  const view = (item: Omit<RunEvidence, "id">) => item.metadata?.find((entry) => entry.label === "View")?.value;
+
+  await run("capture_screenshot", {});
+  await run("solo_playtest", { action: "start", mode: "play" });
+  await run("capture_screenshot", {});
+  await run("solo_playtest", { action: "stop" });
+  await run("capture_screenshot", {});
+  await run("multiplayer_playtest", { action: "start", clients: 2 });
+  await run("capture_screenshot", {});
+
+  const screenshots = evidence.filter((item) => item.kind === "screenshot");
+  assert.deepEqual(screenshots.map(view), [undefined, "Playtest", undefined, undefined]);
+});
+
 test("a failed observation does not manufacture passing evidence", async () => {
   const { context, evidence } = contextWith([{
     ...unavailable(), errorCode: "request_failed", message: "client disconnected",
