@@ -2,7 +2,10 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { ANIMATION_NAME_LABEL, ANIMATION_PREVIEW_TITLE, type RunChange, type RunEvidence } from "../shared/run-events";
 import { groupChangesByTarget } from "./diff-view";
-import { arrivedTab, openingTab, resultsSummary, runResults, shownTab, uploadEntry, type ResultsTabInfo } from "./results-model";
+import {
+  arrivedTab, initialResultsView, openingTab, rememberResults, resultsSummary, runResults, settleFileDefaults, shownTab, uploadEntry,
+  type ResultsTabInfo, type ResultsViewState,
+} from "./results-model";
 
 const image = "data:image/jpeg;base64,QUJD";
 
@@ -136,4 +139,33 @@ test("uploading to the same asset twice is one tile that says so", () => {
   const entry = uploadEntry(groups[0]);
   assert.equal(entry.writes, 2);
   assert.equal(entry.moderation?.tone, "rejected");
+});
+
+test("a run's card is remembered by run id, newest last, and the oldest is forgotten past the bound", () => {
+  const memory = new Map<string, ResultsViewState>();
+  const view = (tab: "changes" | "previews") => ({ ...initialResultsView([], false), picked: tab });
+  rememberResults(memory, "a", view("changes"), 2);
+  rememberResults(memory, "b", view("changes"), 2);
+  rememberResults(memory, "a", view("previews"), 2);
+  rememberResults(memory, "c", view("changes"), 2);
+  assert.deepEqual([...memory.keys()], ["a", "c"]);
+  assert.equal(memory.get("a")?.picked, "previews");
+});
+
+test("a finished run's card starts where its tabs say, folded when it is an earlier run", () => {
+  const tabs = runResults([script("s", "game.A", 1, 0)], [shot("p")]).tabs;
+  assert.deepEqual(initialResultsView(tabs, true), {
+    open: false, picked: null, following: "previews", visited: [], versions: {}, files: {},
+  });
+});
+
+test("a lone file opens; a second file arriving starts folded and leaves the first open", () => {
+  const first = settleFileDefaults({}, ["game.A"]);
+  assert.deepEqual(first, { "game.A": true });
+  const second = settleFileDefaults(first, ["game.A", "game.B"]);
+  assert.deepEqual(second, { "game.A": true, "game.B": false });
+  assert.equal(settleFileDefaults(second, ["game.A", "game.B"]), second);
+  assert.deepEqual(settleFileDefaults({}, ["game.A", "game.B"]), { "game.A": false, "game.B": false });
+  // A file the reader closed stays closed.
+  assert.deepEqual(settleFileDefaults({ "game.A": false }, ["game.A"]), { "game.A": false });
 });

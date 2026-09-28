@@ -157,3 +157,62 @@ export function uploadEntry(group: ChangeGroup): UploadEntry {
     writes: group.changes.length,
   };
 }
+
+/**
+ * What the reader did with a run's Results card: which tab, folded or not,
+ * which version of each picture, which files they opened.
+ *
+ * The card is built twice in a run's life — live, then again from the record
+ * when the run ends — and again whenever its chat is opened. Kept by run id,
+ * it comes back as the reader left it rather than resetting under them at the
+ * moment the run finishes. Renderer memory only: never persisted, and bounded.
+ */
+export type ResultsViewState = {
+  open: boolean;
+  /** The tab the reader chose, which a live run's arrivals never override. */
+  picked: ResultsTab | null;
+  /** The tab a live run was showing: whatever arrived last. */
+  following: ResultsTab | null;
+  /** Tabs opened at least once, whose panels stay mounted. */
+  visited: readonly ResultsTab[];
+  /** The version on show of each picture that has several, by the picture's id. */
+  versions: Readonly<Record<string, number>>;
+  /** Whether each changed file's diff is open, by path. */
+  files: Readonly<Record<string, boolean>>;
+};
+
+export function initialResultsView(tabs: readonly ResultsTabInfo[], collapsed: boolean): ResultsViewState {
+  return { open: !collapsed, picked: null, following: openingTab(tabs), visited: [], versions: {}, files: {} };
+}
+
+/** How many runs' cards are remembered: more than a long chat shows at once. */
+export const MAX_REMEMBERED_RESULTS = 48;
+
+/** Remember `value` under `key` as the most recent entry, forgetting the oldest past `max`. */
+export function rememberResults(
+  memory: Map<string, ResultsViewState>,
+  key: string,
+  value: ResultsViewState,
+  max = MAX_REMEMBERED_RESULTS,
+): void {
+  memory.delete(key);
+  memory.set(key, value);
+  while (memory.size > max) {
+    const oldest = memory.keys().next().value;
+    if (oldest === undefined) break;
+    memory.delete(oldest);
+  }
+}
+
+/**
+ * Whether each file's diff starts open, fixed the first time the file is seen:
+ * a lone file opens, and a file joining others starts folded. Fixing it then
+ * means a second file arriving in a live run does not fold the first one under
+ * the reader. Returns the same object when there is nothing new.
+ */
+export function settleFileDefaults(files: Readonly<Record<string, boolean>>, targets: readonly string[]): Readonly<Record<string, boolean>> {
+  const unseen = targets.filter((target) => !(target in files));
+  if (unseen.length === 0) return files;
+  const lone = targets.length === 1 && Object.keys(files).length === 0;
+  return { ...files, ...Object.fromEntries(unseen.map((target) => [target, lone])) };
+}

@@ -35,7 +35,7 @@ import { QUESTION_ESCAPE_OPTION, type RunQuestion } from "../shared/question";
 import { summarizeTasks, type RunTask, type RunTaskStatus } from "../shared/tasks";
 import { Markdown } from "./markdown-view";
 import { SettingsPage } from "./settings-page";
-import { ResultsCard } from "./results-card";
+import { ResultsCard, type FileExpansion } from "./results-card";
 import { ModelMenu, RunMenu } from "./composer-menus";
 import { blockPreview, characterCount, composedMessage, isLongPaste, lineCount, textSize, type PastedBlock } from "./composer-text";
 
@@ -1717,7 +1717,7 @@ function LiveRun({ view, steps, nodes, explaining, onAnswer, onExplain, onOpenIn
   // about who is working. A run waiting on Studio or on the user is not
   // thinking, and both of those already say so elsewhere.
   const thinking = running && providerIsThinking(view, nodes);
-  const renderFiles = useCallback((files: ChangeGroup[]) => <ChangeSet groups={files} onOpenInStudio={onOpenInStudio} />, [onOpenInStudio]);
+  const renderFiles = useCallback((files: ChangeGroup[], expansion: FileExpansion) => <ChangeSet groups={files} expansion={expansion} onOpenInStudio={onOpenInStudio} />, [onOpenInStudio]);
   return <div className="mock-run"><section className="message assistant-message"><div className="message-content">
     {view.planner === DEMO_PLANNER && <p className="run-tag"><span className="run-badge">Demo</span></p>}
     {running && <TypingIndicator done={produced} />}
@@ -1731,7 +1731,7 @@ function LiveRun({ view, steps, nodes, explaining, onAnswer, onExplain, onOpenIn
     {view.pendingQuestion && <QuestionCard question={view.pendingQuestion} explaining={explaining} onAnswer={onAnswer} onExplain={onExplain} />}
     <TaskList tasks={view.tasks} />
     <ActivitySection steps={steps} nodes={nodes} running={running} />
-    <ResultsCard changes={view.changes} evidence={view.evidence} renderFiles={renderFiles} />
+    <ResultsCard runId={view.runId} changes={view.changes} evidence={view.evidence} renderFiles={renderFiles} />
     {answered && (running
       // Parsing the whole growing document for every provider delta makes a
       // long reply quadratic. Preserve the text while streaming, then render
@@ -2119,10 +2119,15 @@ function ChangeBody({ change }: { change: RunChange }) {
   </div>;
 }
 
-function ArtifactCard({ group, defaultExpanded = true, onOpenInStudio }: { group: ChangeGroup; defaultExpanded?: boolean; onOpenInStudio: OpenInStudio }) {
+function ArtifactCard({ group, expanded, onExpandedChange, onOpenInStudio }: {
+  group: ChangeGroup;
+  /** Held by the Results card, so an open diff outlives a tab switch and the end of the run. */
+  expanded: boolean;
+  onExpandedChange: (open: boolean) => void;
+  onOpenInStudio: OpenInStudio;
+}) {
   const { changes } = group;
   const bodyId = useId();
-  const [expanded, setExpanded] = useState(defaultExpanded);
   const { latest, earlier } = splitChangeGroup(group);
   // Counts belong to one write. Adding up every write to a file reports more
   // changed lines than the file has, so a file written more than once says how
@@ -2148,7 +2153,7 @@ function ArtifactCard({ group, defaultExpanded = true, onOpenInStudio }: { group
   // the chevron stays the one control the keyboard and screen readers use.
   const toggleFromHeader = (event: React.MouseEvent<HTMLDivElement>) => {
     if ((event.target as HTMLElement).closest("button, a") !== null) return;
-    setExpanded((open) => !open);
+    onExpandedChange(!expanded);
   };
   return <article className="diff-artifact">
     <div className="diff-header" onClick={toggleFromHeader}>
@@ -2164,7 +2169,7 @@ function ArtifactCard({ group, defaultExpanded = true, onOpenInStudio }: { group
             {added > 0 && <span className="added">+{added}</span>}
             {removed > 0 && <span className="removed">−{removed}</span>}
           </div>}
-        <button className="diff-collapse" type="button" aria-expanded={expanded} aria-controls={expanded ? bodyId : undefined} title={expanded ? "Collapse this file" : "Expand this file"} onClick={() => setExpanded((open) => !open)}>
+        <button className="diff-collapse" type="button" aria-expanded={expanded} aria-controls={expanded ? bodyId : undefined} title={expanded ? "Collapse this file" : "Expand this file"} onClick={() => onExpandedChange(!expanded)}>
           <ChevronDown size={14} />
         </button>
       </div>
@@ -2186,15 +2191,20 @@ function ArtifactCard({ group, defaultExpanded = true, onOpenInStudio }: { group
  * The Changes tab: one row per file, as a list to scan. A lone file opens on
  * its diff; several stay folded to their headers — path, line counts, Open in
  * Studio — so a run that touched five scripts reads as five lines, and any one
- * opens in place.
+ * opens in place. Which are open is the Results card's to keep.
  *
  * Memoised: see `ActivitySection`. The diffs are the bulk of a live run's DOM.
  */
-const ChangeSet = memo(function ChangeSet({ groups, onOpenInStudio }: { groups: ChangeGroup[]; onOpenInStudio: OpenInStudio }) {
+const ChangeSet = memo(function ChangeSet({ groups, expansion, onOpenInStudio }: { groups: ChangeGroup[]; expansion: FileExpansion; onOpenInStudio: OpenInStudio }) {
   if (groups.length === 0) return null;
   return <div className="change-set" aria-label="Changed files" role="list">
     {groups.map((group) => <div role="listitem" key={group.target}>
-      <ArtifactCard group={group} defaultExpanded={groups.length === 1} onOpenInStudio={onOpenInStudio} />
+      <ArtifactCard
+        group={group}
+        expanded={expansion.isOpen(group.target)}
+        onExpandedChange={(open) => expansion.onToggle(group.target, open)}
+        onOpenInStudio={onOpenInStudio}
+      />
     </div>)}
   </div>;
 });
@@ -2320,11 +2330,11 @@ function RunRecordView({ record, text, latest, onOpenInStudio }: { record: RunRe
   const failed = record.toolCalls.filter((call) => !call.ok).length;
   const appliedAndVerified = recordAppliedAndVerified(record);
   const steps = useMemo(() => recordSteps(record), [record]);
-  const renderFiles = useCallback((files: ChangeGroup[]) => <ChangeSet groups={files} onOpenInStudio={onOpenInStudio} />, [onOpenInStudio]);
+  const renderFiles = useCallback((files: ChangeGroup[], expansion: FileExpansion) => <ChangeSet groups={files} expansion={expansion} onOpenInStudio={onOpenInStudio} />, [onOpenInStudio]);
   return <>
     <TaskList tasks={record.tasks ?? []} settled />
     <ActivitySection steps={steps} running={false} />
-    <ResultsCard changes={record.changes} evidence={record.evidence} collapsed={!latest} renderFiles={renderFiles} />
+    <ResultsCard runId={record.runId} changes={record.changes} evidence={record.evidence} collapsed={!latest} renderFiles={renderFiles} />
     <Markdown text={text} className="result-copy" />
     {appliedAndVerified && <AppliedStatus />}
     {!appliedAndVerified && !recordOnlyAnswered(record, text) && <OutcomeCard

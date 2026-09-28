@@ -1,4 +1,4 @@
-import { memo, useEffect, useId, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
+import { memo, useCallback, useEffect, useId, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import {
   AudioLines, Box, Check, ChevronRight, CloudUpload, Copy, ExternalLink, FileBox, FileCode2, Film, ImageIcon, PersonStanding,
 } from "lucide-react";
@@ -6,14 +6,23 @@ import type { RunChange, RunEvidence } from "../shared/run-events";
 import type { ChangeGroup } from "./diff-view";
 import { PreviewsPanel } from "./evidence-previews";
 import {
-  arrivedTab, openingTab, resultsSummary, runResults, shownTab, TAB_NAME, uploadEntry,
-  type ResultsTab, type ResultsTabInfo, type UploadEntry,
+  arrivedTab, initialResultsView, rememberResults, resultsSummary, runResults, settleFileDefaults, shownTab, TAB_NAME, uploadEntry,
+  type ResultsTab, type ResultsTabInfo, type ResultsViewState, type UploadEntry,
 } from "./results-model";
 
 const TAB_ICON: Record<ResultsTab, ReactNode> = {
   changes: <FileCode2 size={14} aria-hidden="true" />,
   uploads: <CloudUpload size={14} aria-hidden="true" />,
   previews: <ImageIcon size={14} aria-hidden="true" />,
+};
+
+/** Every run's card as the reader left it, by run id. See `ResultsViewState`. */
+const remembered = new Map<string, ResultsViewState>();
+
+/** How the Changes tab renders a file's diff open or folded, and reports a toggle. */
+export type FileExpansion = {
+  isOpen: (target: string) => boolean;
+  onToggle: (target: string, open: boolean) => void;
 };
 
 /**
@@ -24,42 +33,63 @@ const TAB_ICON: Record<ResultsTab, ReactNode> = {
  * A live run shows whatever arrived last until the reader picks a tab; after
  * that the card stays where they put it. An earlier run's card starts folded to
  * its header, which still reads as a one-line account of what it produced, and
- * clicking any tab opens it there.
+ * clicking any tab opens it there. What the reader chose is kept by run id,
+ * so it survives the run ending and the chat being left and reopened.
  *
  * The file diffs are rendered by the caller, which owns the editor panel.
  */
-export const ResultsCard = memo(function ResultsCard({ changes, evidence, collapsed = false, renderFiles }: {
+export const ResultsCard = memo(function ResultsCard({ runId, changes, evidence, collapsed = false, renderFiles }: {
+  /** The run this card belongs to; the live card and the recorded one share it. */
+  runId: string;
   changes: readonly RunChange[];
   evidence: readonly RunEvidence[];
   /** Start folded to the header: an earlier run in the chat. */
   collapsed?: boolean;
-  renderFiles: (files: ChangeGroup[]) => ReactNode;
+  renderFiles: (files: ChangeGroup[], expansion: FileExpansion) => ReactNode;
 }) {
   const results = useMemo(() => runResults(changes, evidence), [changes, evidence]);
   const { tabs } = results;
-  const [open, setOpen] = useState(!collapsed);
-  const [picked, setPicked] = useState<ResultsTab | null>(null);
-  const [following, setFollowing] = useState<ResultsTab | null>(() => openingTab(tabs));
+  const [view, setView] = useState<ResultsViewState>(() => remembered.get(runId) ?? initialResultsView(tabs, collapsed));
+  const update = useCallback((change: (current: ResultsViewState) => ResultsViewState) => {
+    setView((current) => {
+      const next = change(current);
+      if (next !== current) rememberResults(remembered, runId, next);
+      return next;
+    });
+  }, [runId]);
   const seen = useRef<readonly ResultsTabInfo[]>(tabs);
   useEffect(() => {
     const arrived = arrivedTab(seen.current, tabs);
     seen.current = tabs;
-    if (arrived !== null) setFollowing(arrived);
-  }, [tabs]);
+    if (arrived !== null) update((current) => (current.following === arrived ? current : { ...current, following: arrived }));
+  }, [tabs, update]);
   const baseId = useId();
   const tabRefs = useRef(new Map<ResultsTab, HTMLButtonElement>());
-  const active = shownTab(tabs, picked, following);
-  // Tabs the reader has had open. Their panels stay mounted, hidden, so what
-  // they chose there — an earlier version of an animation, a diff they opened —
-  // is still there when they come back. A tab never opened builds nothing.
-  const [visited, setVisited] = useState<ReadonlySet<ResultsTab>>(() => new Set());
-  if (open && active !== null && !visited.has(active)) setVisited(new Set(visited).add(active));
+  const { open } = view;
+  const active = shownTab(tabs, view.picked, view.following);
+  // Tabs the reader has had open keep their panels mounted, hidden, so what
+  // they chose there is still there when they come back; a tab never opened
+  // builds nothing. File defaults are fixed as files are first seen. Both are
+  // settled during render, so neither shows a frame of the wrong state.
+  const files = settleFileDefaults(view.files, results.files.map((group) => group.target));
+  const visit = open && active !== null && !view.visited.includes(active);
+  if (visit || files !== view.files) {
+    update((current) => ({
+      ...current,
+      files: settleFileDefaults(current.files, results.files.map((group) => group.target)),
+      visited: visit && active !== null && !current.visited.includes(active) ? [...current.visited, active] : current.visited,
+    }));
+  }
+  const expansion = useMemo<FileExpansion>(() => ({
+    isOpen: (target) => files[target] ?? false,
+    onToggle: (target, isOpen) => update((current) => ({ ...current, files: { ...current.files, [target]: isOpen } })),
+  }), [files, update]);
+  const onChooseVersion = useCallback((id: string, at: number) => {
+    update((current) => ({ ...current, versions: { ...current.versions, [id]: at } }));
+  }, [update]);
   if (active === null) return null;
 
-  const choose = (id: ResultsTab) => {
-    setPicked(id);
-    setOpen(true);
-  };
+  const choose = (id: ResultsTab) => update((current) => ({ ...current, picked: id, open: true }));
   const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     const at = tabs.findIndex((tab) => tab.id === active);
     const next = event.key === "ArrowRight" ? (at + 1) % tabs.length
@@ -83,7 +113,7 @@ export const ResultsCard = memo(function ResultsCard({ changes, evidence, collap
         aria-expanded={open}
         aria-controls={open ? panelId(active) : undefined}
         title={open ? "Fold the results" : "Show the results"}
-        onClick={() => setOpen((value) => !value)}
+        onClick={() => update((current) => ({ ...current, open: !current.open }))}
       >
         <ChevronRight size={14} aria-hidden="true" />
       </button>
@@ -99,7 +129,7 @@ export const ResultsCard = memo(function ResultsCard({ changes, evidence, collap
             id={tabId(tab.id)}
             className="results-tab"
             aria-selected={selected}
-            aria-controls={visited.has(tab.id) ? panelId(tab.id) : undefined}
+            aria-controls={view.visited.includes(tab.id) ? panelId(tab.id) : undefined}
             aria-label={`${TAB_NAME[tab.id].title}, ${tab.count} ${noun}`}
             tabIndex={selected ? 0 : -1}
             onClick={() => choose(tab.id)}
@@ -118,7 +148,7 @@ export const ResultsCard = memo(function ResultsCard({ changes, evidence, collap
     {/* Mounted on first visit: a folded card in a long chat builds none of
         its diffs, tiles or pictures. A hidden Previews panel is display:none,
         so its inline animation leaves view and gives up its WebGL context. */}
-    {tabs.filter((tab) => visited.has(tab.id)).map((tab) => <div
+    {tabs.filter((tab) => view.visited.includes(tab.id)).map((tab) => <div
       key={tab.id}
       className="results-panel"
       role="tabpanel"
@@ -127,9 +157,9 @@ export const ResultsCard = memo(function ResultsCard({ changes, evidence, collap
       data-tab={tab.id}
       hidden={!open || tab.id !== active}
     >
-      {tab.id === "changes" && renderFiles(results.files)}
+      {tab.id === "changes" && renderFiles(results.files, expansion)}
       {tab.id === "uploads" && <UploadsPanel uploads={results.uploads} />}
-      {tab.id === "previews" && <PreviewsPanel evidence={evidence} changes={changes} />}
+      {tab.id === "previews" && <PreviewsPanel evidence={evidence} changes={changes} chosen={view.versions} onChoose={onChooseVersion} />}
     </div>)}
   </section>;
 });

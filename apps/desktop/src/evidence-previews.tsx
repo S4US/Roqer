@@ -37,14 +37,15 @@ function onShow(choice: VersionChoice, evidence: RunEvidence): RunEvidence {
  * it, and any picture opens the viewer at itself. Previews of one animation are
  * one picture whose versions step back and forth, not a tile each.
  */
-export const PreviewsPanel = memo(function PreviewsPanel({ evidence, changes }: {
+export const PreviewsPanel = memo(function PreviewsPanel({ evidence, changes, chosen, onChoose }: {
   evidence: readonly RunEvidence[];
   changes: readonly RunChange[];
+  /** The version on show of each picture with several; held by the Results card so it outlives this panel. */
+  chosen: Readonly<Record<string, number>>;
+  onChoose: (id: string, at: number) => void;
 }) {
   const { shown: images, versions } = useMemo(() => previewVersions(evidenceImages(evidence)), [evidence]);
   const layout = useMemo(() => previewLayout(images), [images]);
-  const [chosen, setChosen] = useState<Record<string, number>>({});
-  const onChoose = useCallback((id: string, at: number) => setChosen((previous) => ({ ...previous, [id]: at })), []);
   const choice = useMemo<VersionChoice>(() => ({ versions, chosen, onChoose }), [versions, chosen, onChoose]);
   const [open, setOpen] = useState<number | null>(null);
   const opener = useRef<HTMLElement | null>(null);
