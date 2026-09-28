@@ -8,6 +8,7 @@ import {
   type PreviewTile,
 } from "./preview-layout";
 import { evidenceImages, previewsNotShown } from "./run-view";
+import { EvidencePicture } from "./evidence-picture";
 
 /** Which version of each picture with several is on show, by the picture's id; absent means the latest. */
 type VersionChoice = {
@@ -84,7 +85,7 @@ export const PreviewsPanel = memo(function PreviewsPanel({ evidence, changes, ch
         {images.length > 1 && <em>Latest of {images.length}</em>}
         {notShown > 0 && <em
           className="previews-not-kept"
-          title={`A run keeps ${MAX_RECORDED_EVIDENCE_IMAGES} pictures in the chat: the latest of each thing first, then earlier versions. The rest are listed in Activity without their picture.`}
+          title={`A run keeps up to ${MAX_RECORDED_EVIDENCE_IMAGES} pictures: the latest of each thing first, then earlier versions. The rest are listed in Activity without their picture.`}
         >{notShown} earlier {notShown === 1 ? "picture" : "pictures"} not kept</em>}
         <button type="button" className="previews-open" aria-haspopup="dialog" onClick={(event) => show(images.length - 1, event.currentTarget)}>
           Open viewer<Maximize2 size={13} aria-hidden="true" />
@@ -155,7 +156,7 @@ function LiveAnimationTile({ tile, count, choice, paused, onOpen }: {
   return <div className="preview-tile" data-role="lead" data-source="animation" data-live="true" ref={host}>
     {visible && !paused
       ? <ModelViewer key={evidence.id} evidence={evidence} onShowPicture={() => undefined} compact />
-      : <img src={evidence.imageDataUrl} alt="" draggable={false} />}
+      : <EvidencePicture evidence={evidence} />}
     <span className="preview-chip">
       <span className="preview-chip-index">{tile.index + 1}</span>
       <SourceIcon evidence={evidence} size={13} />
@@ -192,7 +193,7 @@ function PreviewTileButton({ tile, role, count, choice, onOpen }: {
     aria-haspopup="dialog"
     onClick={(event) => onOpen(tile.index, event.currentTarget)}
   >
-    <img src={evidence.imageDataUrl} alt="" draggable={false} />
+    <EvidencePicture evidence={evidence} />
     {/* A tile that stands for several pictures is labelled by its count alone. */}
     {tile.hidden === undefined && <span className="preview-chip">
       <span className="preview-chip-index">{tile.index + 1}</span>
@@ -285,7 +286,7 @@ function PreviewViewer({ images, changes, choice, index, onIndex, onClose }: {
       <div className="preview-viewer-frame" data-view={inModel ? "model" : "picture"}>
         {inModel
           ? <ModelViewer key={current.id} evidence={current} onShowPicture={showPicture} autoplay />
-          : <img src={current.imageDataUrl} alt={current.title} draggable={false} />}
+          : <EvidencePicture evidence={current} alt={current.title} />}
       </div>
       {images.length > 1 && <button type="button" className="preview-viewer-step" onClick={() => onIndex(index + 1)} disabled={atEnd} aria-label="Next image"><ChevronRight size={20} /></button>}
     </div>
@@ -302,7 +303,7 @@ function PreviewViewer({ images, changes, choice, index, onIndex, onClose }: {
           onClick={() => onIndex(position)}
         >
           <span>
-            <img src={item.imageDataUrl} alt="" draggable={false} />
+            <EvidencePicture evidence={item} />
             {hasModelPreview(item) && <i className="preview-badge" aria-hidden="true"><Rotate3d size={10} />3D</i>}
           </span>
           <em>{position + 1} · {previewSourceLabel(item)}</em>

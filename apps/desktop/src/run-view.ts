@@ -8,7 +8,7 @@ import type { RunQuestion } from "../shared/question";
 import type { RunDecision } from "../shared/run-digest";
 import type { RunTask } from "../shared/tasks";
 import {
-  MAX_RECORDED_EVIDENCE_IMAGES, RUN_EVENT_SCHEMA_VERSION,
+  MAX_INLINE_EVIDENCE_IMAGES, MAX_RECORDED_EVIDENCE_IMAGES, RUN_EVENT_SCHEMA_VERSION,
   type RunChange, type RunEvent, type RunEvidence, type RunFailure,
   type RunOutcome, type RunRecord, type ToolProposal,
 } from "../shared/run-events";
@@ -421,26 +421,49 @@ export function recordSteps(record: RunRecord): ActivityStep[] {
   ];
 }
 
-/** The ids of the pictures a run shows and keeps; see `keptPreviewIds`. */
+/** Whether evidence carries a picture: inline, stored beside the chat, or both. */
+export function hasPicture(evidence: RunEvidence): boolean {
+  return evidence.imageDataUrl !== undefined || evidence.imageRef !== undefined;
+}
+
+/**
+ * The ids of the pictures a run shows and keeps; see `keptPreviewIds`. Of
+ * those, a picture with no stored file would be kept inside the chat file,
+ * which is bounded, so only the most useful few of those stay.
+ */
 function keptImageIds(evidence: readonly RunEvidence[]): Set<string> {
-  return keptPreviewIds(evidence.filter((item) => item.imageDataUrl !== undefined), MAX_RECORDED_EVIDENCE_IMAGES);
+  const pictures = evidence.filter(hasPicture);
+  const kept = keptPreviewIds(pictures, MAX_RECORDED_EVIDENCE_IMAGES);
+  const inline = pictures.filter((item) => kept.has(item.id) && item.imageRef === undefined);
+  if (inline.length <= MAX_INLINE_EVIDENCE_IMAGES) return kept;
+  const inlineKept = keptPreviewIds(inline, MAX_INLINE_EVIDENCE_IMAGES);
+  return new Set(pictures
+    .filter((item) => kept.has(item.id) && (item.imageRef !== undefined || inlineKept.has(item.id)))
+    .map((item) => item.id));
 }
 
 /**
  * The evidence as it is saved: every item, but only the pictures within the
- * run's budget.
+ * run's budget, and a stored picture by its ref alone.
  *
- * A run that takes thirty screenshots would otherwise carry thirty pictures
- * into the chat file. The latest picture of each thing is kept first, so what
- * the run ended on survives; a picture past the budget leaves its evidence
- * behind, marked, so the answer can say how many it no longer shows.
+ * The latest picture of each thing is kept first, so what the run ended on
+ * survives; a picture past the budget leaves its evidence behind, marked, so
+ * the answer can say how many it no longer shows, and its stored file goes
+ * once no chat refers to it.
  */
 export function recordedEvidence(evidence: readonly RunEvidence[]): RunEvidence[] {
   const kept = keptImageIds(evidence);
   return evidence.map((item) => {
-    if (item.imageDataUrl === undefined || kept.has(item.id)) return item;
+    if (!hasPicture(item)) return item;
+    if (kept.has(item.id)) {
+      if (item.imageRef === undefined || item.imageDataUrl === undefined) return item;
+      const stored: RunEvidence = { ...item };
+      delete stored.imageDataUrl;
+      return stored;
+    }
     const trimmed: RunEvidence = { ...item, previewNotKept: true };
     delete trimmed.imageDataUrl;
+    delete trimmed.imageRef;
     return trimmed;
   });
 }
@@ -451,14 +474,14 @@ export function recordedEvidence(evidence: readonly RunEvidence[]): RunEvidence[
  */
 export function evidenceImages(evidence: readonly RunEvidence[]): RunEvidence[] {
   const kept = keptImageIds(evidence);
-  return evidence.filter((item) => item.imageDataUrl !== undefined && kept.has(item.id));
+  return evidence.filter((item) => hasPicture(item) && kept.has(item.id));
 }
 
 /** How many pictures the run took that the answer does not show, live or saved. */
 export function previewsNotShown(evidence: readonly RunEvidence[]): number {
-  const images = evidence.filter((item) => item.imageDataUrl !== undefined).length;
-  const dropped = evidence.filter((item) => item.imageDataUrl === undefined && item.previewNotKept === true).length;
-  return images - keptImageIds(evidence).size + dropped;
+  const pictures = evidence.filter(hasPicture).length;
+  const dropped = evidence.filter((item) => !hasPicture(item) && item.previewNotKept === true).length;
+  return pictures - keptImageIds(evidence).size + dropped;
 }
 
 /**

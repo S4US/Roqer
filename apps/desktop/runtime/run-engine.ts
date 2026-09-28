@@ -28,7 +28,7 @@ import type {
   RunRequest,
   ToolProposal,
 } from "../shared/run-events";
-import { isEvidenceImage } from "../shared/run-events";
+import { isEvidenceImage, isEvidencePictureRef } from "../shared/run-events";
 import type { ConversationContext } from "../shared/conversation";
 import {
   evaluateCompletion, evidenceBaselineChangeId, type CompletionVerification,
@@ -197,6 +197,13 @@ export type RunEngineOptions = {
   previewImage?: (image: McpToolImage) => Promise<string | undefined>;
   /** Keeps a tool's 3D preview where the viewer can be served it. Main-process only. */
   storeModelPreview?: (glbBase64: string) => Promise<string | undefined>;
+  /**
+   * Keeps a preview in the picture store beside the chats and returns its ref,
+   * or undefined when it could not. Main-process only; the evidence then
+   * carries the ref as well as the picture, so the saved run keeps the ref
+   * alone. Without it, a preview stays only inline.
+   */
+  storePicture?: (dataUrl: string) => Promise<string | undefined>;
   emit: (event: RunEvent) => void;
   /** Injectable for tests; defaults to () => new Date().toISOString(). */
   now?: () => string;
@@ -354,6 +361,8 @@ export class RunSession {
   private currentTasks: RunTask[] = [];
   private readonly recordedChanges: RunChange[] = [];
   private readonly recordedEvidence: RunEvidence[] = [];
+  /** Pictures stored but not yet recorded as evidence, by the picture: their refs. */
+  private readonly storedPictures = new Map<string, string>();
   private failureCount = 0;
 
   private readonly pendingQuestions = new Map<string, {
@@ -371,7 +380,19 @@ export class RunSession {
     this.planner = options.planner;
     this.request = options.request;
     this.images = options.images ?? [];
-    this.previewImage = options.previewImage;
+    const { previewImage, storePicture } = options;
+    // Every picture evidence carries comes from this preview, which the
+    // planner awaits before it records the evidence; so the picture is stored
+    // here, and `recordEvidence` finds its ref by the picture itself.
+    this.previewImage = previewImage === undefined || storePicture === undefined
+      ? previewImage
+      : async (image) => {
+        const url = await previewImage(image);
+        if (url === undefined) return undefined;
+        const ref = await storePicture(url).catch(() => undefined);
+        if (ref !== undefined && isEvidencePictureRef(ref)) this.storedPictures.set(url, ref);
+        return url;
+      };
     this.storeModelPreview = options.storeModelPreview;
     this.emitRaw = options.emit;
     this.now = options.now ?? (() => new Date().toISOString());
@@ -425,10 +446,17 @@ export class RunSession {
           evidenceBaselineChangeId(this.recordedChanges, taskId);
         // A preview that fails the saved-record bound would make the renderer
         // refuse the whole event, so it is dropped here and the evidence kept.
-        const { imageDataUrl, ...rest } = evidence;
+        // Only a ref this run stored for this very picture is attached: the
+        // planner cannot name a stored picture, only show one.
+        const rest = { ...evidence };
+        delete rest.imageDataUrl;
+        delete rest.imageRef;
+        const picture = isEvidenceImage(evidence.imageDataUrl) ? evidence.imageDataUrl : undefined;
+        const imageRef = picture === undefined ? undefined : this.storedPictures.get(picture);
         const recorded: RunEvidence = {
           ...rest,
-          ...(isEvidenceImage(imageDataUrl) ? { imageDataUrl } : {}),
+          ...(picture === undefined ? {} : { imageDataUrl: picture }),
+          ...(imageRef === undefined ? {} : { imageRef }),
           id: this.createId("evidence"),
           ...(taskId !== undefined ? { taskId } : {}),
           ...(afterChangeId !== undefined ? { afterChangeId } : {}),

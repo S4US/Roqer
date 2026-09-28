@@ -28,9 +28,10 @@ import {
 import {
   activitySteps, applyRunEvent, createRunView, describeOutcome, recordAppliedAndVerified,
   recordGateIssues, recordHasWarnings, recordOnlyAnswered, recordSteps, runAppliedAndVerified,
-  runGateIssues, runHasWarnings, runOnlyAnswered, toRunRecord,
+  runGateIssues, runHasWarnings, runOnlyAnswered, toRunRecord, hasPicture,
   type ActivityStep, type PendingApproval, type RunView,
 } from "./run-view";
+import { EvidencePicture, rememberEvidencePicture } from "./evidence-picture";
 import { QUESTION_ESCAPE_OPTION, type RunQuestion } from "../shared/question";
 import { summarizeTasks, type RunTask, type RunTaskStatus } from "../shared/tasks";
 import { Markdown } from "./markdown-view";
@@ -287,6 +288,9 @@ function App() {
       });
     };
     const unsubscribe = subscribeToRuns((event) => {
+      // A picture arrives with its ref; kept under it, the saved run shows it
+      // at once when it replaces the live one, instead of asking for it again.
+      if (event.type === "evidence") rememberEvidencePicture(event.evidence);
       if (activeRunId.current === null) {
         if (pendingStartAttempt.current !== null) eventBuffer.current.push(event);
         return;
@@ -1887,10 +1891,10 @@ function ActivityGroup({ node, open, onToggle }: {
 function EvidenceDetail({ evidence }: { evidence: RunEvidence }) {
   const lines = evidence.lines ?? [];
   const metadata = evidence.metadata ?? [];
-  if (!evidence.detail && lines.length === 0 && metadata.length === 0 && !evidence.imageDataUrl) return null;
+  if (!evidence.detail && lines.length === 0 && metadata.length === 0 && !hasPicture(evidence)) return null;
   return <CardDetails label={evidenceDetailLabel(evidence.kind)}>
     {evidence.detail && <p className="evidence-note">{evidence.detail}</p>}
-    {evidence.imageDataUrl && <img className="evidence-image" src={evidence.imageDataUrl} alt={evidence.title} />}
+    {hasPicture(evidence) && <EvidencePicture className="evidence-image" evidence={evidence} alt={evidence.title} />}
     {lines.length > 0 && (evidence.format === "code"
       // A source read-back is verbatim: indentation and blank lines are part of
       // what is being shown, so it is a code block, not a list of strings.

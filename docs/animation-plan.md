@@ -92,10 +92,18 @@ the activity list.
 - **Blender previews** are labelled "Blender result, before upload". They are
   recorded as an inspection with no requirement, so they never satisfy the
   completion check.
-- **What is saved.** A run shows and keeps six previews, spent on distinct
-  things first: the latest picture of each animation, model or screenshot,
-  newest first, then earlier versions. A picture past that is counted in the
-  answer ("3 earlier pictures not kept"), not dropped silently.
+- **What is saved.** A run shows and keeps up to forty previews, spent on
+  distinct things first: the latest picture of each animation, model or
+  screenshot, newest first, then earlier versions. A picture past that is
+  counted in the answer ("3 earlier pictures not kept"), not dropped silently.
+- **Where pictures live.** Each picture is a file in `workspace-pictures`
+  beside the chats, named by the SHA-256 of its bytes; a chat keeps only that
+  name. The main process serves a picture by name alone and checks the file
+  hashes to it. A picture goes once no chat refers to it (its chat was
+  deleted), no running run holds it, and it is over ten minutes old. Chats
+  saved by earlier builds, with pictures inside, are moved out on load. A
+  picture that cannot be stored stays inside its chat, at most six per run.
+  Export puts pictures back inline, so an export stands on its own.
 - **Validation.** The run engine and the load-time validator both refuse a
   preview that is not a bounded PNG or JPEG data URL.
 - **Why no schema bump.** The saved format needed no migration.

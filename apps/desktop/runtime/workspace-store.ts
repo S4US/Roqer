@@ -4,11 +4,18 @@ import { basename, dirname, join } from "node:path";
 
 import { createInitialWorkspace, normalizeWorkspace, type Chat, type WorkspaceState } from "../src/model";
 import { malformedWorkspace, supportsWorkspaceSchema } from "../shared/workspace-validation";
+import { inlineStoredPictures, pictureRefs, PictureStore, storeInlinePictures } from "./picture-store";
 
 const MANIFEST_FORMAT_VERSION = 1;
 const WORKSPACE_SCHEMA_VERSION = 3;
 const MAX_CHAT_BYTES = 64 * 1024 * 1024;
 const HASH_PATTERN = /^[a-f0-9]{64}\.json$/;
+/**
+ * A picture ref as a saved chat file spells it. Chat files are written by
+ * `stableJson`, so the field has no spacing; reading refs this way needs no
+ * parse, and can only find more refs than are there, never fewer.
+ */
+const PICTURE_REF_IN_CHAT = /"imageRef":"([0-9a-f]{64}\.(?:jpg|png))"/g;
 
 type ChatReference = Omit<Chat, "messages"> & { content: string };
 type WorkspaceManifest = Omit<WorkspaceState, "projects"> & {
@@ -71,12 +78,15 @@ export class WorkspaceStore {
   #lockedRaw: unknown = undefined;
   #loaded: WorkspaceState | null = null;
   #queue: Promise<unknown> = Promise.resolve();
+  /** The saved runs' previews, as files beside the chats that refer to them. */
+  readonly pictures: PictureStore;
 
-  constructor(readonly root: string) {
+  constructor(readonly root: string, options: { pictures?: PictureStore } = {}) {
     this.#manifestPath = join(root, "workspace-manifest.json");
     this.#previousManifestPath = join(root, "workspace-manifest.previous.json");
     this.#legacyPath = join(root, "workspace-state.json");
     this.#chatDirectory = join(root, "workspace-chats");
+    this.pictures = options.pictures ?? new PictureStore(root);
   }
 
   status(): { required: boolean; message: string | null } {
@@ -115,19 +125,24 @@ export class WorkspaceStore {
     });
   }
 
+  /**
+   * Write a copy of the workspace to `destination`. The copy stands on its own:
+   * every stored picture it refers to is put back inline, as it was before
+   * pictures were stored apart.
+   */
   async export(destination: string, state?: unknown): Promise<void> {
     return this.#serialize(async () => {
       if (state !== undefined) {
         if (!supportsWorkspaceSchema(state) || malformedWorkspace(state)) {
           throw new Error("Cannot export a workspace with an unsupported schema or malformed records.");
         }
-        await atomicWrite(destination, stableJson(normalizeWorkspace(state)));
+        await atomicWrite(destination, stableJson(await inlineStoredPictures(normalizeWorkspace(state), this.pictures)));
         return;
       }
       if (this.#loaded === null) await this.#loadUnlocked();
       const exported = this.#recoveryKind === "future" && this.#lockedRaw !== undefined
         ? this.#lockedRaw
-        : this.#loaded ?? createInitialWorkspace();
+        : await inlineStoredPictures(this.#loaded ?? createInitialWorkspace(), this.pictures);
       await atomicWrite(destination, stableJson(exported));
     });
   }
@@ -162,8 +177,7 @@ export class WorkspaceStore {
     if (malformedWorkspace(raw)) {
       return this.#lock(normalized, "Some malformed workspace records could not be loaded. Review the salvaged workspace, then recover explicitly.", "corrupt", [this.#legacyPath]);
     }
-    this.#loaded = normalized;
-    return normalized;
+    return this.#adopt(normalized);
   }
 
   async #loadManifest(): Promise<WorkspaceState> {
@@ -229,8 +243,24 @@ export class WorkspaceStore {
     const normalized = normalizeWorkspace(assembled);
     damaged ||= malformedWorkspace(assembled);
     if (damaged) return this.#lock(normalized, "One or more workspace records or chat files were missing, corrupt, or invalid. Review the salvaged workspace, then recover explicitly.", "corrupt", sources);
-    this.#loaded = normalized;
-    return normalized;
+    return this.#adopt(normalized);
+  }
+
+  /**
+   * Take a cleanly loaded workspace as the one in use. Pictures that earlier
+   * builds saved inside chats move to the picture store first, and the chats
+   * are saved once without them: each picture file is written before any chat
+   * stops holding it, so stopping part-way loses nothing, and the next load
+   * finds the work done. A workspace that needs recovery never comes here, so
+   * it is left exactly as found.
+   */
+  async #adopt(normalized: WorkspaceState): Promise<WorkspaceState> {
+    const migrated = await storeInlinePictures(normalized, this.pictures);
+    this.#loaded = migrated;
+    // The chats on disk still hold every picture, so a save that fails here
+    // (a full disk) only leaves the move to finish on a later save.
+    if (migrated !== normalized) await this.#save(migrated).catch(() => undefined);
+    return this.#loaded;
   }
 
   async #save(state: unknown, recovering = false): Promise<{ savedAt: string }> {
@@ -242,8 +272,10 @@ export class WorkspaceStore {
     if (!supportsWorkspaceSchema(state)) {
       throw new Error("Cannot save a workspace with an unsupported schema version.");
     }
-    const normalized = normalizeWorkspace(state);
     if (malformedWorkspace(state)) throw new Error("Cannot save a workspace containing malformed records.");
+    // A picture still inline — one the renderer made without a store, or one
+    // the store refused before — moves out now if the store can take it.
+    const normalized = await storeInlinePictures(normalizeWorkspace(state), this.pictures);
     await mkdir(this.#chatDirectory, { recursive: true });
     const projects: WorkspaceManifest["projects"] = [];
     for (const project of normalized.projects) {
@@ -279,12 +311,56 @@ export class WorkspaceStore {
     const previous = await readFile(this.#manifestPath, "utf8").catch(() => null);
     if (previous !== null) await atomicWrite(this.#previousManifestPath, previous);
     await atomicWrite(this.#manifestPath, stableJson(manifest));
-    await this.#collectUnusedChats(manifest);
+    const retained = await this.#collectUnusedChats(manifest);
     this.#loaded = normalized;
+    // Never while recovering: a chat that could not be read still refers to
+    // its pictures, and nothing here can say which.
+    if (!recovering) await this.#collectUnusedPictures(normalized, manifest, retained).catch(() => undefined);
     return { savedAt };
   }
 
-  async #collectUnusedChats(current: WorkspaceManifest): Promise<void> {
+  /**
+   * Remove the pictures nothing kept refers to: no chat in use, no chat the
+   * previous manifest still keeps on disk, and no recovery backup, which is
+   * kept so damaged chats can be looked into later. If one of those files
+   * cannot be read, nothing is removed this time.
+   */
+  async #collectUnusedPictures(state: WorkspaceState, current: WorkspaceManifest, retained: ReadonlySet<string>): Promise<void> {
+    const referenced = pictureRefs(state);
+    const inUse = new Set(current.projects.flatMap((project) => project.chats.map((chat) => chat.content)));
+    for (const filename of retained) {
+      if (inUse.has(filename)) continue;
+      const encoded = await readFile(join(this.#chatDirectory, filename), "utf8");
+      for (const match of encoded.matchAll(PICTURE_REF_IN_CHAT)) referenced.add(match[1]);
+    }
+    for (const ref of await this.#backupPictureRefs()) referenced.add(ref);
+    await this.pictures.collect(referenced);
+  }
+
+  /** Recovery backups never change once written, so each is read for refs once. */
+  readonly #backupRefs = new Map<string, readonly string[]>();
+
+  async #backupPictureRefs(): Promise<string[]> {
+    const backups = join(this.root, "workspace-recovery");
+    const refs: string[] = [];
+    const folders = await readdir(backups, { withFileTypes: true }).catch(() => []);
+    for (const folder of folders.filter((entry) => entry.isDirectory())) {
+      const files = await readdir(join(backups, folder.name), { withFileTypes: true });
+      for (const file of files.filter((entry) => entry.isFile())) {
+        const path = join(backups, folder.name, file.name);
+        let found = this.#backupRefs.get(path);
+        if (found === undefined) {
+          found = [...(await readFile(path, "utf8")).matchAll(PICTURE_REF_IN_CHAT)].map((match) => match[1]);
+          this.#backupRefs.set(path, found);
+        }
+        refs.push(...found);
+      }
+    }
+    return refs;
+  }
+
+  /** Remove the chat files neither manifest refers to; returns the ones kept. */
+  async #collectUnusedChats(current: WorkspaceManifest): Promise<Set<string>> {
     const retained = new Set(current.projects.flatMap((project) => project.chats.map((chat) => chat.content)));
     try {
       const previous: unknown = JSON.parse(await readFile(this.#previousManifestPath, "utf8"));
@@ -297,6 +373,7 @@ export class WorkspaceStore {
     for (const filename of await readdir(this.#chatDirectory)) {
       if (HASH_PATTERN.test(filename) && !retained.has(filename)) await unlink(join(this.#chatDirectory, filename));
     }
+    return retained;
   }
 
   #lock(state: WorkspaceState, message: string, kind: Exclude<RecoveryKind, null>, sources: string[], raw?: unknown): WorkspaceState {

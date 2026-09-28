@@ -12,6 +12,7 @@ import type {
 import type { OpenCloudCheckResult, OpenCloudSave, OpenCloudSettingsResult } from "../shared/open-cloud";
 import type { BlenderSettingsResult } from "../shared/blender";
 import type { ModelPreviewResult } from "../shared/model-preview";
+import type { EvidencePictureResult } from "../shared/evidence-picture";
 
 type ProviderConnector = {
   status(): Promise<ProviderStatus>;
@@ -74,6 +75,7 @@ declare global {
       };
       previews: {
         loadModel(id: string): Promise<ModelPreviewResult>;
+        loadPicture(ref: string): Promise<EvidencePictureResult>;
       };
       blender: {
         get(): Promise<BlenderSettingsResult>;

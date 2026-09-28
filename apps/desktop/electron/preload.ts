@@ -14,7 +14,7 @@ import {
 import { isProviderLimits, NO_LIMITS, type ProviderLimits } from "../shared/provider-limits";
 import { isAppUpdateState, type AppUpdateState } from "../shared/app-update";
 import { isMcpServerState, type McpServerState } from "../shared/mcp-server";
-import { isRunEvent, type RunEvent, type RunStartRequest } from "../shared/run-events";
+import { isEvidencePictureRef, isRunEvent, type RunEvent, type RunStartRequest } from "../shared/run-events";
 import {
   isStudioActionResult,
   type OpenStudioScriptRequest,
@@ -39,6 +39,7 @@ import {
 } from "../shared/open-cloud";
 import { isBlenderSettingsResult, type BlenderSettingsResult } from "../shared/blender";
 import { isModelPreviewResult, type ModelPreviewResult } from "../shared/model-preview";
+import { isEvidencePictureResult, type EvidencePictureResult } from "../shared/evidence-picture";
 
 /**
  * The renderer's only route to the desktop runtime.
@@ -308,6 +309,12 @@ contextBridge.exposeInMainWorld("workbenchDesktop", {
     loadModel: async (id: string): Promise<ModelPreviewResult> => {
       const value: unknown = await ipcRenderer.invoke("previews:model", id);
       return isModelPreviewResult(value) ? value : { ok: false, reason: "invalid" };
+    },
+    /** A saved run's picture, by the ref its evidence carries; never a path. */
+    loadPicture: async (ref: string): Promise<EvidencePictureResult> => {
+      if (!isEvidencePictureRef(ref)) return { ok: false, reason: "invalid" };
+      const value: unknown = await ipcRenderer.invoke("previews:picture", ref);
+      return isEvidencePictureResult(value) ? value : { ok: false, reason: "invalid" };
     },
   },
   app: {

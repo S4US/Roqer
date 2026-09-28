@@ -44,6 +44,24 @@ test("recovers an interrupted run with changes and evidence truthfully", async (
   } finally { await fixture.cleanup(); }
 });
 
+test("a recovered run keeps its stored pictures by ref, but never a picture inline", async () => {
+  const fixture = await temporaryJournal();
+  try {
+    await fixture.journal.start("run-2", { projectId: "project", chatId: "chat" }, "look", "Ask first");
+    const ref = `${"c".repeat(64)}.jpg`;
+    fixture.journal.record(event({
+      type: "evidence", runId: "run-2", seq: 1, at: "2026-01-01T00:00:03.000Z",
+      evidence: { id: "e1", kind: "screenshot", title: "Studio", imageDataUrl: "data:image/jpeg;base64,QUJD", imageRef: ref },
+    }));
+    await fixture.journal.drain();
+
+    const [recovered] = await new RunJournal(fixture.root).recover();
+    const evidence = recovered.message.run?.evidence[0];
+    assert.equal(evidence?.imageRef, ref);
+    assert.equal(evidence?.imageDataUrl, undefined);
+  } finally { await fixture.cleanup(); }
+});
+
 test("keeps a completed run until it is acknowledged", async () => {
   const fixture = await temporaryJournal();
   try {

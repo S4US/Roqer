@@ -148,6 +148,13 @@ export type RunEvidence = {
    */
   imageDataUrl?: string;
   /**
+   * The same preview's name in the picture store beside the chat
+   * (`isEvidencePictureRef`). A live run carries both, so the picture shows at
+   * once; a saved run keeps only this, and the renderer asks the main process
+   * for the picture when it is shown.
+   */
+  imageRef?: string;
+  /**
    * The 3D preview of a Blender result, by the opaque id the main process
    * serves it under. Never a path; the preview may have expired since.
    */
@@ -381,9 +388,9 @@ function isChange(value: unknown): value is RunChange {
 /**
  * How large a saved evidence preview may be.
  *
- * Previews outlive the run in the chat file, so each is bounded here and the
- * renderer keeps only the last few of a run (`MAX_RECORDED_EVIDENCE_IMAGES`).
- * The host aims well below this; a record over it is damaged, not saved.
+ * A preview outlives the run, in the picture store beside the chat or, when
+ * it could not be stored there, inline in the chat file, so each is bounded
+ * here. The host aims well below this; a record over it is damaged, not saved.
  */
 export const MAX_EVIDENCE_IMAGE_CHARACTERS = 128 * 1024;
 
@@ -393,8 +400,30 @@ export const MAX_EVIDENCE_IMAGE_CHARACTERS = 128 * 1024;
  * Spent on distinct things first: the latest picture of each animation, model
  * or screenshot, newest first, and only then earlier versions of them. So an
  * agent revising one model five times never pushes a different picture out.
+ * Pictures live in the picture store beside the chat, not in the chat file,
+ * so this bounds a run's disk use (about 40 × 90 KB at most), not the chat's.
  */
-export const MAX_RECORDED_EVIDENCE_IMAGES = 6;
+export const MAX_RECORDED_EVIDENCE_IMAGES = 40;
+
+/**
+ * How many of those a saved run may keep inline in the chat file: pictures
+ * that have no stored file, because the picture store could not take them or
+ * there is none (the renderer in a plain browser). Inline pictures grow the
+ * chat file itself, which is bounded, so they keep the old, tighter budget.
+ */
+export const MAX_INLINE_EVIDENCE_IMAGES = 6;
+
+/**
+ * A stored preview's name in the picture store: the SHA-256 of its bytes and
+ * its type. It names a picture by its content, never a path, so the renderer
+ * can ask for a picture but cannot name a file, and the main process can check
+ * that what it read is the picture that was stored.
+ */
+const EVIDENCE_PICTURE_REF = /^[0-9a-f]{64}\.(jpg|png)$/;
+
+export function isEvidencePictureRef(value: unknown): value is string {
+  return typeof value === "string" && EVIDENCE_PICTURE_REF.test(value);
+}
 
 /**
  * The title of a Blender job's preview. The answer labels a preview by where it
@@ -473,6 +502,7 @@ function isEvidence(value: unknown): value is RunEvidence {
     isOptionalString(value.taskId) &&
     isOptionalString(value.afterChangeId) &&
     (value.imageDataUrl === undefined || isEvidenceImage(value.imageDataUrl)) &&
+    (value.imageRef === undefined || isEvidencePictureRef(value.imageRef)) &&
     (value.modelPreviewId === undefined || isModelPreviewId(value.modelPreviewId)) &&
     (value.previewNotKept === undefined || value.previewNotKept === true) &&
     (value.changeKind === undefined ||
