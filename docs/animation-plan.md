@@ -96,31 +96,55 @@ the activity list.
   producer. It is optional, so older records still load. Older builds already
   accepted and displayed it, so a downgrade reads the new records too.
 
-### 4. 3D preview for Blender models
+### 4. 3D preview for Blender models — implemented
 
-- **What's shown.** The Blender job's own verification pass exports a preview
-  GLB, so the preview is the model Roqer checked, not whatever the script wrote.
-- **How it reaches the window.** The main process keeps the file and the
-  renderer asks for it by an opaque ID through one new IPC call. The file is
-  size-capped and must be a self-contained GLB with no external fetches. The
-  renderer never sees a path.
-- **The viewer.** three.js, loaded only when a preview is on screen:
-  - orbit, zoom, pan and reset;
-  - a grid floor, light and shadow, and both themes;
-  - an overlay with size in studs, triangle count and part count.
-- **One live 3D view at a time.** Chromium limits live WebGL contexts, so
-  off-screen and older previews show the step 3 thumbnail until clicked.
-- **Stages.** A model built in stages (frame, body, wheels) is one card that
-  steps through them.
-- **Labels and expiry.**
-  - The card says "Blender result, before upload".
-  - Blender job folders are kept for seven days (newest 40). After that the
-    card says the 3D preview has expired and keeps the still image.
+A Blender result opens in 3D in the viewer. The still picture stays in the
+answer, and in the viewer it is one switch away ("3D | Picture").
+
+- **What's shown.** Roqer's own inspection of the job's output exports the
+  model it measured as one GLB: the same meshes, with modifiers applied and
+  hidden objects left out. So the preview is the model Roqer checked, not
+  whatever the script wrote. Only the model the chat pictures is kept: the
+  first whose still was kept.
+- **How it reaches the window.**
+  - The GLB stays in the job's folder, named by the model's position alone.
+  - The main process checks it before it records an ID, and again each time
+    the renderer asks. The file must be at most 24 MiB and well formed. It
+    must need nothing outside itself, and no Draco or meshopt compression,
+    which the viewer cannot decode. A file that fails is deleted.
+  - The renderer asks for it by an opaque ID (`<job id>-<index>`) through one
+    IPC call, from a trusted window only. It never sees a path. The model
+    never reads the ID either: it travels beside the tool result, like the
+    images, not in it.
+- **The viewer.** It uses three.js, which loads only when a model is opened.
+  - The model stands on a grid floor with a shadow, on Roblox's axes. That is
+    half a turn about Y from glTF, so it faces the way it will in Studio. The
+    first view is of its front, from the same corner as the still's
+    three-quarter view.
+  - It can be orbited, zoomed and panned. Buttons turn it left and right and
+    reset the view, and an axis gizmo follows the view.
+  - Chips over the model give its size in studs, triangle count and object
+    count, as the inspection measured them.
+  - It is dark in both themes, like the rest of the viewer.
+- **One live 3D view at a time.** Chromium limits live WebGL contexts. So the
+  answer's card shows stills with a "3D" badge, and only the viewer draws, for
+  the picture on screen. It releases its context when it switches to the
+  picture, moves on or closes.
+- **Expiry.** Blender job folders are cleared after seven days, or once 40
+  newer jobs exist. After that the viewer says the 3D preview has expired,
+  over the dimmed still, and offers the picture.
 - **Fallbacks.**
-  - A still image when WebGL is unavailable.
-  - Caps on triangles and texture size.
-  - No autoplay under reduced motion.
-  - Keyboard access.
+  - When the window cannot draw 3D, the still shows with a note saying so.
+  - A preview that fails to load says so and offers the picture.
+  - The 24 MiB cap bounds triangles and textures together.
+  - Turns and resets glide, except under reduced motion.
+  - Every control is a button.
+- **Why no schema bump.** `RunEvidence.modelPreviewId` is optional, so older
+  records load unchanged, and older builds ignore it. The load-time validator
+  accepts only the ID's shape.
+- **Not built yet.** A model built in stages (frame, body, wheels) as one card
+  that steps through them. That needs each stage's job kept together, and is
+  left for later.
 
 ### 5. Pose compiler (core)
 

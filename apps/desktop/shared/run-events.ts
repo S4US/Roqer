@@ -5,6 +5,7 @@ import { isReasoningEffort, type ProviderId, type ReasoningEffort } from "./prov
 import { isRunQuestion, type RunQuestion } from "./question";
 import { isRunDecision, type RunDecision } from "./run-digest";
 import { MAX_STEER_CHARS } from "./steer";
+import { isModelPreviewId } from "./model-preview";
 import {
   isRunTaskList,
   RUN_EVIDENCE_REQUIREMENTS,
@@ -146,6 +147,11 @@ export type RunEvidence = {
    * so it is bounded by `isEvidenceImage`.
    */
   imageDataUrl?: string;
+  /**
+   * The 3D preview of a Blender result, by the opaque id the main process
+   * serves it under. Never a path; the preview may have expired since.
+   */
+  modelPreviewId?: string;
   /** Shown only when the reader expands the card. */
   metadata?: RunMetadata[];
   /** Observation dimension this evidence is allowed to satisfy. */
@@ -415,6 +421,7 @@ function isEvidence(value: unknown): value is RunEvidence {
     isOptionalString(value.taskId) &&
     isOptionalString(value.afterChangeId) &&
     (value.imageDataUrl === undefined || isEvidenceImage(value.imageDataUrl)) &&
+    (value.modelPreviewId === undefined || isModelPreviewId(value.modelPreviewId)) &&
     (value.changeKind === undefined ||
       ["script-source", "properties", "instance", "asset"].includes(value.changeKind as string)) &&
     isMetadataList(value.metadata);

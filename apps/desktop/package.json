@@ -46,10 +46,12 @@
   "devDependencies": {
     "@types/react": "^19.2.18",
     "@types/react-dom": "^19.2.5",
+    "@types/three": "^0.186.0",
     "@vitejs/plugin-react": "^6.1.1",
     "electron": "44.0.0",
     "electron-builder": "^26.0.12",
     "esbuild": "0.27.2",
+    "three": "^0.186.1",
     "typescript": "^5.9.3",
     "vite": "^8.2.2"
   }

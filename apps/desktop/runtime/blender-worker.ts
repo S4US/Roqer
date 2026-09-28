@@ -10,6 +10,8 @@ import {
   MAX_BLENDER_SCRIPT_CHARACTERS,
 } from "../shared/blender";
 import type { McpCallOptions, McpToolImage, McpToolOutcome } from "./mcp-types";
+import { isViewableGlb, modelPreviewFileName } from "./model-preview";
+import { modelPreviewId } from "../shared/model-preview";
 
 /**
  * Runs one model-written Blender script and checks what it made.
@@ -379,6 +381,7 @@ from mathutils.bvhtree import BVHTree
 
 args = sys.argv[sys.argv.index("--") + 1:]
 model_path, preview_path = args[0], args[1]
+model_preview_path = args[2] if len(args) > 2 else None
 extension = os.path.splitext(model_path)[1].lower()
 if extension == ".blend":
     # A job's own saved scene, measured as it would export: what is hidden is
@@ -749,6 +752,65 @@ if meshes:
         stats["preview"] = os.path.exists(preview_path)
     except Exception as error:
         stats["previewError"] = str(error)[:200]
+    # The model as measured, as one self-contained GLB for the 3D view in
+    # Roqer's chat: the same meshes, modifiers applied, hidden objects left
+    # out, images packed in. Draco stays off, so the viewer needs no decoder.
+    if model_preview_path:
+        try:
+            # Studio shows the vertex colours a glTF file stores as sRGB, where
+            # glTF and Blender mean them as linear, so the same colour looks
+            # darker in Studio than in Blender. The preview stores the colour
+            # Studio will show, so a viewer that follows glTF shows it too. FBX
+            # and OBJ files store sRGB, which their importers have already
+            # undone. A saved scene is taken as it would export to glTF.
+            if extension not in (".fbx", ".obj"):
+                import numpy
+                converted = set()
+                for item in meshes:
+                    if item.data.as_pointer() in converted:
+                        continue
+                    converted.add(item.data.as_pointer())
+                    for layer in item.data.color_attributes:
+                        values = numpy.empty(len(layer.data) * 4, dtype=numpy.float32)
+                        layer.data.foreach_get("color", values)
+                        rgb = values.reshape(-1, 4)[:, :3]
+                        rgb[:] = numpy.where(rgb <= 0.04045, rgb / 12.92, ((numpy.maximum(rgb, 0.04045) + 0.055) / 1.055) ** 2.4)
+                        layer.data.foreach_set("color", values)
+            # Studio takes an FBX file's vertex colours whatever its materials
+            # say, and ignores a material's own colour, but Blender exports
+            # only colours a material uses: wire each plain base colour to them.
+            if extension == ".fbx":
+                for item in meshes:
+                    layer = item.data.color_attributes.active_color
+                    if layer is None:
+                        continue
+                    for slot in item.material_slots:
+                        material = slot.material
+                        if material is None or not material.use_nodes or material.node_tree is None:
+                            continue
+                        bsdf = next((node for node in material.node_tree.nodes if node.type == "BSDF_PRINCIPLED"), None)
+                        if bsdf is None or bsdf.inputs["Base Color"].is_linked:
+                            continue
+                        colors = material.node_tree.nodes.new("ShaderNodeVertexColor")
+                        colors.layer_name = layer.name
+                        material.node_tree.links.new(colors.outputs["Color"], bsdf.inputs["Base Color"])
+            for item in scene.objects:
+                try:
+                    item.select_set(item in meshes)
+                except Exception:
+                    pass
+            options = {"filepath": model_preview_path, "export_format": "GLB", "use_selection": True,
+                       "export_apply": True, "export_cameras": False, "export_lights": False,
+                       "export_animations": False, "export_draco_mesh_compression_enable": False}
+            try:
+                bpy.ops.export_scene.gltf(**options)
+            except TypeError:
+                # An option this Blender does not know: the plain export, which
+                # still selects, embeds and leaves Draco off by default.
+                bpy.ops.export_scene.gltf(filepath=model_preview_path, export_format="GLB", use_selection=True)
+            stats["model3d"] = os.path.exists(model_preview_path)
+        except Exception as error:
+            stats["model3dError"] = str(error)[:200]
 print("${INSPECT_MARKER}" + json.dumps(stats), flush=True)
 `;
 
@@ -1084,6 +1146,8 @@ export class BlenderWorker {
 
     const files: InspectedFile[] = [];
     const images: McpToolImage[] = [];
+    // The model the first preview pictures, which the chat shows, with its 3D preview when kept.
+    let pictured: McpToolOutcome["pictured"];
     // A render is shown as itself: the image is the result, so there is nothing
     // to re-import. Its size is read from the file, not from the script.
     const rendered: RenderedImage[] = [];
@@ -1105,11 +1169,16 @@ export class BlenderWorker {
     const inspected = inspectScene
       ? [{ name: "scene.blend", filePath: sceneFile }]
       : models.slice(0, MAX_INSPECTED_MODELS).map((name) => ({ name, filePath: path.join(outputDirectory, name) }));
-    for (const { name, filePath } of inspected) {
+    for (const [index, { name, filePath }] of inspected.entries()) {
       const bytes = (await fs.stat(filePath).catch(() => undefined))?.size ?? 0;
       const preview = path.join(jobDirectory, `preview-${path.parse(name).name}.png`);
+      // Only the model the chat will picture needs a 3D preview: the first
+      // whose preview is kept, so each model is exported until one is.
+      const modelPreview = images.length === 0 ? path.join(jobDirectory, modelPreviewFileName(index)) : undefined;
+      // Written fresh by the inspection, never over anything already there.
+      if (modelPreview !== undefined) await fs.rm(modelPreview, { force: true }).catch(() => undefined);
       const inspection = await this.runBlender(
-        ["--background", "--factory-startup", "--python", path.join(jobDirectory, "roqer_inspect.py"), "--", filePath, preview],
+        ["--background", "--factory-startup", "--python", path.join(jobDirectory, "roqer_inspect.py"), "--", filePath, preview, ...(modelPreview === undefined ? [] : [modelPreview])],
         jobDirectory,
         INSPECT_TIMEOUT_MS,
         call,
@@ -1124,6 +1193,7 @@ export class BlenderWorker {
       }
       if (stats === undefined) {
         files.push({ name, path: filePath, bytes, inspectionError: inspection.timedOut ? "Inspection timed out." : "Roqer could not re-import this file in Blender." });
+        if (modelPreview !== undefined) await fs.rm(modelPreview, { force: true }).catch(() => undefined);
         continue;
       }
       files.push({
@@ -1152,6 +1222,15 @@ export class BlenderWorker {
       if (stats.preview === true) {
         const png = await fs.readFile(preview).catch(() => undefined);
         if (png !== undefined && png.length <= MAX_PREVIEW_BYTES) images.push({ data: png.toString("base64"), mediaType: "image/png" });
+      }
+      if (modelPreview !== undefined) {
+        // Kept only for the model the first preview pictures, and only when it
+        // is a self-contained GLB the viewer can show; anything else is
+        // removed, so no id can lead the renderer to it.
+        const shown = images.length === 1;
+        const kept = shown && stats.model3d === true && await isViewableGlb(modelPreview);
+        if (!kept) await fs.rm(modelPreview, { force: true }).catch(() => undefined);
+        if (shown) pictured = { name, ...(kept ? { modelPreviewId: modelPreviewId(jobId, index) } : {}) };
       }
     }
 
@@ -1199,6 +1278,7 @@ export class BlenderWorker {
       },
       text: lines.join("\n"),
       ...(images.length > 0 ? { images } : {}),
+      ...(pictured === undefined ? {} : { pictured }),
       httpStatus: 200,
       durationMs,
     };

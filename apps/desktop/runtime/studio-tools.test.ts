@@ -858,6 +858,46 @@ test("a Blender preview is shown as the job's output and never counts as Studio 
   assert.equal(evidence[0].requirement, undefined);
   assert.equal(evidence[0].passed, undefined);
   assert.equal(evidence[0].imageDataUrl, PREVIEW);
+  assert.equal(evidence[0].modelPreviewId, undefined, "no 3D preview was kept");
+});
+
+test("a Blender preview carries its model's 3D preview and what was measured, on Roblox's axes", async () => {
+  const files = [
+    { name: "cart.glb", path: "/jobs/output/cart.glb", bytes: 2048, meshes: 2, triangles: 1336, size: [3.9, 7.14, 2.75] },
+    { name: "crate.glb", path: "/jobs/output/crate.glb", bytes: 1024, meshes: 1, triangles: 12, size: [2, 2, 2] },
+  ];
+  const job = (pictured: McpToolOutcome["pictured"]) => ({
+    ...ok({ jobId: "a1b2c3d4", files }),
+    text: "Exported cart.glb and crate.glb",
+    images: [{ data: "QUJD", mediaType: "image/png" as const }],
+    pictured,
+  });
+  const { context, evidence } = contextWith([
+    job({ name: "cart.glb", modelPreviewId: "a1b2c3d4-0" }),
+    job({ name: "crate.glb" }),
+    job({ name: "cart.glb", modelPreviewId: "../../cart.glb" }),
+    job(undefined),
+  ]);
+  context.previewImage = async () => PREVIEW;
+  const run = createStudioToolRunner(context);
+
+  for (let call = 0; call < 4; call += 1) await run("run_blender_script", { script: "import bpy" });
+
+  assert.equal(evidence[0].modelPreviewId, "a1b2c3d4-0");
+  // Blender's (x, y, z) arrive in Studio as (x, z, y) in size: 7.14 deep, 2.75 up.
+  assert.deepEqual(evidence[0].metadata, [
+    { label: "Size", value: "3.9 × 2.8 × 7.1 studs" },
+    { label: "Triangles", value: "1,336" },
+    { label: "Objects", value: "2" },
+  ]);
+  // The facts are the pictured model's, even without a 3D preview of it.
+  assert.equal(evidence[1].modelPreviewId, undefined);
+  assert.deepEqual(evidence[1].metadata?.map((entry) => entry.value), ["2.0 × 2.0 × 2.0 studs", "12", "1"]);
+  // An id that is not one the main process serves is dropped, not recorded.
+  assert.equal(evidence[2].modelPreviewId, undefined);
+  // With no word on which model the picture shows, nothing is attributed to one.
+  assert.equal(evidence[3].modelPreviewId, undefined);
+  assert.equal(evidence[3].metadata, undefined);
 });
 
 test("a screenshot taken while this run's own playtest runs says so, and only then", async () => {

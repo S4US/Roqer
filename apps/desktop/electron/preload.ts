@@ -38,6 +38,7 @@ import {
   type OpenCloudSettingsResult,
 } from "../shared/open-cloud";
 import { isBlenderSettingsResult, type BlenderSettingsResult } from "../shared/blender";
+import { isModelPreviewResult, type ModelPreviewResult } from "../shared/model-preview";
 
 /**
  * The renderer's only route to the desktop runtime.
@@ -302,6 +303,13 @@ contextBridge.exposeInMainWorld("workbenchDesktop", {
   openCloud,
   blender,
   runs,
+  previews: {
+    /** A Blender result's 3D preview, by the opaque id its evidence carries. */
+    loadModel: async (id: string): Promise<ModelPreviewResult> => {
+      const value: unknown = await ipcRenderer.invoke("previews:model", id);
+      return isModelPreviewResult(value) ? value : { ok: false, reason: "invalid" };
+    },
+  },
   app: {
     getDataPath: () => ipcRenderer.invoke("app:data-path"),
   },

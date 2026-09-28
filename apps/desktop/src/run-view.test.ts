@@ -691,3 +691,19 @@ test("a saved run with a malformed or oversized preview is not a valid record", 
   assert.ok(!isRunRecord(withImage("data:image/svg+xml;base64,QUJD")));
   assert.ok(!isRunRecord(withImage(`data:image/jpeg;base64,${"A".repeat(MAX_EVIDENCE_IMAGE_CHARACTERS)}`)));
 });
+
+test("a saved run names a 3D preview only by an id the main process serves", () => {
+  const finished = fold(stream(
+    started,
+    { type: "evidence", evidence: { id: "blender", kind: "inspection", title: "Blender result, before upload", imageDataUrl: "data:image/jpeg;base64,QUJD" } },
+    { type: "run-completed", outcome: "completed", summary: "done" },
+  ));
+  const record = toRunRecord(finished);
+  assert.ok(record);
+  const withModel = (modelPreviewId: unknown) => ({ ...record, evidence: [{ ...record.evidence[0], modelPreviewId }] });
+
+  assert.ok(isRunRecord(withModel("a1b2c3d4-0")));
+  for (const id of ["../a1b2c3d4-0", "C:\\Users\\me\\cart.glb", "a1b2c3d4-10", "", 3]) {
+    assert.ok(!isRunRecord(withModel(id)), String(id));
+  }
+});

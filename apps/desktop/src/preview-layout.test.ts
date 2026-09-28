@@ -4,7 +4,7 @@ import {
   BLENDER_PREVIEW_TITLE, SCREENSHOT_VIEW_LABEL, SCREENSHOT_VIEW_PLAYTEST, type RunChange, type RunEvidence,
 } from "../shared/run-events";
 import {
-  previewCaption, previewLayout, previewSource, previewSourceLabel, previewTileLabel, shortTarget,
+  hasModelPreview, previewCaption, previewLayout, previewSource, previewSourceLabel, previewTileLabel, shortTarget,
 } from "./preview-layout";
 
 const image = "data:image/jpeg;base64,QUJD";
@@ -55,6 +55,19 @@ test("a picture is labelled by where the host says it came from", () => {
   assert.deepEqual([blender, playtest, shot("s"), other].map(previewSourceLabel), [
     "Blender · before upload", "Playtest", "Studio", "Interface",
   ]);
+});
+
+test("only a Blender result with a kept model opens in 3D, and its tile says so", () => {
+  const blender: RunEvidence = { id: "b", kind: "inspection", title: BLENDER_PREVIEW_TITLE, imageDataUrl: image };
+  const withModel = { ...blender, modelPreviewId: "a1b2c3d4-0" };
+  assert.equal(hasModelPreview(blender), false);
+  assert.equal(hasModelPreview(withModel), true);
+  // The id alone is not enough: a 3D view belongs to a Blender result.
+  assert.equal(hasModelPreview(shot("s", { modelPreviewId: "a1b2c3d4-0" })), false);
+  assert.equal(previewTileLabel({ index: 0, evidence: withModel }, 2), `Open image 1 of 2, ${BLENDER_PREVIEW_TITLE}, with a 3D view`);
+  assert.equal(previewTileLabel({ index: 0, evidence: blender }, 2), `Open image 1 of 2, ${BLENDER_PREVIEW_TITLE}`);
+  // A tile standing for several pictures is labelled by its count alone.
+  assert.equal(previewTileLabel({ index: 2, evidence: withModel, hidden: 3 }, 6), `Open image 3 of 6, ${BLENDER_PREVIEW_TITLE}, and 2 more`);
 });
 
 test("the caption says when a picture was taken, from what the host recorded", () => {

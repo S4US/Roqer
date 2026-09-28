@@ -13,8 +13,11 @@ import {
 import { boundedCode, diffDeletedRange, diffText, normalizeNewlines } from "../shared/text-diff";
 import {
   BLENDER_PREVIEW_TITLE, SCREENSHOT_VIEW_LABEL, SCREENSHOT_VIEW_PLAYTEST,
-  type RunChange, type RunEvidence,
+  type RunChange, type RunEvidence, type RunMetadata,
 } from "../shared/run-events";
+import {
+  isModelPreviewId, MODEL_OBJECTS_LABEL, MODEL_SIZE_LABEL, MODEL_TRIANGLES_LABEL,
+} from "../shared/model-preview";
 import type { McpToolImage, McpToolOutcome } from "./mcp-types";
 import type { PlannerContext } from "./run-engine";
 import { compactValue, truncateText } from "./result-summary";
@@ -469,6 +472,34 @@ const BLENDER_PREVIEW_EVIDENCE: ObservationEvidence = {
   title: BLENDER_PREVIEW_TITLE,
   detail: "Rendered by Blender from the job's output. A Studio screenshot shows what is in the place.",
 };
+
+/**
+ * What a Blender job's result says about the model its preview pictures: the
+ * id of that model's 3D preview, when the inspection kept one, and what the
+ * inspection measured, in studs on Roblox's axes (X, then Blender's up as Y,
+ * then Z).
+ */
+function blenderModelFacts(outcome: McpToolOutcome): Pick<ObservationEvidence, "modelPreviewId" | "metadata"> {
+  const pictured = outcome.pictured;
+  if (pictured === undefined) return {};
+  const data = isRecord(outcome.data) ? outcome.data : {};
+  const file = (Array.isArray(data.files) ? data.files : []).find((entry) => isRecord(entry) && entry.name === pictured.name);
+  const metadata: RunMetadata[] = [];
+  if (isRecord(file)) {
+    const size = Array.isArray(file.size) && file.size.length === 3 && file.size.every((value) => typeof value === "number" && Number.isFinite(value))
+      ? file.size as number[]
+      : undefined;
+    if (size !== undefined) {
+      metadata.push({ label: MODEL_SIZE_LABEL, value: `${[size[0], size[2], size[1]].map((value) => value.toFixed(1)).join(" × ")} studs` });
+    }
+    if (typeof file.triangles === "number") metadata.push({ label: MODEL_TRIANGLES_LABEL, value: file.triangles.toLocaleString("en-US") });
+    if (typeof file.meshes === "number") metadata.push({ label: MODEL_OBJECTS_LABEL, value: String(file.meshes) });
+  }
+  return {
+    ...(isModelPreviewId(pictured.modelPreviewId) ? { modelPreviewId: pictured.modelPreviewId } : {}),
+    ...(metadata.length > 0 ? { metadata } : {}),
+  };
+}
 
 /** The host-made preview of the first image a call returned, if it can make one. */
 async function evidencePreview(context: PlannerContext, outcome: McpToolOutcome): Promise<string | undefined> {
@@ -1240,7 +1271,7 @@ export function createStudioToolRunner(context: PlannerContext): StudioToolRunne
       : undefined;
     const observation = observed !== undefined
       ? { ...observed, ...(preview === undefined ? {} : { imageDataUrl: preview }) }
-      : preview !== undefined ? { ...BLENDER_PREVIEW_EVIDENCE, imageDataUrl: preview } : undefined;
+      : preview !== undefined ? { ...BLENDER_PREVIEW_EVIDENCE, ...blenderModelFacts(outcome), imageDataUrl: preview } : undefined;
     if (observation?.title === UI_AUDIT_TITLE) {
       // Which changes the audit saw, so the gate can tell an interface change made after it.
       const latest = context.changes().at(-1)?.id ?? "none";

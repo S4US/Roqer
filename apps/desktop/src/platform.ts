@@ -10,6 +10,7 @@ import type {
 } from "../shared/custom-providers";
 import type { OpenCloudCheckResult, OpenCloudSave, OpenCloudSettingsResult } from "../shared/open-cloud";
 import type { BlenderSettingsResult } from "../shared/blender";
+import type { ModelPreviewResult } from "../shared/model-preview";
 import { NO_LIMITS, type ProviderLimits } from "../shared/provider-limits";
 import {
   providerLabel,
@@ -137,6 +138,14 @@ export async function chooseBlender(): Promise<BlenderSettingsResult> {
 
 export async function redetectBlender(): Promise<BlenderSettingsResult> {
   return window.workbenchDesktop?.blender.redetect() ?? { ok: false, message: NO_DESKTOP_BLENDER };
+}
+
+/**
+ * A Blender result's 3D preview, by the opaque id its evidence carries. The
+ * files live with the desktop app's Blender jobs, so a browser has none.
+ */
+export async function loadModelPreview(id: string): Promise<ModelPreviewResult> {
+  return window.workbenchDesktop?.previews.loadModel(id) ?? { ok: false, reason: "refused" };
 }
 
 export async function getProviderStatus(provider: ProviderId): Promise<ProviderStatus> {
