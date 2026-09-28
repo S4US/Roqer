@@ -498,9 +498,10 @@ What was built:
   - Three of its calls repaired argument mistakes: `verify` without the
     animation, `verify` with `expected_id` for `animation_id`, and
     `solo_playtest` without `mode`. The schema now says what `verify` needs.
-  - The agent noted that the character stood still in its playtest, so the run
-    was not seen playing while a player ran. `verify` plays the clip directly
-    and reads the slot; it does not drive the character.
+  - The agent noted that the character stood still in its playtest. `verify`
+    plays the clip directly and reads the slot; it does not drive the
+    character. A manual playtest afterwards confirmed the published run plays
+    while the player moves.
 
 ## Deferred
 
