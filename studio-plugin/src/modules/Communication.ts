@@ -5,6 +5,7 @@ import { cleanupEditBridgeArtifacts } from "./EvalBridges";
 import QueryHandlers from "./handlers/QueryHandlers";
 import PropertyHandlers from "./handlers/PropertyHandlers";
 import BuildHandlers from "./handlers/BuildHandlers";
+import AnimationHandlers from "./handlers/AnimationHandlers";
 import ScriptHandlers from "./handlers/ScriptHandlers";
 import MetadataHandlers from "./handlers/MetadataHandlers";
 import TestHandlers from "./handlers/TestHandlers";
@@ -55,6 +56,8 @@ const routeMap: Record<string, Handler> = {
 
     "/api/set-properties": PropertyHandlers.setProperties,
     "/api/build-instances": BuildHandlers.buildInstances,
+    "/api/preview-animation": AnimationHandlers.previewAnimation,
+    "/api/build-animation": AnimationHandlers.buildAnimation,
 
 	"/api/get-script-source": ScriptHandlers.getScriptSource,
 	"/api/set-script-source": ScriptHandlers.setScriptSource,

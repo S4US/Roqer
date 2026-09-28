@@ -197,6 +197,27 @@ describe('compilePoseAnimation', () => {
     ]);
   });
 
+  test('refuses a turn over 90° between one key and the next, unless the earlier key snaps', () => {
+    const turn = (style?: string) => ({
+      name: 'Swing',
+      rig: 'R15',
+      keyframes: [
+        { time: 0, joints: { RightShoulder: { rotation: [-50, 0, 0], ...(style ? { easing: { style } } : {}) } } },
+        { time: 0.5, joints: { RightShoulder: { rotation: [60, 0, 0] } } },
+      ],
+    });
+    expect(errors(turn())).toEqual([
+      'keyframes[1].joints.RightShoulder.rotation: turns 110° from its key at 0 s; split turns over 90° across more keyframes',
+    ]);
+    expect(errors(turn('CubicV2'))).toHaveLength(1);
+    expect(compilePoseAnimation(turn('Constant')).ok).toBe(true);
+    // Split across a middle key, the same swing is fine.
+    expect(compilePoseAnimation({
+      ...turn(),
+      keyframes: [...turn().keyframes.slice(0, 1), { time: 0.25, joints: { RightShoulder: { rotation: [5, 0, 0] } } }, { time: 0.5, joints: { RightShoulder: { rotation: [60, 0, 0] } } }],
+    }).ok).toBe(true);
+  });
+
   test('refuses rigs it does not know, including inherited object keys', () => {
     for (const rig of ['R6', 'toString', '__proto__', undefined]) {
       expect(errors(swing({ rig }))).toEqual(['rig: must be one of R15']);

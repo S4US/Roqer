@@ -261,6 +261,11 @@ export function serverInstructions(definitions: readonly ToolDefinition[]): stri
       'Use build_instances to create, clone, update, or remove many instances under one root as a single undoable step.',
     );
   }
+  if (has('animation')) {
+    instructions.push(
+      'Use animation to check and build R15 character animations; read the tool guide for the pose format first.',
+    );
+  }
   if (has('set_script_source', 'edit_script_lines', 'insert_script_lines', 'delete_script_lines')) {
     instructions.push(
       'Read source first and pass its revision as expectedRevision to set_script_source for whole-script replacement. Use edit_script_lines, insert_script_lines, or delete_script_lines for focused changes, passing the same revision to the line tools so a script that changed is refused, and edit_script_batch when one script needs several exact edits at once.',

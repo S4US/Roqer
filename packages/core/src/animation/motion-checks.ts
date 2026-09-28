@@ -228,7 +228,7 @@ function checkJointLimits(data: Sampled, rig: Rig): MotionCheckResult {
   return result('jointLimits', failures.length > 0, detail, measured);
 }
 
-function checkVelocity(data: Sampled, rate: number, rig: Rig): MotionCheckResult {
+function checkVelocity(data: Sampled, rig: Rig): MotionCheckResult {
   const measured: Record<string, number> = {};
   let worst = { joint: '', speed: 0, time: 0 };
   for (const joint of rig.joints) {
@@ -238,7 +238,8 @@ function checkVelocity(data: Sampled, rate: number, rig: Rig): MotionCheckResult
         data.poses[index - 1].transforms.get(joint.name)!.r,
         data.poses[index].transforms.get(joint.name)!.r,
       );
-      const speed = step * rate;
+      // The actual gap: a short animation is sampled more coarsely than the rate.
+      const speed = step / (data.times[index] - data.times[index - 1]);
       if (speed > peak) peak = speed;
       if (speed > worst.speed) worst = { joint: joint.name, speed, time: data.times[index] };
     }
@@ -451,7 +452,7 @@ export function checkMotion(sequence: MotionSequence, options: MotionCheckOption
   const data = sample(sequence, rate, rig);
   const checks: MotionCheckResult[] = [
     checkJointLimits(data, rig),
-    checkVelocity(data, rate, rig),
+    checkVelocity(data, rig),
     checkRootDrift(data, rig),
     checkLoopContinuity(sequence, data, rig),
   ];

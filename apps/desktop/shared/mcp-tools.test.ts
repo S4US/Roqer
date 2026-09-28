@@ -95,6 +95,31 @@ test("mcp-tools - checking upload status is read-only but uploading remains irre
   assert.strictEqual(riskForTool("upload_asset"), "irreversible");
 });
 
+test("mcp-tools - checking an animation is a read; building one is a reversible edit", () => {
+  assert.strictEqual(riskForTool("animation", { action: "check", animation: {} }), "read");
+  assert.strictEqual(riskForTool("animation", { action: "build", animation: {}, parent: "game.ServerStorage" }), "mutation");
+  assert.strictEqual(riskForTool("animation"), "mutation");
+});
+
+test("mcp-tools - an animation call is summarised in words, not as its pose JSON", () => {
+  const animation = {
+    name: "Run",
+    rig: "R15",
+    loop: true,
+    keyframes: [
+      { time: 0, joints: { LeftHip: { rotation: [30, 0, 0] }, RightHip: { rotation: [-30, 0, 0] } } },
+      { time: 0.3, joints: { LeftHip: { rotation: [-30, 0, 0] }, RightHip: { rotation: [30, 0, 0] }, Waist: {} } },
+    ],
+  };
+  assert.strictEqual(
+    summarizeToolCall("animation", { action: "build", animation, parent: "game.ServerStorage.Animations", expected_revision: "kr1:1", waive: ["rootDrift"] }),
+    "animation · build Run in game.ServerStorage.Animations: 2 keyframes, 0.3 s, loops, moves 3 joints, replacing its last build, accepting failed rootDrift",
+  );
+  assert.strictEqual(summarizeToolCall("animation", { action: "check", animation }), "animation · check Run: 2 keyframes, 0.3 s, loops, moves 3 joints");
+  // Whatever the model sent, the summary never throws and never shows raw JSON.
+  assert.strictEqual(summarizeToolCall("animation", { action: "build", animation: "not an object" }), "animation · build an animation: 0 keyframes");
+});
+
 test("mcp-tools - a profiler capture is a read until it names a file on the user's disk", () => {
   assert.strictEqual(riskForTool("capture_script_profiler", { max_functions: 20 }), "read");
   assert.strictEqual(riskForTool("capture_script_profiler", { output_path: "C:/Users/creator/raw.json" }), "mutation");

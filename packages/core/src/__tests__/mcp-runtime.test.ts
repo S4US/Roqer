@@ -116,6 +116,10 @@ describe('MCP v2 tool runtime', () => {
   // arbitrary-Luau calls a build otherwise needs one approval each for.
   // `upload_asset` then gained `instance_id` (a hundred characters): it looks
   // up a Decal's image ID in Studio, and a Studio call has to name its place.
+  // `animation` then added one tool (about 1,900 characters, two average
+  // tools): character animation had no structured path at all, so every
+  // KeyframeSequence was hand-built in arbitrary Luau, unchecked and one
+  // approval each. Its pose format lives in the tool guide, not here.
   test('keeps the catalog within the 3.0 token budget', () => {
     const catalog = TOOL_DEFINITIONS.map(publicToolDefinition);
     const names = new Set(catalog.map((tool) => tool.name));
@@ -123,13 +127,13 @@ describe('MCP v2 tool runtime', () => {
     const serialized = JSON.stringify(catalog);
     const inspectorCatalog = getReadOnlyTools().map(publicToolDefinition);
 
-    expect(catalog).toHaveLength(51);
+    expect(catalog).toHaveLength(52);
     // Scatter adds bounded placement parameters to the existing build tool,
     // keeping the tool count fixed instead of introducing another operation.
     // The line-edit revisions on insert_script_lines and delete_script_lines
     // added about 150 characters: a compare-and-set is worth the tokens.
-    expect(serialized.length).toBeLessThanOrEqual(47_300);
-    expect(catalog.filter((tool) => tool.outputSchema)).toHaveLength(50);
+    expect(serialized.length).toBeLessThanOrEqual(48_700);
+    expect(catalog.filter((tool) => tool.outputSchema)).toHaveLength(51);
     expect(catalog.every((tool) => tool.description.length <= 120)).toBe(true);
     expect(inspectorCatalog).toHaveLength(25);
     expect(JSON.stringify(inspectorCatalog).length).toBeLessThanOrEqual(20_000);

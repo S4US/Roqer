@@ -63,7 +63,7 @@ const MUTATION_SUMMARY: Readonly<Record<string, string>> = {
  * the client. A refused write changed nothing, and recording it as a verified
  * change would be exactly the false success the change cards exist to prevent.
  */
-const STRUCTURED_MUTATIONS = new Set(["set_properties", "build_instances"]);
+const STRUCTURED_MUTATIONS = new Set(["set_properties", "build_instances", "animation"]);
 
 function pluginRefused(outcome: McpToolOutcome): boolean {
   return isRecord(outcome.data) && typeof outcome.data.error === "string";
@@ -140,6 +140,7 @@ const DOCUMENTED_OPERATIONS = [
   "delete_script_lines",
   "set_properties",
   "build_instances",
+  "animation",
   "insert_asset",
   "solo_playtest",
   "get_runtime_logs",
@@ -173,6 +174,7 @@ export function studioToolDescription(): string {
     // text over button edges and a row past the end of its scroll.
     "After creating or changing interface (anything under StarterGui), start a playtest and call inspect_ui {mode: 'audit'} on the client. Roqer does not verify the run until an audit after the last interface change reports no problems: fix what it names (text_obscured, text_straddles_edge, content_beyond_scroll, text_overflow) and audit again.",
     "To aim a screenshot, call selection {action: 'view', path, from, angleY, padding} before capture_screenshot (from is the azimuth in degrees, 0 = +X, 90 = +Z; angleY the elevation, -89 to 89; padding the distance scale, above 0 and at most 10); it is a read that needs no approval. Do not move the camera with execute_luau. For comparable before and after views, frame the same stable container (the zone or build root, not the part being changed, whose bounds move) with the same from, angleY and padding.",
+    "Make character animations with animation, never by building a KeyframeSequence in execute_luau. The animation argument is {name, rig: 'R15', loop?, priority?, easing?, keyframes: [{time, name?, easing?, joints}]}, first keyframe at time 0. joints maps Root, Waist, Neck, Left/RightShoulder, Left/RightElbow, Left/RightWrist, Left/RightHip, Left/RightKnee, Left/RightAnkle to {rotation?: [x, y, z] degrees about the parent part, position?: studs (Root only), easing?}; +X on a shoulder raises the arm forward, knees bend negative about X, elbows positive. Key every moved joint at time 0, and turn a joint at most 90° between its keys. easing is {style: Linear|Constant|CubicV2|Bounce|Elastic, direction: In|Out|InOut}. Call {action: 'check'} first (free, no Studio), with locomotion: true for a gait, and fix what the checks name; then {action: 'build', parent} writes it after Studio plays it as checked. Waive a check only for motion that means it. Rebuild with the revision the last build returned as expected_revision.",
     "For seeded bulk placement, build_instances accepts one sole step {op:'scatter', name, zone:{min:[x,z],max:[x,z]}, density:countPer10000SquareStuds, seed, templates:[{source,weight,kit?}], ground:[path], raycast:{top,bottom}, rotation?:[minYaw,maxYaw], scale?:[min,max], spacing?, avoid?:[{tag,distance}], maxSlope?, replace?, parent?, tags?, attributes?, id?}. Ground and templates must already exist. The named scatter group is replaced only with replace:true and matching ownership; the entire replacement is undoable. Requested count is floor(area*density/10000), limited to 1-1000. Footprints stay inside the rectangle and clear of tagged bounds. Inspect returned scatter.requested/placed/attempts: blocked ground can produce fewer placements. Same seed reproduces only with unchanged inputs and scene. Load roblox-building references/scatter.md for details.",
   ].join("\n");
 }
@@ -1043,6 +1045,53 @@ function recordBuild(context: PlannerContext, args: JsonRecord, outcome: McpTool
   });
 }
 
+/**
+ * A built animation as a change card and its verification. The evidence
+ * passes only when Studio's read-back matched what was compiled and its
+ * preview played as the checks measured; the MCP result carries both.
+ */
+function recordAnimationBuild(context: PlannerContext, outcome: McpToolOutcome): void {
+  const data = isRecord(outcome.data) ? outcome.data : {};
+  const path = stringField(data, "path");
+  if (path === undefined || data.built !== true) return;
+  const animation = isRecord(data.animation) ? data.animation : {};
+  const readBack = isRecord(data.readBack) ? data.readBack : {};
+  const playback = isRecord(data.playback) ? data.playback : {};
+  const checks = isRecord(data.checks) ? data.checks : {};
+  const keyframes = numberField(animation, "keyframes");
+  const duration = numberField(animation, "duration");
+  const facts = [
+    ...(keyframes === undefined ? [] : [`${keyframes} keyframe${keyframes === 1 ? "" : "s"}`]),
+    ...(duration === undefined ? [] : [`${duration} s`]),
+    ...(animation.loop === true ? ["looping"] : []),
+  ];
+  context.recordChange({
+    kind: "instance",
+    target: path,
+    instanceId: context.instanceId ?? undefined,
+    summary: `${data.replaced === true ? "Rebuilt" : "Built"} an animation in one undoable step${facts.length > 0 ? `: ${facts.join(", ")}` : ""}.`,
+  });
+
+  const waived = Array.isArray(checks.waived) ? checks.waived.filter((id): id is string => typeof id === "string") : [];
+  const maxDegrees = numberField(playback, "maxDegrees");
+  const passed = readBack.matchesCompiled === true && playback.verified === true;
+  context.recordEvidence({
+    kind: "verification",
+    changeKind: "instance",
+    title: path,
+    passed,
+    detail: passed
+      ? "Roqer checked the motion before building. Studio played it on a temporary dummy and matched the checked model, then wrote the sequence and read it back."
+      : "Studio wrote the sequence, but what it read back or played does not match what Roqer compiled and checked.",
+    metadata: [
+      { label: "Motion checks", value: waived.length > 0 ? `Passed, with ${waived.join(", ")} waived` : "All passed" },
+      ...(maxDegrees === undefined ? [] : [{ label: "Preview", value: `Within ${maxDegrees}° of the checked model` }]),
+      { label: "Read back", value: readBack.matchesCompiled === true ? "Matches what was compiled" : "Differs from what was compiled" },
+      { label: "Undo", value: data.undoable !== false ? "One Studio undo step" : "Not recorded in Studio's undo history" },
+    ],
+  });
+}
+
 /** A completed Roblox upload as a host-owned result card. */
 function completedUpload(
   args: JsonRecord,
@@ -1345,6 +1394,10 @@ export function createStudioToolRunner(context: PlannerContext): StudioToolRunne
 
     if (outcome.ok && !refused && operation === "build_instances") {
       recordBuild(context, args, outcome);
+    }
+
+    if (outcome.ok && !refused && operation === "animation" && args.action === "build") {
+      recordAnimationBuild(context, outcome);
     }
 
     if (operation === "upload_asset") {

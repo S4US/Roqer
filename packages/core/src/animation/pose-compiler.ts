@@ -26,6 +26,12 @@ export const POSE_LIMITS = {
   maxNameLength: 100,
   maxRotationDegrees: 360,
   maxRootOffsetStuds: 20,
+  /**
+   * Degrees a joint may turn between consecutive keys, unless the earlier key
+   * snaps (Constant). Past 90° Studio's playback of Linear keys drifts from a
+   * slerp, and past 180° a turn goes the short way round, not the way meant.
+   */
+  maxTurnPerSegment: 90,
   maxErrors: 20,
 } as const;
 
@@ -314,6 +320,36 @@ function parseKeyframes(value: unknown, rig: Rig, issues: Issues): ParsedKeyfram
   return keyframes;
 }
 
+/** The angle in degrees between two rotations, from their CFrame components. */
+function turnDegrees(a: CFrameComponents, b: CFrameComponents): number {
+  let trace = 0;
+  for (let index = 3; index < 12; index += 1) trace += a[index] * b[index];
+  return (Math.acos(Math.min(1, Math.max(-1, (trace - 1) / 2))) * 180) / Math.PI;
+}
+
+// Each joint's turn from one of its keys to the next, measured on the
+// rotations as compiled.
+function checkTurns(keyframes: ParsedKeyframe[], animationEasing: ParsedJoint['easing'], rig: Rig, issues: Issues): void {
+  for (const joint of rig.joints) {
+    let previous: { cframe: CFrameComponents; time: number; style: PoseEasingStyle } | undefined;
+    keyframes.forEach((keyframe, index) => {
+      const pose = keyframe.joints.get(joint.childPart);
+      if (!pose) return;
+      const cframe = poseCFrame(pose.rotation);
+      if (previous && previous.style !== 'Constant') {
+        const turn = turnDegrees(previous.cframe, cframe);
+        if (turn > POSE_LIMITS.maxTurnPerSegment + 1e-6) {
+          issues.add(
+            `keyframes[${index}].joints.${joint.name}.rotation`,
+            `turns ${Math.round(turn)}° from its key at ${previous.time} s; split turns over ${POSE_LIMITS.maxTurnPerSegment}° across more keyframes`,
+          );
+        }
+      }
+      previous = { cframe, time: keyframe.time, style: pose.easing.style ?? keyframe.easing.style ?? animationEasing.style ?? 'Linear' };
+    });
+  }
+}
+
 function round(value: number): number {
   const rounded = Math.round(value * 1e6) / 1e6;
   return rounded === 0 ? 0 : rounded;
@@ -410,6 +446,7 @@ export function compilePoseAnimation(input: unknown): PoseCompileResult {
     : parseEnum(input.priority, ANIMATION_PRIORITIES, 'priority', issues);
   const easing = parseEasing(input.easing, 'easing', issues);
   const keyframes = rig ? parseKeyframes(input.keyframes, rig, issues) : [];
+  if (rig && issues.count === 0) checkTurns(keyframes, easing, rig, issues);
 
   if (issues.count > 0 || !rig || name === undefined || priority === undefined) {
     return { ok: false, errors: issues.report() };

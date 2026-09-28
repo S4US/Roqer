@@ -49,6 +49,10 @@ export const TOOL_RISK: Readonly<Record<string, ToolRisk>> = {
   // Removes as well as builds, but only inside its own root, and the whole
   // batch is one ChangeHistory step, so Studio's undo reverses it.
   build_instances: "mutation",
+  // Writes one KeyframeSequence as one ChangeHistory step, and replaces only a
+  // sequence it built itself whose revision the caller names. `check` never
+  // reaches Studio; `riskForTool` rates it a read.
+  animation: "mutation",
   set_script_source: "mutation",
   edit_script_lines: "mutation",
   edit_script_batch: "mutation",
@@ -126,6 +130,8 @@ export function riskForTool(tool: string, args?: Record<string, unknown>): ToolR
   // Reading a durable Roblox operation cannot publish or mutate anything. The
   // upload action remains irreversible and keeps its normal confirmation.
   if (tool === "upload_asset" && args?.action === "status") return "read";
+  // Checking an animation compiles and measures it on the MCP host; only build writes.
+  if (tool === "animation" && args?.action === "check") return "read";
   // A profiler capture only reads Studio, but a path argument has it write a
   // file anywhere on the user's disk, or read one, so Read only mode refuses it
   // and Ask first asks, as for `export_rbxm`.
@@ -229,10 +235,49 @@ const IDENTIFYING_ARGUMENTS = [
   "mode",
 ];
 
+/**
+ * An animation call in words: the approval card shows this instead of the
+ * pose description's JSON. Every field is the model's, so each is read
+ * defensively and anything unexpected is simply left out.
+ */
+function summarizeAnimation(args: Record<string, unknown>): string {
+  const action = args.action === "build" ? "build" : "check";
+  const animation = typeof args.animation === "object" && args.animation !== null && !Array.isArray(args.animation)
+    ? args.animation as Record<string, unknown>
+    : {};
+  const name = typeof animation.name === "string" && animation.name !== "" ? truncate(animation.name, 40) : "an animation";
+  const keyframes = Array.isArray(animation.keyframes) ? animation.keyframes : [];
+  const times = keyframes
+    .map((keyframe) => (typeof keyframe === "object" && keyframe !== null ? (keyframe as Record<string, unknown>).time : undefined))
+    .filter((time): time is number => typeof time === "number" && Number.isFinite(time));
+  const joints = new Set<string>();
+  for (const keyframe of keyframes) {
+    const keyed = typeof keyframe === "object" && keyframe !== null ? (keyframe as Record<string, unknown>).joints : undefined;
+    if (typeof keyed === "object" && keyed !== null && !Array.isArray(keyed)) {
+      for (const joint of Object.keys(keyed)) joints.add(joint);
+    }
+  }
+  const facts = [
+    `${keyframes.length} keyframe${keyframes.length === 1 ? "" : "s"}`,
+    ...(times.length > 0 ? [`${Math.round(Math.max(...times) * 100) / 100} s`] : []),
+    ...(animation.loop === true ? ["loops"] : []),
+    ...(joints.size > 0 ? [`moves ${joints.size} joint${joints.size === 1 ? "" : "s"}`] : []),
+  ];
+  const where = action === "build" && typeof args.parent === "string" && args.parent !== ""
+    ? ` in ${truncate(args.parent, 60)}`
+    : "";
+  const replaces = action === "build" && typeof args.expected_revision === "string" ? ", replacing its last build" : "";
+  const waived = Array.isArray(args.waive) && args.waive.length > 0
+    ? `, accepting failed ${args.waive.filter((id) => typeof id === "string").join(", ")}`
+    : "";
+  return `animation · ${action} ${name}${where}: ${facts.join(", ")}${replaces}${waived}`;
+}
+
 /** One-line human summary of a proposed call, shown in the activity timeline. */
 export function summarizeToolCall(tool: string, args: Record<string, unknown>): string {
   // A Blender job's only argument is its script, which is no summary.
   if (tool === "run_blender_script") return tool;
+  if (tool === "animation") return summarizeAnimation(args);
   for (const key of IDENTIFYING_ARGUMENTS) {
     const value = args[key];
     if (typeof value === "string" && value !== "") {

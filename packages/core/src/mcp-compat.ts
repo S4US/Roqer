@@ -40,6 +40,19 @@ Use build_instances to create, clone, update, or remove many instances in one re
 
 Use one sole build_instances step {op:"scatter", name, zone:{min:[x,z],max:[x,z]}, density, seed, templates:[{source,weight,kit?}], ground:[path], raycast:{top,bottom}}. density is placements per 10,000 square studs; floor(area*density/10000) must be 1-1000. ground names existing Workspace surfaces; templates must already exist. Optional rotation:[minYaw,maxYaw] degrees, scale:[min,max] (0.05-20), spacing (extra footprint clearance), avoid:[{tag,distance}] (extra clearance from tagged Part/Model bounds), and maxSlope (0-89 degrees, default30). Optional parent stays under the build root; tags and attributes decorate each placement. The named Model holds this scatter; replace:true replaces only a recognized scatter group as one atomic undo step. Same seed, inputs and unchanged scene give the same layout. Result scatter:{requested,placed,attempts} reports shortfalls; no placements is an error and preserves existing output. Commit ground/templates first; scatter cannot share a batch with other steps.
 
+## Character animation
+
+Use animation to make an R15 character animation instead of building a KeyframeSequence in execute_luau. action=check compiles the pose description and measures its motion without touching Studio; action=build does the same, then previews it in Studio and writes it.
+
+- animation is {name, rig:"R15", loop?, priority?, easing?, keyframes:[{time, name?, easing?, joints}]}. The first keyframe is at time 0 and times rise; at most 240 keyframes and 60 seconds. priority is Core, Idle, Movement, Action (default), Action2, Action3 or Action4.
+- joints maps a joint name to {rotation?:[x,y,z], position?:[x,y,z], easing?}. Joints are Root, Waist, Neck, LeftShoulder, LeftElbow, LeftWrist, RightShoulder, RightElbow, RightWrist, LeftHip, LeftKnee, LeftAnkle, RightHip, RightKnee and RightAnkle. rotation is degrees about the parent part's axes, applied as CFrame.Angles; omitted, the joint is at rest. Only Root takes a position, in studs; it moves the whole body.
+- Directions on the rig: +X on a shoulder raises the arm forward; knees bend negative about X and elbows positive.
+- Key every joint the animation moves in the first keyframe. A joint may turn at most 90 degrees between its keys; split a larger swing across more keyframes. A key with Constant easing snaps instead, and may turn any amount.
+- easing is {style, direction}: style Linear (default), Constant, CubicV2, Cubic, Bounce or Elastic; direction In (default), Out or InOut. It shapes the motion from a key to the joint's next key, and falls back field by field from joint to keyframe to animation. Prefer CubicV2 to Cubic, whose In and Out are swapped.
+- The checks: jointLimits, velocity, rootDrift and loopContinuity always; groundContact, footSliding and gaitSymmetry when locomotion is true, for a walk, run or other gait. A failed check names the joint, the time and the limit. Their limits let Roblox's own R15 animations pass.
+- build refuses while a check fails unless waive lists it; waive only a failure the animation means, such as a dance that leaves the ground. parent is the instance the KeyframeSequence goes in, named after the animation. Studio plays it on a temporary dummy first, and nothing is written unless it plays as checked.
+- The write is one undo step and is read back. The result returns a revision; pass it as expected_revision to rebuild the same sequence. A rebuild is refused when the revision is stale, when the sequence was edited after its build, or when the target was not built by this tool.
+
 ## Selection and viewport
 
 - Use selection with action=get when the user's Studio selection should define the scope.

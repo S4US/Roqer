@@ -44,9 +44,21 @@ export type ToolSchema = {
 };
 
 /** sha256 of `packages/core/src/tools/definitions.ts` with LF newlines. */
-export const TOOL_DEFINITIONS_DIGEST = "1ad4237d0438ba153f2093b99aea6d704fc140a32efc56014293affd2ee26dd1";
+export const TOOL_DEFINITIONS_DIGEST = "2591dca63e793e9ff913380a8b545aad2e31bfcfc5cb7b443e412082cda48c6a";
 
 export const TOOL_SCHEMAS: Readonly<Record<string, ToolSchema>> = {
+  animation: {
+    description: "Use to check a character animation, or build it as a KeyframeSequence.",
+    parameters: [
+      { name: "action", type: "string", required: true, enumValues: ["check", "build"], description: "check measures without Studio; build previews, writes, reads back." },
+      { name: "animation", type: "object", required: true, description: "Pose description for an R15 rig." },
+      { name: "locomotion", type: "boolean", required: false, description: "A gait: adds ground, foot, and symmetry checks." },
+      { name: "parent", type: "string", required: false, description: "Build: instance the KeyframeSequence goes in." },
+      { name: "expected_revision", type: "string", required: false, description: "Build: revision its last build returned; required to replace it." },
+      { name: "waive", type: "string[]", required: false, description: "Failed checks to accept." },
+      { name: "instance_id", type: "string", required: false, description: "Connected place ID; required with multiple places." },
+    ],
+  },
   breakpoints: {
     description: "Use to trace script execution with breakpoints or logpoints.",
     parameters: [

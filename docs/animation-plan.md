@@ -239,7 +239,7 @@ What was built, in `packages/core/src/animation/`:
   differently from the model (see "Live results"). The tool should split big
   swings across more keyframes.
 
-### 7. Studio `animation` tool
+### 7. Studio `animation` tool — implemented
 
 One public tool, with every layer in step:
 
@@ -262,6 +262,51 @@ dummy. Safety rules:
 - **Readable approvals.** The approval prompt summarises the pose instead of
   showing JSON.
 - **Inspector edition.** It gets no write path.
+
+What was built:
+
+- **Two actions.**
+  - `check` compiles the pose description and runs the motion checks in core,
+    without Studio. The desktop rates it a read, so it needs no approval.
+  - `build` does the same, and refuses while a check fails that the caller did
+    not name in `waive`. It then has the plugin preview the sequence, and
+    writes it only if Studio played it within 1.5° and 0.05 studs of the
+    checked model. The write goes into `parent`, named after the animation, as
+    one ChangeHistory step, and is read back.
+- **The preview dummy is not in memory.** A probe found that an Animator never
+  loads a track on a dummy outside the DataModel, even inside a `WorldModel`.
+  So the dummy lives in a temporary Workspace folder. It is created outside
+  any ChangeHistory recording, which leaves no undo step, and it is destroyed
+  on every path. The sequence is registered as a temporary clip while still
+  detached.
+- **No overwrites.**
+  - Each build stamps its content revision on the sequence
+    (`RoqerAnimationRevision`), and a rebuild needs that revision as
+    `expected_revision`.
+  - A rebuild is refused when the target was not built by the tool, or when
+    its content no longer matches its stamp, as after an edit in the
+    Animation Editor.
+  - The rule about an `AnimationId` that changed underneath moves to step 8,
+    where `AnimationId`s are first written.
+- **One compiler rule from step 6.** A joint may turn at most 90° between its
+  keys, unless the earlier key snaps (Constant). Past 90°, Studio's playback of
+  Linear keys drifts from the model, and past 180° a turn goes the short way
+  round.
+- **Layers.**
+  - Core: the schema (with the tool guide's "Character animation" section),
+    HTTP routing, `RobloxStudioTools.animation` and
+    `animation/animation-tool.ts`.
+  - The plugin: `AnimationHandlers.ts`, whose two endpoints the inspector build
+    refuses.
+  - The desktop: its risk table, activity labels, a summary in words on the
+    approval card, the operation guidance, and a change card with
+    verification evidence for each build.
+  - The catalog budget was raised by this one tool's size.
+- **Tests.**
+  - Unit tests for the tool flow, with the plugin stubbed.
+  - Desktop tests for the risk, summaries and evidence.
+  - `tests/animation-tool.mjs` exercises all of it against a live Studio, in
+    the full managed suite.
 
 ### 8. Publish and wire up
 
@@ -476,3 +521,19 @@ What this settles:
   them.
 - Step 7 should split a swing of more than 90° across several keyframes. The
   motion is then smoother either way, and the model matches Studio closely.
+
+### 2026-09-28: preview probe, Studio 0.740.19
+
+A one-off probe for step 7's preview design, run through `execute_luau` on the
+managed Studio. Each case played a 0 to 60° shoulder swing and stepped it by
+hand to 0.5 s.
+
+- **Unparented dummy:** the track never loaded (length 0), and the shoulder did
+  not move.
+- **Dummy in an unparented `WorldModel`:** the same.
+- **Dummy in a temporary Workspace folder:** the shoulder read 30.0°, as
+  expected.
+- **Undo history:** creating and destroying the folder outside a recording
+  left `GetCanUndo` false.
+- **Detached sequence:** a `KeyframeSequence` that was never parented
+  registered and played.

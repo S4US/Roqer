@@ -7,7 +7,7 @@ import {
   sampleTrack,
   type MotionSequence,
 } from '../animation/motion.js';
-import { checkMotion, MOTION_LIMITS, type MotionCheckId, type MotionReport } from '../animation/motion-checks.js';
+import { checkMotion, type MotionCheckId, type MotionReport } from '../animation/motion-checks.js';
 
 type Joints = Record<string, { rotation?: [number, number, number]; position?: [number, number, number] }>;
 
@@ -150,14 +150,15 @@ describe('checkMotion', () => {
   });
 
   test('fails a joint that moves faster than the speed limit', () => {
+    // 90° in 0.03 s: 3000°/s, sampled over two uneven steps.
     const report = checkMotion(animation([
       { time: 0, joints: { RightShoulder: { rotation: [0, 0, 0] } } },
-      { time: 0.05, joints: { RightShoulder: { rotation: [170, 0, 0] } } },
+      { time: 0.03, joints: { RightShoulder: { rotation: [90, 0, 0] } } },
     ]));
     const velocity = check(report, 'velocity');
     expect(velocity.status).toBe('fail');
-    expect(velocity.measured.RightShoulder).toBeGreaterThan(MOTION_LIMITS.angularSpeed);
-    expect(velocity.detail).toMatch(/^fastest: RightShoulder at \d+°\/s around 0\.0\d s; limit 2500°\/s$/);
+    expect(velocity.measured.RightShoulder).toBe(3000);
+    expect(velocity.detail).toBe('fastest: RightShoulder at 3000°/s around 0.02 s; limit 2500°/s');
   });
 
   test('fails a loop whose last pose does not meet its first', () => {
