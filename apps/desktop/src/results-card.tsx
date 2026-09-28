@@ -49,6 +49,11 @@ export const ResultsCard = memo(function ResultsCard({ changes, evidence, collap
   const baseId = useId();
   const tabRefs = useRef(new Map<ResultsTab, HTMLButtonElement>());
   const active = shownTab(tabs, picked, following);
+  // Tabs the reader has had open. Their panels stay mounted, hidden, so what
+  // they chose there — an earlier version of an animation, a diff they opened —
+  // is still there when they come back. A tab never opened builds nothing.
+  const [visited, setVisited] = useState<ReadonlySet<ResultsTab>>(() => new Set());
+  if (open && active !== null && !visited.has(active)) setVisited(new Set(visited).add(active));
   if (active === null) return null;
 
   const choose = (id: ResultsTab) => {
@@ -68,7 +73,7 @@ export const ResultsCard = memo(function ResultsCard({ changes, evidence, collap
     tabRefs.current.get(tabs[next].id)?.focus();
   };
 
-  const panelId = `${baseId}-panel`;
+  const panelId = (id: ResultsTab) => `${baseId}-${id}-panel`;
   const tabId = (id: ResultsTab) => `${baseId}-${id}`;
   return <section className="results-card" data-open={open} aria-label={`Results: ${resultsSummary(tabs)}`}>
     <div className="results-header">
@@ -76,7 +81,7 @@ export const ResultsCard = memo(function ResultsCard({ changes, evidence, collap
         type="button"
         className="results-collapse"
         aria-expanded={open}
-        aria-controls={open ? panelId : undefined}
+        aria-controls={open ? panelId(active) : undefined}
         title={open ? "Fold the results" : "Show the results"}
         onClick={() => setOpen((value) => !value)}
       >
@@ -94,7 +99,7 @@ export const ResultsCard = memo(function ResultsCard({ changes, evidence, collap
             id={tabId(tab.id)}
             className="results-tab"
             aria-selected={selected}
-            aria-controls={open && selected ? panelId : undefined}
+            aria-controls={visited.has(tab.id) ? panelId(tab.id) : undefined}
             aria-label={`${TAB_NAME[tab.id].title}, ${tab.count} ${noun}`}
             tabIndex={selected ? 0 : -1}
             onClick={() => choose(tab.id)}
@@ -110,13 +115,22 @@ export const ResultsCard = memo(function ResultsCard({ changes, evidence, collap
         })}
       </div>
     </div>
-    {/* Mounted on demand: a folded card in a long chat builds none of its
-        diffs, tiles or pictures. */}
-    {open && <div className="results-panel" role="tabpanel" id={panelId} aria-labelledby={tabId(active)} data-tab={active}>
-      {active === "changes" && renderFiles(results.files)}
-      {active === "uploads" && <UploadsPanel uploads={results.uploads} />}
-      {active === "previews" && <PreviewsPanel evidence={evidence} changes={changes} />}
-    </div>}
+    {/* Mounted on first visit: a folded card in a long chat builds none of
+        its diffs, tiles or pictures. A hidden Previews panel is display:none,
+        so its inline animation leaves view and gives up its WebGL context. */}
+    {tabs.filter((tab) => visited.has(tab.id)).map((tab) => <div
+      key={tab.id}
+      className="results-panel"
+      role="tabpanel"
+      id={panelId(tab.id)}
+      aria-labelledby={tabId(tab.id)}
+      data-tab={tab.id}
+      hidden={!open || tab.id !== active}
+    >
+      {tab.id === "changes" && renderFiles(results.files)}
+      {tab.id === "uploads" && <UploadsPanel uploads={results.uploads} />}
+      {tab.id === "previews" && <PreviewsPanel evidence={evidence} changes={changes} />}
+    </div>)}
   </section>;
 });
 

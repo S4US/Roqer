@@ -1159,6 +1159,7 @@ a.small-button:focus-visible { outline: 2px solid var(--accent); outline-offset:
 .results-collapse > svg { transition: transform .16s ease; }
 .results-collapse[aria-expanded="true"] > svg { transform: rotate(90deg); }
 .results-panel { animation: fade .16s ease both; }
+.results-panel[hidden] { display: none; }
 
 /* The Changes tab: files as rows of one list rather than cards in a card. A
  * row's header toggles its diff; the diff keeps its own bounded height. */
