@@ -1,5 +1,5 @@
 import {
-  BLENDER_PREVIEW_TITLE, SCREENSHOT_VIEW_LABEL, SCREENSHOT_VIEW_PLAYTEST,
+  ANIMATION_PREVIEW_TITLE, BLENDER_PREVIEW_TITLE, SCREENSHOT_VIEW_LABEL, SCREENSHOT_VIEW_PLAYTEST,
   type RunChange, type RunEvidence,
 } from "../shared/run-events";
 
@@ -11,7 +11,7 @@ import {
  * describes; the earlier ones sit beside it, oldest first.
  */
 
-export type PreviewSource = "studio" | "playtest" | "blender" | "other";
+export type PreviewSource = "studio" | "playtest" | "blender" | "animation" | "other";
 
 export type PreviewTile = {
   /** Position in the run's pictures, oldest first; the viewer opens here. */
@@ -45,6 +45,7 @@ export function previewLayout(images: readonly RunEvidence[]): PreviewLayout | n
 /** Where a picture came from, as the host recorded it. */
 export function previewSource(evidence: RunEvidence): PreviewSource {
   if (evidence.title === BLENDER_PREVIEW_TITLE) return "blender";
+  if (evidence.title === ANIMATION_PREVIEW_TITLE) return "animation";
   if (evidence.kind !== "screenshot") return "other";
   const view = evidence.metadata?.find((entry) => entry.label === SCREENSHOT_VIEW_LABEL)?.value;
   return view === SCREENSHOT_VIEW_PLAYTEST ? "playtest" : "studio";
@@ -54,6 +55,7 @@ export function previewSource(evidence: RunEvidence): PreviewSource {
 export function previewSourceLabel(evidence: RunEvidence): string {
   switch (previewSource(evidence)) {
     case "blender": return "Blender · before upload";
+    case "animation": return "Animation · box rig";
     case "playtest": return "Playtest";
     case "studio": return "Studio";
     default: return evidence.title;
@@ -92,9 +94,13 @@ export function previewCaption(evidence: RunEvidence, changes: readonly RunChang
   return parts.length === 0 ? undefined : `Taken ${parts.join(", ")}`;
 }
 
-/** Whether a picture also opens in 3D: a Blender result whose model the host kept a preview of. */
+/**
+ * Whether a picture also opens in 3D: a Blender result, or an animation's
+ * contact sheet, whose model the host kept a preview of.
+ */
 export function hasModelPreview(evidence: RunEvidence): boolean {
-  return evidence.modelPreviewId !== undefined && previewSource(evidence) === "blender";
+  const source = previewSource(evidence);
+  return evidence.modelPreviewId !== undefined && (source === "blender" || source === "animation");
 }
 
 /** The accessible name of a tile. */

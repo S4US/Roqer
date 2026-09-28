@@ -48,8 +48,10 @@ function faithfulSamples(sequence: KeyframeSequenceDescription, nudge = 0): Prev
   }));
 }
 
-function body(result: { content: { text: string }[] }) {
-  return JSON.parse(result.content[0].text);
+type ToolContent = { type: string; text?: string; data?: string; mimeType?: string; resource?: { mimeType: string; blob: string } };
+
+function body(result: { content: ToolContent[] }) {
+  return JSON.parse(result.content[0].text!);
 }
 
 describe('prepareAnimation', () => {
@@ -121,6 +123,20 @@ describe('RobloxStudioTools.animation', () => {
     ]);
     expect(body(await tools.animation({ action: 'check', animation: { ...wave(), keyframes: [] } })))
       .toEqual({ valid: false, errors: ['keyframes: must be a non-empty array'] });
+  });
+
+  test('check shows the motion: a contact sheet for the model and a GLB for the viewer', async () => {
+    const { tools } = toolsWith({});
+    const result = await tools.animation({ action: 'check', animation: wave() });
+    const [text, image, resource] = result.content as ToolContent[];
+    expect(JSON.parse(text.text!).sheet).toMatchObject({ times: [0, 0.167, 0.333, 0.5, 0.667, 0.833] });
+    expect(image).toMatchObject({ type: 'image', mimeType: 'image/png' });
+    const png = Buffer.from(image.data!, 'base64');
+    expect(png.subarray(1, 4).toString()).toBe('PNG');
+    expect([png.readUInt32BE(16), png.readUInt32BE(20)]).toEqual([1056, 472]);
+    expect(resource).toMatchObject({ type: 'resource', resource: { mimeType: 'model/gltf-binary' } });
+    // An invalid animation has nothing to show.
+    expect((await tools.animation({ action: 'check', animation: { ...wave(), keyframes: [] } })).content).toHaveLength(1);
   });
 
   test('build refuses a failing check before Studio sees anything', async () => {

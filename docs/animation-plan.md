@@ -383,7 +383,7 @@ What that needs:
 The easing measured in step 6 applies when converting Blender's
 interpolation.
 
-### 9. Animation playback and contact sheet
+### 9. Animation playback and contact sheet — implemented
 
 - **Playback.** The step 4 viewer plays the rig from the compiled pose data (no
   Blender needed), or a GLB with the animation baked in when Blender made it.
@@ -392,6 +392,39 @@ interpolation.
   trusted code, by a small box-rig renderer in core using the existing PNG
   encoder, or by Blender when it is on. It is never rendered by the chat
   window.
+
+What was built:
+
+- **The contact sheet** (`animation/contact-sheet.ts`).
+  - A z-buffered software rasteriser draws the R15 rig as boxes, posed by
+    core's own sampler, at the same scale in every frame.
+  - There are six moments across one pass: a loop's wrap is left out, and a
+    one-shot's last frame is kept. The top row shows the front three-quarter,
+    the bottom row the right side, facing right. Left limbs are blue and right
+    limbs orange, so a gait's phase reads at a glance, and a line marks the
+    ground.
+  - `check` and `build` return it as an image, with a note in the result on how
+    to read it. A model that sees images can check the motion; the numeric
+    checks stay enough without it.
+- **The 3D preview** (`animation/rig-glb.ts`).
+  - The same box rig as one self-contained GLB, every joint's rotation and
+    translation sampled 30 times a second from the same sampler.
+  - It travels as a host-only resource block. The MCP transport strips it, so
+    MCP clients never receive it; only the desktop's HTTP surface keeps it.
+- **The desktop.**
+  - The main process validates the GLB with step 4's inspector and keeps it in
+    a job folder beside Blender's, under the same id shape. So it is served,
+    checked again and expired exactly as a Blender preview is, and older
+    builds still load the records.
+  - The sheet becomes an "Animation preview" in the answer, whose 3D view plays
+    the animation.
+- **The viewer.**
+  - It plays any GLB that carries an animation: looping, with play/pause, a
+    keyboard-operable scrub bar and the time.
+  - Under reduced motion it waits to be played.
+  - A GLB baked by Blender plays the same way, once a Blender job exports one.
+- **Not built: a Blender-rendered sheet.** The box-rig sheet needs no Blender,
+  and a Blender sheet waits for the proposed Blender step.
 
 ### 10. Guidance, docs and evals
 

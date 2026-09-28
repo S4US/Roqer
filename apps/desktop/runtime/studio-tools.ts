@@ -12,7 +12,7 @@ import {
 } from "../shared/mcp-tool-help";
 import { boundedCode, diffDeletedRange, diffText, normalizeNewlines } from "../shared/text-diff";
 import {
-  BLENDER_PREVIEW_TITLE, SCREENSHOT_VIEW_LABEL, SCREENSHOT_VIEW_PLAYTEST,
+  ANIMATION_PREVIEW_TITLE, BLENDER_PREVIEW_TITLE, SCREENSHOT_VIEW_LABEL, SCREENSHOT_VIEW_PLAYTEST,
   type RunChange, type RunEvidence, type RunMetadata,
 } from "../shared/run-events";
 import {
@@ -1046,6 +1046,40 @@ function recordBuild(context: PlannerContext, args: JsonRecord, outcome: McpTool
 }
 
 /**
+ * An animation's contact sheet as a preview in the answer, with the box rig's
+ * 3D preview behind it when the host could keep one. Both were drawn by the
+ * MCP bridge from the compiled motion, never by the model or the renderer.
+ */
+async function recordAnimationPreview(context: PlannerContext, outcome: McpToolOutcome): Promise<void> {
+  const data = isRecord(outcome.data) ? outcome.data : {};
+  if (data.valid !== true && data.built !== true) return;
+  const imageDataUrl = await evidencePreview(context, outcome);
+  if (imageDataUrl === undefined) return;
+  let modelPreviewId: string | undefined;
+  if (outcome.modelFile !== undefined && context.storeModelPreview !== undefined) {
+    modelPreviewId = await context.storeModelPreview(outcome.modelFile).catch(() => undefined);
+  }
+  const animation = isRecord(data.animation) ? data.animation : {};
+  const checks = isRecord(data.checks) ? data.checks : {};
+  const name = stringField(animation, "name") ?? "The animation";
+  const duration = numberField(animation, "duration");
+  const keyframes = numberField(animation, "keyframes");
+  context.recordEvidence({
+    kind: "inspection",
+    title: ANIMATION_PREVIEW_TITLE,
+    passed: checks.passed === true,
+    detail: `${name}: ${checks.passed === true ? "every motion check passed" : "a motion check failed"}${data.built === true ? ", and it was built in Studio" : ""}.`,
+    imageDataUrl,
+    ...(isModelPreviewId(modelPreviewId) ? { modelPreviewId } : {}),
+    metadata: [
+      { label: "Animation", value: name },
+      ...(keyframes === undefined ? [] : [{ label: "Keyframes", value: String(keyframes) }]),
+      ...(duration === undefined ? [] : [{ label: "Length", value: `${duration} s${animation.loop === true ? ", looping" : ""}` }]),
+    ],
+  });
+}
+
+/**
  * A built animation as a change card and its verification. The evidence
  * passes only when Studio's read-back matched what was compiled and its
  * preview played as the checks measured; the MCP result carries both.
@@ -1477,6 +1511,7 @@ export function createStudioToolRunner(context: PlannerContext): StudioToolRunne
     }
 
     if (outcome.ok && !refused && operation === "animation") {
+      if (args.action === "check" || args.action === "build") await recordAnimationPreview(context, outcome);
       if (args.action === "build") recordAnimationBuild(context, outcome);
       else if (args.action === "publish") recordAnimationPublish(context, outcome);
       else if (args.action === "wire") recordAnimationWire(context, outcome);

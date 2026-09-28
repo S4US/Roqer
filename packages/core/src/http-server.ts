@@ -823,7 +823,9 @@ export function createHttpServer(tools: RobloxStudioTools, bridge: BridgeService
 
     app.post(`/mcp/${toolName}`, async (req, res) => {
       try {
-        const result = normalizeToolResult(await handler(tools, req.body), 'modern');
+        // Roqer's desktop is the only caller of this surface, so it also gets
+        // the files meant for its own viewer, which MCP clients never see.
+        const result = normalizeToolResult(await handler(tools, req.body), 'modern', { keepHostOnly: true });
         // The bare object carries no isError, so a failure keeps its envelope:
         // unwrapped, an upload Roblox refused read as a successful call.
         if (result.structuredContent && result.content.length === 0 && !result.isError) {

@@ -131,6 +131,12 @@ export type PlannerContext = {
    * image encoder; a missing preview never fails the call it belongs to.
    */
   previewImage?(image: McpToolImage): Promise<string | undefined>;
+  /**
+   * Keep a 3D preview a tool returned (base64 GLB) and return the opaque id the
+   * viewer asks for it by, or undefined when it cannot be kept. Absent in a
+   * context with nowhere to keep it; a missing preview never fails the call.
+   */
+  storeModelPreview?(glbBase64: string): Promise<string | undefined>;
   /** Replace the run's task list. Already validated by the caller. */
   setTasks(tasks: RunTask[]): void;
   /** The current task list, for a planner that needs to reread its own plan. */
@@ -189,6 +195,8 @@ export type RunEngineOptions = {
    * encoder is Electron's; without it, evidence carries no image.
    */
   previewImage?: (image: McpToolImage) => Promise<string | undefined>;
+  /** Keeps a tool's 3D preview where the viewer can be served it. Main-process only. */
+  storeModelPreview?: (glbBase64: string) => Promise<string | undefined>;
   emit: (event: RunEvent) => void;
   /** Injectable for tests; defaults to () => new Date().toISOString(). */
   now?: () => string;
@@ -320,6 +328,7 @@ export class RunSession {
   private readonly request: RunRequest;
   private readonly images: readonly PlannerImage[];
   private readonly previewImage: RunEngineOptions["previewImage"];
+  private readonly storeModelPreview: RunEngineOptions["storeModelPreview"];
   private readonly emitRaw: (event: RunEvent) => void;
   private readonly now: () => string;
   private readonly createId: (prefix: string) => string;
@@ -363,6 +372,7 @@ export class RunSession {
     this.request = options.request;
     this.images = options.images ?? [];
     this.previewImage = options.previewImage;
+    this.storeModelPreview = options.storeModelPreview;
     this.emitRaw = options.emit;
     this.now = options.now ?? (() => new Date().toISOString());
     this.createId = options.createId ?? defaultIdGenerator();
@@ -435,6 +445,7 @@ export class RunSession {
       evidence: () => this.recordedEvidence,
       decisions: () => this.recordedDecisions,
       ...(this.previewImage === undefined ? {} : { previewImage: this.previewImage }),
+      ...(this.storeModelPreview === undefined ? {} : { storeModelPreview: this.storeModelPreview }),
       takeSteers: () => this.pendingSteers.splice(0),
       askUser: (question, options) => this.askUser(question, options),
       // "completed" because the question is what the gate would say about a run

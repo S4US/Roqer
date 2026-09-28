@@ -1,14 +1,25 @@
 import { useEffect, useRef, useState } from "react";
 import {
-  Clock, Layers, Loader2, MonitorOff, Rotate3d, RotateCcw, RotateCw, Ruler, Triangle, TriangleAlert,
+  Clock, Layers, Loader2, MonitorOff, Pause, Play, Rotate3d, RotateCcw, RotateCw, Ruler, Triangle, TriangleAlert,
 } from "lucide-react";
-import type { RunEvidence } from "../shared/run-events";
+import { ANIMATION_PREVIEW_TITLE, type RunEvidence } from "../shared/run-events";
 import { MODEL_OBJECTS_LABEL, MODEL_SIZE_LABEL, MODEL_TRIANGLES_LABEL } from "../shared/model-preview";
 import { hasDesktopRuntime, loadModelPreview } from "./platform";
 
 type Status = "loading" | "ready" | "expired" | "failed" | "no-desktop" | "no-webgl";
 
-type Controls = { reset(): void; turn(steps: number): void };
+type Controls = {
+  reset(): void;
+  turn(steps: number): void;
+  /** Present when the model carries an animation. */
+  playback?: { play(): void; pause(): void; seek(seconds: number): void };
+};
+
+/** What the view knows about the model's animation, for the playback bar. */
+type Playback = { duration: number; time: number; playing: boolean };
+
+/** How often the playback bar follows the animation; the 3D view itself draws every frame. */
+const PLAYBACK_REPORT_MS = 66;
 
 /** Whether this window can draw 3D at all; the context made to find out is released at once. */
 function webglAvailable(): boolean {
@@ -30,8 +41,11 @@ const fact = (evidence: RunEvidence, label: string) =>
 const AXES = ["x", "y", "z"] as const;
 
 /**
- * A Blender result in 3D: the GLB Roqer's own inspection exported from the
- * model it pictured, which the main process hands over by the evidence's id.
+ * A Blender result or an animation in 3D: a GLB Roqer made (its own inspection
+ * of a Blender model, or the animation tool's box rig), which the main process
+ * hands over by the evidence's id. A GLB that carries an animation plays it,
+ * looping, with play/pause and a scrub bar; under reduced motion it waits to be
+ * played.
  *
  * The model stands on a floor on Roblox's axes, facing the way it will in
  * Studio, and can be orbited, zoomed and panned. three.js loads only when a
@@ -46,6 +60,7 @@ export function ModelViewer({ evidence, onShowPicture }: { evidence: RunEvidence
   const controls = useRef<Controls | null>(null);
   const [status, setStatus] = useState<Status>("loading");
   const [moved, setMoved] = useState(false);
+  const [playback, setPlayback] = useState<Playback | null>(null);
   const id = evidence.modelPreviewId;
 
   useEffect(() => {
@@ -53,6 +68,7 @@ export function ModelViewer({ evidence, onShowPicture }: { evidence: RunEvidence
     let release = () => undefined as void;
     setStatus("loading");
     setMoved(false);
+    setPlayback(null);
     void (async () => {
       const container = host.current;
       if (id === undefined || container === null) {
@@ -192,6 +208,27 @@ export function ModelViewer({ evidence, onShowPicture }: { evidence: RunEvidence
       let dirty = true;
       let frame = 0;
 
+      // The model's own animation, if it has one: sampled by the mixer each
+      // frame while it plays, and reported to the playback bar a few times a
+      // second.
+      const clip = gltf.animations[0];
+      const mixer = clip !== undefined && clip.duration > 0 ? new THREE.AnimationMixer(model) : undefined;
+      if (mixer !== undefined && clip !== undefined) mixer.clipAction(clip).setLoop(THREE.LoopRepeat, Infinity).play();
+      let playing = mixer !== undefined && !reducedMotion();
+      let clock = performance.now();
+      let reported = 0;
+      const report = (force = false) => {
+        if (mixer === undefined || clip === undefined) return;
+        const now = performance.now();
+        if (!force && now - reported < PLAYBACK_REPORT_MS) return;
+        reported = now;
+        setPlayback({ duration: clip.duration, time: mixer.time % clip.duration, playing });
+      };
+      if (mixer !== undefined) {
+        mixer.setTime(0);
+        report(true);
+      }
+
       // Where each of the scene's axes points on screen, redrawn with the view.
       const inverse = new THREE.Quaternion();
       const axis = new THREE.Vector3();
@@ -231,6 +268,13 @@ export function ModelViewer({ evidence, onShowPicture }: { evidence: RunEvidence
 
       const tick = (now: number) => {
         frame = requestAnimationFrame(tick);
+        const delta = Math.min((now - clock) / 1000, 0.1);
+        clock = now;
+        if (mixer !== undefined && playing) {
+          mixer.update(delta);
+          dirty = true;
+          report();
+        }
         if (glide !== undefined && !glide(now)) glide = undefined;
         // The gizmo mounts with the ready state, a frame or so after the first render.
         const unmarked = gizmo.current !== null && gizmo.current.dataset.drawn === undefined;
@@ -275,6 +319,24 @@ export function ModelViewer({ evidence, onShowPicture }: { evidence: RunEvidence
           });
           setMoved(true);
         },
+        ...(mixer !== undefined && clip !== undefined ? {
+          playback: {
+            play: () => {
+              playing = true;
+              clock = performance.now();
+              report(true);
+            },
+            pause: () => {
+              playing = false;
+              report(true);
+            },
+            seek: (seconds: number) => {
+              mixer.setTime(Math.min(Math.max(seconds, 0), clip.duration));
+              dirty = true;
+              report(true);
+            },
+          },
+        } : {}),
       };
 
       release = () => {
@@ -295,6 +357,8 @@ export function ModelViewer({ evidence, onShowPicture }: { evidence: RunEvidence
           }
         });
         environment.dispose();
+        mixer?.stopAllAction();
+        if (mixer !== undefined) mixer.uncacheRoot(model);
         renderer.dispose();
         // Hand the context back now, not whenever the collector gets to it:
         // Chromium allows only a handful at once.
@@ -317,17 +381,22 @@ export function ModelViewer({ evidence, onShowPicture }: { evidence: RunEvidence
   const size = fact(evidence, MODEL_SIZE_LABEL);
   const triangles = fact(evidence, MODEL_TRIANGLES_LABEL);
   const objects = fact(evidence, MODEL_OBJECTS_LABEL);
+  const animation = evidence.title === ANIMATION_PREVIEW_TITLE;
   const notice = status === "expired"
     ? {
       icon: <Clock size={17} />,
       title: "3D preview expired",
-      detail: "Blender job files are cleared after 7 days, or once 40 newer jobs exist. The still picture stays with the chat.",
+      detail: animation
+        ? "3D previews are cleared after 7 days, or once 40 newer ones exist. The contact sheet stays with the chat."
+        : "Blender job files are cleared after 7 days, or once 40 newer jobs exist. The still picture stays with the chat.",
     }
     : status === "failed"
       ? {
         icon: <TriangleAlert size={17} />,
         title: "The 3D preview could not be shown",
-        detail: "The still picture shows the same model from four sides.",
+        detail: animation
+          ? "The contact sheet shows the same motion, frame by frame."
+          : "The still picture shows the same model from four sides.",
       }
       : undefined;
   const note = status === "no-desktop"
@@ -364,6 +433,26 @@ export function ModelViewer({ evidence, onShowPicture }: { evidence: RunEvidence
         {triangles && <span><Triangle size={13} aria-hidden="true" />{triangles} triangles</span>}
         {objects && <span><Layers size={13} aria-hidden="true" />{objects === "1" ? "1 object" : `${objects} objects`}</span>}
       </div>
+      {playback && <div className="model-viewer-playback">
+        <button
+          type="button"
+          onClick={() => (playback.playing ? controls.current?.playback?.pause() : controls.current?.playback?.play())}
+          aria-label={playback.playing ? "Pause the animation" : "Play the animation"}
+        >
+          {playback.playing ? <Pause size={15} /> : <Play size={15} />}
+        </button>
+        <input
+          type="range"
+          min={0}
+          max={playback.duration}
+          step={0.01}
+          value={playback.time}
+          aria-label="Animation time"
+          aria-valuetext={`${playback.time.toFixed(2)} of ${playback.duration.toFixed(2)} seconds`}
+          onChange={(event) => controls.current?.playback?.seek(Number(event.currentTarget.value))}
+        />
+        <span className="model-viewer-time">{playback.time.toFixed(2)} / {playback.duration.toFixed(2)} s</span>
+      </div>}
       <div className="model-viewer-actions">
         <button type="button" onClick={() => controls.current?.turn(-1)} aria-label="Turn the model left"><RotateCcw size={15} /></button>
         <button type="button" onClick={() => controls.current?.turn(1)} aria-label="Turn the model right"><RotateCw size={15} /></button>

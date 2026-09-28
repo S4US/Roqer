@@ -1079,9 +1079,16 @@ a.small-button:focus-visible { outline: 2px solid var(--accent); outline-offset:
 .model-viewer-gizmo [data-axis="z"] line { stroke: #80add2; }
 .model-viewer-gizmo text { fill: #9299a5; font: 8px "Geist Mono Variable", monospace; text-anchor: middle; }
 .model-viewer-gizmo circle { fill: #c2c7d0; }
+/* An animated model's playback bar: play/pause, a scrub bar, and the time. */
+.model-viewer-playback { position: absolute; bottom: 14px; left: 50%; transform: translateX(-50%); display: flex; align-items: center; gap: 10px; width: min(440px, calc(100% - 330px)); height: 32px; box-sizing: border-box; padding: 0 12px 0 4px; background: rgba(10, 12, 16, .74); border: 1px solid rgba(255, 255, 255, .06); border-radius: 8px; }
+.model-viewer-playback button { display: grid; place-items: center; flex: 0 0 auto; width: 26px; height: 26px; color: #c2c7d0; background: transparent; border: 0; border-radius: 6px; }
+.model-viewer-playback button:hover { color: #fff; background: rgba(255, 255, 255, .08); }
+.model-viewer-playback input[type="range"] { flex: 1 1 auto; min-width: 0; accent-color: #8fb4e6; }
+.model-viewer-time { flex: 0 0 auto; color: #c2c7d0; font: 12px "Geist Mono Variable", monospace; font-variant-numeric: tabular-nums; }
 @media (max-width: 820px) {
   .model-viewer-hint { right: 14px; height: auto; min-height: 28px; padding-block: 5px; }
   .model-viewer-facts { max-width: calc(100% - 28px); bottom: 60px; }
+  .model-viewer-playback { left: 14px; right: 14px; width: auto; transform: none; bottom: 60px; }
 }
 .evidence-lines { display: flex; flex-direction: column; gap: 4px; margin: 0; padding: 0; color: var(--muted); list-style: none; font: var(--weight-regular) var(--type-meta)/1.55 "Geist Mono Variable", monospace; }
 .evidence-lines li { overflow: hidden; text-overflow: ellipsis; white-space: pre; }

@@ -390,6 +390,12 @@ export const MAX_RECORDED_EVIDENCE_IMAGES = 6;
 export const BLENDER_PREVIEW_TITLE = "Blender result, before upload";
 
 /**
+ * The title of an animation's preview: the contact sheet the animation tool
+ * drew, whose 3D view plays the same box rig.
+ */
+export const ANIMATION_PREVIEW_TITLE = "Animation preview";
+
+/**
  * Metadata on a Studio screenshot taken while a playtest this run started was
  * running, so the answer can say the picture shows the playtest.
  */

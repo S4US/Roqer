@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
-  BLENDER_PREVIEW_TITLE, SCREENSHOT_VIEW_LABEL, SCREENSHOT_VIEW_PLAYTEST, type RunChange, type RunEvidence,
+  ANIMATION_PREVIEW_TITLE, BLENDER_PREVIEW_TITLE, SCREENSHOT_VIEW_LABEL, SCREENSHOT_VIEW_PLAYTEST, type RunChange, type RunEvidence,
 } from "../shared/run-events";
 import {
   hasModelPreview, previewCaption, previewLayout, previewSource, previewSourceLabel, previewTileLabel, shortTarget,
@@ -55,6 +55,14 @@ test("a picture is labelled by where the host says it came from", () => {
   assert.deepEqual([blender, playtest, shot("s"), other].map(previewSourceLabel), [
     "Blender · before upload", "Playtest", "Studio", "Interface",
   ]);
+});
+
+test("an animation's contact sheet is labelled as the box rig, and opens in 3D when its model was kept", () => {
+  const sheet: RunEvidence = { id: "a", kind: "inspection", title: ANIMATION_PREVIEW_TITLE, imageDataUrl: image };
+  assert.equal(previewSource(sheet), "animation");
+  assert.equal(previewSourceLabel(sheet), "Animation · box rig");
+  assert.equal(hasModelPreview(sheet), false);
+  assert.equal(hasModelPreview({ ...sheet, modelPreviewId: "a1b2c3d4-0" }), true);
 });
 
 test("only a Blender result with a kept model opens in 3D, and its tile says so", () => {

@@ -36,7 +36,9 @@ import {
   verifyPlayback,
   type AnimateSlot,
 } from '../animation/animation-tool.js';
-import { compilePoseAnimation } from '../animation/pose-compiler.js';
+import { compilePoseAnimation, type KeyframeSequenceDescription } from '../animation/pose-compiler.js';
+import { renderContactSheet } from '../animation/contact-sheet.js';
+import { renderRigGlb } from '../animation/rig-glb.js';
 import * as fs from 'fs';
 import * as path from 'path';
 
@@ -1755,13 +1757,13 @@ export class RobloxStudioTools {
       ...(waived.length > 0 ? { waived } : {}),
     };
     if (action === 'check') {
-      return this._textResult({ valid: true, animation: describeAnimation(sequence), checks });
+      return this._animationResult({ valid: true, animation: describeAnimation(sequence), checks }, sequence);
     }
     if (failing.length > 0) {
-      return this._textResult({
+      return this._animationResult({
         error: `${failing.length === 1 ? 'A motion check' : `${failing.length} motion checks`} failed (${failing.join(', ')}); nothing was built. Fix the motion, or waive a failure you intend.`,
         checks,
-      });
+      }, sequence);
     }
 
     const payload = { name: sequence.name, loop: sequence.loop, priority: sequence.priority, keyframes: sequence.keyframes };
@@ -1788,7 +1790,7 @@ export class RobloxStudioTools {
     if (written?.error) return this._textResult({ ...written, playback });
 
     const expected = expectedCounts(sequence);
-    return this._textResult({
+    return this._animationResult({
       built: true,
       path: written.path,
       instanceRef: written.instanceRef,
@@ -1805,7 +1807,36 @@ export class RobloxStudioTools {
       },
       playback,
       checks,
-    });
+    }, sequence);
+  }
+
+  /**
+   * A check or build result with what the motion looks like: a contact sheet
+   * the model can check, drawn here from the compiled sequence, and a GLB of
+   * the same box rig for Roqer's viewer, which MCP clients never receive.
+   */
+  private _animationResult(body: Record<string, unknown>, sequence: KeyframeSequenceDescription) {
+    const sheet = renderContactSheet(sequence);
+    const preview = renderRigGlb(sequence, sequence.name);
+    return {
+      content: [
+        {
+          type: 'text',
+          text: JSON.stringify({
+            ...body,
+            sheet: {
+              times: sheet.times.map((time) => Math.round(time * 1000) / 1000),
+              reading: 'Box rig, one column per time. Top row from the front three-quarter, bottom row from its right side facing right; left limbs blue, right limbs orange; the grey line is the ground.',
+            },
+          }),
+        },
+        { type: 'image', data: sheet.png.toString('base64'), mimeType: 'image/png' },
+        {
+          type: 'resource',
+          resource: { uri: 'roqer://animation-preview.glb', mimeType: 'model/gltf-binary', blob: preview.toString('base64') },
+        },
+      ],
+    };
   }
 
   /**
