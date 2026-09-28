@@ -1,9 +1,10 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { Box, Camera, ChevronLeft, ChevronRight, Gamepad2, ImageIcon, Maximize2, X } from "lucide-react";
+import { Box, Camera, ChevronLeft, ChevronRight, Gamepad2, ImageIcon, Maximize2, Rotate3d, X } from "lucide-react";
 import type { RunChange, RunEvidence } from "../shared/run-events";
+import { ModelViewer } from "./model-viewer";
 import {
-  previewCaption, previewLayout, previewSource, previewSourceLabel, previewTileLabel, type PreviewTile,
+  hasModelPreview, previewCaption, previewLayout, previewSource, previewSourceLabel, previewTileLabel, type PreviewTile,
 } from "./preview-layout";
 import { evidenceImages } from "./run-view";
 
@@ -96,6 +97,9 @@ function PreviewTileButton({ tile, role, count, onOpen }: {
       <SourceIcon evidence={tile.evidence} size={role === "rail" ? 12 : 13} />
       <span>{previewSourceLabel(tile.evidence)}</span>
     </span>}
+    {tile.hidden === undefined && hasModelPreview(tile.evidence) && <span className="preview-badge" aria-hidden="true">
+      <Rotate3d size={role === "rail" ? 11 : 12} />3D
+    </span>}
     {role === "lead" && <span className="preview-expand" aria-hidden="true"><Maximize2 size={14} /></span>}
     {tile.hidden !== undefined && <span className="preview-more" aria-hidden="true">+{tile.hidden}</span>}
   </button>;
@@ -106,7 +110,8 @@ function PreviewTileButton({ tile, role, count, onOpen }: {
  *
  * Rendered into the document body, because a message is a containing block for
  * fixed positioning. Escape closes it and the arrow keys move through it; the
- * tile that opened it gets the focus back.
+ * tile that opened it gets the focus back. A Blender result whose model has a
+ * 3D preview opens in 3D, and the picture is one switch away.
  */
 function PreviewViewer({ images, changes, index, onIndex, onClose }: {
   images: readonly RunEvidence[];
@@ -119,6 +124,15 @@ function PreviewViewer({ images, changes, index, onIndex, onClose }: {
   const atStart = index <= 0;
   const atEnd = index >= images.length - 1;
   const caption = previewCaption(current, changes);
+  // The picture the reader switched to the still for; any other opens in 3D.
+  const [pictureAt, setPictureAt] = useState<number | null>(null);
+  const pictureButton = useRef<HTMLButtonElement>(null);
+  const model = hasModelPreview(current);
+  const inModel = model && pictureAt !== index;
+  const showPicture = useCallback(() => {
+    setPictureAt(index);
+    pictureButton.current?.focus();
+  }, [index]);
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
@@ -142,10 +156,16 @@ function PreviewViewer({ images, changes, index, onIndex, onClose }: {
       <span className="preview-viewer-count">{index + 1} of {images.length}</span>
       <div className="preview-viewer-title">
         <strong><SourceIcon evidence={current} size={15} />{current.title}</strong>
-        <span>{caption ?? (previewSource(current) === "blender"
-          ? "Rendered by Blender from the job's output; not in the place yet"
-          : previewSourceLabel(current))}</span>
+        <span>{caption ?? (previewSource(current) !== "blender"
+          ? previewSourceLabel(current)
+          : inModel
+            ? "The job's model in 3D, on Roblox's axes; not in the place yet"
+            : "Rendered by Blender from the job's output; not in the place yet")}</span>
       </div>
+      {model && <div className="preview-viewer-mode" role="group" aria-label="Show as">
+        <button type="button" aria-pressed={inModel} onClick={() => setPictureAt(null)}><Rotate3d size={14} aria-hidden="true" />3D</button>
+        <button type="button" aria-pressed={!inModel} onClick={showPicture} ref={pictureButton}><ImageIcon size={14} aria-hidden="true" />Picture</button>
+      </div>}
       <p className="preview-viewer-keys" aria-hidden="true">
         {images.length > 1 && <><kbd>←</kbd><kbd>→</kbd> to move · </>}<kbd>Esc</kbd> to close
       </p>
@@ -153,8 +173,10 @@ function PreviewViewer({ images, changes, index, onIndex, onClose }: {
     </div>
     <div className="preview-viewer-stage">
       {images.length > 1 && <button type="button" className="preview-viewer-step" onClick={() => onIndex(index - 1)} disabled={atStart} aria-label="Previous image"><ChevronLeft size={20} /></button>}
-      <div className="preview-viewer-frame">
-        <img src={current.imageDataUrl} alt={current.title} draggable={false} />
+      <div className="preview-viewer-frame" data-view={inModel ? "model" : "picture"}>
+        {inModel
+          ? <ModelViewer key={current.id} evidence={current} onShowPicture={showPicture} />
+          : <img src={current.imageDataUrl} alt={current.title} draggable={false} />}
       </div>
       {images.length > 1 && <button type="button" className="preview-viewer-step" onClick={() => onIndex(index + 1)} disabled={atEnd} aria-label="Next image"><ChevronRight size={20} /></button>}
     </div>
@@ -165,10 +187,13 @@ function PreviewViewer({ images, changes, index, onIndex, onClose }: {
         className="preview-viewer-thumb"
         data-source={previewSource(item)}
         aria-current={position === index ? "true" : undefined}
-        aria-label={`Show image ${position + 1}, ${item.title}`}
+        aria-label={`Show image ${position + 1}, ${item.title}${hasModelPreview(item) ? ", with a 3D view" : ""}`}
         onClick={() => onIndex(position)}
       >
-        <span><img src={item.imageDataUrl} alt="" draggable={false} /></span>
+        <span>
+          <img src={item.imageDataUrl} alt="" draggable={false} />
+          {hasModelPreview(item) && <i className="preview-badge" aria-hidden="true"><Rotate3d size={10} />3D</i>}
+        </span>
         <em>{position + 1} · {previewSourceLabel(item)}</em>
       </button>)}
     </div>}

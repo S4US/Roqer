@@ -92,10 +92,15 @@ export function previewCaption(evidence: RunEvidence, changes: readonly RunChang
   return parts.length === 0 ? undefined : `Taken ${parts.join(", ")}`;
 }
 
+/** Whether a picture also opens in 3D: a Blender result whose model the host kept a preview of. */
+export function hasModelPreview(evidence: RunEvidence): boolean {
+  return evidence.modelPreviewId !== undefined && previewSource(evidence) === "blender";
+}
+
 /** The accessible name of a tile. */
 export function previewTileLabel(tile: PreviewTile, count: number): string {
   const what = tile.hidden !== undefined
     ? `and ${tile.hidden - 1} more`
-    : "";
+    : hasModelPreview(tile.evidence) ? "with a 3D view" : "";
   return `Open image ${tile.index + 1} of ${count}, ${tile.evidence.title}${what ? `, ${what}` : ""}`;
 }

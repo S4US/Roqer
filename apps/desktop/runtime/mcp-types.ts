@@ -51,6 +51,12 @@ export type McpToolOutcome = {
   text: string;
   /** Validated image content blocks. Kept out of renderer events and persisted history. */
   images?: readonly McpToolImage[];
+  /**
+   * The model file `images[0]` pictures, when Roqer's own Blender worker made
+   * the picture, with the id its 3D preview is served under when one was kept.
+   * Host-only, like the images: the model never reads it.
+   */
+  pictured?: { name: string; modelPreviewId?: string };
   /** 0 when the request never reached the server. */
   httpStatus: number;
   /** e.g. "source_revision_conflict", "unauthorized", "request_failed". */

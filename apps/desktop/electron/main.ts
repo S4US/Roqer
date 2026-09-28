@@ -16,9 +16,11 @@ import { CustomProviderStore } from "../runtime/custom-provider-store";
 import { bridgeEnvironment, checkOpenCloudKey } from "../runtime/open-cloud";
 import { BlenderSettings } from "../runtime/blender-settings";
 import { BlenderWorker } from "../runtime/blender-worker";
+import { readModelPreview } from "../runtime/model-preview";
 import { withLocalOperations } from "../runtime/local-operations";
 import type { McpCallOptions, McpToolOutcome } from "../runtime/mcp-types";
 import { BLENDER_OPERATION, type BlenderSettingsResult, type BlenderSettingsView } from "../shared/blender";
+import type { ModelPreviewResult } from "../shared/model-preview";
 import { OpenCloudStore, type OpenCloudResolved } from "../runtime/open-cloud-store";
 import {
   parseOpenCloudSave,
@@ -517,10 +519,24 @@ async function runBlenderJob(args: Record<string, unknown>, options: McpCallOpti
   }
   const worker = new BlenderWorker({
     executable,
-    jobsRoot: path.join(app.getPath("userData"), "blender-jobs"),
+    jobsRoot: blenderJobsRoot(),
     scope: createHash("sha256").update(chatId).digest("hex").slice(0, 32),
   });
   return worker.run(args, options);
+}
+
+function blenderJobsRoot(): string {
+  return path.join(app.getPath("userData"), "blender-jobs");
+}
+
+/**
+ * A Blender result's 3D preview, for the viewer in the chat. The renderer
+ * names it by the opaque id its evidence carries; the file is found inside
+ * the job folders from that id alone, and checked again before it is sent.
+ */
+async function loadModelPreview(event: IpcMainInvokeEvent, id: unknown): Promise<ModelPreviewResult> {
+  if (!isTrusted(event.sender)) return { ok: false, reason: "refused" };
+  return readModelPreview(blenderJobsRoot(), id);
 }
 
 async function blenderResult(operation: () => Promise<BlenderSettingsView>): Promise<BlenderSettingsResult> {
@@ -1689,9 +1705,13 @@ function runSmokeTest(window: BrowserWindow): void {
     try {
       const report = await window.webContents.executeJavaScript(`(async () => {
         const bridge = window.workbenchDesktop;
-        if (!bridge?.storage?.load || !bridge?.storage?.flush || !bridge?.studio?.getStatus || !bridge?.studio?.openScript || !bridge?.providers?.chatGpt?.models || !bridge?.providers?.chatGpt?.status || !bridge?.runs?.start || !bridge?.assets?.attachImage) {
+        if (!bridge?.storage?.load || !bridge?.storage?.flush || !bridge?.studio?.getStatus || !bridge?.studio?.openScript || !bridge?.providers?.chatGpt?.models || !bridge?.providers?.chatGpt?.status || !bridge?.runs?.start || !bridge?.assets?.attachImage || !bridge?.previews?.loadModel) {
           return { ok: false, reason: "bridge-missing" };
         }
+
+        // The 3D preview call answers, and names no file from what it was sent.
+        const refusedPreview = await bridge.previews.loadModel("../../job-folder");
+        if (refusedPreview?.ok !== false || refusedPreview.reason !== "invalid") return { ok: false, reason: "model-preview" };
 
         const seed = ${JSON.stringify(createInitialWorkspace())};
         seed.projects[0].name = "Native persistence";
@@ -1879,6 +1899,7 @@ app.whenReady().then(async () => {
   ipcMain.handle("blender:set-enabled", setBlenderEnabled);
   ipcMain.handle("blender:choose", chooseBlender);
   ipcMain.handle("blender:redetect", redetectBlender);
+  ipcMain.handle("previews:model", loadModelPreview);
   ipcMain.handle("run:start", startRun);
   ipcMain.handle("run:respond", respondToRun);
   ipcMain.handle("run:answer", answerRun);

@@ -10,6 +10,7 @@ import test from "node:test";
 import {
   BlenderWorker, HELPERS_SCRIPT, otherSideName, readSceneContents, RUNNER_SCRIPT, scriptEnvironment, type SpawnProcess,
 } from "./blender-worker";
+import { glbBytes } from "./test-glb";
 
 /** What one fake Blender process does: optional work, printed output, and how it ends. */
 type Behaviour = (args: readonly string[]) => Promise<{ output?: string; exitCode?: number; hang?: boolean }>;
@@ -181,6 +182,79 @@ test("model previews come before rendered images in what the model sees", async 
     assert.equal((outcome.data as { files: Array<{ colorSource?: string }> }).files[0].colorSource, "vertex");
     // A kit set in one file lists each piece, so the pieces can be split into templates after upload.
     assert.match(outcome.text, /its own MeshPart named after it: KitTree 4\.00 × 9\.25 × 4\.00; KitRock 2\.50 × 2\.50 × 2\.50/);
+  });
+});
+
+/**
+ * A job that exports the given models, whose inspection of each does what
+ * `inspect` says: writes a preview picture, writes the 3D preview it was
+ * asked for (the argument after the picture), and prints its stats.
+ */
+function previewedJob(models: string[], inspect: (name: string) => { preview: boolean; glb?: Buffer }) {
+  return fakeBlender(async (args) => {
+    if (args.some((arg) => arg.endsWith("roqer_runner.py"))) {
+      for (const name of models) await fs.writeFile(path.join(argAfterDashes(args), "output", name), Buffer.alloc(1024));
+      return { output: "ROQER_SCRIPT_DONE\n" };
+    }
+    const { preview, glb } = inspect(path.basename(argAfterDashes(args)));
+    if (preview) await fs.writeFile(argAfterDashes(args, 1), pngHeader(512, 384));
+    const modelPreview = argAfterDashes(args, 2);
+    if (glb !== undefined && modelPreview !== undefined) await fs.writeFile(modelPreview, glb);
+    const stats = { meshes: 1, triangles: 12, materials: [], size: [2, 2, 2], preview, model3d: glb !== undefined && modelPreview !== undefined };
+    return { output: `ROQER_INSPECT ${JSON.stringify(stats)}\n` };
+  });
+}
+
+test("the pictured model's 3D preview is kept for the chat, under an id the model never reads", async () => {
+  await withJobs(async (jobsRoot) => {
+    const glb = glbBytes({ asset: { version: "2.0" }, buffers: [{ byteLength: 8 }] }, new Uint8Array(8));
+    const blender = previewedJob(["crate.glb"], () => ({ preview: true, glb }));
+    const worker = new BlenderWorker({ executable: EXECUTABLE, jobsRoot, spawn: blender.spawn, killTree: blender.killTree, env: {} });
+
+    const outcome = await worker.run({ script: "import bpy" });
+
+    assert.equal(outcome.ok, true, outcome.text);
+    const data = outcome.data as { jobId: string; jobDirectory: string };
+    assert.deepEqual(outcome.pictured, { name: "crate.glb", modelPreviewId: `${data.jobId}-0` });
+    // Written where the host named it, inside the job's folder, from the model's position alone.
+    assert.equal(argAfterDashes(blender.calls[1].args, 2), path.join(data.jobDirectory, "model-preview-0.glb"));
+    assert.ok((await fs.readFile(path.join(data.jobDirectory, "model-preview-0.glb"))).equals(glb));
+    assert.doesNotMatch(JSON.stringify(data) + outcome.text, /model-preview|modelPreviewId/);
+  });
+});
+
+test("a 3D preview the viewer could not show is removed, and the picture stays", async () => {
+  await withJobs(async (jobsRoot) => {
+    const outside = glbBytes({ asset: { version: "2.0" }, images: [{ uri: "C:/Users/me/wood.png" }] });
+    const blender = previewedJob(["crate.glb"], () => ({ preview: true, glb: outside }));
+    const worker = new BlenderWorker({ executable: EXECUTABLE, jobsRoot, spawn: blender.spawn, killTree: blender.killTree, env: {} });
+
+    const outcome = await worker.run({ script: "import bpy" });
+
+    assert.equal(outcome.ok, true, outcome.text);
+    assert.deepEqual(outcome.pictured, { name: "crate.glb" });
+    assert.equal(outcome.images?.length, 1);
+    const { jobDirectory } = outcome.data as { jobDirectory: string };
+    await assert.rejects(fs.stat(path.join(jobDirectory, "model-preview-0.glb")), { code: "ENOENT" });
+  });
+});
+
+test("only the model the chat pictures is exported in 3D", async () => {
+  await withJobs(async (jobsRoot) => {
+    const glb = glbBytes();
+    // The first model's picture fails, so the second is the one the chat shows.
+    const blender = previewedJob(["a-crate.glb", "b-barrel.glb", "c-lamp.glb"], (name) => ({ preview: name !== "a-crate.glb", glb }));
+    const worker = new BlenderWorker({ executable: EXECUTABLE, jobsRoot, spawn: blender.spawn, killTree: blender.killTree, env: {} });
+
+    const outcome = await worker.run({ script: "import bpy" });
+
+    assert.equal(outcome.ok, true, outcome.text);
+    const { jobId, jobDirectory } = outcome.data as { jobId: string; jobDirectory: string };
+    assert.deepEqual(outcome.pictured, { name: "b-barrel.glb", modelPreviewId: `${jobId}-1` });
+    assert.deepEqual((await fs.readdir(jobDirectory)).filter((name) => name.startsWith("model-preview")), ["model-preview-1.glb"]);
+    // Once a picture is kept, the next model is not asked for a 3D preview at all.
+    assert.equal(argAfterDashes(blender.calls[3].args, 2), undefined);
+    assert.equal(outcome.images?.length, 2);
   });
 });
 

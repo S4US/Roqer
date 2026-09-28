@@ -63,6 +63,11 @@ the tool away again.
    geometry at invalid (NaN) positions that an export fails on, and left and
    right pairs (`Wheel_L` and `Wheel_R`) that do not mirror each other. A PNG
    reaches the agent as it is.
+
+   The preview also shows in the chat's answer. There, the model it pictures
+   opens in 3D in the viewer, on Roblox's axes and facing the way it will in
+   Studio. Roqer's inspection exports that model as a self-contained GLB, which
+   only the viewer reads; the agent never sees it.
 4. To use a model, the agent exports it, uploads it to Roblox as a Model and
    inserts it into your place, then checks its size there. An image uploads as
    a Decal, whose image ID a UI element can display. Uploads ask first too,
@@ -89,9 +94,10 @@ Both live in Roqer's data folder:
 
 - `blender.json` holds the setting and which Blender to run;
 - `blender-jobs` holds one folder per job, with the script, its output, the
-  scene it saved and the preview renders. Roqer deletes a job's folder after
-  seven days, and keeps only the newest 40, except a job another job is
-  continuing from.
+  scene it saved, the preview renders and the 3D preview. Roqer deletes a job's
+  folder after seven days, and keeps only the newest 40, except a job another
+  job is continuing from. The 3D view goes with the folder; the still picture
+  stays with the chat.
 
 ## Limits
 
