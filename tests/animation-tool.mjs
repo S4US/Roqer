@@ -133,6 +133,22 @@ const passed = await runTest('animation tool', async ({ track }) => {
     state = await luau(client, INSPECT);
     assert(typeof owl.error === 'string' && /jointLimits/.test(owl.error) && state.owl === false, 'a failing motion check stops the build before Studio changes');
 
+    // Aim posing compiles to rotations Studio plays as checked: the guidance's wave recipe.
+    const aimed = await client.callTool('animation', {
+      action: 'build',
+      animation: {
+        name: 'AimWave', rig: 'R15', loop: true, easing: { style: 'CubicV2', direction: 'InOut' },
+        keyframes: [
+          { time: 0, joints: { RightShoulder: { aim: [1, 0.3, 0.4], bendToward: [0, 1, 0] }, RightElbow: { bend: 70 } } },
+          { time: 0.3, joints: { RightElbow: { bend: 115 } } },
+          { time: 0.6, joints: { RightShoulder: { aim: [1, 0.3, 0.4], bendToward: [0, 1, 0] }, RightElbow: { bend: 70 } } },
+        ],
+      },
+      parent: PARENT,
+    }, 120_000);
+    assert(aimed.built === true && aimed.playback?.verified === true, `an aim-posed wave builds and plays as checked (${aimed.error ?? `within ${aimed.playback?.maxDegrees}°`})`);
+    assert(/straight at its front/.test(aimed.sheet?.reading ?? ''), 'a wave\'s contact sheet looks at the front below');
+
     // -- Step 8: publish, wire, verify -------------------------------------
     // The hand-edited sequence stays refused; start it afresh to publish from.
     await luau(client, `game:GetService("ServerStorage")[${JSON.stringify(FOLDER_NAME)}].Wave:Destroy() return true`);

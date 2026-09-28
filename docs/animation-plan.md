@@ -413,8 +413,10 @@ What was built:
     figure, posed by core's own sampler, at the same scale in every frame. The
     background is dark, with a soft shadow under the body.
   - There are five moments across one pass: a loop's wrap is left out, and a
-    one-shot's last frame is kept. The top row shows the front three-quarter,
-    the bottom row the right side, facing right.
+    one-shot's last frame is kept. The top row shows the front three-quarter.
+    The bottom row looks straight at the front, where arm and head motion
+    reads. For a gait (`locomotion: true`) it looks at the right side instead,
+    facing right, where strides and foot plants read.
   - `check` and `build` return it as an image, with a note in the result on how
     to read it. A model that sees images can check the motion; the numeric
     checks stay enough without it.
@@ -433,6 +435,19 @@ What was built:
   - Chromium keeps only a few WebGL contexts alive, so the inline view mounts
     only while the card is on screen and the viewer is closed; otherwise the
     card shows the contact sheet.
+  - Previews of one animation, by name, are versions of one picture rather
+    than a tile each. The card and the viewer step through them ("Version 3 of
+    6"), and the latest leads.
+- **Aim posing** (`animation/pose-compiler.ts`). A real run showed the agent
+  failing to work out the combined Euler rotation that a wave needs (shoulder
+  `[90, 0, 90]`). Poses can now say `aim: [right, up, forward]` for a shoulder
+  or hip, with `bendToward` to set which way the limb folds, and `bend:
+  degrees` for an elbow or knee. They compile to the same rotations.
+- **Recipes** (`apps/desktop/agent/skills/roblox-animation-vfx/references/character-animation.md`).
+  Wave, idle, walk, run and jump are written with `aim` and `bend`.
+  `animation-recipes.test.ts` compiles each one straight from the reference,
+  runs it through the motion checks and checks its gesture: the wave's hand
+  above the head, the gaits' opposite arms and legs, the jump's raised arms.
 - **The viewer.**
   - It plays any GLB that carries an animation: looping, with play/pause, a
     keyboard-operable scrub bar and the time.

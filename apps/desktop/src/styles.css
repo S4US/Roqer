@@ -1005,6 +1005,16 @@ a.small-button:focus-visible { outline: 2px solid var(--accent); outline-offset:
 .preview-caption strong { flex: 0 0 auto; color: var(--ink-secondary); font-size: var(--type-label); font-weight: var(--weight-medium); }
 .preview-caption span { overflow: hidden; color: var(--muted); text-overflow: ellipsis; white-space: nowrap; }
 .preview-caption em { flex: 0 0 auto; margin-left: auto; color: var(--faint); font-style: normal; white-space: nowrap; }
+/* A picture's versions: one animation checked again and again is one picture. */
+.preview-versions { display: inline-flex; flex: 0 0 auto; align-items: center; gap: 2px; margin-left: auto; color: var(--muted); font-size: var(--type-meta); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.preview-caption .preview-versions { overflow: visible; align-self: center; }
+.preview-versions + em { margin-left: 6px; }
+.preview-versions button { display: grid; place-items: center; width: 22px; height: 22px; padding: 0; color: inherit; background: transparent; border: 0; border-radius: 6px; }
+.preview-versions button:hover:not(:disabled) { color: var(--ink-secondary); background: color-mix(in srgb, var(--faint) 16%, transparent); }
+.preview-versions button:disabled { opacity: .35; cursor: default; }
+.preview-viewer .preview-versions { color: #9299a5; font-size: 12px; }
+.preview-viewer .preview-versions button:hover:not(:disabled) { color: #edf0f4; background: rgba(255, 255, 255, .08); }
+.preview-versions + .preview-viewer-mode, .preview-versions + .preview-viewer-keys { margin-left: 0; }
 
 /* The viewer is dark in both themes, like any picture viewer: the pictures are
  * what it is for. */

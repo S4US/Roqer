@@ -4,9 +4,29 @@ import { Box, Camera, ChevronLeft, ChevronRight, Gamepad2, ImageIcon, Maximize2,
 import type { RunChange, RunEvidence } from "../shared/run-events";
 import { ModelViewer } from "./model-viewer";
 import {
-  hasModelPreview, previewCaption, previewLayout, previewSource, previewSourceLabel, previewTileLabel, type PreviewTile,
+  hasModelPreview, previewCaption, previewLayout, previewSource, previewSourceLabel, previewTileLabel, previewVersions,
+  type PreviewTile,
 } from "./preview-layout";
 import { evidenceImages } from "./run-view";
+
+/** Which version of each picture with several is on show, by the picture's id; absent means the latest. */
+type VersionChoice = {
+  versions: ReadonlyMap<string, readonly RunEvidence[]>;
+  chosen: Readonly<Record<string, number>>;
+  onChoose: (id: string, at: number) => void;
+};
+
+function versionAt(choice: VersionChoice, evidence: RunEvidence): { list: readonly RunEvidence[]; at: number } {
+  const list = choice.versions.get(evidence.id) ?? [evidence];
+  const at = Math.min(Math.max(choice.chosen[evidence.id] ?? list.length - 1, 0), list.length - 1);
+  return { list, at };
+}
+
+/** The version of a picture on show. */
+function onShow(choice: VersionChoice, evidence: RunEvidence): RunEvidence {
+  const { list, at } = versionAt(choice, evidence);
+  return list[at];
+}
 
 /**
  * The pictures a run produced, in the answer: Studio screenshots and Blender
@@ -14,14 +34,18 @@ import { evidenceImages } from "./run-view";
  *
  * Every picture is a preview the host made from what a tool returned; nothing
  * here comes from the model. The newest one leads, the earlier ones sit beside
- * it, and any picture opens the viewer at itself.
+ * it, and any picture opens the viewer at itself. Previews of one animation are
+ * one picture whose versions step back and forth, not a tile each.
  */
 export const PreviewsCard = memo(function PreviewsCard({ evidence, changes }: {
   evidence: readonly RunEvidence[];
   changes: readonly RunChange[];
 }) {
-  const images = useMemo(() => evidenceImages(evidence), [evidence]);
+  const { shown: images, versions } = useMemo(() => previewVersions(evidenceImages(evidence)), [evidence]);
   const layout = useMemo(() => previewLayout(images), [images]);
+  const [chosen, setChosen] = useState<Record<string, number>>({});
+  const onChoose = useCallback((id: string, at: number) => setChosen((previous) => ({ ...previous, [id]: at })), []);
+  const choice = useMemo<VersionChoice>(() => ({ versions, chosen, onChoose }), [versions, chosen, onChoose]);
   const [open, setOpen] = useState<number | null>(null);
   const opener = useRef<HTMLElement | null>(null);
   const show = useCallback((index: number, from: HTMLElement) => {
@@ -36,11 +60,12 @@ export const PreviewsCard = memo(function PreviewsCard({ evidence, changes }: {
   if (layout === null) return null;
 
   const latest = images[images.length - 1];
-  const caption = previewCaption(latest, changes);
+  const latestVersions = versions.get(latest.id);
+  const caption = previewCaption(onShow(choice, latest), changes);
   const tile = (item: PreviewTile, role: "lead" | "rail" | "even") => (
-    role === "lead" && playsInline(item.evidence)
-      ? <LiveAnimationTile key={item.evidence.id} tile={item} count={images.length} paused={open !== null} onOpen={show} />
-      : <PreviewTileButton key={item.evidence.id} tile={item} role={role} count={images.length} onOpen={show} />
+    role === "lead" && playsInline(onShow(choice, item.evidence))
+      ? <LiveAnimationTile key={item.evidence.id} tile={item} count={images.length} choice={choice} paused={open !== null} onOpen={show} />
+      : <PreviewTileButton key={item.evidence.id} tile={item} role={role} count={images.length} choice={choice} onOpen={show} />
   );
   return <section className="previews-card" aria-label="Previews">
     <div className="previews-header">
@@ -61,10 +86,11 @@ export const PreviewsCard = memo(function PreviewsCard({ evidence, changes }: {
       <div className="preview-caption">
         <strong>{latest.title}</strong>
         {caption && <span>{caption}</span>}
+        {latestVersions !== undefined && <VersionStepper evidence={latest} choice={choice} />}
         {images.length > 1 && <em>Latest of {images.length}</em>}
       </div>
     </div>
-    {open !== null && <PreviewViewer images={images} changes={changes} index={open} onIndex={setOpen} onClose={close} />}
+    {open !== null && <PreviewViewer images={images} changes={changes} choice={choice} index={open} onIndex={setOpen} onClose={close} />}
   </section>;
 });
 
@@ -75,6 +101,24 @@ function SourceIcon({ evidence, size }: { evidence: RunEvidence; size: number })
     case "playtest": return <Gamepad2 size={size} aria-hidden="true" />;
     default: return <Camera size={size} aria-hidden="true" />;
   }
+}
+
+/**
+ * Steps through a picture's versions, newest last: "Version 3 of 6". The card
+ * and the viewer share the choice, so the viewer opens on the version the card
+ * shows.
+ */
+function VersionStepper({ evidence, choice }: { evidence: RunEvidence; choice: VersionChoice }) {
+  const { list, at } = versionAt(choice, evidence);
+  return <span className="preview-versions" role="group" aria-label="Versions">
+    <button type="button" onClick={() => choice.onChoose(evidence.id, at - 1)} disabled={at <= 0} aria-label="Earlier version">
+      <ChevronLeft size={13} aria-hidden="true" />
+    </button>
+    <span aria-live="polite">Version {at + 1} of {list.length}</span>
+    <button type="button" onClick={() => choice.onChoose(evidence.id, at + 1)} disabled={at >= list.length - 1} aria-label="Later version">
+      <ChevronRight size={13} aria-hidden="true" />
+    </button>
+  </span>;
 }
 
 /** An animation leads the card as itself, playing, rather than as its contact sheet. */
@@ -90,12 +134,14 @@ function playsInline(evidence: RunEvidence): boolean {
  * otherwise the tile shows the contact sheet. A long chat of animations thus
  * holds one or two live views at most.
  */
-function LiveAnimationTile({ tile, count, paused, onOpen }: {
+function LiveAnimationTile({ tile, count, choice, paused, onOpen }: {
   tile: PreviewTile;
   count: number;
+  choice: VersionChoice;
   paused: boolean;
   onOpen: (index: number, from: HTMLElement) => void;
 }) {
+  const evidence = onShow(choice, tile.evidence);
   const host = useRef<HTMLDivElement>(null);
   const [visible, setVisible] = useState(false);
   useEffect(() => {
@@ -107,17 +153,17 @@ function LiveAnimationTile({ tile, count, paused, onOpen }: {
   }, []);
   return <div className="preview-tile" data-role="lead" data-source="animation" data-live="true" ref={host}>
     {visible && !paused
-      ? <ModelViewer evidence={tile.evidence} onShowPicture={() => undefined} compact />
-      : <img src={tile.evidence.imageDataUrl} alt="" draggable={false} />}
+      ? <ModelViewer key={evidence.id} evidence={evidence} onShowPicture={() => undefined} compact />
+      : <img src={evidence.imageDataUrl} alt="" draggable={false} />}
     <span className="preview-chip">
       <span className="preview-chip-index">{tile.index + 1}</span>
-      <SourceIcon evidence={tile.evidence} size={13} />
-      <span>{previewSourceLabel(tile.evidence)}</span>
+      <SourceIcon evidence={evidence} size={13} />
+      <span>{previewSourceLabel(evidence)}</span>
     </span>
     <button
       type="button"
       className="preview-expand"
-      aria-label={previewTileLabel(tile, count)}
+      aria-label={previewTileLabel(tile, count, versionAt(choice, tile.evidence).list.length)}
       aria-haspopup="dialog"
       onClick={(event) => onOpen(tile.index, event.currentTarget)}
     >
@@ -126,30 +172,33 @@ function LiveAnimationTile({ tile, count, paused, onOpen }: {
   </div>;
 }
 
-function PreviewTileButton({ tile, role, count, onOpen }: {
+function PreviewTileButton({ tile, role, count, choice, onOpen }: {
   tile: PreviewTile;
   role: "lead" | "rail" | "even";
   count: number;
+  choice: VersionChoice;
   onOpen: (index: number, from: HTMLElement) => void;
 }) {
-  const source = previewSource(tile.evidence);
+  const evidence = onShow(choice, tile.evidence);
+  const versions = versionAt(choice, tile.evidence).list.length;
+  const source = previewSource(evidence);
   return <button
     type="button"
     className="preview-tile"
     data-role={role}
     data-source={source}
-    aria-label={previewTileLabel(tile, count)}
+    aria-label={previewTileLabel(tile, count, versions)}
     aria-haspopup="dialog"
     onClick={(event) => onOpen(tile.index, event.currentTarget)}
   >
-    <img src={tile.evidence.imageDataUrl} alt="" draggable={false} />
+    <img src={evidence.imageDataUrl} alt="" draggable={false} />
     {/* A tile that stands for several pictures is labelled by its count alone. */}
     {tile.hidden === undefined && <span className="preview-chip">
       <span className="preview-chip-index">{tile.index + 1}</span>
-      <SourceIcon evidence={tile.evidence} size={role === "rail" ? 12 : 13} />
-      <span>{previewSourceLabel(tile.evidence)}</span>
+      <SourceIcon evidence={evidence} size={role === "rail" ? 12 : 13} />
+      <span>{previewSourceLabel(evidence)}{versions > 1 && ` · ${versions} versions`}</span>
     </span>}
-    {tile.hidden === undefined && hasModelPreview(tile.evidence) && <span className="preview-badge" aria-hidden="true">
+    {tile.hidden === undefined && hasModelPreview(evidence) && <span className="preview-badge" aria-hidden="true">
       <Rotate3d size={role === "rail" ? 11 : 12} />3D
     </span>}
     {role === "lead" && <span className="preview-expand" aria-hidden="true"><Maximize2 size={14} /></span>}
@@ -165,14 +214,16 @@ function PreviewTileButton({ tile, role, count, onOpen }: {
  * tile that opened it gets the focus back. A Blender result whose model has a
  * 3D preview opens in 3D, and the picture is one switch away.
  */
-function PreviewViewer({ images, changes, index, onIndex, onClose }: {
+function PreviewViewer({ images, changes, choice, index, onIndex, onClose }: {
   images: readonly RunEvidence[];
   changes: readonly RunChange[];
+  choice: VersionChoice;
   index: number;
   onIndex: (index: number) => void;
   onClose: () => void;
 }) {
-  const current = images[Math.min(index, images.length - 1)];
+  const picture = images[Math.min(index, images.length - 1)];
+  const current = onShow(choice, picture);
   const atStart = index <= 0;
   const atEnd = index >= images.length - 1;
   const caption = previewCaption(current, changes);
@@ -210,14 +261,15 @@ function PreviewViewer({ images, changes, index, onIndex, onClose }: {
         <strong><SourceIcon evidence={current} size={15} />{current.title}</strong>
         <span>{caption ?? (previewSource(current) === "animation"
           ? inModel
-            ? "The animation on the R15 block rig, as checked"
-            : "Five moments of the animation, front three-quarter and side"
+            ? "The animation on the R15 rig, as checked"
+            : "Five moments of the animation, from two views"
           : previewSource(current) !== "blender"
             ? previewSourceLabel(current)
             : inModel
               ? "The job's model in 3D, on Roblox's axes; not in the place yet"
               : "Rendered by Blender from the job's output; not in the place yet")}</span>
       </div>
+      {choice.versions.has(picture.id) && <VersionStepper evidence={picture} choice={choice} />}
       {model && <div className="preview-viewer-mode" role="group" aria-label="Show as">
         <button type="button" aria-pressed={inModel} onClick={() => setPictureAt(null)}><Rotate3d size={14} aria-hidden="true" />3D</button>
         <button type="button" aria-pressed={!inModel} onClick={showPicture} ref={pictureButton}><ImageIcon size={14} aria-hidden="true" />Picture</button>
@@ -237,21 +289,24 @@ function PreviewViewer({ images, changes, index, onIndex, onClose }: {
       {images.length > 1 && <button type="button" className="preview-viewer-step" onClick={() => onIndex(index + 1)} disabled={atEnd} aria-label="Next image"><ChevronRight size={20} /></button>}
     </div>
     {images.length > 1 && <div className="preview-viewer-strip">
-      {images.map((item, position) => <button
-        type="button"
-        key={item.id}
-        className="preview-viewer-thumb"
-        data-source={previewSource(item)}
-        aria-current={position === index ? "true" : undefined}
-        aria-label={`Show image ${position + 1}, ${item.title}${hasModelPreview(item) ? ", with a 3D view" : ""}`}
-        onClick={() => onIndex(position)}
-      >
-        <span>
-          <img src={item.imageDataUrl} alt="" draggable={false} />
-          {hasModelPreview(item) && <i className="preview-badge" aria-hidden="true"><Rotate3d size={10} />3D</i>}
-        </span>
-        <em>{position + 1} · {previewSourceLabel(item)}</em>
-      </button>)}
+      {images.map((picture, position) => {
+        const item = onShow(choice, picture);
+        return <button
+          type="button"
+          key={picture.id}
+          className="preview-viewer-thumb"
+          data-source={previewSource(item)}
+          aria-current={position === index ? "true" : undefined}
+          aria-label={`Show image ${position + 1}, ${item.title}${hasModelPreview(item) ? ", with a 3D view" : ""}`}
+          onClick={() => onIndex(position)}
+        >
+          <span>
+            <img src={item.imageDataUrl} alt="" draggable={false} />
+            {hasModelPreview(item) && <i className="preview-badge" aria-hidden="true"><Rotate3d size={10} />3D</i>}
+          </span>
+          <em>{position + 1} · {previewSourceLabel(item)}</em>
+        </button>;
+      })}
     </div>}
   </div>, document.body);
 }

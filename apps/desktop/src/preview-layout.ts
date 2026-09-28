@@ -1,5 +1,5 @@
 import {
-  ANIMATION_PREVIEW_TITLE, BLENDER_PREVIEW_TITLE, SCREENSHOT_VIEW_LABEL, SCREENSHOT_VIEW_PLAYTEST,
+  ANIMATION_NAME_LABEL, ANIMATION_PREVIEW_TITLE, BLENDER_PREVIEW_TITLE, SCREENSHOT_VIEW_LABEL, SCREENSHOT_VIEW_PLAYTEST,
   type RunChange, type RunEvidence,
 } from "../shared/run-events";
 
@@ -25,6 +25,41 @@ export type PreviewLayout =
   | { kind: "single"; tiles: [PreviewTile] }
   | { kind: "pair"; tiles: [PreviewTile, PreviewTile] }
   | { kind: "lead"; lead: PreviewTile; rail: PreviewTile[] };
+
+export type PreviewVersions = {
+  /** One picture for each thing shown, in the order the latest of each was taken. */
+  shown: RunEvidence[];
+  /** Every version of a shown picture that has more than one, oldest first, by the shown picture's id. */
+  versions: ReadonlyMap<string, readonly RunEvidence[]>;
+};
+
+/**
+ * The run's pictures as the card shows them. Every preview of one animation,
+ * by its name, is a version of one picture: an agent revising a wave checks it
+ * again and again, and each check is the same wave, newer. The picture sits
+ * where its latest version was taken and shows that version. Anything else is
+ * a picture of its own.
+ */
+export function previewVersions(images: readonly RunEvidence[]): PreviewVersions {
+  const keyOf = (evidence: RunEvidence) => {
+    const name = previewSource(evidence) === "animation"
+      ? evidence.metadata?.find((entry) => entry.label === ANIMATION_NAME_LABEL)?.value
+      : undefined;
+    return name === undefined ? `picture:${evidence.id}` : `animation:${name}`;
+  };
+  const groups = new Map<string, RunEvidence[]>();
+  const last = new Map<string, number>();
+  images.forEach((evidence, index) => {
+    const key = keyOf(evidence);
+    groups.set(key, [...(groups.get(key) ?? []), evidence]);
+    last.set(key, index);
+  });
+  const ordered = [...groups.entries()].sort(([a], [b]) => last.get(a)! - last.get(b)!).map(([, group]) => group);
+  return {
+    shown: ordered.map((group) => group[group.length - 1]),
+    versions: new Map(ordered.filter((group) => group.length > 1).map((group) => [group[group.length - 1].id, group])),
+  };
+}
 
 /** Beside the lead there is room for three; past that the last one says how many more. */
 const RAIL_SLOTS = 3;
@@ -104,9 +139,9 @@ export function hasModelPreview(evidence: RunEvidence): boolean {
 }
 
 /** The accessible name of a tile. */
-export function previewTileLabel(tile: PreviewTile, count: number): string {
+export function previewTileLabel(tile: PreviewTile, count: number, versions = 1): string {
   const what = tile.hidden !== undefined
-    ? `and ${tile.hidden - 1} more`
-    : hasModelPreview(tile.evidence) ? "with a 3D view" : "";
-  return `Open image ${tile.index + 1} of ${count}, ${tile.evidence.title}${what ? `, ${what}` : ""}`;
+    ? [`and ${tile.hidden - 1} more`]
+    : [...(versions > 1 ? [`${versions} versions`] : []), ...(hasModelPreview(tile.evidence) ? ["with a 3D view"] : [])];
+  return `Open image ${tile.index + 1} of ${count}, ${[tile.evidence.title, ...what].join(", ")}`;
 }

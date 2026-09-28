@@ -1758,13 +1758,13 @@ export class RobloxStudioTools {
       ...(waived.length > 0 ? { waived } : {}),
     };
     if (action === 'check') {
-      return this._animationResult({ valid: true, animation: describeAnimation(sequence), checks }, sequence);
+      return this._animationResult({ valid: true, animation: describeAnimation(sequence), checks }, sequence, locomotion === true);
     }
     if (failing.length > 0) {
       return this._animationResult({
         error: `${failing.length === 1 ? 'A motion check' : `${failing.length} motion checks`} failed (${failing.join(', ')}); nothing was built. Fix the motion, or waive a failure you intend.`,
         checks,
-      }, sequence);
+      }, sequence, locomotion === true);
     }
 
     await this._fetchRigMeshes(instance_id);
@@ -1809,7 +1809,7 @@ export class RobloxStudioTools {
       },
       playback,
       checks,
-    }, sequence);
+    }, sequence, locomotion === true);
   }
 
   /**
@@ -1836,9 +1836,9 @@ export class RobloxStudioTools {
     }
   }
 
-  private _animationResult(body: Record<string, unknown>, sequence: KeyframeSequenceDescription) {
+  private _animationResult(body: Record<string, unknown>, sequence: KeyframeSequenceDescription, locomotion: boolean) {
     const meshes = currentRigMeshes();
-    const sheet = renderContactSheet(sequence, meshes);
+    const sheet = renderContactSheet(sequence, meshes, { locomotion });
     const preview = renderRigGlb(sequence, sequence.name, meshes);
     return {
       content: [
@@ -1849,7 +1849,7 @@ export class RobloxStudioTools {
             sheet: {
               times: sheet.times.map((time) => Math.round(time * 1000) / 1000),
               rig: meshes.source === 'studio' ? 'the stock R15 rig' : 'a stand-in block rig, until a build reads the stock rig from Studio',
-              reading: 'One column per time. Top row from the front three-quarter, bottom row from its right side facing right; the shadow marks the ground under the body.',
+              reading: `One column per time. Top row from the front three-quarter, bottom row ${locomotion ? 'from its right side facing right' : 'straight at its front, its right hand on the left'}; the shadow marks the ground under the body.`,
             },
           }),
         },

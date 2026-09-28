@@ -64,6 +64,13 @@ from the defects recorded in the Phase 4 world evaluations, and a four-question
 check against the overview screenshot. It is distributed under the repository's
 licence.
 
+The repository-authored `skills/roblox-animation-vfx/references/character-animation.md`,
+added on 2026-09-28, documents authoring R15 animations with the `animation`
+tool: the pose format with `aim` and `bend`, and wave, idle, walk, run and jump
+recipes that a core unit test compiles and runs through the motion checks. The
+skill's entrypoint points to it. It is distributed under the repository's
+licence.
+
 ## User-provided UI reconstruction
 
 `skills/roblox-ui-design/` was substantially revised from the user-provided `codex-ui-integration-handoff.zip` beginning 2026-09-08.

@@ -186,7 +186,7 @@ describe('compilePoseAnimation', () => {
       'priority: must be one of Core, Idle, Movement, Action, Action2, Action3, Action4',
       'keyframes[0].time: the first keyframe must be at time 0',
       'keyframes[0].joints.RightUpperArm: "RightUpperArm" is a part; key the joint that moves it, "RightShoulder"',
-      'keyframes[0].joints.Neck: unknown field "rotaton"; expected rotation, position, easing',
+      'keyframes[0].joints.Neck: unknown field "rotaton"; expected rotation, aim, bendToward, bend, position, easing',
       'keyframes[1].time: must be later than the previous keyframe (0.1)',
       'keyframes[1].joints.Waist.rotation[1]: must be within ±360 degrees',
       'keyframes[1].joints.Waist.rotation[2]: must be a finite number',
@@ -207,7 +207,7 @@ describe('compilePoseAnimation', () => {
       ],
     });
     expect(errors(turn())).toEqual([
-      'keyframes[1].joints.RightShoulder.rotation: turns 110° from its key at 0 s; split turns over 90° across more keyframes',
+      'keyframes[1].joints.RightShoulder: turns 110° from its key at 0 s; split turns over 90° across more keyframes',
     ]);
     expect(errors(turn('CubicV2'))).toHaveLength(1);
     expect(compilePoseAnimation(turn('Constant')).ok).toBe(true);
@@ -216,6 +216,53 @@ describe('compilePoseAnimation', () => {
       ...turn(),
       keyframes: [...turn().keyframes.slice(0, 1), { time: 0.25, joints: { RightShoulder: { rotation: [5, 0, 0] } } }, { time: 0.5, joints: { RightShoulder: { rotation: [60, 0, 0] } } }],
     }).ok).toBe(true);
+  });
+
+  test('aims a limb and bends a hinge, and refuses them where they do not apply', () => {
+    // Upper arm straight out to the right, elbow folding up: the wave that rotation angles hide.
+    const wave = compilePoseAnimation({
+      name: 'Wave',
+      rig: 'R15',
+      keyframes: [{ time: 0, joints: { RightShoulder: { aim: [1, 0, 0], bendToward: [0, 1, 0] }, RightElbow: { bend: 90 } } }],
+    });
+    if (!wave.ok) throw new Error(wave.errors.join('\n'));
+    const poses = (function flatten(pose: CompiledPose): CompiledPose[] { return [pose, ...pose.children.flatMap(flatten)]; })(wave.sequence.keyframes[0].root);
+    expect(poses.find((pose) => pose.joint === 'RightShoulder')!.cframe).toEqual(poseCFrame([90, 0, 90]));
+    expect(poses.find((pose) => pose.joint === 'RightElbow')!.cframe).toEqual(poseCFrame([90, 0, 0]));
+
+    // At rest, an arm hangs and a leg stands: both aims come out as the identity.
+    const rest = compilePoseAnimation({
+      name: 'Rest',
+      rig: 'R15',
+      keyframes: [{ time: 0, joints: { LeftShoulder: { aim: [0, -1, 0] }, RightHip: { aim: [0, -1, 0] }, LeftKnee: { bend: 30 } } }],
+    });
+    if (!rest.ok) throw new Error(rest.errors.join('\n'));
+    const restPoses = (function flatten(pose: CompiledPose): CompiledPose[] { return [pose, ...pose.children.flatMap(flatten)]; })(rest.sequence.keyframes[0].root);
+    expect(restPoses.find((pose) => pose.joint === 'LeftShoulder')!.cframe).toEqual(poseCFrame([0, 0, 0]));
+    expect(restPoses.find((pose) => pose.joint === 'RightHip')!.cframe).toEqual(poseCFrame([0, 0, 0]));
+    // A knee flexes the shin back: negative about X.
+    expect(restPoses.find((pose) => pose.joint === 'LeftKnee')!.cframe).toEqual(poseCFrame([-30, 0, 0]));
+
+    expect(errors({
+      name: 'Bad',
+      rig: 'R15',
+      keyframes: [{
+        time: 0,
+        joints: {
+          Neck: { aim: [0, 1, 0] },
+          Waist: { bend: 10 },
+          LeftShoulder: { aim: [0, 0, 0] },
+          RightShoulder: { aim: [1, 0, 0], rotation: [0, 0, 90] },
+          LeftHip: { bendToward: [0, 0, 1] },
+        },
+      }],
+    })).toEqual([
+      'keyframes[0].joints.Neck: aim and bendToward work on shoulders and hips; use rotation here',
+      'keyframes[0].joints.Waist.bend: works on elbows and knees; use rotation here',
+      'keyframes[0].joints.LeftShoulder.aim: must point somewhere: [right, up, forward], not all zero',
+      'keyframes[0].joints.RightShoulder: give one of rotation, aim or bend, not rotation and aim',
+      'keyframes[0].joints.LeftHip.bendToward: goes with aim',
+    ]);
   });
 
   test('refuses rigs it does not know, including inherited object keys', () => {

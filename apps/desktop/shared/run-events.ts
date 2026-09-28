@@ -396,6 +396,12 @@ export const BLENDER_PREVIEW_TITLE = "Blender result, before upload";
 export const ANIMATION_PREVIEW_TITLE = "Animation preview";
 
 /**
+ * Metadata on an animation's preview: the animation's name. Previews of one
+ * name are versions of one animation, and the card shows them as one.
+ */
+export const ANIMATION_NAME_LABEL = "Animation";
+
+/**
  * Metadata on a Studio screenshot taken while a playtest this run started was
  * running, so the answer can say the picture shows the playtest.
  */

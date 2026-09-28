@@ -1,3 +1,4 @@
+import { inflateSync } from 'zlib';
 import { roundedBox } from '../animation/box-rig.js';
 import { renderContactSheet, sheetTimes } from '../animation/contact-sheet.js';
 import { GLB_SAMPLE_RATE, glbSampleTimes, renderRigGlb } from '../animation/rig-glb.js';
@@ -62,6 +63,21 @@ describe('contact sheet', () => {
     const b = renderContactSheet(raise(false)).png;
     expect(a.equals(b)).toBe(true);
     expect(a.equals(renderContactSheet(raise(true)).png)).toBe(false);
+  });
+
+  test('looks at the front below, unless the motion is a gait, which it looks at from the side', () => {
+    // The encoder writes one IDAT of unfiltered rows, each behind a filter byte.
+    const rows = (png: Buffer) => {
+      const length = png.readUInt32BE(33);
+      const data = inflateSync(png.subarray(41, 41 + length));
+      const stride = 1 + 860 * 4;
+      return Array.from({ length: data.length / stride }, (_unused, y) => data.subarray(y * stride, (y + 1) * stride));
+    };
+    const front = rows(renderContactSheet(raise(false)).png);
+    const side = rows(renderContactSheet(raise(false), undefined, { locomotion: true }).png);
+    const half = front.length / 2;
+    expect(front.slice(0, half).every((row, y) => row.equals(side[y]))).toBe(true);
+    expect(front.slice(half).every((row, y) => row.equals(side[half + y]))).toBe(false);
   });
 });
 

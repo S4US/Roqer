@@ -1,8 +1,9 @@
 // A contact sheet of an animation: a grid of frames of the block rig, drawn in
 // trusted code so a model that can see images can check the motion. Each
 // column is a moment; the top row looks from the front three-quarter, the
-// bottom row from the character's right side, facing right. The scale is the
-// same in every frame, so drift and height changes show as they are.
+// bottom row straight at the character's front, or, for a gait, from its right
+// side facing right, where strides and foot plants read. The scale is the same
+// in every frame, so drift and height changes show as they are.
 //
 // A small software rasteriser draws it: a depth buffer, one light-grey
 // rounded mesh a part, and smooth shading from a key and a fill light, on a
@@ -59,6 +60,7 @@ const YAW = Math.PI * 35 / 180;
 const PITCH = Math.PI * 14 / 180;
 const THREE_QUARTER = view([Math.sin(YAW) * Math.cos(PITCH), Math.sin(PITCH), -Math.cos(YAW) * Math.cos(PITCH)]);
 const SIDE = view([1, 0.06, 0]);
+const FRONT = view([0, 0.06, -1]);
 
 // 3x5 glyphs for the time labels, one bit per pixel, top row first.
 const GLYPHS: Record<string, number[]> = {
@@ -240,7 +242,11 @@ export function sheetTimes(sequence: MotionSequence, columns = COLUMNS): number[
   return Array.from({ length: columns }, (_unused, index) => (duration * index) / spans);
 }
 
-export function renderContactSheet(sequence: MotionSequence, meshes: RigMeshes = generatedRigMeshes()): ContactSheet {
+export function renderContactSheet(
+  sequence: MotionSequence,
+  meshes: RigMeshes = generatedRigMeshes(),
+  options: { locomotion?: boolean } = {},
+): ContactSheet {
   const times = sheetTimes(sequence);
   const tracks = buildTracks(sequence);
   const width = CELL_WIDTH * times.length;
@@ -250,7 +256,7 @@ export function renderContactSheet(sequence: MotionSequence, meshes: RigMeshes =
   times.forEach((time, column) => {
     const parts = poseRig(tracks, time).parts;
     const left = column * CELL_WIDTH;
-    [THREE_QUARTER, SIDE].forEach((camera, row) => {
+    [THREE_QUARTER, options.locomotion ? SIDE : FRONT].forEach((camera, row) => {
       const top = row * rowHeight;
       drawBackground(canvas, left, top, rowHeight);
       drawCell(canvas, meshes, parts, camera, left, top);

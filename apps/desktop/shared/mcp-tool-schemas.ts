@@ -44,7 +44,7 @@ export type ToolSchema = {
 };
 
 /** sha256 of `packages/core/src/tools/definitions.ts` with LF newlines. */
-export const TOOL_DEFINITIONS_DIGEST = "b5049b83b26003b234a9b48b02d4dd3a7e53b2b8df5f632d133176d1b7008b71";
+export const TOOL_DEFINITIONS_DIGEST = "c6b24d736938e48c8257bdf2fb82eb25b09bd8fd715cac59b54671ff9d04a52a";
 
 export const TOOL_SCHEMAS: Readonly<Record<string, ToolSchema>> = {
   animation: {
