@@ -5,8 +5,9 @@ import type { RunTask } from "../shared/tasks";
 import type {
   RunChange, RunEvent, RunEventBody, RunEvidence, RunOutcome, ToolProposal,
 } from "../shared/run-events";
+import { isRunRecord, MAX_EVIDENCE_IMAGE_CHARACTERS } from "../shared/run-events";
 import {
-  activitySteps, applyRunEvent, createRunView, describeActivityState, describeOutcome,
+  activitySteps, applyRunEvent, createRunView, describeActivityState, describeOutcome, evidenceImages,
   recordAppliedAndVerified, recordGateIssues, recordHasWarnings, recordOnlyAnswered, recordSteps,
   runAppliedAndVerified, runGateIssues, runHasWarnings, runOnlyAnswered, toRunRecord,
   type RunView,
@@ -644,4 +645,49 @@ test("verification is tied to the revision of each write and failed evidence sur
   const record = toRunRecord(failed);
   assert.ok(record);
   assert.equal(recordHasWarnings(record), true);
+});
+
+test("a saved run keeps every evidence item but only its newest six previews", () => {
+  const screenshots = Array.from({ length: 8 }, (_, index): RunEvidence => ({
+    id: `shot-${index}`,
+    kind: "screenshot",
+    title: `Studio screenshot ${index}`,
+    passed: true,
+    imageDataUrl: `data:image/jpeg;base64,${btoa(`shot ${index}`)}`,
+  }));
+  const finished = fold(stream(
+    started,
+    ...screenshots.map((evidence): RunEventBody => ({ type: "evidence", evidence })),
+    { type: "evidence", evidence: { id: "logs", kind: "logs", title: "Runtime logs", passed: true } },
+    { type: "run-completed", outcome: "completed", summary: "done" },
+  ));
+
+  const record = toRunRecord(finished);
+
+  assert.ok(record);
+  assert.equal(record.evidence.length, 9);
+  assert.deepEqual(record.evidence.map((item) => item.imageDataUrl !== undefined), [
+    false, false, true, true, true, true, true, true, false,
+  ]);
+  assert.ok(isRunRecord(record));
+  assert.equal(finished.evidence.filter((item) => item.imageDataUrl).length, 8, "the live view is not trimmed");
+  assert.deepEqual(evidenceImages(finished.evidence).map((item) => item.id), [
+    "shot-2", "shot-3", "shot-4", "shot-5", "shot-6", "shot-7",
+  ]);
+});
+
+test("a saved run with a malformed or oversized preview is not a valid record", () => {
+  const finished = fold(stream(
+    started,
+    { type: "evidence", evidence: { id: "shot", kind: "screenshot", title: "Studio screenshot", passed: true } },
+    { type: "run-completed", outcome: "completed", summary: "done" },
+  ));
+  const record = toRunRecord(finished);
+  assert.ok(record);
+  const withImage = (imageDataUrl: string) => ({ ...record, evidence: [{ ...record.evidence[0], imageDataUrl }] });
+
+  assert.ok(isRunRecord(withImage("data:image/png;base64,QUJD")));
+  assert.ok(!isRunRecord(withImage("https://example.com/shot.png")));
+  assert.ok(!isRunRecord(withImage("data:image/svg+xml;base64,QUJD")));
+  assert.ok(!isRunRecord(withImage(`data:image/jpeg;base64,${"A".repeat(MAX_EVIDENCE_IMAGE_CHARACTERS)}`)));
 });

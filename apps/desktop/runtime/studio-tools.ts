@@ -1,3 +1,4 @@
+import { BLENDER_OPERATION } from "../shared/blender";
 import { AUDITED_AFTER_LABEL, UI_AUDIT_TITLE } from "../shared/completion";
 import { isKnownTool, TOOL_RISK } from "../shared/mcp-tools";
 import {
@@ -451,6 +452,30 @@ function auditEvidence(data: unknown): ObservationEvidence | undefined {
     ...(lines.length > 0 ? { lines } : {}),
     metadata: [{ label: "Problems", value: String(issues.length) }],
   };
+}
+
+/**
+ * What a Blender job's preview is: the job's own output, seen before upload.
+ *
+ * Kept as an inspection with no requirement, so it shows in the answer without
+ * counting toward the completion gate: a render of a file is not evidence of
+ * anything in Studio.
+ */
+const BLENDER_PREVIEW_EVIDENCE: ObservationEvidence = {
+  kind: "inspection",
+  title: "Blender result, before upload",
+  detail: "Rendered by Blender from the job's output. A Studio screenshot shows what is in the place.",
+};
+
+/** The host-made preview of the first image a call returned, if it can make one. */
+async function evidencePreview(context: PlannerContext, outcome: McpToolOutcome): Promise<string | undefined> {
+  const image = outcome.images?.[0];
+  if (!outcome.ok || image === undefined || context.previewImage === undefined) return undefined;
+  try {
+    return await context.previewImage(image);
+  } catch {
+    return undefined;
+  }
 }
 
 /** Evidence supplied by observable Studio operations, never inferred by the model. */
@@ -1189,7 +1214,13 @@ export function createStudioToolRunner(context: PlannerContext): StudioToolRunne
     const outcome = await context.call(operation, args);
     let modelNote: string | undefined;
 
-    const observation = observationEvidence(operation, args, outcome);
+    const observed = observationEvidence(operation, args, outcome);
+    const preview = observed !== undefined || operation === BLENDER_OPERATION
+      ? await evidencePreview(context, outcome)
+      : undefined;
+    const observation = observed !== undefined
+      ? { ...observed, ...(preview === undefined ? {} : { imageDataUrl: preview }) }
+      : preview !== undefined ? { ...BLENDER_PREVIEW_EVIDENCE, imageDataUrl: preview } : undefined;
     if (observation?.title === UI_AUDIT_TITLE) {
       // Which changes the audit saw, so the gate can tell an interface change made after it.
       const latest = context.changes().at(-1)?.id ?? "none";

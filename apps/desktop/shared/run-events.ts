@@ -140,7 +140,11 @@ export type RunEvidence = {
   lines?: string[];
   /** How `lines` should read: prose by default, or verbatim source. */
   format?: "text" | "code";
-  /** Data URL for image evidence. Producers must keep this small. */
+  /**
+   * A preview of image evidence, as a data URL. Made by the host from what the
+   * tool returned, never by the model or the renderer, and kept with the chat,
+   * so it is bounded by `isEvidenceImage`.
+   */
   imageDataUrl?: string;
   /** Shown only when the reader expands the card. */
   metadata?: RunMetadata[];
@@ -361,6 +365,25 @@ function isChange(value: unknown): value is RunChange {
     ["script-source", "properties", "instance", "asset"].includes(value.kind as string);
 }
 
+/**
+ * How large a saved evidence preview may be.
+ *
+ * Previews outlive the run in the chat file, so each is bounded here and the
+ * renderer keeps only the last few of a run (`MAX_RECORDED_EVIDENCE_IMAGES`).
+ * The host aims well below this; a record over it is damaged, not saved.
+ */
+export const MAX_EVIDENCE_IMAGE_CHARACTERS = 128 * 1024;
+
+/** How many evidence previews one saved run keeps, newest first. */
+export const MAX_RECORDED_EVIDENCE_IMAGES = 6;
+
+/** A bounded PNG or JPEG data URL: the only previews the host produces. */
+export function isEvidenceImage(value: unknown): value is string {
+  return typeof value === "string" &&
+    value.length <= MAX_EVIDENCE_IMAGE_CHARACTERS &&
+    /^data:image\/(png|jpeg);base64,[A-Za-z0-9+/]+={0,2}$/.test(value);
+}
+
 /** Optional, so absent is valid; present but malformed is not. */
 function isMetadataList(value: unknown): boolean {
   if (value === undefined) return true;
@@ -378,6 +401,7 @@ function isEvidence(value: unknown): value is RunEvidence {
       RUN_EVIDENCE_REQUIREMENTS.includes(value.requirement as RunEvidenceRequirement)) &&
     isOptionalString(value.taskId) &&
     isOptionalString(value.afterChangeId) &&
+    (value.imageDataUrl === undefined || isEvidenceImage(value.imageDataUrl)) &&
     (value.changeKind === undefined ||
       ["script-source", "properties", "instance", "asset"].includes(value.changeKind as string)) &&
     isMetadataList(value.metadata);

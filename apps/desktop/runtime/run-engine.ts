@@ -14,7 +14,7 @@
  */
 
 import { createHash } from "node:crypto";
-import type { McpToolCaller, McpToolOutcome } from "./mcp-types";
+import type { McpToolCaller, McpToolImage, McpToolOutcome } from "./mcp-types";
 import { decideToolPolicy, describePolicyReason } from "../shared/policy";
 import type { PolicyReason } from "../shared/policy";
 import { isClassifiedTool, riskForTool, summarizeToolCall, timeoutForTool } from "../shared/mcp-tools";
@@ -28,6 +28,7 @@ import type {
   RunRequest,
   ToolProposal,
 } from "../shared/run-events";
+import { isEvidenceImage } from "../shared/run-events";
 import type { ConversationContext } from "../shared/conversation";
 import {
   evaluateCompletion, evidenceBaselineChangeId, type CompletionVerification,
@@ -124,6 +125,12 @@ export type PlannerContext = {
   recordChange(change: Omit<RunChange, "id">): void;
   /** Record evidence supporting the result. */
   recordEvidence(evidence: Omit<RunEvidence, "id">): void;
+  /**
+   * A small preview of an image a tool returned, for the evidence it supports,
+   * or undefined when the host cannot make one. Absent in a context with no
+   * image encoder; a missing preview never fails the call it belongs to.
+   */
+  previewImage?(image: McpToolImage): Promise<string | undefined>;
   /** Replace the run's task list. Already validated by the caller. */
   setTasks(tasks: RunTask[]): void;
   /** The current task list, for a planner that needs to reread its own plan. */
@@ -177,6 +184,11 @@ export type RunEngineOptions = {
   request: RunRequest;
   /** Images attached to the starting message; never persisted with the run. */
   images?: readonly PlannerImage[];
+  /**
+   * Makes the preview kept with image evidence. Main-process only, because the
+   * encoder is Electron's; without it, evidence carries no image.
+   */
+  previewImage?: (image: McpToolImage) => Promise<string | undefined>;
   emit: (event: RunEvent) => void;
   /** Injectable for tests; defaults to () => new Date().toISOString(). */
   now?: () => string;
@@ -307,6 +319,7 @@ export class RunSession {
   private readonly planner: Planner;
   private readonly request: RunRequest;
   private readonly images: readonly PlannerImage[];
+  private readonly previewImage: RunEngineOptions["previewImage"];
   private readonly emitRaw: (event: RunEvent) => void;
   private readonly now: () => string;
   private readonly createId: (prefix: string) => string;
@@ -349,6 +362,7 @@ export class RunSession {
     this.planner = options.planner;
     this.request = options.request;
     this.images = options.images ?? [];
+    this.previewImage = options.previewImage;
     this.emitRaw = options.emit;
     this.now = options.now ?? (() => new Date().toISOString());
     this.createId = options.createId ?? defaultIdGenerator();
@@ -399,8 +413,12 @@ export class RunSession {
         const taskId = evidence.taskId ?? this.currentTasks.find((task) => task.status === "active")?.id;
         const afterChangeId = evidence.afterChangeId ??
           evidenceBaselineChangeId(this.recordedChanges, taskId);
+        // A preview that fails the saved-record bound would make the renderer
+        // refuse the whole event, so it is dropped here and the evidence kept.
+        const { imageDataUrl, ...rest } = evidence;
         const recorded: RunEvidence = {
-          ...evidence,
+          ...rest,
+          ...(isEvidenceImage(imageDataUrl) ? { imageDataUrl } : {}),
           id: this.createId("evidence"),
           ...(taskId !== undefined ? { taskId } : {}),
           ...(afterChangeId !== undefined ? { afterChangeId } : {}),
@@ -416,6 +434,7 @@ export class RunSession {
       changes: () => this.recordedChanges,
       evidence: () => this.recordedEvidence,
       decisions: () => this.recordedDecisions,
+      ...(this.previewImage === undefined ? {} : { previewImage: this.previewImage }),
       takeSteers: () => this.pendingSteers.splice(0),
       askUser: (question, options) => this.askUser(question, options),
       // "completed" because the question is what the gate would say about a run

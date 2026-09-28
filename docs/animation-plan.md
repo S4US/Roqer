@@ -63,11 +63,24 @@ report and also captures the R15 rest pose, which step 5 uses as reference data.
 If a question comes back "no", steps 7 and 8 change before anything is built on
 it. Results are recorded below.
 
-### 3. Thumbnails in the answer
+### 3. Thumbnails in the answer — implemented
 
-Screenshots and previews show inline in the answer instead of only in the
-activity list. Storing them changes the saved chat format: version bump,
-migration, validation on load, and `npm run smoke:electron`.
+Studio screenshots and Blender previews show in the answer instead of only in
+the activity list. Clicking one opens it larger.
+
+- **Who makes them.** The main process makes each preview from the image the
+  tool returned: a JPEG of at most 640 px on the long edge and at most 128 KiB.
+  Neither the model nor the renderer supplies one.
+- **Blender previews** are labelled "Blender result, before upload". They are
+  recorded as an inspection with no requirement, so they never satisfy the
+  completion check.
+- **What is saved.** A saved run keeps its newest six previews.
+- **Validation.** The run engine and the load-time validator both refuse a
+  preview that is not a bounded PNG or JPEG data URL.
+- **Why no schema bump.** The saved format needed no migration.
+  `RunEvidence.imageDataUrl` was already part of workspace schema 3 but had no
+  producer. It is optional, so older records still load. Older builds already
+  accepted and displayed it, so a downgrade reads the new records too.
 
 ### 4. 3D preview for Blender models
 
