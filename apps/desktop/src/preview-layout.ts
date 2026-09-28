@@ -34,14 +34,18 @@ export type PreviewVersions = {
 };
 
 /**
- * What a picture is of, so every picture of one thing is a version of it: an
- * animation by its name, a Blender model by the file it was written to. An
- * agent revising a wave or a sword checks it again and again, and each check is
- * the same thing, newer. Anything else — a screenshot, a render, a preview
- * recorded before models were named — is a thing of its own.
+ * What a picture is of, so every picture of one thing is a version of it: the
+ * subject the host recorded (a Blender model by the job lineage it was built
+ * in), else an animation by its name, else a Blender model by the file it was
+ * written to. An agent revising a wave or a sword checks it again and again,
+ * and each check is the same thing, newer. Anything else — a screenshot, a
+ * render, a preview recorded before models were named — is a thing of its own.
  */
 export function previewSubject(evidence: RunEvidence): string {
   const source = previewSource(evidence);
+  // The host's own word on what the picture is of wins; the names below are
+  // for runs saved before it gave one.
+  if (evidence.subject !== undefined) return `${source}:subject:${evidence.subject}`;
   const label = source === "animation" ? ANIMATION_NAME_LABEL : source === "blender" ? BLENDER_MODEL_LABEL : undefined;
   const name = label === undefined ? undefined : evidence.metadata?.find((entry) => entry.label === label)?.value;
   return name === undefined ? `picture:${evidence.id}` : `${source}:${name}`;

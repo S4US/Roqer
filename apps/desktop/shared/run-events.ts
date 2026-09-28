@@ -160,6 +160,13 @@ export type RunEvidence = {
    */
   modelPreviewId?: string;
   /**
+   * What the picture is of, as the host knows it, so pictures of one thing
+   * are versions of one picture. A Blender job that continued an earlier job's
+   * scene is a later version of that job's model, whatever file either wrote.
+   * Opaque, and never shown; at most `MAX_EVIDENCE_SUBJECT_CHARS`.
+   */
+  subject?: string;
+  /**
    * Set when the run took a picture here that the saved chat does not keep:
    * past a run's picture budget (`MAX_RECORDED_EVIDENCE_IMAGES`), the picture
    * is dropped from the record and this says so, so the answer can count what
@@ -444,12 +451,15 @@ export const ANIMATION_PREVIEW_TITLE = "Animation preview";
 export const ANIMATION_NAME_LABEL = "Animation";
 
 /**
- * Metadata on a Blender preview: the file the pictured model was written to.
- * A revised model is written to the same file again, so previews of one file
- * are versions of one model, and the card shows them as one, the way it does
- * an animation's.
+ * Metadata on a Blender preview: the file the pictured model was written to,
+ * or "scene.blend" when the job exported nothing and its scene was pictured.
+ * Which previews are versions of one model is the evidence's `subject`; runs
+ * saved before that existed fall back to grouping by this.
  */
 export const BLENDER_MODEL_LABEL = "Model";
+
+/** How long a picture's subject may be (`RunEvidence.subject`). */
+export const MAX_EVIDENCE_SUBJECT_CHARS = 200;
 
 /**
  * Metadata on an animation build's verification: whether every motion check
@@ -505,6 +515,7 @@ function isEvidence(value: unknown): value is RunEvidence {
     (value.imageRef === undefined || isEvidencePictureRef(value.imageRef)) &&
     (value.modelPreviewId === undefined || isModelPreviewId(value.modelPreviewId)) &&
     (value.previewNotKept === undefined || value.previewNotKept === true) &&
+    (value.subject === undefined || (isString(value.subject) && value.subject.length > 0 && value.subject.length <= MAX_EVIDENCE_SUBJECT_CHARS)) &&
     (value.changeKind === undefined ||
       ["script-source", "properties", "instance", "asset"].includes(value.changeKind as string)) &&
     isMetadataList(value.metadata);
