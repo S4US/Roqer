@@ -1060,6 +1060,49 @@ test("a built animation is one change, verified by its preview and read-back", a
   ]);
 });
 
+test("publishing, wiring and verifying an animation each leave their own record", async () => {
+  const { context, changes, evidence } = contextWith([
+    ok({
+      published: true, assetId: "555", animationId: "rbxassetid://555", displayName: "Run", moderation: "Approved",
+      ownerCheck: "The animation belongs to user 42, who owns the place.", readBack: { matches: true },
+    }),
+    ok({
+      wired: true, loader: "game.ServerScriptService.RoqerAnimate", installed: true, slot: "run",
+      animationId: "rbxassetid://555", previousId: false, readBackMatches: true, undoable: true,
+    }),
+    ok({
+      verified: true,
+      played: { source: "published", verified: true, maxDegrees: 0.8 },
+      wiring: { slot: "run", matches: true, playingNow: false },
+    }),
+  ]);
+  const run = createStudioToolRunner(context);
+
+  await run("animation", { action: "publish", path: "game.ServerStorage.Animations.Run" });
+  await run("animation", { action: "wire", slot: "run", animation_id: "rbxassetid://555" });
+  await run("animation", { action: "verify", animation: { name: "Run" }, animation_id: "rbxassetid://555", slot: "run" });
+
+  assert.deepEqual(changes.map((change) => [change.kind, change.target, change.summary]), [
+    ["asset", "rbxassetid://555", "Published “Run” to Roblox as animation 555. Moderation: Approved."],
+    ["instance", "game.ServerScriptService.RoqerAnimate", "Installed the animation loader and set the run slot to rbxassetid://555, in one undoable step."],
+  ]);
+  assert.deepEqual(evidence.map((item) => [item.kind, item.title, item.passed]), [
+    ["verification", "rbxassetid://555", true],
+    ["verification", "game.ServerScriptService.RoqerAnimate", true],
+    ["playtest", "Run on the playtest character", true],
+  ]);
+  assert.deepEqual(evidence[2].metadata, [
+    { label: "Played from", value: "The published asset" },
+    { label: "Largest difference", value: "0.8°" },
+    { label: "run slot", value: "Wired" },
+  ]);
+});
+
+test("the Studio tool description stays inside a model turn's tool limit", () => {
+  // turn-contract refuses a tool description over 8,192 characters.
+  assert.ok(studioToolDescription().length <= 8_192, `${studioToolDescription().length} characters`);
+});
+
 test("an animation that was only checked, or refused, records nothing", async () => {
   const { context, changes, evidence } = contextWith([
     ok({ valid: true, checks: { passed: true } }),

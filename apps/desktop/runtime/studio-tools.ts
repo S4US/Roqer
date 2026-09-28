@@ -174,7 +174,7 @@ export function studioToolDescription(): string {
     // text over button edges and a row past the end of its scroll.
     "After creating or changing interface (anything under StarterGui), start a playtest and call inspect_ui {mode: 'audit'} on the client. Roqer does not verify the run until an audit after the last interface change reports no problems: fix what it names (text_obscured, text_straddles_edge, content_beyond_scroll, text_overflow) and audit again.",
     "To aim a screenshot, call selection {action: 'view', path, from, angleY, padding} before capture_screenshot (from is the azimuth in degrees, 0 = +X, 90 = +Z; angleY the elevation, -89 to 89; padding the distance scale, above 0 and at most 10); it is a read that needs no approval. Do not move the camera with execute_luau. For comparable before and after views, frame the same stable container (the zone or build root, not the part being changed, whose bounds move) with the same from, angleY and padding.",
-    "Make character animations with animation, never by building a KeyframeSequence in execute_luau. The animation argument is {name, rig: 'R15', loop?, priority?, easing?, keyframes: [{time, name?, easing?, joints}]}, first keyframe at time 0. joints maps Root, Waist, Neck, Left/RightShoulder, Left/RightElbow, Left/RightWrist, Left/RightHip, Left/RightKnee, Left/RightAnkle to {rotation?: [x, y, z] degrees about the parent part, position?: studs (Root only), easing?}; +X on a shoulder raises the arm forward, knees bend negative about X, elbows positive. Key every moved joint at time 0, and turn a joint at most 90° between its keys. easing is {style: Linear|Constant|CubicV2|Bounce|Elastic, direction: In|Out|InOut}. Call {action: 'check'} first (free, no Studio), with locomotion: true for a gait, and fix what the checks name; then {action: 'build', parent} writes it after Studio plays it as checked. Waive a check only for motion that means it. Rebuild with the revision the last build returned as expected_revision.",
+    "Animate characters with animation, never a KeyframeSequence in execute_luau. animation: {name, rig: 'R15', loop?, priority?, easing?, keyframes: [{time, easing?, joints}]}, first at time 0; joints maps Root, Waist, Neck, Left/Right Shoulder, Elbow, Wrist, Hip, Knee, Ankle to {rotation?: [x, y, z] degrees about the parent part, position? (Root, studs)}. +X raises a shoulder's arm forward; knees bend -X, elbows +X. Key moved joints at time 0; a joint turns at most 90° between keys. easing: {style: Linear|Constant|CubicV2|Bounce|Elastic, direction: In|Out|InOut}. Flow: check (free; locomotion: true for gaits; fix what fails) → build {parent} → publish {path} (asks first; place owner only) → wire {slot, animation_id} (expected_id to replace) → playtest → verify {animation, animation_id, slot}. With no Open Cloud key, verify with just animation and say publishing needs a key. Rebuild with expected_revision; waive only intended failures.",
     "For seeded bulk placement, build_instances accepts one sole step {op:'scatter', name, zone:{min:[x,z],max:[x,z]}, density:countPer10000SquareStuds, seed, templates:[{source,weight,kit?}], ground:[path], raycast:{top,bottom}, rotation?:[minYaw,maxYaw], scale?:[min,max], spacing?, avoid?:[{tag,distance}], maxSlope?, replace?, parent?, tags?, attributes?, id?}. Ground and templates must already exist. The named scatter group is replaced only with replace:true and matching ownership; the entire replacement is undoable. Requested count is floor(area*density/10000), limited to 1-1000. Footprints stay inside the rectangle and clear of tagged bounds. Inspect returned scatter.requested/placed/attempts: blocked ground can produce fewer placements. Same seed reproduces only with unchanged inputs and scene. Load roblox-building references/scatter.md for details.",
   ].join("\n");
 }
@@ -1092,6 +1092,86 @@ function recordAnimationBuild(context: PlannerContext, outcome: McpToolOutcome):
   });
 }
 
+/** A published animation as an asset card, verified by reading the asset back. */
+function recordAnimationPublish(context: PlannerContext, outcome: McpToolOutcome): void {
+  const data = isRecord(outcome.data) ? outcome.data : {};
+  const assetId = stringField(data, "assetId");
+  if (data.published !== true || !assetId || !/^\d+$/.test(assetId)) return;
+  const displayName = stringField(data, "displayName");
+  const moderationState = stringField(data, "moderation");
+  context.recordChange({
+    kind: "asset",
+    target: `rbxassetid://${assetId}`,
+    summary: `Published ${displayName ? `“${displayName}”` : "the animation"} to Roblox as animation ${assetId}.${moderationState ? ` Moderation: ${moderationState}.` : ""}`,
+    assetId,
+    assetUrl: `https://create.roblox.com/store/asset/${assetId}`,
+    assetType: "Animation",
+    moderationState,
+  });
+  const readBack = isRecord(data.readBack) ? data.readBack : {};
+  const ownerCheck = stringField(data, "ownerCheck");
+  context.recordEvidence({
+    kind: "verification",
+    changeKind: "asset",
+    title: `rbxassetid://${assetId}`,
+    passed: readBack.matches === true,
+    detail: readBack.matches === true
+      ? "Roblox served the published animation back, and it holds the motion that was built and checked."
+      : "The published animation could not be confirmed to hold the motion that was built.",
+    metadata: [
+      ...(ownerCheck ? [{ label: "Owner", value: ownerCheck }] : []),
+      { label: "Moderation", value: moderationState ?? "Unknown" },
+    ],
+  });
+}
+
+/** A wired slot as a change to the loader that carries it. */
+function recordAnimationWire(context: PlannerContext, outcome: McpToolOutcome): void {
+  const data = isRecord(outcome.data) ? outcome.data : {};
+  const loader = stringField(data, "loader");
+  const slot = stringField(data, "slot");
+  const animationId = stringField(data, "animationId");
+  if (data.wired !== true || !loader || !slot || !animationId) return;
+  const previous = stringField(data, "previousId");
+  context.recordChange({
+    kind: "instance",
+    target: loader,
+    instanceId: context.instanceId ?? undefined,
+    summary: `${data.installed === true ? "Installed the animation loader and set" : "Set"} the ${slot} slot to ${animationId}${previous ? `, replacing ${previous}` : ""}, in one undoable step.`,
+  });
+  context.recordEvidence({
+    kind: "verification",
+    changeKind: "instance",
+    title: loader,
+    passed: data.readBackMatches === true,
+    detail: "Studio read the loader back: its code is the fixed loader, and the slot holds the new ID. Every character spawned from now on gets it.",
+    metadata: [{ label: "Undo", value: data.undoable !== false ? "One Studio undo step" : "Not recorded in Studio's undo history" }],
+  });
+}
+
+/** A playtest verification as evidence: the animation played on the character as checked. */
+function recordAnimationVerify(context: PlannerContext, args: JsonRecord, outcome: McpToolOutcome): void {
+  const data = isRecord(outcome.data) ? outcome.data : {};
+  if (typeof data.verified !== "boolean") return;
+  const played = isRecord(data.played) ? data.played : {};
+  const wiring = isRecord(data.wiring) ? data.wiring : undefined;
+  const name = isRecord(args.animation) && typeof args.animation.name === "string" ? args.animation.name : "The animation";
+  const maxDegrees = numberField(played, "maxDegrees");
+  context.recordEvidence({
+    kind: "playtest",
+    title: `${name} on the playtest character`,
+    passed: data.verified,
+    detail: data.verified
+      ? `It played on the character${wiring ? ", and its Animate slot holds the wired ID" : ""}, matching the checked motion.`
+      : stringField(played, "reason") ?? (wiring && wiring.matches !== true ? "The character's Animate slot does not hold the wired ID." : "It did not play as checked."),
+    metadata: [
+      { label: "Played from", value: played.source === "published" ? "The published asset" : "A temporary clip" },
+      ...(maxDegrees === undefined ? [] : [{ label: "Largest difference", value: `${maxDegrees}°` }]),
+      ...(wiring ? [{ label: `${String(wiring.slot)} slot`, value: wiring.matches === true ? (wiring.playingNow === true ? "Wired, and playing now" : "Wired") : "Not wired" }] : []),
+    ],
+  });
+}
+
 /** A completed Roblox upload as a host-owned result card. */
 function completedUpload(
   args: JsonRecord,
@@ -1396,8 +1476,11 @@ export function createStudioToolRunner(context: PlannerContext): StudioToolRunne
       recordBuild(context, args, outcome);
     }
 
-    if (outcome.ok && !refused && operation === "animation" && args.action === "build") {
-      recordAnimationBuild(context, outcome);
+    if (outcome.ok && !refused && operation === "animation") {
+      if (args.action === "build") recordAnimationBuild(context, outcome);
+      else if (args.action === "publish") recordAnimationPublish(context, outcome);
+      else if (args.action === "wire") recordAnimationWire(context, outcome);
+      else if (args.action === "verify") recordAnimationVerify(context, args, outcome);
     }
 
     if (operation === "upload_asset") {

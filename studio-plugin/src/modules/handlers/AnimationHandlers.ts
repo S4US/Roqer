@@ -2,7 +2,7 @@ import Utils from "../Utils";
 import Recording from "../Recording";
 import { sourceRevision } from "../SourceRevision";
 
-const { getInstancePath, resolveInstance, getInstanceReference } = Utils;
+const { getInstancePath, resolveInstance, getInstanceReference, readScriptSource } = Utils;
 const { beginRecording, finishRecording } = Recording;
 
 const Players = game.GetService("Players");
@@ -337,7 +337,251 @@ function buildAnimation(requestData: Data) {
 	};
 }
 
+/** A built sequence, confirmed unchanged since its build, with who owns the place. */
+function animationPublishInfo(requestData: Data) {
+	const path = requestData.path;
+	if (!typeIs(path, "string") || path === "") return { error: "path is required." };
+	const target = resolveInstance(path, undefined);
+	if (!target) return { error: `${path} does not exist.` };
+	if (!target.IsA("KeyframeSequence")) return { error: `${path} is a ${target.ClassName}, not a KeyframeSequence.`, errorCode: "target_not_animation" };
+	const stamp = target.GetAttribute(REVISION_ATTRIBUTE);
+	if (!typeIs(stamp, "string")) {
+		return { error: `${path} was not built by this tool; build it first, so its motion is checked.`, errorCode: "target_not_built_here" };
+	}
+	const revision = sequenceRevision(target);
+	if (revision !== stamp) {
+		return { error: `${path} was edited after it was built; build it again, so the published motion is the checked one.`, errorCode: "animation_edited_since_build" };
+	}
+	return {
+		path: getInstancePath(target),
+		name: target.Name,
+		revision,
+		placeCreatorType: game.CreatorType.Name,
+		placeCreatorId: game.CreatorId,
+		placeId: game.PlaceId,
+	};
+}
+
+/** The published asset as Roblox serves it back, compared with the revision that was built. */
+function animationReadBack(requestData: Data) {
+	const assetId = requestData.assetId;
+	const expected = requestData.expectedRevision;
+	if (!typeIs(assetId, "string") || assetId.match("^%d+$")[0] === undefined) return { error: "assetId must be digits." };
+	const [ok, fetched] = pcall(() =>
+		game.GetService("KeyframeSequenceProvider").GetKeyframeSequenceAsync(`rbxassetid://${assetId}`),
+	);
+	if (!ok || !typeIs(fetched, "Instance") || !fetched.IsA("KeyframeSequence")) {
+		return { error: `Roblox did not return the published animation: ${tostring(fetched)}` };
+	}
+	const revision = sequenceRevision(fetched);
+	const counts = countContent(fetched);
+	fetched.Destroy();
+	return { revision, matches: revision === expected, keyframes: counts.keyframes, poses: counts.poses };
+}
+
+const LOADER_NAME = "RoqerAnimate";
+const WIRE_SLOTS = ["idle", "walk", "run", "jump", "fall", "climb", "swim", "swimidle", "sit"];
+/** The loader's whole code. It never changes; the animation IDs are its attributes. */
+const LOADER_SOURCE = `-- Built by Roqer. Sets each character's default Animate script to the
+-- animation IDs held in this script's attributes, one per Animate slot
+-- (idle, walk, run, jump, fall, climb, swim, swimidle, sit). Roqer's animation
+-- tool changes the attributes; this code stays as it is.
+local Players = game:GetService("Players")
+
+local function apply(character)
+	local animate = character:WaitForChild("Animate", 10)
+	if not animate then
+		return
+	end
+	for slot, id in script:GetAttributes() do
+		local folder = animate:FindFirstChild(slot)
+		if folder and typeof(id) == "string" then
+			for _, child in folder:GetChildren() do
+				if child:IsA("Animation") then
+					child.AnimationId = id
+				end
+			end
+		end
+	end
+end
+
+local function watch(player)
+	player.CharacterAdded:Connect(apply)
+	if player.Character then
+		task.spawn(apply, player.Character)
+	end
+end
+
+Players.PlayerAdded:Connect(watch)
+for _, player in Players:GetPlayers() do
+	watch(player)
+end
+`;
+
+function animationWire(requestData: Data) {
+	const slot = requestData.slot;
+	const animationId = requestData.animationId;
+	const expectedId = requestData.expectedId;
+	if (!typeIs(slot, "string") || !WIRE_SLOTS.includes(slot)) return { error: `slot must be one of ${WIRE_SLOTS.join(", ")}.` };
+	if (!typeIs(animationId, "string") || animationId.match("^rbxassetid://%d+$")[0] === undefined) {
+		return { error: "animationId must be rbxassetid://<digits>." };
+	}
+	if (expectedId !== undefined && !typeIs(expectedId, "string")) return { error: "expectedId must be a string." };
+
+	const service = game.GetService("ServerScriptService");
+	const named = service.GetChildren().filter((child) => child.Name === LOADER_NAME);
+	if (named.size() > 1) {
+		return { error: `ServerScriptService holds ${named.size()} children named ${LOADER_NAME}; keep one. Nothing was wired.`, errorCode: "ambiguous_target" };
+	}
+	const existing = named[0];
+	if (existing && (!existing.IsA("Script") || readScriptSource(existing) !== LOADER_SOURCE)) {
+		return { error: `${getInstancePath(existing)} is not the loader this tool installs, or its code was changed; it is left alone. Nothing was wired.`, errorCode: "loader_modified" };
+	}
+	const current = existing?.GetAttribute(slot);
+	const currentId = typeIs(current, "string") ? current : undefined;
+	if (currentId !== undefined && expectedId === undefined) {
+		return { error: `The ${slot} slot already holds ${currentId}; pass it as expected_id to replace it. Nothing was wired.`, errorCode: "expected_id_required", currentId };
+	}
+	if (currentId !== expectedId) {
+		return {
+			error: currentId === undefined
+				? `The ${slot} slot holds nothing yet; omit expected_id. Nothing was wired.`
+				: `The ${slot} slot holds ${currentId}, not ${expectedId}; someone changed it. Nothing was wired.`,
+			errorCode: "animation_id_changed",
+			currentId: currentId ?? false,
+		};
+	}
+
+	const recordingId = beginRecording(`Wire ${slot} animation`);
+	let loader = existing as Script | undefined;
+	const installed = loader === undefined;
+	const [applied, applyError] = pcall(() => {
+		if (!loader) {
+			const created = new Instance("Script");
+			created.Name = LOADER_NAME;
+			created.Source = LOADER_SOURCE;
+			created.SetAttribute(slot, animationId);
+			created.Parent = service;
+			loader = created;
+		} else {
+			loader.SetAttribute(slot, animationId);
+		}
+	});
+	if (!applied) {
+		pcall(() => {
+			if (installed && loader) loader.Destroy();
+			else if (loader) loader.SetAttribute(slot, currentId);
+		});
+		finishRecording(recordingId, false);
+		return { error: `Wiring failed: ${tostring(applyError)}. The previous state was restored.` };
+	}
+	finishRecording(recordingId, true);
+	const wired = loader as Script;
+	return {
+		loader: getInstancePath(wired),
+		installed,
+		slot,
+		animationId: wired.GetAttribute(slot),
+		previousId: currentId ?? false,
+		readBackMatches: wired.GetAttribute(slot) === animationId && readScriptSource(wired) === LOADER_SOURCE,
+		undoable: recordingId !== undefined,
+		...(installed ? { loaderSource: LOADER_SOURCE } : {}),
+	};
+}
+
+/**
+ * On a playtest client: report what the character's Animate slot holds and is
+ * playing, then play the animation on the character as the player sees it and
+ * sample its joints on the Animator's own clock.
+ */
+function animationVerify(requestData: Data) {
+	const player = Players.LocalPlayer;
+	if (!player) return { error: "This is not a playtest client." };
+	let character = player.Character;
+	const deadline = os.clock() + 10;
+	while (!character && os.clock() < deadline) {
+		task.wait(0.1);
+		character = player.Character;
+	}
+	if (!character) return { error: "The player has no character yet." };
+	const humanoid = character.WaitForChild("Humanoid", 10) as Humanoid | undefined;
+	const animator = humanoid?.WaitForChild("Animator", 10) as Animator | undefined;
+	if (!humanoid || !animator) return { error: "The character has no Humanoid with an Animator." };
+
+	const slot = requestData.slot;
+	let wiredIds: string[] | undefined;
+	let playingIds: string[] | undefined;
+	if (typeIs(slot, "string")) {
+		wiredIds = [];
+		const folder = character.FindFirstChild("Animate")?.FindFirstChild(slot);
+		for (const child of folder?.GetChildren() ?? []) {
+			if (child.IsA("Animation")) wiredIds.push(child.AnimationId);
+		}
+		// Read before the verification track starts, so it cannot count itself.
+		playingIds = [];
+		for (const playing of animator.GetPlayingAnimationTracks()) {
+			playingIds.push(playing.Animation ? playing.Animation.AnimationId : "");
+		}
+	}
+
+	let sequence: KeyframeSequence | undefined;
+	let animation: Animation | undefined;
+	let track: AnimationTrack | undefined;
+	const [ok, result] = pcall(() => {
+		let id = requestData.animationId;
+		if (!typeIs(id, "string")) {
+			sequence = buildSequence(requestData.sequence);
+			const provider = game.GetService("AnimationClipProvider" as keyof Services) as unknown as ClipProvider;
+			id = tostring(provider.RegisterAnimationClip(sequence));
+		}
+		const joints = new Map<string, Instance>();
+		for (const descendant of character!.GetDescendants()) {
+			if (descendant.IsA("AnimationConstraint")) {
+				const attachment = descendant.Attachment1;
+				if (attachment && attachment.Parent) joints.set(attachment.Parent.Name, descendant);
+			} else if (descendant.IsA("Motor6D") && descendant.Part1) {
+				joints.set(descendant.Part1.Name, descendant);
+			}
+		}
+		animation = new Instance("Animation");
+		animation.AnimationId = id as string;
+		track = animator.LoadAnimation(animation);
+		track.Priority = Enum.AnimationPriority.Action4;
+		track.Play(0);
+		const loadDeadline = os.clock() + TRACK_LOAD_SECONDS;
+		while (track.Length === 0 && os.clock() < loadDeadline) task.wait(0.05);
+		if (track.Length === 0) error("the animation never loaded on the character");
+		const count = 10;
+		const gap = math.max(track.Length, 0.2) / (count + 1);
+		const samples: { time: number; transforms: Record<string, number[]> }[] = [];
+		for (let index = 0; index < count; index++) {
+			task.wait(gap);
+			if (!track.IsPlaying) break;
+			const transforms: Record<string, number[]> = {};
+			for (const [part, joint] of joints) {
+				transforms[part] = componentsOf((joint as unknown as { Transform: CFrame }).Transform);
+			}
+			samples.push({ time: track.TimePosition, transforms });
+		}
+		return { length: track.Length, samples };
+	});
+
+	if (track) {
+		const playing = track;
+		pcall(() => playing.Stop(0));
+	}
+	destroyQuietly(track);
+	destroyQuietly(animation);
+	destroyQuietly(sequence);
+	if (!ok) return { error: `${tostring(result)}.` };
+	return { ...(result as object), ...(wiredIds ? { wiredIds, playingIds } : {}) };
+}
+
 export = {
 	previewAnimation,
 	buildAnimation,
+	animationPublishInfo,
+	animationReadBack,
+	animationWire,
+	animationVerify,
 };

@@ -1,7 +1,7 @@
 import type { ToolAnnotations } from '@modelcontextprotocol/server';
 import { MAX_PNG_BASE64_CHARACTERS } from '../image-decode.js';
 import { ANIMATION_PRIORITIES } from '../animation/pose-compiler.js';
-import { MOTION_CHECK_IDS } from '../animation/animation-tool.js';
+import { ANIMATE_SLOTS, MOTION_CHECK_IDS } from '../animation/animation-tool.js';
 
 // Styles and directions are listed in the tool guide and in the compiler's
 // errors; spelling the enums out twice here would cost more than they save.
@@ -152,14 +152,14 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
   {
     name: 'animation',
     category: 'write',
-    description: 'Use to check a character animation, or build it as a KeyframeSequence.',
+    description: 'Use to check, build, publish, wire, or verify an R15 character animation.',
     inputSchema: {
       type: 'object',
       properties: {
         action: {
           type: 'string',
-          enum: ['check', 'build'],
-          description: 'check measures without Studio; build previews, writes, reads back.'
+          enum: ['check', 'build', 'publish', 'wire', 'verify'],
+          description: 'check needs no Studio; verify needs a running playtest.'
         },
         animation: {
           type: 'object',
@@ -207,12 +207,33 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
           items: { type: 'string', enum: [...MOTION_CHECK_IDS] },
           description: 'Failed checks to accept.'
         },
+        path: {
+          type: 'string',
+          description: 'Publish: the KeyframeSequence a build wrote.'
+        },
+        display_name: {
+          type: 'string',
+          description: 'Publish: asset name; defaults to the sequence name.'
+        },
+        slot: {
+          type: 'string',
+          enum: [...ANIMATE_SLOTS],
+          description: 'Wire/verify: default Animate slot.'
+        },
+        animation_id: {
+          type: 'string',
+          description: 'Wire/verify: published ID, rbxassetid://N.'
+        },
+        expected_id: {
+          type: 'string',
+          description: 'Wire: ID the slot holds now; required to replace it.'
+        },
         instance_id: {
           type: 'string',
           description: 'Connected place ID; required with multiple places.'
         }
       },
-      required: ['action', 'animation']
+      required: ['action']
     }
   },
   {

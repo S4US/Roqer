@@ -2,8 +2,11 @@ import { BridgeService } from '../bridge-service.js';
 import { RobloxStudioTools } from '../tools/index.js';
 import {
   PREVIEW_SAMPLES,
+  choosePublisher,
+  normalizeAnimationId,
   prepareAnimation,
   previewSampleTimes,
+  verifyLivePlayback,
   verifyPlayback,
   type PreviewSample,
 } from '../animation/animation-tool.js';
@@ -110,20 +113,20 @@ describe('RobloxStudioTools.animation', () => {
 
   test('check compiles and measures without calling Studio', async () => {
     const { tools, calls } = toolsWith({});
-    const result = body(await tools.animation('check', wave(), undefined, undefined, undefined, undefined));
+    const result = body(await tools.animation({ action: 'check', animation: wave() }));
     expect(calls).toEqual([]);
     expect(result).toMatchObject({ valid: true, animation: { name: 'Wave', keyframes: 3, loop: true, joints: ['RightShoulder', 'RightElbow'] }, checks: { passed: true } });
     expect(result.checks.results.map((check: { id: string }) => check.id)).toEqual([
       'jointLimits', 'velocity', 'rootDrift', 'loopContinuity', 'groundContact', 'footSliding', 'gaitSymmetry',
     ]);
-    expect(body(await tools.animation('check', { ...wave(), keyframes: [] }, undefined, undefined, undefined, undefined)))
+    expect(body(await tools.animation({ action: 'check', animation: { ...wave(), keyframes: [] } })))
       .toEqual({ valid: false, errors: ['keyframes: must be a non-empty array'] });
   });
 
   test('build refuses a failing check before Studio sees anything', async () => {
     const { tools, calls } = toolsWith({});
     const neckTwist = { name: 'Owl', rig: 'R15', keyframes: [{ time: 0, joints: { Neck: { rotation: [0, 150, 0] } } }] };
-    const result = body(await tools.animation('build', neckTwist, 'game.ServerStorage', undefined, undefined, undefined));
+    const result = body(await tools.animation({ action: 'build', animation: neckTwist, parent: 'game.ServerStorage' }));
     expect(calls).toEqual([]);
     expect(result.error).toBe('A motion check failed (jointLimits); nothing was built. Fix the motion, or waive a failure you intend.');
     expect(result.checks.results[0]).toMatchObject({ id: 'jointLimits', status: 'fail', measured: { Neck: 150 } });
@@ -138,7 +141,7 @@ describe('RobloxStudioTools.animation', () => {
         replaced: false, keyframes: 3, poses: sequence.poseCount, undoable: true,
       }),
     });
-    const result = body(await tools.animation('build', wave(), 'game.ServerStorage.Animations', undefined, undefined, undefined, 'place-1'));
+    const result = body(await tools.animation({ action: 'build', animation: wave(), parent: 'game.ServerStorage.Animations' }, 'place-1'));
     expect(calls.map((call) => [call.endpoint, call.instance_id])).toEqual([
       ['/api/preview-animation', 'place-1'],
       ['/api/build-animation', 'place-1'],
@@ -160,12 +163,12 @@ describe('RobloxStudioTools.animation', () => {
   test('build writes nothing when the preview fails or strays', async () => {
     const sequence = compiled(wave());
     const failed = toolsWith({ '/api/preview-animation': () => ({ error: 'the preview track never loaded.' }) });
-    expect(body(await failed.tools.animation('build', wave(), 'game.ServerStorage', undefined, undefined, undefined)).error)
+    expect(body(await failed.tools.animation({ action: 'build', animation: wave(), parent: 'game.ServerStorage' })).error)
       .toBe('Studio could not preview the animation: the preview track never loaded. Nothing was built.');
     expect(failed.calls.map((call) => call.endpoint)).toEqual(['/api/preview-animation']);
 
     const strayed = toolsWith({ '/api/preview-animation': () => ({ length: 1, samples: faithfulSamples(sequence, 0.3) }) });
-    const result = body(await strayed.tools.animation('build', wave(), 'game.ServerStorage', undefined, undefined, undefined));
+    const result = body(await strayed.tools.animation({ action: 'build', animation: wave(), parent: 'game.ServerStorage' }));
     expect(result.error).toMatch(/^The preview did not play as checked: Studio played it up to .*\. Nothing was built\.$/);
     expect(strayed.calls.map((call) => call.endpoint)).toEqual(['/api/preview-animation']);
   });
@@ -181,14 +184,147 @@ describe('RobloxStudioTools.animation', () => {
         sent: data.expectedRevision,
       }),
     });
-    const result = body(await tools.animation('build', wave(), 'game.ServerStorage', 'kr1:old', undefined, undefined));
+    const result = body(await tools.animation({ action: 'build', animation: wave(), parent: 'game.ServerStorage', expected_revision: 'kr1:old' }));
     expect(result).toMatchObject({ errorCode: 'revision_conflict', currentRevision: 'kr1:new', sent: 'kr1:old' });
   });
 
   test('rejects malformed arguments outright', async () => {
     const { tools } = toolsWith({});
-    await expect(tools.animation('play', wave(), undefined, undefined, undefined, undefined)).rejects.toThrow('animation action must be "check" or "build"');
-    await expect(tools.animation('build', wave(), '', undefined, undefined, undefined)).rejects.toThrow(/parent .* is required/);
-    await expect(tools.animation('build', wave(), 'game.ServerStorage', 7, undefined, undefined)).rejects.toThrow('expected_revision must be');
+    await expect(tools.animation({ action: 'play', animation: wave() })).rejects.toThrow('animation action must be check, build, publish, wire or verify');
+    await expect(tools.animation({ action: 'build', animation: wave(), parent: '' })).rejects.toThrow(/parent .* is required/);
+    await expect(tools.animation({ action: 'build', animation: wave(), parent: 'game.ServerStorage', expected_revision: 7 })).rejects.toThrow('expected_revision must be');
+    await expect(tools.animation({ action: 'wire', slot: 'dance', animation_id: 'rbxassetid://1' })).rejects.toThrow(/slot must be one of idle, walk, run/);
+    await expect(tools.animation({ action: 'wire', slot: 'run', animation_id: 'not an id' })).rejects.toThrow(/animation_id must be/);
+    await expect(tools.animation({ action: 'verify', animation: wave(), slot: 'run' })).rejects.toThrow(/animation_id is required with slot/);
+  });
+});
+
+describe('publishing', () => {
+  const owner = (creatorType: string, creatorId: number) => ({ creatorType, creatorId });
+
+  test('uploads only as the place owner, and names an unpublished place', () => {
+    expect(choosePublisher(owner('User', 42), { userId: '42' })).toMatchObject({ ok: true, creator: { userId: '42' } });
+    expect(choosePublisher(owner('Group', 7), { groupId: '7' })).toMatchObject({ ok: true, creator: { groupId: '7' } });
+    expect(choosePublisher(owner('Group', 7), { userId: '42' })).toMatchObject({ ok: false, errorCode: 'owner_mismatch' });
+    expect(choosePublisher(owner('User', 42), { userId: '43' })).toMatchObject({ ok: false, errorCode: 'owner_mismatch' });
+    expect(choosePublisher(owner('User', 42), { groupId: '7', userId: '42' })).toMatchObject({ ok: false, errorCode: 'owner_mismatch' });
+    expect(choosePublisher(owner('User', 42), {})).toMatchObject({ ok: false, errorCode: 'creator_not_configured' });
+    const unpublished = choosePublisher(owner('User', 0), { userId: '42' });
+    expect(unpublished).toMatchObject({ ok: true, creator: { userId: '42' } });
+    expect(unpublished.ok && unpublished.ownerCheck).toMatch(/not published/);
+  });
+
+  test('reads an asset ID in any form Roblox accepts', () => {
+    expect(normalizeAnimationId('rbxassetid://123')).toBe('rbxassetid://123');
+    expect(normalizeAnimationId('http://www.roblox.com/asset/?id=507770239')).toBe('rbxassetid://507770239');
+    expect(normalizeAnimationId(' 99 ')).toBe('rbxassetid://99');
+    expect(normalizeAnimationId(99)).toBe('rbxassetid://99');
+    for (const bad of ['rbxassetid://', '0', 'rbxassetid://12a', 'abc', -1, 1.5, null]) expect(normalizeAnimationId(bad)).toBeUndefined();
+  });
+
+  function publishingTools(responses: Record<string, (data: Payload) => unknown>, upload: Record<string, unknown>) {
+    const tools = new RobloxStudioTools(new BridgeService());
+    const calls: string[] = [];
+    (tools as unknown as { _callSingle: unknown })._callSingle = async (endpoint: string, data: Payload) => {
+      calls.push(endpoint);
+      return responses[endpoint](data);
+    };
+    const uploads: unknown[] = [];
+    (tools as unknown as { openCloudClient: unknown }).openCloudClient = {
+      hasApiKey: () => true,
+      createAsset: async (request: unknown) => {
+        uploads.push(request);
+        return upload;
+      },
+    };
+    return { tools, calls, uploads };
+  }
+  type Payload = Record<string, unknown>;
+  const info = { path: 'game.ServerStorage.Wave', name: 'Wave', revision: 'kr1:abc', placeCreatorType: 'User', placeCreatorId: 42 };
+  const done = { path: 'operations/op-1', done: true, response: { assetId: '555', moderationResult: { moderationState: 'Approved' } } };
+
+  test('publishes as the owner and confirms the asset holds what was built', async () => {
+    const saved = process.env.ROBLOX_CREATOR_USER_ID;
+    process.env.ROBLOX_CREATOR_USER_ID = '42';
+    try {
+      const { tools, calls, uploads } = publishingTools({
+        '/api/animation-publish-info': () => info,
+        '/api/export-rbxm': () => ({ base64: Buffer.from('rbxm').toString('base64') }),
+        '/api/animation-read-back': (data) => ({ matches: data.expectedRevision === 'kr1:abc', keyframes: 3, poses: 21 }),
+      }, done);
+      const result = body(await tools.animation({ action: 'publish', path: 'game.ServerStorage.Wave' }));
+      expect(calls).toEqual(['/api/animation-publish-info', '/api/export-rbxm', '/api/animation-read-back']);
+      expect(uploads).toEqual([expect.objectContaining({ assetType: 'Animation', displayName: 'Wave', creationContext: { creator: { userId: '42' } } })]);
+      expect(result).toMatchObject({
+        published: true, assetId: '555', animationId: 'rbxassetid://555', creator: { user: '42' },
+        moderation: 'Approved', approved: true, readBack: { matches: true },
+      });
+    } finally {
+      if (saved === undefined) delete process.env.ROBLOX_CREATOR_USER_ID; else process.env.ROBLOX_CREATOR_USER_ID = saved;
+    }
+  });
+
+  test('uploads nothing for a place someone else owns, and never calls a rejection published', async () => {
+    const saved = process.env.ROBLOX_CREATOR_USER_ID;
+    process.env.ROBLOX_CREATOR_USER_ID = '42';
+    try {
+      const groupPlace = publishingTools({ '/api/animation-publish-info': () => ({ ...info, placeCreatorType: 'Group', placeCreatorId: 7 }) }, done);
+      const refused = body(await groupPlace.tools.animation({ action: 'publish', path: 'game.ServerStorage.Wave' }));
+      expect(refused.errorCode).toBe('owner_mismatch');
+      expect(groupPlace.uploads).toEqual([]);
+
+      const rejected = publishingTools({
+        '/api/animation-publish-info': () => info,
+        '/api/export-rbxm': () => ({ base64: 'cmJ4bQ==' }),
+        '/api/animation-read-back': () => ({ matches: true }),
+      }, { ...done, response: { assetId: '556', moderationResult: { moderationState: 'Rejected' } } });
+      expect(body(await rejected.tools.animation({ action: 'publish', path: 'game.ServerStorage.Wave' })))
+        .toMatchObject({ published: false, moderation: 'Rejected', approved: false });
+    } finally {
+      if (saved === undefined) delete process.env.ROBLOX_CREATOR_USER_ID; else process.env.ROBLOX_CREATOR_USER_ID = saved;
+    }
+  });
+
+  test('without an Open Cloud key, says how to publish and uploads nothing', async () => {
+    const tools = new RobloxStudioTools(new BridgeService());
+    (tools as unknown as { openCloudClient: unknown }).openCloudClient = { hasApiKey: () => false };
+    const result = body(await tools.animation({ action: 'publish', path: 'game.ServerStorage.Wave' }));
+    expect(result.errorCode).toBe('open_cloud_not_configured');
+    expect(result.error).toMatch(/verify plays the animation in a playtest/);
+  });
+});
+
+describe('verifying in a playtest', () => {
+  test('compares only the joints the animation keys, since other tracks blend into the rest', () => {
+    const sequence = compiled(wave());
+    const samples = faithfulSamples(sequence).map((sample) => ({
+      ...sample,
+      transforms: { ...sample.transforms, Head: [0, 0, 0, 0, -1, 0, 1, 0, 0, 0, 0, 1] },
+    }));
+    expect(verifyLivePlayback(sequence, samples)).toMatchObject({ verified: true, maxDegrees: 0 });
+    expect(verifyLivePlayback(sequence, faithfulSamples(sequence, 0.3))).toMatchObject({ verified: false, maxStuds: 0.3 });
+  });
+
+  test('plays on the playtest client and checks the wired slot', async () => {
+    const sequence = compiled(wave());
+    const tools = new RobloxStudioTools(new BridgeService());
+    const calls: { endpoint: string; data: Record<string, unknown>; target: unknown }[] = [];
+    (tools as unknown as { _callSingle: unknown })._callSingle = async (endpoint: string, data: Record<string, unknown>, target: unknown) => {
+      calls.push({ endpoint, data, target });
+      return {
+        length: 1,
+        samples: faithfulSamples(sequence),
+        wiredIds: ['rbxassetid://555', 'http://www.roblox.com/asset/?id=555'],
+        playingIds: ['rbxassetid://555'],
+      };
+    };
+    const result = body(await tools.animation({ action: 'verify', animation: wave(), animation_id: '555', slot: 'idle' }));
+    expect(calls).toEqual([{ endpoint: '/api/animation-verify', data: expect.objectContaining({ animationId: 'rbxassetid://555', slot: 'idle' }), target: 'client-1' }]);
+    expect(calls[0].data).not.toHaveProperty('sequence');
+    expect(result).toMatchObject({
+      verified: true,
+      played: { source: 'published', verified: true },
+      wiring: { slot: 'idle', matches: true, playingNow: true },
+    });
   });
 });

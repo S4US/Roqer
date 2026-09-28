@@ -95,10 +95,23 @@ test("mcp-tools - checking upload status is read-only but uploading remains irre
   assert.strictEqual(riskForTool("upload_asset"), "irreversible");
 });
 
-test("mcp-tools - checking an animation is a read; building one is a reversible edit", () => {
+test("mcp-tools - checking or verifying an animation is a read; publishing it always asks", () => {
   assert.strictEqual(riskForTool("animation", { action: "check", animation: {} }), "read");
+  assert.strictEqual(riskForTool("animation", { action: "verify", animation: {} }), "read");
   assert.strictEqual(riskForTool("animation", { action: "build", animation: {}, parent: "game.ServerStorage" }), "mutation");
+  assert.strictEqual(riskForTool("animation", { action: "wire", slot: "run", animation_id: "rbxassetid://1" }), "mutation");
+  assert.strictEqual(riskForTool("animation", { action: "publish", path: "game.ServerStorage.Run" }), "irreversible");
   assert.strictEqual(riskForTool("animation"), "mutation");
+  // Publishing waits on Roblox as an upload does, plus its export and read-back.
+  assert.ok(timeoutForTool("animation") >= timeoutForTool("upload_asset"));
+});
+
+test("mcp-tools - publishing and wiring are summarised by what they change", () => {
+  assert.strictEqual(summarizeToolCall("animation", { action: "publish", path: "game.ServerStorage.Run" }), "animation · publish game.ServerStorage.Run to Roblox");
+  assert.strictEqual(
+    summarizeToolCall("animation", { action: "wire", slot: "run", animation_id: "rbxassetid://555", expected_id: "rbxassetid://554" }),
+    "animation · wire rbxassetid://555 to the run slot of every character, replacing rbxassetid://554",
+  );
 });
 
 test("mcp-tools - an animation call is summarised in words, not as its pose JSON", () => {

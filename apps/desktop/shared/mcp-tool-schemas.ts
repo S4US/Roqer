@@ -44,18 +44,23 @@ export type ToolSchema = {
 };
 
 /** sha256 of `packages/core/src/tools/definitions.ts` with LF newlines. */
-export const TOOL_DEFINITIONS_DIGEST = "2591dca63e793e9ff913380a8b545aad2e31bfcfc5cb7b443e412082cda48c6a";
+export const TOOL_DEFINITIONS_DIGEST = "b5049b83b26003b234a9b48b02d4dd3a7e53b2b8df5f632d133176d1b7008b71";
 
 export const TOOL_SCHEMAS: Readonly<Record<string, ToolSchema>> = {
   animation: {
-    description: "Use to check a character animation, or build it as a KeyframeSequence.",
+    description: "Use to check, build, publish, wire, or verify an R15 character animation.",
     parameters: [
-      { name: "action", type: "string", required: true, enumValues: ["check", "build"], description: "check measures without Studio; build previews, writes, reads back." },
-      { name: "animation", type: "object", required: true, description: "Pose description for an R15 rig." },
+      { name: "action", type: "string", required: true, enumValues: ["check", "build", "publish", "wire", "verify"], description: "check needs no Studio; verify needs a running playtest." },
+      { name: "animation", type: "object", required: false, description: "Pose description for an R15 rig." },
       { name: "locomotion", type: "boolean", required: false, description: "A gait: adds ground, foot, and symmetry checks." },
       { name: "parent", type: "string", required: false, description: "Build: instance the KeyframeSequence goes in." },
       { name: "expected_revision", type: "string", required: false, description: "Build: revision its last build returned; required to replace it." },
       { name: "waive", type: "string[]", required: false, description: "Failed checks to accept." },
+      { name: "path", type: "string", required: false, description: "Publish: the KeyframeSequence a build wrote." },
+      { name: "display_name", type: "string", required: false, description: "Publish: asset name; defaults to the sequence name." },
+      { name: "slot", type: "string", required: false, enumValues: ["idle", "walk", "run", "jump", "fall", "climb", "swim", "swimidle", "sit"], description: "Wire/verify: default Animate slot." },
+      { name: "animation_id", type: "string", required: false, description: "Wire/verify: published ID, rbxassetid://N." },
+      { name: "expected_id", type: "string", required: false, description: "Wire: ID the slot holds now; required to replace it." },
       { name: "instance_id", type: "string", required: false, description: "Connected place ID; required with multiple places." },
     ],
   },

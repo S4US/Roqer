@@ -14,6 +14,7 @@ import HttpDiagnostics from "./HttpDiagnostics";
 import PluginSession from "./PluginSession";
 import UIInspectionHandlers from "./handlers/UIInspectionHandlers";
 import UIInteractionHandlers from "./handlers/UIInteractionHandlers";
+import AnimationHandlers from "./handlers/AnimationHandlers";
 
 interface StudioTestServiceMultiplayer extends StudioTestService {
 	CanLeaveTest(): boolean;
@@ -76,6 +77,9 @@ const CLIENT_BROKER_ALLOWED_ENDPOINTS = new Set<string>([
 	"/api/simulate-keyboard-input",
 	"/api/inspect-ui",
 	"/api/interact-ui",
+	// The local character's Animator plays what the player sees, so animation
+	// verification loads and samples its track in the client peer's VM.
+	"/api/animation-verify",
 	// Viewport framing must target the same live client captured by screenshots.
 	"/api/focus-viewport",
 ]);
@@ -233,6 +237,9 @@ function setupClientBroker() {
 		}
 		if (payload && payload.endpoint === "/api/focus-viewport") {
 			return MetadataHandlers.focusViewport(payload.data ?? {});
+		}
+		if (payload && payload.endpoint === "/api/animation-verify") {
+			return AnimationHandlers.animationVerify(payload.data ?? {});
 		}
 		if (payload && payload.endpoint === "/api/execute-luau") {
 			return handleExecuteLuau(payload.data);

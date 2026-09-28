@@ -7,10 +7,25 @@
 // and a sequence edited after its build, or not built by the tool, is never
 // replaced. A motion check that fails stops the build before Studio changes.
 
-import { McpClient, assert, runTest } from './lib/mcp-client.mjs';
+//
+// Then it wires Roblox's own wave animation (a published asset, so nothing is
+// uploaded) to the idle slot, starts a playtest, and verifies there: the
+// built animation plays on the character as checked, and the idle slot holds
+// the wired ID and plays it. Publishing is refused without an Open Cloud key;
+// with ROQER_ANIMATION_UPLOAD=1 and a key, it uploads one real test animation,
+// reads it back, and verifies the published copy in the playtest.
+
+import { McpClient, assert, runTest, safeStopPlaytest, startPlaytestAndWait } from './lib/mcp-client.mjs';
 
 const FOLDER_NAME = '__RoqerAnimationTest';
 const PARENT = `game.ServerStorage.${FOLDER_NAME}`;
+const ROBLOX_WAVE = 'rbxassetid://507770239';
+const UPLOAD = process.env.ROQER_ANIMATION_UPLOAD === '1';
+const REMOVE_LOADER = `
+local loader = game:GetService("ServerScriptService"):FindFirstChild("RoqerAnimate")
+if loader then loader:Destroy() end
+return true
+`;
 
 function wave(raise) {
   return {
@@ -117,7 +132,61 @@ const passed = await runTest('animation tool', async ({ track }) => {
     });
     state = await luau(client, INSPECT);
     assert(typeof owl.error === 'string' && /jointLimits/.test(owl.error) && state.owl === false, 'a failing motion check stops the build before Studio changes');
+
+    // -- Step 8: publish, wire, verify -------------------------------------
+    // The hand-edited sequence stays refused; start it afresh to publish from.
+    await luau(client, `game:GetService("ServerStorage")[${JSON.stringify(FOLDER_NAME)}].Wave:Destroy() return true`);
+    const rebuiltAfterEdit = await client.callTool('animation', { action: 'build', animation: wave(100), parent: PARENT }, 120_000);
+    assert(rebuiltAfterEdit.built === true, `a fresh build to publish from (${rebuiltAfterEdit.error ?? 'ok'})`);
+
+    let publishedId;
+    if (!process.env.ROBLOX_OPEN_CLOUD_API_KEY) {
+      const refused = await client.callTool('animation', { action: 'publish', path: rebuiltAfterEdit.path }, 120_000);
+      assert(refused.errorCode === 'open_cloud_not_configured', `publishing without a key uploads nothing and says why (${refused.errorCode})`);
+    } else if (UPLOAD) {
+      const published = await client.callTool('animation', { action: 'publish', path: rebuiltAfterEdit.path, display_name: 'Roqer animation tool test' }, 150_000);
+      assert(published.published === true && published.readBack?.matches === true, `publishing uploads the build and reads it back (${published.error ?? `${published.animationId}, ${published.moderation}`})`);
+      publishedId = published.animationId;
+    } else {
+      console.log('  (publish skipped: set ROQER_ANIMATION_UPLOAD=1 to upload a real test animation)');
+    }
+
+    await luau(client, REMOVE_LOADER);
+    const wired = await client.callTool('animation', { action: 'wire', slot: 'idle', animation_id: ROBLOX_WAVE });
+    assert(wired.wired === true && wired.installed === true && wired.readBackMatches === true, `wire installs the loader and sets the idle slot (${wired.error ?? 'ok'})`);
+    const unnamed = await client.callTool('animation', { action: 'wire', slot: 'idle', animation_id: ROBLOX_WAVE });
+    assert(unnamed.errorCode === 'expected_id_required', `replacing a slot needs its current ID (${unnamed.errorCode})`);
+    const wrong = await client.callTool('animation', { action: 'wire', slot: 'idle', animation_id: ROBLOX_WAVE, expected_id: 'rbxassetid://1' });
+    assert(wrong.errorCode === 'animation_id_changed', `a slot changed underneath is not overwritten (${wrong.errorCode})`);
+    const same = await client.callTool('animation', { action: 'wire', slot: 'idle', animation_id: ROBLOX_WAVE, expected_id: ROBLOX_WAVE });
+    assert(same.wired === true && same.installed === false, 'naming the current ID replaces it');
+
+    let playtestStarted = false;
+    try {
+      playtestStarted = true;
+      await startPlaytestAndWait(client, { timeoutSec: 60 });
+      const temporary = await client.callTool('animation', { action: 'verify', animation: wave(100) }, 60_000);
+      assert(temporary.verified === true && temporary.played?.source === 'temporary clip', `verify plays the built animation on the character as checked (within ${temporary.played?.maxDegrees}°; ${temporary.error ?? temporary.played?.reason ?? 'ok'})`);
+      const wiring = await client.callTool('animation', { action: 'verify', animation: wave(100), animation_id: ROBLOX_WAVE, slot: 'idle' }, 60_000);
+      assert(wiring.wiring?.matches === true && wiring.wiring?.playingNow === true, `the idle slot holds the wired ID and plays it (${JSON.stringify(wiring.wiring ?? wiring.error)})`);
+      if (publishedId) {
+        const published = await client.callTool('animation', { action: 'verify', animation: wave(100), animation_id: publishedId }, 60_000);
+        assert(published.verified === true && published.played?.source === 'published', `the published copy plays as checked (within ${published.played?.maxDegrees}°)`);
+      }
+    } finally {
+      if (playtestStarted) await safeStopPlaytest(client);
+    }
+
+    const handEdited = await luau(client, `
+      local loader = game:GetService("ServerScriptService").RoqerAnimate
+      loader.Source = loader.Source .. "\\n-- edited"
+      return true
+    `);
+    assert(handEdited === true, 'the loader was edited by hand');
+    const modified = await client.callTool('animation', { action: 'wire', slot: 'run', animation_id: ROBLOX_WAVE });
+    assert(modified.errorCode === 'loader_modified', `an edited loader is left alone (${modified.errorCode})`);
   } finally {
+    await luau(client, REMOVE_LOADER).catch((error) => console.error(`  loader cleanup failed: ${error.message}`));
     await luau(client, `
       local folder = game:GetService("ServerStorage"):FindFirstChild(${JSON.stringify(FOLDER_NAME)})
       if folder then folder:Destroy() end

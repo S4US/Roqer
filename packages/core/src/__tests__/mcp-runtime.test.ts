@@ -120,6 +120,8 @@ describe('MCP v2 tool runtime', () => {
   // tools): character animation had no structured path at all, so every
   // KeyframeSequence was hand-built in arbitrary Luau, unchecked and one
   // approval each. Its pose format lives in the tool guide, not here.
+  // Publishing, wiring, and playtest verification then joined it as actions
+  // (about 470 characters) rather than as three tools of their own.
   test('keeps the catalog within the 3.0 token budget', () => {
     const catalog = TOOL_DEFINITIONS.map(publicToolDefinition);
     const names = new Set(catalog.map((tool) => tool.name));
@@ -132,7 +134,7 @@ describe('MCP v2 tool runtime', () => {
     // keeping the tool count fixed instead of introducing another operation.
     // The line-edit revisions on insert_script_lines and delete_script_lines
     // added about 150 characters: a compare-and-set is worth the tokens.
-    expect(serialized.length).toBeLessThanOrEqual(48_700);
+    expect(serialized.length).toBeLessThanOrEqual(49_200);
     expect(catalog.filter((tool) => tool.outputSchema)).toHaveLength(51);
     expect(catalog.every((tool) => tool.description.length <= 120)).toBe(true);
     expect(inspectorCatalog).toHaveLength(25);
