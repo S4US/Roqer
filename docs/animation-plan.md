@@ -146,7 +146,7 @@ answer, and in the viewer it is one switch away ("3D | Picture").
   that steps through them. That needs each stage's job kept together, and is
   left for later.
 
-### 5. Pose compiler (core)
+### 5. Pose compiler (core) — implemented
 
 It turns a compact pose description (joint rotations per keyframe, easing,
 loop, priority, rig type) into a `KeyframeSequence` description:
@@ -155,6 +155,42 @@ loop, priority, rig type) into a `KeyframeSequence` description:
 - It knows the R15 joint tree, taken from the step 2 rest pose.
 - It is pure TypeScript with no Studio or Blender dependency, so it is
   unit-tested here.
+
+What was built, in `packages/core/src/animation/`:
+
+- **`r15-rig.ts`** holds the rig from the second spike run: 16 parts with
+  their sizes, 15 joints with their attachment offsets, and the hip height.
+- **`pose-compiler.ts`** takes the description and returns either the whole
+  sequence or every problem found, each with its path. It never returns part
+  of a sequence.
+- **The description.**
+  - Joints are named as in the rig ("RightShoulder"). A part name gets an
+    error that names the joint that moves it.
+  - Each keyed joint takes a rotation in degrees about its parent part's
+    axes, applied as `CFrame.Angles` does. An empty pose is the rest pose.
+  - Only `Root` takes a position, which offsets the whole body.
+  - Easing falls back field by field: joint, then keyframe, then animation,
+    then the engine's default (Linear, In).
+- **Validation.**
+  - The first keyframe is at time 0, and times increase.
+  - A joint keyed anywhere is keyed in the first keyframe, so its motion
+    starts from a stated pose.
+  - Unknown fields are refused, so a misspelt field cannot be silently
+    dropped.
+  - Limits: 240 keyframes, 60 seconds, ±360° per axis, ±20 studs for `Root`.
+    At most 20 problems are listed.
+  - Judging the motion itself is step 6's job.
+- **The output.**
+  - Poses are keyed by part name, the part each joint moves.
+  - Each keyframe's poses nest from `HumanoidRootPart` down, and only the
+    branches that reach a keyed part are included.
+  - A pose on the way to a keyed part is a placeholder: weight 0, identity,
+    so it keys nothing itself.
+  - CFrames are given as the 12 numbers `CFrame.new` takes.
+- **Still to observe live.** That the engine skips a weight-0 placeholder
+  instead of keying its joint to the identity. The spike keyed every
+  intermediate pose at weight 1, so it did not test this. Step 7's live test
+  must, before the tool relies on it.
 
 ### 6. Motion checks
 
