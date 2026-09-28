@@ -62,7 +62,7 @@ import { adoptPreviousUserData, PREVIOUS_USER_DATA_SEGMENTS } from "../runtime/u
 import { RunJournal } from "../runtime/run-journal";
 import { BridgeLog } from "../runtime/bridge-log";
 import { AttachmentRegistry, MAX_IMAGE_SOURCE_BYTES } from "../runtime/attachment-context";
-import { encodeAttachmentImage } from "./image-encoder";
+import { encodeAttachmentImage, previewToolImage } from "./image-encoder";
 import { DiscordPresence } from "./discord-presence";
 import { McpServerProcess } from "../runtime/mcp-server-process";
 import { mcpServerMessage, type McpServerState } from "../shared/mcp-server";
@@ -1461,6 +1461,7 @@ async function startRun(event: IpcMainInvokeEvent, payload: unknown): Promise<Ru
       planner,
       request: { ...resolvedRequest, runId },
       images: attachmentContext.images,
+      previewImage: previewToolImage,
       emit: (runEvent: RunEvent) => {
         runJournal().record(runEvent);
         if (runEvent.type === "run-completed") completedRuns.add(runId);

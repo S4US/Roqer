@@ -953,6 +953,16 @@ a.small-button:focus-visible { outline: 2px solid var(--accent); outline-offset:
 .activity-node .card-details-body { display: grid; gap: 9px; padding: 2px 0 6px 39px; }
 .evidence-note { margin: 0; color: var(--ink-secondary); font-size: var(--type-meta); line-height: 1.55; }
 .evidence-image { display: block; width: 100%; border-radius: 9px; }
+.evidence-gallery { display: flex; flex-wrap: wrap; gap: 10px; margin: 12px 0; }
+.evidence-thumb { display: flex; flex-direction: column; gap: 5px; max-width: 260px; padding: 0; color: var(--muted); background: none; border: 0; cursor: zoom-in; font-size: var(--type-meta); text-align: left; }
+.evidence-thumb img { display: block; max-width: 260px; max-height: 170px; object-fit: contain; background: var(--surface-sunken); border: 1px solid var(--border); border-radius: 9px; }
+.evidence-thumb:hover img { border-color: var(--accent-border); }
+.evidence-thumb:focus-visible { outline: 0; }
+.evidence-thumb:focus-visible img { outline: 2px solid var(--accent); outline-offset: 2px; }
+.evidence-thumb span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.image-modal { max-width: calc(100vw - 40px); max-height: calc(100vh - 40px); overflow: auto; padding: 20px; color: var(--ink); background: var(--surface-raised); border: 1px solid var(--border-subtle); border-radius: 16px; box-shadow: var(--shadow-lg); }
+/* Never scaled past its own size: a preview enlarged beyond it only blurs. */
+.image-modal > img { display: block; max-width: 100%; max-height: calc(100vh - 150px); margin: 16px auto 0; object-fit: contain; border-radius: 9px; }
 .evidence-lines { display: flex; flex-direction: column; gap: 4px; margin: 0; padding: 0; color: var(--muted); list-style: none; font: var(--weight-regular) var(--type-meta)/1.55 "Geist Mono Variable", monospace; }
 .evidence-lines li { overflow: hidden; text-overflow: ellipsis; white-space: pre; }
 

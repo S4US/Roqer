@@ -8,7 +8,7 @@ import type { RunQuestion } from "../shared/question";
 import type { RunDecision } from "../shared/run-digest";
 import type { RunTask } from "../shared/tasks";
 import {
-  RUN_EVENT_SCHEMA_VERSION,
+  MAX_RECORDED_EVIDENCE_IMAGES, RUN_EVENT_SCHEMA_VERSION,
   type RunChange, type RunEvent, type RunEvidence, type RunFailure,
   type RunOutcome, type RunRecord, type ToolProposal,
 } from "../shared/run-events";
@@ -421,6 +421,34 @@ export function recordSteps(record: RunRecord): ActivityStep[] {
 }
 
 /**
+ * The evidence as it is saved: every item, but only the newest few previews.
+ *
+ * A run that takes thirty screenshots would otherwise carry thirty pictures
+ * into the chat file. The last ones are kept because they show where the run
+ * ended, which is what the answer describes.
+ */
+export function recordedEvidence(evidence: readonly RunEvidence[]): RunEvidence[] {
+  let kept = 0;
+  const result = [...evidence];
+  for (let index = result.length - 1; index >= 0; index -= 1) {
+    if (result[index].imageDataUrl === undefined) continue;
+    if (kept < MAX_RECORDED_EVIDENCE_IMAGES) {
+      kept += 1;
+      continue;
+    }
+    const trimmed = { ...result[index] };
+    delete trimmed.imageDataUrl;
+    result[index] = trimmed;
+  }
+  return result;
+}
+
+/** The evidence previews to show in an answer, oldest first. */
+export function evidenceImages(evidence: readonly RunEvidence[]): RunEvidence[] {
+  return evidence.filter((item) => item.imageDataUrl !== undefined).slice(-MAX_RECORDED_EVIDENCE_IMAGES);
+}
+
+/**
  * Compact a finished run for persistence. Live-only detail — progress lines and
  * the prose, which is kept as the message text — is dropped, so chat history
  * does not grow with every run.
@@ -448,7 +476,7 @@ export function toRunRecord(view: RunView): RunRecord | null {
         };
       }),
     changes: view.changes,
-    evidence: view.evidence,
+    evidence: recordedEvidence(view.evidence),
     failures: view.failures,
     ...(view.tasks.length > 0 ? { tasks: view.tasks } : {}),
     ...(view.verification ? { verification: view.verification } : {}),

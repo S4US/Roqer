@@ -5,6 +5,8 @@ import {
 } from "../runtime/model-api/turn-contract";
 
 import type { EncodedImage, ImageEncoder } from "../runtime/attachment-context";
+import type { McpToolImage } from "../runtime/mcp-types";
+import { isEvidenceImage } from "../shared/run-events";
 import { MAX_ATTACHMENT_THUMBNAIL_CHARACTERS } from "../shared/workspace-validation";
 
 /**
@@ -32,6 +34,13 @@ const JPEG_QUALITIES = [82, 62, 45];
 
 const THUMBNAIL_EDGE = 320;
 const THUMBNAIL_QUALITIES = [70, 50];
+
+/**
+ * Evidence previews are shown in the answer and opened larger on click, so they
+ * are kept at twice an attachment thumbnail's size, then smaller if they must.
+ */
+const EVIDENCE_PREVIEW_EDGES = [640, 480];
+const EVIDENCE_PREVIEW_QUALITIES = [72, 55, 40];
 
 function base64Length(bytes: number): number {
   return Math.ceil(bytes / 3) * 4;
@@ -116,3 +125,26 @@ export const encodeAttachmentImage: ImageEncoder = async ({ bytes, mediaType, na
   }
   throw new Error(`“${name}” could not be made small enough to send.`);
 };
+
+/**
+ * The preview kept with image evidence: a screenshot or a Blender preview,
+ * scaled down and re-encoded as JPEG so it fits the saved-record bound.
+ *
+ * Undefined when the image does not decode here or cannot be made small
+ * enough. The evidence is then kept without a picture; the tool call itself is
+ * unaffected.
+ */
+export async function previewToolImage(image: McpToolImage): Promise<string | undefined> {
+  const source = nativeImage.createFromBuffer(Buffer.from(image.data, "base64"));
+  if (source.isEmpty()) return undefined;
+  for (const edge of EVIDENCE_PREVIEW_EDGES) {
+    const preview = scaled(source, edge);
+    for (const quality of EVIDENCE_PREVIEW_QUALITIES) {
+      const jpeg = preview.toJPEG(quality);
+      if (jpeg.byteLength === 0) continue;
+      const url = `data:image/jpeg;base64,${jpeg.toString("base64")}`;
+      if (isEvidenceImage(url)) return url;
+    }
+  }
+  return undefined;
+}

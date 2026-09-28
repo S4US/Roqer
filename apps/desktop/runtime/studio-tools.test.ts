@@ -808,6 +808,58 @@ test("successful runtime observations are recorded with distinct evidence dimens
   assert.equal(evidence[1].metadata?.[0]?.value, "1");
 });
 
+const PREVIEW = "data:image/jpeg;base64,cHJldmlldw==";
+
+test("image evidence carries the host-made preview of the first returned image", async () => {
+  const screenshot = {
+    ...ok({ width: 800, height: 600 }),
+    images: [{ data: "Rmlyc3Q=", mediaType: "image/png" as const }, { data: "U2Vjb25k", mediaType: "image/png" as const }],
+  };
+  const { context, evidence } = contextWith([screenshot]);
+  const previewed: string[] = [];
+  context.previewImage = async (image) => { previewed.push(image.data); return PREVIEW; };
+  const run = createStudioToolRunner(context);
+
+  const result = await run("capture_screenshot", {});
+
+  assert.deepEqual(previewed, ["Rmlyc3Q="]);
+  assert.equal(evidence[0].kind, "screenshot");
+  assert.equal(evidence[0].imageDataUrl, PREVIEW);
+  assert.equal(result.images?.length, 2, "the model still receives every image at full size");
+});
+
+test("a preview that cannot be made leaves the evidence and the call intact", async () => {
+  const screenshot = { ...ok({}), images: [{ data: "QUJD", mediaType: "image/png" as const }] };
+  const failing = contextWith([screenshot]);
+  failing.context.previewImage = async () => { throw new Error("decoder unavailable"); };
+  const withoutEncoder = contextWith([screenshot]);
+
+  const failed = await createStudioToolRunner(failing.context)("capture_screenshot", {});
+  await createStudioToolRunner(withoutEncoder.context)("capture_screenshot", {});
+
+  assert.equal(failed.ok, true);
+  assert.equal(failing.evidence[0].kind, "screenshot");
+  assert.equal(failing.evidence[0].imageDataUrl, undefined);
+  assert.equal(withoutEncoder.evidence[0].imageDataUrl, undefined);
+});
+
+test("a Blender preview is shown as the job's output and never counts as Studio evidence", async () => {
+  const job = { ...ok({}), text: "Exported model.glb", images: [{ data: "QUJD", mediaType: "image/png" as const }] };
+  const { context, evidence } = contextWith([job, { ...ok({}), text: "Exported model.glb" }]);
+  context.previewImage = async () => PREVIEW;
+  const run = createStudioToolRunner(context);
+
+  await run("run_blender_script", { script: "import bpy" });
+  await run("run_blender_script", { script: "import bpy" });
+
+  assert.equal(evidence.length, 1, "a job that returned no image records nothing");
+  assert.equal(evidence[0].kind, "inspection");
+  assert.equal(evidence[0].title, "Blender result, before upload");
+  assert.equal(evidence[0].requirement, undefined);
+  assert.equal(evidence[0].passed, undefined);
+  assert.equal(evidence[0].imageDataUrl, PREVIEW);
+});
+
 test("a failed observation does not manufacture passing evidence", async () => {
   const { context, evidence } = contextWith([{
     ...unavailable(), errorCode: "request_failed", message: "client disconnected",

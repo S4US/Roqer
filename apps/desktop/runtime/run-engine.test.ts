@@ -987,3 +987,47 @@ test("nothing is emitted after run-completed even if the planner keeps calling s
   assertAllValid(events);
 });
 
+
+test("the host's preview encoder reaches the planner, and an oversized preview is dropped", async () => {
+  const events: RunEvent[] = [];
+  const previewed: string[] = [];
+  const valid = "data:image/jpeg;base64,cHJldmlldw==";
+  const session = new RunSession({
+    caller: makeCaller(async () => outcome()),
+    planner: planner(async (ctx) => {
+      const made = await ctx.previewImage?.({ data: "QUJD", mediaType: "image/png" });
+      ctx.recordEvidence({ kind: "screenshot", title: "kept", imageDataUrl: made });
+      ctx.recordEvidence({ kind: "screenshot", title: "oversized", imageDataUrl: `data:image/jpeg;base64,${"A".repeat(200_000)}` });
+      ctx.recordEvidence({ kind: "screenshot", title: "not an image", imageDataUrl: "javascript:alert(1)" });
+      return "done";
+    }),
+    previewImage: async (image) => { previewed.push(image.data); return valid; },
+    request: makeRequest(),
+    emit: (event) => events.push(event),
+  });
+
+  await session.execute();
+
+  const evidence = events.flatMap((event) => (event.type === "evidence" ? [event.evidence] : []));
+  assert.deepEqual(previewed, ["QUJD"]);
+  assert.deepEqual(evidence.map((item) => [item.title, item.imageDataUrl]), [
+    ["kept", valid],
+    ["oversized", undefined],
+    ["not an image", undefined],
+  ]);
+  assertAllValid(events);
+});
+
+test("a planner context has no preview encoder when the host supplied none", async () => {
+  let context: PlannerContext | undefined;
+  const session = new RunSession({
+    caller: makeCaller(async () => outcome()),
+    planner: planner(async (ctx) => { context = ctx; return "done"; }),
+    request: makeRequest(),
+    emit: () => undefined,
+  });
+
+  await session.execute();
+
+  assert.equal(context?.previewImage, undefined);
+});
