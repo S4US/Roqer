@@ -1,11 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
-  ANIMATION_NAME_LABEL, ANIMATION_PREVIEW_TITLE, BLENDER_PREVIEW_TITLE, SCREENSHOT_VIEW_LABEL, SCREENSHOT_VIEW_PLAYTEST,
+  ANIMATION_NAME_LABEL, ANIMATION_PREVIEW_TITLE, BLENDER_MODEL_LABEL, BLENDER_PREVIEW_TITLE, SCREENSHOT_VIEW_LABEL, SCREENSHOT_VIEW_PLAYTEST,
   type RunChange, type RunEvidence,
 } from "../shared/run-events";
 import {
-  hasModelPreview, previewCaption, previewLayout, previewSource, previewSourceLabel, previewTileLabel, previewVersions, shortTarget,
+  hasModelPreview, keptPreviewIds, previewCaption, previewLayout, previewSource, previewSourceLabel, previewSubject, previewTileLabel,
+  previewVersions, shortTarget,
 } from "./preview-layout";
 
 const image = "data:image/jpeg;base64,QUJD";
@@ -89,6 +90,36 @@ test("previews of one animation are versions of one picture, shown where the lat
   // A Blender result named like an animation is still its own picture.
   const blender: RunEvidence = { ...wave("b"), title: BLENDER_PREVIEW_TITLE };
   assert.equal(previewVersions([blender, wave("4")]).shown.length, 2);
+});
+
+test("previews of one Blender model, by the file it was written to, are versions of one picture", () => {
+  const model = (id: string, file?: string): RunEvidence => ({
+    id, kind: "inspection", title: BLENDER_PREVIEW_TITLE, imageDataUrl: image,
+    ...(file === undefined ? {} : { metadata: [{ label: BLENDER_MODEL_LABEL, value: file }] }),
+  });
+  const images = [model("sword-1", "sword.glb"), model("shield", "shield.glb"), shot("s"), model("sword-2", "sword.glb"), model("old-a"), model("old-b")];
+  const { shown, versions } = previewVersions(images);
+  assert.deepEqual(shown.map((item) => item.id), ["shield", "s", "sword-2", "old-a", "old-b"]);
+  assert.deepEqual(versions.get("sword-2")?.map((item) => item.id), ["sword-1", "sword-2"]);
+  // Previews saved before models were named each stay a picture of their own.
+  assert.equal(versions.size, 1);
+  // A model and an animation of the same name are different things.
+  const wave: RunEvidence = { id: "w", kind: "inspection", title: ANIMATION_PREVIEW_TITLE, imageDataUrl: image, metadata: [{ label: ANIMATION_NAME_LABEL, value: "sword.glb" }] };
+  assert.equal(previewSubject(wave) === previewSubject(model("x", "sword.glb")), false);
+});
+
+test("the picture budget keeps the latest of every thing before any earlier version", () => {
+  const wave = (id: string): RunEvidence => ({
+    id, kind: "inspection", title: ANIMATION_PREVIEW_TITLE, imageDataUrl: image, metadata: [{ label: ANIMATION_NAME_LABEL, value: "Wave" }],
+  });
+  const images = [shot("a"), wave("w1"), shot("b"), wave("w2"), wave("w3"), wave("w4"), shot("c")];
+  assert.deepEqual([...keptPreviewIds(images, 4)].sort(), ["a", "b", "c", "w4"]);
+  // Room left over goes to the newest earlier versions.
+  assert.deepEqual([...keptPreviewIds(images, 6)].sort(), ["a", "b", "c", "w2", "w3", "w4"]);
+  // More distinct things than room: the newest things win.
+  assert.deepEqual([...keptPreviewIds(images, 2)].sort(), ["c", "w4"]);
+  assert.equal(keptPreviewIds(images, 0).size, 0);
+  assert.equal(keptPreviewIds(images, 99).size, images.length);
 });
 
 test("only a Blender result with a kept model opens in 3D, and its tile says so", () => {

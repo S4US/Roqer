@@ -21,6 +21,7 @@ import { withLocalOperations } from "../runtime/local-operations";
 import type { McpCallOptions, McpToolOutcome } from "../runtime/mcp-types";
 import { BLENDER_OPERATION, type BlenderSettingsResult, type BlenderSettingsView } from "../shared/blender";
 import type { ModelPreviewResult } from "../shared/model-preview";
+import type { EvidencePictureResult } from "../shared/evidence-picture";
 import { OpenCloudStore, type OpenCloudResolved } from "../runtime/open-cloud-store";
 import {
   parseOpenCloudSave,
@@ -537,6 +538,16 @@ function blenderJobsRoot(): string {
 async function loadModelPreview(event: IpcMainInvokeEvent, id: unknown): Promise<ModelPreviewResult> {
   if (!isTrusted(event.sender)) return { ok: false, reason: "refused" };
   return readModelPreview(blenderJobsRoot(), id);
+}
+
+/**
+ * A saved run's picture, for the chat. The renderer names it only by the ref
+ * its evidence carries; the picture store finds the file from that name alone
+ * and checks it is the picture that was stored before it is sent.
+ */
+async function loadEvidencePicture(event: IpcMainInvokeEvent, ref: unknown): Promise<EvidencePictureResult> {
+  if (!isTrusted(event.sender)) return { ok: false, reason: "refused" };
+  return store().pictures.read(ref);
 }
 
 async function blenderResult(operation: () => Promise<BlenderSettingsView>): Promise<BlenderSettingsResult> {
@@ -1469,6 +1480,8 @@ async function startRun(event: IpcMainInvokeEvent, payload: unknown): Promise<Ru
     if (attachmentContext.text) {
       resolvedRequest = { ...resolvedRequest, prompt: `${request.prompt}\n\n${attachmentContext.text}` };
     }
+    /** The pictures this run stored, held in the picture store until it ends. */
+    const heldPictures = new Set<string>();
     const session = new RunSession({
       caller: blender
         ? withLocalOperations(client, new Map([[BLENDER_OPERATION, (args, options) => runBlenderJob(args, options, request.chatId)]]))
@@ -1479,6 +1492,16 @@ async function startRun(event: IpcMainInvokeEvent, payload: unknown): Promise<Ru
       images: attachmentContext.images,
       previewImage: previewToolImage,
       storeModelPreview: (glbBase64: string) => storeModelPreview(blenderJobsRoot(), glbBase64),
+      // Each picture is held for as long as the run goes, so no clean-up
+      // removes it before the chat that records the run is saved.
+      storePicture: async (dataUrl: string) => {
+        const ref = await store().pictures.put(dataUrl);
+        if (ref !== undefined && !heldPictures.has(ref)) {
+          heldPictures.add(ref);
+          store().pictures.hold([ref]);
+        }
+        return ref;
+      },
       emit: (runEvent: RunEvent) => {
         runJournal().record(runEvent);
         if (runEvent.type === "run-completed") completedRuns.add(runId);
@@ -1493,6 +1516,9 @@ async function startRun(event: IpcMainInvokeEvent, payload: unknown): Promise<Ru
     executionStarted = true;
     const execution = session.execute().finally(async () => {
       runSessions.delete(runId);
+      // The saved chat refers to them from here on; the picture store's grace
+      // covers the moment before it is saved.
+      store().pictures.release(heldPictures);
       presence.setRunning(runSessions.size > 0);
       if (runSessions.size === 0 && bridgeRestartPending) {
         void restartBridgeForOpenCloud().catch((error) => console.error("Roqer could not restart the Studio bridge with new Open Cloud settings:", error));
@@ -1901,6 +1927,7 @@ app.whenReady().then(async () => {
   ipcMain.handle("blender:choose", chooseBlender);
   ipcMain.handle("blender:redetect", redetectBlender);
   ipcMain.handle("previews:model", loadModelPreview);
+  ipcMain.handle("previews:picture", loadEvidencePicture);
   ipcMain.handle("run:start", startRun);
   ipcMain.handle("run:respond", respondToRun);
   ipcMain.handle("run:answer", answerRun);

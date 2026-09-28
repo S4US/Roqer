@@ -70,7 +70,9 @@ whether the engine skips the pose compiler's weight-0 placeholders.
 Studio screenshots and Blender previews show in the answer instead of only in
 the activity list.
 
-- **The previews card.** It is one card in the Activity card's style.
+- **The previews card.** It is the Previews tab of the run's Results card,
+  beside the Changes and Uploads tabs, in the Activity card's style. A
+  finished run opens on it; an earlier run's card folds to its header.
   - The newest picture leads. Up to three earlier ones sit beside it, and past
     that the last tile shows a count of the rest.
   - Each tile says where the picture came from: Studio, Playtest, or Blender ·
@@ -90,7 +92,18 @@ the activity list.
 - **Blender previews** are labelled "Blender result, before upload". They are
   recorded as an inspection with no requirement, so they never satisfy the
   completion check.
-- **What is saved.** A saved run keeps its newest six previews.
+- **What is saved.** A run shows and keeps up to forty previews, spent on
+  distinct things first: the latest picture of each animation, model or
+  screenshot, newest first, then earlier versions. A picture past that is
+  counted in the answer ("3 earlier pictures not kept"), not dropped silently.
+- **Where pictures live.** Each picture is a file in `workspace-pictures`
+  beside the chats, named by the SHA-256 of its bytes; a chat keeps only that
+  name. The main process serves a picture by name alone and checks the file
+  hashes to it. A picture goes once no chat refers to it (its chat was
+  deleted), no running run holds it, and it is over ten minutes old. Chats
+  saved by earlier builds, with pictures inside, are moved out on load. A
+  picture that cannot be stored stays inside its chat, at most six per run.
+  Export puts pictures back inline, so an export stands on its own.
 - **Validation.** The run engine and the load-time validator both refuse a
   preview that is not a bounded PNG or JPEG data URL.
 - **Why no schema bump.** The saved format needed no migration.
@@ -412,14 +425,15 @@ What was built:
     a job folder beside Blender's, under the same id shape. So it is served,
     checked again and expired exactly as a Blender preview is, and older
     builds still load the records.
-  - In the answer, the latest animation plays inline in the previews card, with
+  - In the answer, the latest animation plays inline in the Previews tab, with
     its playback bar underneath, and opens in the full viewer.
   - Chromium keeps only a few WebGL contexts alive, so the inline view mounts
     only while the card is on screen and the viewer is closed; otherwise the
     card shows the contact sheet.
   - Previews of one animation, by name, are versions of one picture rather
     than a tile each. The card and the viewer step through them ("Version 3 of
-    6"), and the latest leads.
+    6"), and the latest leads. Blender previews of one output file group the
+    same way.
 - **Aim posing** (`animation/pose-compiler.ts`). A real run showed the agent
   failing to work out the combined Euler rotation that a wave needs (shoulder
   `[90, 0, 90]`). Poses can now say `aim: [right, up, forward]` for a shoulder

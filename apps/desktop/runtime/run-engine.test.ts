@@ -1018,6 +1018,42 @@ test("the host's preview encoder reaches the planner, and an oversized preview i
   assertAllValid(events);
 });
 
+test("a preview the host stores carries its ref, and only a picture the run stored gets one", async () => {
+  const events: RunEvent[] = [];
+  const stored = "data:image/jpeg;base64,c3RvcmVk";
+  const refused = "data:image/jpeg;base64,cmVmdXNlZA==";
+  const ref = `${"a".repeat(64)}.jpg`;
+  const outputs = [stored, refused];
+  const session = new RunSession({
+    caller: makeCaller(async () => outcome()),
+    planner: planner(async (ctx) => {
+      const first = await ctx.previewImage?.({ data: "QUJD", mediaType: "image/png" });
+      const second = await ctx.previewImage?.({ data: "REVG", mediaType: "image/png" });
+      ctx.recordEvidence({ kind: "screenshot", title: "stored", imageDataUrl: first });
+      ctx.recordEvidence({ kind: "screenshot", title: "the same picture again", imageDataUrl: first });
+      ctx.recordEvidence({ kind: "screenshot", title: "not stored", imageDataUrl: second });
+      // A planner cannot point evidence at a stored picture of its choosing.
+      ctx.recordEvidence({ kind: "screenshot", title: "named by the planner", imageRef: `${"b".repeat(64)}.jpg` });
+      return "done";
+    }),
+    previewImage: async () => outputs.shift(),
+    storePicture: async (url) => (url === stored ? ref : undefined),
+    request: makeRequest(),
+    emit: (event) => events.push(event),
+  });
+
+  await session.execute();
+
+  const evidence = events.flatMap((event) => (event.type === "evidence" ? [event.evidence] : []));
+  assert.deepEqual(evidence.map((item) => [item.title, item.imageDataUrl, item.imageRef]), [
+    ["stored", stored, ref],
+    ["the same picture again", stored, ref],
+    ["not stored", refused, undefined],
+    ["named by the planner", undefined, undefined],
+  ]);
+  assertAllValid(events);
+});
+
 test("a planner context has no preview encoder when the host supplied none", async () => {
   let context: PlannerContext | undefined;
   const session = new RunSession({

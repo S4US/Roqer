@@ -11,6 +11,7 @@ import type {
 import type { OpenCloudCheckResult, OpenCloudSave, OpenCloudSettingsResult } from "../shared/open-cloud";
 import type { BlenderSettingsResult } from "../shared/blender";
 import type { ModelPreviewResult } from "../shared/model-preview";
+import type { EvidencePictureResult } from "../shared/evidence-picture";
 import { NO_LIMITS, type ProviderLimits } from "../shared/provider-limits";
 import {
   providerLabel,
@@ -146,6 +147,14 @@ export async function redetectBlender(): Promise<BlenderSettingsResult> {
  */
 export async function loadModelPreview(id: string): Promise<ModelPreviewResult> {
   return window.workbenchDesktop?.previews.loadModel(id) ?? { ok: false, reason: "refused" };
+}
+
+/**
+ * A saved run's picture, by the ref its evidence carries. The picture store
+ * lives beside the desktop app's chats, so a browser has none.
+ */
+export async function loadEvidencePicture(ref: string): Promise<EvidencePictureResult> {
+  return window.workbenchDesktop?.previews.loadPicture(ref) ?? { ok: false, reason: "refused" };
 }
 
 export async function getProviderStatus(provider: ProviderId): Promise<ProviderStatus> {

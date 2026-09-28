@@ -28,14 +28,15 @@ import {
 import {
   activitySteps, applyRunEvent, createRunView, describeOutcome, recordAppliedAndVerified,
   recordGateIssues, recordHasWarnings, recordOnlyAnswered, recordSteps, runAppliedAndVerified,
-  runGateIssues, runHasWarnings, runOnlyAnswered, toRunRecord,
+  runGateIssues, runHasWarnings, runOnlyAnswered, toRunRecord, hasPicture,
   type ActivityStep, type PendingApproval, type RunView,
 } from "./run-view";
+import { EvidencePicture, rememberEvidencePicture } from "./evidence-picture";
 import { QUESTION_ESCAPE_OPTION, type RunQuestion } from "../shared/question";
 import { summarizeTasks, type RunTask, type RunTaskStatus } from "../shared/tasks";
 import { Markdown } from "./markdown-view";
 import { SettingsPage } from "./settings-page";
-import { PreviewsCard } from "./evidence-previews";
+import { ResultsCard, type FileExpansion } from "./results-card";
 import { ModelMenu, RunMenu } from "./composer-menus";
 import { blockPreview, characterCount, composedMessage, isLongPaste, lineCount, textSize, type PastedBlock } from "./composer-text";
 
@@ -45,7 +46,7 @@ const SEND_MODIFIER = typeof navigator !== "undefined" && /Mac/.test(navigator.u
 import { providerCard } from "./provider-card";
 import { approvalCode } from "./approval-code";
 import {
-  groupChangesByTarget, highlightRows, parseDiffRows, sourceRows, splitChangeGroup,
+  highlightRows, parseDiffRows, sourceRows, splitChangeGroup,
   type ChangeGroup, type DiffRow, type SyntaxToken,
 } from "./diff-view";
 import {
@@ -287,6 +288,9 @@ function App() {
       });
     };
     const unsubscribe = subscribeToRuns((event) => {
+      // A picture arrives with its ref; kept under it, the saved run shows it
+      // at once when it replaces the live one, instead of asking for it again.
+      if (event.type === "evidence") rememberEvidencePicture(event.evidence);
       if (activeRunId.current === null) {
         if (pendingStartAttempt.current !== null) eventBuffer.current.push(event);
         return;
@@ -1717,6 +1721,7 @@ function LiveRun({ view, steps, nodes, explaining, onAnswer, onExplain, onOpenIn
   // about who is working. A run waiting on Studio or on the user is not
   // thinking, and both of those already say so elsewhere.
   const thinking = running && providerIsThinking(view, nodes);
+  const renderFiles = useCallback((files: ChangeGroup[], expansion: FileExpansion) => <ChangeSet groups={files} expansion={expansion} onOpenInStudio={onOpenInStudio} />, [onOpenInStudio]);
   return <div className="mock-run"><section className="message assistant-message"><div className="message-content">
     {view.planner === DEMO_PLANNER && <p className="run-tag"><span className="run-badge">Demo</span></p>}
     {running && <TypingIndicator done={produced} />}
@@ -1730,8 +1735,7 @@ function LiveRun({ view, steps, nodes, explaining, onAnswer, onExplain, onOpenIn
     {view.pendingQuestion && <QuestionCard question={view.pendingQuestion} explaining={explaining} onAnswer={onAnswer} onExplain={onExplain} />}
     <TaskList tasks={view.tasks} />
     <ActivitySection steps={steps} nodes={nodes} running={running} />
-    <ChangeSet changes={view.changes} onOpenInStudio={onOpenInStudio} />
-    <PreviewsCard evidence={view.evidence} changes={view.changes} />
+    <ResultsCard runId={view.runId} changes={view.changes} evidence={view.evidence} renderFiles={renderFiles} />
     {answered && (running
       // Parsing the whole growing document for every provider delta makes a
       // long reply quadratic. Preserve the text while streaming, then render
@@ -1887,10 +1891,10 @@ function ActivityGroup({ node, open, onToggle }: {
 function EvidenceDetail({ evidence }: { evidence: RunEvidence }) {
   const lines = evidence.lines ?? [];
   const metadata = evidence.metadata ?? [];
-  if (!evidence.detail && lines.length === 0 && metadata.length === 0 && !evidence.imageDataUrl) return null;
+  if (!evidence.detail && lines.length === 0 && metadata.length === 0 && !hasPicture(evidence)) return null;
   return <CardDetails label={evidenceDetailLabel(evidence.kind)}>
     {evidence.detail && <p className="evidence-note">{evidence.detail}</p>}
-    {evidence.imageDataUrl && <img className="evidence-image" src={evidence.imageDataUrl} alt={evidence.title} />}
+    {hasPicture(evidence) && <EvidencePicture className="evidence-image" evidence={evidence} alt={evidence.title} />}
     {lines.length > 0 && (evidence.format === "code"
       // A source read-back is verbatim: indentation and blank lines are part of
       // what is being shown, so it is a code block, not a list of strings.
@@ -2119,10 +2123,15 @@ function ChangeBody({ change }: { change: RunChange }) {
   </div>;
 }
 
-function ArtifactCard({ group, defaultExpanded = true, onOpenInStudio }: { group: ChangeGroup; defaultExpanded?: boolean; onOpenInStudio: OpenInStudio }) {
+function ArtifactCard({ group, expanded, onExpandedChange, onOpenInStudio }: {
+  group: ChangeGroup;
+  /** Held by the Results card, so an open diff outlives a tab switch and the end of the run. */
+  expanded: boolean;
+  onExpandedChange: (open: boolean) => void;
+  onOpenInStudio: OpenInStudio;
+}) {
   const { changes } = group;
   const bodyId = useId();
-  const [expanded, setExpanded] = useState(defaultExpanded);
   const { latest, earlier } = splitChangeGroup(group);
   // Counts belong to one write. Adding up every write to a file reports more
   // changed lines than the file has, so a file written more than once says how
@@ -2144,8 +2153,14 @@ function ArtifactCard({ group, defaultExpanded = true, onOpenInStudio }: { group
     const result = await onOpenInStudio(group.target, scriptChange.instanceId);
     setOpenState({ kind: result.ok ? "opened" : "error", message: result.message });
   };
+  // The whole header toggles for a pointer, as a file row in a list should;
+  // the chevron stays the one control the keyboard and screen readers use.
+  const toggleFromHeader = (event: React.MouseEvent<HTMLDivElement>) => {
+    if ((event.target as HTMLElement).closest("button, a") !== null) return;
+    onExpandedChange(!expanded);
+  };
   return <article className="diff-artifact">
-    <div className="diff-header">
+    <div className="diff-header" onClick={toggleFromHeader}>
       <div className="diff-file">{assetChange ? <FileBox size={14} /> : <FileCode2 size={14} />}<code title={group.target}>{group.target}</code></div>
       <div className="diff-actions">
         {scriptChange && <button className={`open-studio-action state-${openState.kind}`} type="button" onClick={() => void openScript()} disabled={openState.kind === "opening"} title={openState.message ?? "Open this script in Roblox Studio"}>
@@ -2158,7 +2173,7 @@ function ArtifactCard({ group, defaultExpanded = true, onOpenInStudio }: { group
             {added > 0 && <span className="added">+{added}</span>}
             {removed > 0 && <span className="removed">−{removed}</span>}
           </div>}
-        <button className="diff-collapse" type="button" aria-expanded={expanded} aria-controls={expanded ? bodyId : undefined} title={expanded ? "Collapse this file" : "Expand this file"} onClick={() => setExpanded((open) => !open)}>
+        <button className="diff-collapse" type="button" aria-expanded={expanded} aria-controls={expanded ? bodyId : undefined} title={expanded ? "Collapse this file" : "Expand this file"} onClick={() => onExpandedChange(!expanded)}>
           <ChevronDown size={14} />
         </button>
       </div>
@@ -2176,13 +2191,26 @@ function ArtifactCard({ group, defaultExpanded = true, onOpenInStudio }: { group
   </article>;
 }
 
-/** Memoised: see `ActivitySection`. The diffs are the bulk of a live run's DOM. */
-const ChangeSet = memo(function ChangeSet({ changes, collapsed = false, onOpenInStudio }: { changes: RunChange[]; collapsed?: boolean; onOpenInStudio: OpenInStudio }) {
-  const groups = useMemo(() => groupChangesByTarget(changes), [changes]);
+/**
+ * The Changes tab: one row per file, as a list to scan. A lone file opens on
+ * its diff; several stay folded to their headers — path, line counts, Open in
+ * Studio — so a run that touched five scripts reads as five lines, and any one
+ * opens in place. Which are open is the Results card's to keep.
+ *
+ * Memoised: see `ActivitySection`. The diffs are the bulk of a live run's DOM.
+ */
+const ChangeSet = memo(function ChangeSet({ groups, expansion, onOpenInStudio }: { groups: ChangeGroup[]; expansion: FileExpansion; onOpenInStudio: OpenInStudio }) {
   if (groups.length === 0) return null;
-  return <section className="change-set" aria-label="Changed files">
-    {groups.map((group) => <ArtifactCard key={group.target} group={group} defaultExpanded={!collapsed} onOpenInStudio={onOpenInStudio} />)}
-  </section>;
+  return <div className="change-set" aria-label="Changed files" role="list">
+    {groups.map((group) => <div role="listitem" key={group.target}>
+      <ArtifactCard
+        group={group}
+        expanded={expansion.isOpen(group.target)}
+        onExpandedChange={(open) => expansion.onToggle(group.target, open)}
+        onOpenInStudio={onOpenInStudio}
+      />
+    </div>)}
+  </div>;
 });
 
 function AppliedStatus() {
@@ -2227,13 +2255,13 @@ const TASK_ICON: Record<RunTaskStatus, React.ReactNode> = {
  * promise the completion gate will hold the run to, and seeing it beforehand is
  * what makes the caveat at the end legible instead of surprising.
  */
-const TaskList = memo(function TaskList({ tasks }: { tasks: readonly RunTask[] }) {
+const TaskList = memo(function TaskList({ tasks, settled = false }: {
+  tasks: readonly RunTask[];
+  /** A finished run's plan: folded to its heading when every task is done. */
+  settled?: boolean;
+}) {
   if (tasks.length === 0) return null;
-  return <div className="task-list">
-    <div className="task-list-heading">
-      <ListChecks size={14} /><strong>Plan</strong><span>{summarizeTasks(tasks)}</span>
-    </div>
-    <ul>{tasks.map((task) => <li key={task.id} className={`task-row task-${task.status}`}>
+  const rows = <ul>{tasks.map((task) => <li key={task.id} className={`task-row task-${task.status}`}>
       {TASK_ICON[task.status]}
       <span className="task-title">{task.title}</span>
       {task.requiresRuntimeEvidence && (
@@ -2244,8 +2272,19 @@ const TaskList = memo(function TaskList({ tasks }: { tasks: readonly RunTask[] }
           {(task.requiredEvidence ?? ["runtime"]).join("/")}
         </em>
       )}
-    </li>)}</ul>
-  </div>;
+    </li>)}</ul>;
+  const heading = <><strong>Plan</strong><span>{summarizeTasks(tasks)}</span></>;
+  if (!settled) {
+    return <div className="task-list">
+      <div className="task-list-heading"><ListChecks size={14} />{heading}</div>
+      {rows}
+    </div>;
+  }
+  // Folded, it lines up with the Activity row beneath it: caret, name, count.
+  return <details className="task-list" open={tasks.some((task) => task.status !== "done")}>
+    <summary className="task-list-heading"><ChevronRight size={14} className="task-list-caret" />{heading}</summary>
+    {rows}
+  </details>;
 });
 
 /**
@@ -2283,22 +2322,23 @@ function QuestionCard({ question, explaining, onAnswer, onExplain }: {
 /**
  * A finished run from history, in the same two layers a live one uses.
  *
- * Only the latest run's diffs open by default. Earlier ones keep their header
- * -- the file, the line counts, Open in Studio -- and mount their lines when
- * asked, because opening a chat used to build every line of every past diff
- * before it could draw a frame: half a second for a modest chat, over a second
- * for a long one, on every switch.
+ * Only the latest run's results open by default. An earlier run's card folds
+ * to its header -- files, uploads and pictures, each counted -- and mounts its
+ * contents when asked, because opening a chat used to build every line of
+ * every past diff before it could draw a frame: half a second for a modest
+ * chat, over a second for a long one, on every switch. A plan that finished
+ * folds the same way; one with a blocked task stays open, since that is news.
  */
 function RunRecordView({ record, text, latest, onOpenInStudio }: { record: RunRecord; text: string; latest: boolean; onOpenInStudio: OpenInStudio }) {
   const warnings = recordHasWarnings(record);
   const failed = record.toolCalls.filter((call) => !call.ok).length;
   const appliedAndVerified = recordAppliedAndVerified(record);
   const steps = useMemo(() => recordSteps(record), [record]);
+  const renderFiles = useCallback((files: ChangeGroup[], expansion: FileExpansion) => <ChangeSet groups={files} expansion={expansion} onOpenInStudio={onOpenInStudio} />, [onOpenInStudio]);
   return <>
-    <TaskList tasks={record.tasks ?? []} />
+    <TaskList tasks={record.tasks ?? []} settled />
     <ActivitySection steps={steps} running={false} />
-    <ChangeSet changes={record.changes} collapsed={!latest} onOpenInStudio={onOpenInStudio} />
-    <PreviewsCard evidence={record.evidence} changes={record.changes} />
+    <ResultsCard runId={record.runId} changes={record.changes} evidence={record.evidence} collapsed={!latest} renderFiles={renderFiles} />
     <Markdown text={text} className="result-copy" />
     {appliedAndVerified && <AppliedStatus />}
     {!appliedAndVerified && !recordOnlyAnswered(record, text) && <OutcomeCard

@@ -4,6 +4,7 @@ import type { McpToolOutcome } from "./mcp-types";
 import type { PlannerContext } from "./run-engine";
 import type { RunEvidence } from "../shared/run-events";
 import { createStudioToolRunner, parseStudioToolInput, studioToolDescription, studioToolResultText } from "./studio-tools";
+import { previewVersions } from "../src/preview-layout";
 
 const ok = (data: Record<string, unknown>): McpToolOutcome => ({
   ok: true,
@@ -861,6 +862,42 @@ test("a Blender preview is shown as the job's output and never counts as Studio 
   assert.equal(evidence[0].modelPreviewId, undefined, "no 3D preview was kept");
 });
 
+test("a Blender job that continues an earlier one's scene previews a later version of the same model", async () => {
+  // The run that showed the problem: take 1 only built the scene, so its
+  // picture is of scene.blend; take 2 continued it and exported mug.glb.
+  const job = (jobId: string, pictured: string, continuedFrom?: string) => ({
+    ...ok({ jobId, ...(continuedFrom === undefined ? {} : { continuedFrom }), files: [] }),
+    images: [{ data: "QUJD", mediaType: "image/png" as const }],
+    pictured: { name: pictured },
+  });
+  const { context, evidence } = contextWith([
+    job("6317610a", "scene.blend"),
+    job("9254b059", "mug.glb", "6317610a"),
+    job("aaaa0001", "mug.glb"),                   // a fresh start that rebuilds the mug file
+    job("aaaa0002", "scene.blend"),               // a fresh scene: a new model
+    job("aaaa0003", "cup.glb", "0ld0j0b0"),       // continues a job from an earlier run: new here
+    job("aaaa0004", "scene.blend", "aaaa0002"),
+  ]);
+  context.previewImage = async () => PREVIEW;
+  const run = createStudioToolRunner(context);
+  for (let call = 0; call < 6; call += 1) await run("run_blender_script", { script: "import bpy" });
+
+  const subjects = evidence.map((item) => item.subject);
+  assert.ok(subjects.every((subject) => typeof subject === "string" && subject.length > 0));
+  assert.equal(subjects[1], subjects[0], "take 2 continued take 1");
+  assert.equal(subjects[2], subjects[0], "a rebuild writing the same file is the same model");
+  assert.notEqual(subjects[3], subjects[0], "a fresh scene is a new model");
+  assert.notEqual(subjects[4], subjects[0]);
+  assert.notEqual(subjects[4], subjects[3]);
+  assert.equal(subjects[5], subjects[3]);
+
+  // And the answer's card shows them that way: the mug, the new scene, the cup.
+  const { shown, versions } = previewVersions(evidence.map((item, index) => ({ ...item, id: `e${index}` })));
+  assert.deepEqual(shown.map((item) => item.id), ["e2", "e4", "e5"]);
+  assert.deepEqual(versions.get("e2")?.map((item) => item.id), ["e0", "e1", "e2"]);
+  assert.deepEqual(versions.get("e5")?.map((item) => item.id), ["e3", "e5"]);
+});
+
 test("a Blender preview carries its model's 3D preview and what was measured, on Roblox's axes", async () => {
   const files = [
     { name: "cart.glb", path: "/jobs/output/cart.glb", bytes: 2048, meshes: 2, triangles: 1336, size: [3.9, 7.14, 2.75] },
@@ -886,15 +923,18 @@ test("a Blender preview carries its model's 3D preview and what was measured, on
   assert.equal(evidence[0].modelPreviewId, "a1b2c3d4-0");
   // Blender's (x, y, z) arrive in Studio as (x, z, y) in size: 7.14 deep, 2.75 up.
   assert.deepEqual(evidence[0].metadata, [
+    { label: "Model", value: "cart.glb" },
     { label: "Size", value: "3.9 × 2.8 × 7.1 studs" },
     { label: "Triangles", value: "1,336" },
     { label: "Objects", value: "2" },
   ]);
   // The facts are the pictured model's, even without a 3D preview of it.
   assert.equal(evidence[1].modelPreviewId, undefined);
-  assert.deepEqual(evidence[1].metadata?.map((entry) => entry.value), ["2.0 × 2.0 × 2.0 studs", "12", "1"]);
-  // An id that is not one the main process serves is dropped, not recorded.
+  assert.deepEqual(evidence[1].metadata?.map((entry) => entry.value), ["crate.glb", "2.0 × 2.0 × 2.0 studs", "12", "1"]);
+  // An id that is not one the main process serves is dropped, not recorded,
+  // but the model is still named: its picture is a version of cart.glb.
   assert.equal(evidence[2].modelPreviewId, undefined);
+  assert.equal(evidence[2].metadata?.[0].value, "cart.glb");
   // With no word on which model the picture shows, nothing is attributed to one.
   assert.equal(evidence[3].modelPreviewId, undefined);
   assert.equal(evidence[3].metadata, undefined);

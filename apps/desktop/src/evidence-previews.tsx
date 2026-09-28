@@ -1,13 +1,14 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Box, Camera, ChevronLeft, ChevronRight, Gamepad2, ImageIcon, Maximize2, PersonStanding, Rotate3d, X } from "lucide-react";
-import type { RunChange, RunEvidence } from "../shared/run-events";
+import { MAX_RECORDED_EVIDENCE_IMAGES, type RunChange, type RunEvidence } from "../shared/run-events";
 import { ModelViewer } from "./model-viewer";
 import {
   hasModelPreview, previewCaption, previewLayout, previewSource, previewSourceLabel, previewTileLabel, previewVersions,
   type PreviewTile,
 } from "./preview-layout";
-import { evidenceImages } from "./run-view";
+import { evidenceImages, previewsNotShown } from "./run-view";
+import { EvidencePicture } from "./evidence-picture";
 
 /** Which version of each picture with several is on show, by the picture's id; absent means the latest. */
 type VersionChoice = {
@@ -29,22 +30,24 @@ function onShow(choice: VersionChoice, evidence: RunEvidence): RunEvidence {
 }
 
 /**
- * The pictures a run produced, in the answer: Studio screenshots and Blender
- * previews, in one card that reads like the Activity card above it.
+ * The pictures a run produced: Studio screenshots, Blender previews and
+ * animation checks, as the Previews tab of the run's Results card.
  *
  * Every picture is a preview the host made from what a tool returned; nothing
  * here comes from the model. The newest one leads, the earlier ones sit beside
  * it, and any picture opens the viewer at itself. Previews of one animation are
  * one picture whose versions step back and forth, not a tile each.
  */
-export const PreviewsCard = memo(function PreviewsCard({ evidence, changes }: {
+export const PreviewsPanel = memo(function PreviewsPanel({ evidence, changes, chosen, onChoose }: {
   evidence: readonly RunEvidence[];
   changes: readonly RunChange[];
+  /** The version on show of each picture with several; held by the Results card so it outlives this panel. */
+  chosen: Readonly<Record<string, number>>;
+  onChoose: (id: string, at: number) => void;
 }) {
   const { shown: images, versions } = useMemo(() => previewVersions(evidenceImages(evidence)), [evidence]);
+  const notShown = useMemo(() => previewsNotShown(evidence), [evidence]);
   const layout = useMemo(() => previewLayout(images), [images]);
-  const [chosen, setChosen] = useState<Record<string, number>>({});
-  const onChoose = useCallback((id: string, at: number) => setChosen((previous) => ({ ...previous, [id]: at })), []);
   const choice = useMemo<VersionChoice>(() => ({ versions, chosen, onChoose }), [versions, chosen, onChoose]);
   const [open, setOpen] = useState<number | null>(null);
   const opener = useRef<HTMLElement | null>(null);
@@ -67,15 +70,7 @@ export const PreviewsCard = memo(function PreviewsCard({ evidence, changes }: {
       ? <LiveAnimationTile key={item.evidence.id} tile={item} count={images.length} choice={choice} paused={open !== null} onOpen={show} />
       : <PreviewTileButton key={item.evidence.id} tile={item} role={role} count={images.length} choice={choice} onOpen={show} />
   );
-  return <section className="previews-card" aria-label="Previews">
-    <div className="previews-header">
-      <ImageIcon size={15} aria-hidden="true" />
-      <strong>Previews</strong>
-      <span>{images.length === 1 ? "1 image" : `${images.length} images`}</span>
-      <button type="button" className="previews-open" aria-haspopup="dialog" onClick={(event) => show(images.length - 1, event.currentTarget)}>
-        Open viewer<Maximize2 size={13} aria-hidden="true" />
-      </button>
-    </div>
+  return <div className="previews-panel">
     <div className="previews-body">
       {layout.kind === "lead"
         ? <div className="preview-grid" data-rail={layout.rail.length}>
@@ -88,10 +83,17 @@ export const PreviewsCard = memo(function PreviewsCard({ evidence, changes }: {
         {caption && <span>{caption}</span>}
         {latestVersions !== undefined && <VersionStepper evidence={latest} choice={choice} />}
         {images.length > 1 && <em>Latest of {images.length}</em>}
+        {notShown > 0 && <em
+          className="previews-not-kept"
+          title={`A run keeps up to ${MAX_RECORDED_EVIDENCE_IMAGES} pictures: the latest of each thing first, then earlier versions. The rest are listed in Activity without their picture.`}
+        >{notShown} earlier {notShown === 1 ? "picture" : "pictures"} not kept</em>}
+        <button type="button" className="previews-open" aria-haspopup="dialog" onClick={(event) => show(images.length - 1, event.currentTarget)}>
+          Open viewer<Maximize2 size={13} aria-hidden="true" />
+        </button>
       </div>
     </div>
     {open !== null && <PreviewViewer images={images} changes={changes} choice={choice} index={open} onIndex={setOpen} onClose={close} />}
-  </section>;
+  </div>;
 });
 
 function SourceIcon({ evidence, size }: { evidence: RunEvidence; size: number }) {
@@ -154,7 +156,7 @@ function LiveAnimationTile({ tile, count, choice, paused, onOpen }: {
   return <div className="preview-tile" data-role="lead" data-source="animation" data-live="true" ref={host}>
     {visible && !paused
       ? <ModelViewer key={evidence.id} evidence={evidence} onShowPicture={() => undefined} compact />
-      : <img src={evidence.imageDataUrl} alt="" draggable={false} />}
+      : <EvidencePicture evidence={evidence} />}
     <span className="preview-chip">
       <span className="preview-chip-index">{tile.index + 1}</span>
       <SourceIcon evidence={evidence} size={13} />
@@ -191,7 +193,7 @@ function PreviewTileButton({ tile, role, count, choice, onOpen }: {
     aria-haspopup="dialog"
     onClick={(event) => onOpen(tile.index, event.currentTarget)}
   >
-    <img src={evidence.imageDataUrl} alt="" draggable={false} />
+    <EvidencePicture evidence={evidence} />
     {/* A tile that stands for several pictures is labelled by its count alone. */}
     {tile.hidden === undefined && <span className="preview-chip">
       <span className="preview-chip-index">{tile.index + 1}</span>
@@ -284,7 +286,7 @@ function PreviewViewer({ images, changes, choice, index, onIndex, onClose }: {
       <div className="preview-viewer-frame" data-view={inModel ? "model" : "picture"}>
         {inModel
           ? <ModelViewer key={current.id} evidence={current} onShowPicture={showPicture} autoplay />
-          : <img src={current.imageDataUrl} alt={current.title} draggable={false} />}
+          : <EvidencePicture evidence={current} alt={current.title} />}
       </div>
       {images.length > 1 && <button type="button" className="preview-viewer-step" onClick={() => onIndex(index + 1)} disabled={atEnd} aria-label="Next image"><ChevronRight size={20} /></button>}
     </div>
@@ -301,7 +303,7 @@ function PreviewViewer({ images, changes, choice, index, onIndex, onClose }: {
           onClick={() => onIndex(position)}
         >
           <span>
-            <img src={item.imageDataUrl} alt="" draggable={false} />
+            <EvidencePicture evidence={item} />
             {hasModelPreview(item) && <i className="preview-badge" aria-hidden="true"><Rotate3d size={10} />3D</i>}
           </span>
           <em>{position + 1} · {previewSourceLabel(item)}</em>

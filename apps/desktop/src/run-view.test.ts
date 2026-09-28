@@ -5,9 +5,9 @@ import type { RunTask } from "../shared/tasks";
 import type {
   RunChange, RunEvent, RunEventBody, RunEvidence, RunOutcome, ToolProposal,
 } from "../shared/run-events";
-import { isRunRecord, MAX_EVIDENCE_IMAGE_CHARACTERS } from "../shared/run-events";
+import { BLENDER_MODEL_LABEL, BLENDER_PREVIEW_TITLE, isRunRecord, MAX_EVIDENCE_IMAGE_CHARACTERS } from "../shared/run-events";
 import {
-  activitySteps, applyRunEvent, createRunView, describeActivityState, describeOutcome, evidenceImages,
+  activitySteps, applyRunEvent, createRunView, describeActivityState, describeOutcome, evidenceImages, previewsNotShown,
   recordAppliedAndVerified, recordGateIssues, recordHasWarnings, recordOnlyAnswered, recordSteps,
   runAppliedAndVerified, runGateIssues, runHasWarnings, runOnlyAnswered, toRunRecord,
   type RunView,
@@ -647,7 +647,7 @@ test("verification is tied to the revision of each write and failed evidence sur
   assert.equal(recordHasWarnings(record), true);
 });
 
-test("a saved run keeps every evidence item but only its newest six previews", () => {
+test("a saved run keeps every evidence item, but at most six pictures inside the chat file", () => {
   const screenshots = Array.from({ length: 8 }, (_, index): RunEvidence => ({
     id: `shot-${index}`,
     kind: "screenshot",
@@ -674,6 +674,92 @@ test("a saved run keeps every evidence item but only its newest six previews", (
   assert.deepEqual(evidenceImages(finished.evidence).map((item) => item.id), [
     "shot-2", "shot-3", "shot-4", "shot-5", "shot-6", "shot-7",
   ]);
+  // The two it drops are marked, so the answer can count them, and the card
+  // shows the same six, and the same count, before and after the run ends.
+  assert.deepEqual(record.evidence.filter((item) => item.previewNotKept).map((item) => item.id), ["shot-0", "shot-1"]);
+  assert.deepEqual(evidenceImages(record.evidence).map((item) => item.id), evidenceImages(finished.evidence).map((item) => item.id));
+  assert.equal(previewsNotShown(finished.evidence), 2);
+  assert.equal(previewsNotShown(record.evidence), 2);
+});
+
+test("the inline budget goes to distinct things before earlier versions of one", () => {
+  const image = (label: string) => `data:image/jpeg;base64,${btoa(label)}`;
+  const model = (id: string, file: string): RunEvidence => ({
+    id, kind: "inspection", title: BLENDER_PREVIEW_TITLE, imageDataUrl: image(id),
+    metadata: [{ label: BLENDER_MODEL_LABEL, value: file }],
+  });
+  const shot = (id: string): RunEvidence => ({ id, kind: "screenshot", title: "Studio screenshot", imageDataUrl: image(id) });
+  // A sword first, then the arena, then the sword revised six times.
+  const evidence = [
+    model("sword-1", "sword.glb"), shot("arena"), model("shield", "shield.glb"),
+    ...[2, 3, 4, 5, 6, 7].map((version) => model(`sword-${version}`, "sword.glb")),
+  ];
+  const finished = fold(stream(
+    started,
+    ...evidence.map((item): RunEventBody => ({ type: "evidence", evidence: item })),
+    { type: "run-completed", outcome: "completed", summary: "done" },
+  ));
+  const record = toRunRecord(finished);
+  assert.ok(record);
+  assert.ok(isRunRecord(record));
+
+  // Newest-first the old rule kept only swords. Now the arena and the shield
+  // stay, and the rest of the budget goes to the sword's newest versions.
+  const kept = evidenceImages(record.evidence).map((item) => item.id);
+  assert.deepEqual(kept, ["arena", "shield", "sword-4", "sword-5", "sword-6", "sword-7"]);
+  assert.deepEqual(evidenceImages(finished.evidence).map((item) => item.id), kept);
+  assert.equal(previewsNotShown(record.evidence), 3);
+});
+
+test("a run whose pictures are stored keeps forty, each by its ref alone", () => {
+  const ref = (index: number) => `${index.toString(16).padStart(64, "0")}.jpg`;
+  const shots = Array.from({ length: 45 }, (_, index): RunEvidence => ({
+    id: `shot-${index}`, kind: "screenshot", title: `Area ${index}`,
+    imageDataUrl: `data:image/jpeg;base64,${btoa(`shot ${index}`)}`, imageRef: ref(index),
+  }));
+  const finished = fold(stream(
+    started,
+    ...shots.map((evidence): RunEventBody => ({ type: "evidence", evidence })),
+    { type: "run-completed", outcome: "completed", summary: "done" },
+  ));
+  const record = toRunRecord(finished);
+  assert.ok(record);
+  assert.ok(isRunRecord(record));
+
+  const kept = record.evidence.filter((item) => item.imageRef !== undefined);
+  assert.equal(kept.length, 40);
+  assert.deepEqual(kept.map((item) => item.id), shots.slice(5).map((item) => item.id), "the newest forty");
+  assert.ok(kept.every((item) => item.imageDataUrl === undefined), "a stored picture is saved by its ref alone");
+  // Past the budget, the ref goes too, so the file is removed once nothing refers to it.
+  assert.deepEqual(record.evidence.slice(0, 5).map((item) => [item.imageRef, item.imageDataUrl, item.previewNotKept]), Array(5).fill([undefined, undefined, true]));
+  assert.equal(evidenceImages(finished.evidence).length, 40, "the live card shows the same forty");
+  assert.equal(previewsNotShown(record.evidence), 5);
+});
+
+test("pictures with no stored file are held to six even when stored ones fill the rest", () => {
+  const stored = Array.from({ length: 10 }, (_, index): RunEvidence => ({
+    id: `stored-${index}`, kind: "screenshot", title: `Stored ${index}`, imageRef: `${index.toString(16).padStart(64, "a")}.jpg`,
+  }));
+  const inline = Array.from({ length: 10 }, (_, index): RunEvidence => ({
+    id: `inline-${index}`, kind: "screenshot", title: `Inline ${index}`, imageDataUrl: `data:image/jpeg;base64,${btoa(`inline ${index}`)}`,
+  }));
+  const kept = evidenceImages([...stored, ...inline]).map((item) => item.id);
+  assert.equal(kept.filter((id) => id.startsWith("stored")).length, 10);
+  assert.deepEqual(kept.filter((id) => id.startsWith("inline")), inline.slice(4).map((item) => item.id));
+});
+
+test("a preview marked as not kept is a valid record only as `true`", () => {
+  const finished = fold(stream(
+    started,
+    { type: "evidence", evidence: { id: "shot", kind: "screenshot", title: "Studio screenshot" } },
+    { type: "run-completed", outcome: "completed", summary: "done" },
+  ));
+  const record = toRunRecord(finished);
+  assert.ok(record);
+  const marked = (previewNotKept: unknown) => ({ ...record, evidence: [{ ...record.evidence[0], previewNotKept }] });
+  assert.ok(isRunRecord(marked(true)));
+  assert.ok(!isRunRecord(marked(false)));
+  assert.ok(!isRunRecord(marked("yes")));
 });
 
 test("a saved run with a malformed or oversized preview is not a valid record", () => {

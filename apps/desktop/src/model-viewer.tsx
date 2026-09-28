@@ -5,6 +5,7 @@ import {
 import { ANIMATION_PREVIEW_TITLE, type RunEvidence } from "../shared/run-events";
 import { MODEL_OBJECTS_LABEL, MODEL_SIZE_LABEL, MODEL_TRIANGLES_LABEL } from "../shared/model-preview";
 import { hasDesktopRuntime, loadModelPreview } from "./platform";
+import { EvidencePicture } from "./evidence-picture";
 
 type Status = "loading" | "ready" | "expired" | "failed" | "no-desktop" | "no-webgl";
 
@@ -445,7 +446,7 @@ export function ModelViewer({ evidence, onShowPicture, compact = false, autoplay
         ref={host}
         {...(status === "ready" ? { role: "img", "aria-label": `${evidence.title}, playing in 3D` } : {})}
       />
-      {status !== "ready" && <img className="model-viewer-still" src={evidence.imageDataUrl} alt={evidence.title} draggable={false} />}
+      {status !== "ready" && <EvidencePicture className="model-viewer-still" evidence={evidence} alt={evidence.title} />}
       {status === "ready" && bar}
     </div>;
   }
@@ -456,7 +457,7 @@ export function ModelViewer({ evidence, onShowPicture, compact = false, autoplay
       ref={host}
       {...(status === "ready" ? { role: "img", "aria-label": `${evidence.title}, in 3D` } : {})}
     />
-    {status !== "loading" && status !== "ready" && <img className="model-viewer-still" src={evidence.imageDataUrl} alt={evidence.title} draggable={false} />}
+    {status !== "loading" && status !== "ready" && <EvidencePicture className="model-viewer-still" evidence={evidence} alt={evidence.title} />}
     {status === "loading" && <div className="model-viewer-state" role="status">
       <Loader2 className="model-viewer-spinner" size={22} aria-hidden="true" />
       <span>Loading the 3D preview</span>

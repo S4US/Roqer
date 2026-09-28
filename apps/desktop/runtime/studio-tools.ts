@@ -14,7 +14,7 @@ import { boundedCode, diffDeletedRange, diffText, normalizeNewlines } from "../s
 import {
   ANIMATION_ALL_CHECKS_PASSED, ANIMATION_CHECKED_AS_GAIT, ANIMATION_GAIT_CHECKS_LABEL, ANIMATION_MOTION_CHECKS_LABEL,
   ANIMATION_NAME_LABEL, ANIMATION_PLAYED_FROM_LABEL, ANIMATION_PLAYED_PUBLISHED, ANIMATION_PREVIEW_TITLE, animationSlotLabel,
-  BLENDER_PREVIEW_TITLE, SCREENSHOT_VIEW_LABEL, SCREENSHOT_VIEW_PLAYTEST,
+  BLENDER_MODEL_LABEL, BLENDER_PREVIEW_TITLE, MAX_EVIDENCE_SUBJECT_CHARS, SCREENSHOT_VIEW_LABEL, SCREENSHOT_VIEW_PLAYTEST,
   type RunChange, type RunEvidence, type RunMetadata,
 } from "../shared/run-events";
 import {
@@ -477,18 +477,57 @@ const BLENDER_PREVIEW_EVIDENCE: ObservationEvidence = {
   detail: "Rendered by Blender from the job's output. A Studio screenshot shows what is in the place.",
 };
 
+/** A model's file name, as the preview records it; Blender's own are far shorter. */
+const MAX_MODEL_NAME_CHARS = 120;
+
+/** What Roqer's inspection names the picture of a job that exported nothing: its scene. */
+const SCENE_PICTURE_NAME = "scene.blend";
+
+/**
+ * Which Blender model a job's preview shows, across one run's jobs.
+ *
+ * A job that continued an earlier job's scene is a later version of that
+ * job's model: the agent revising a mug continues from its first take, even
+ * when the first take only sketched it in the scene and the second exported
+ * `mug.glb`. A job that started from an empty scene is a new model, unless it
+ * writes the same exported file as an earlier one did, which is a rebuild of
+ * that model. Anything else is a model of its own, named by its job.
+ */
+class BlenderLineage {
+  readonly #byJob = new Map<string, string>();
+  readonly #byFile = new Map<string, string>();
+
+  /** The subject of a finished job's model, remembering it for the jobs that follow. */
+  follow(outcome: McpToolOutcome): string | undefined {
+    const data = isRecord(outcome.data) ? outcome.data : {};
+    const jobId = stringField(data, "jobId");
+    if (jobId === undefined) return undefined;
+    const continued = stringField(data, "continuedFrom");
+    const file = outcome.pictured?.name;
+    const exported = file !== undefined && file !== SCENE_PICTURE_NAME ? file : undefined;
+    const subject = (continued === undefined ? undefined : this.#byJob.get(continued))
+      ?? (exported === undefined ? undefined : this.#byFile.get(exported))
+      ?? `blender-job:${jobId}`.slice(0, MAX_EVIDENCE_SUBJECT_CHARS);
+    this.#byJob.set(jobId, subject);
+    if (exported !== undefined && !this.#byFile.has(exported)) this.#byFile.set(exported, subject);
+    return subject;
+  }
+}
+
 /**
  * What a Blender job's result says about the model its preview pictures: the
- * id of that model's 3D preview, when the inspection kept one, and what the
- * inspection measured, in studs on Roblox's axes (X, then Blender's up as Y,
- * then Z).
+ * file it was written to, the id of its 3D preview when the inspection kept
+ * one, and what the inspection measured, in studs on Roblox's axes (X, then
+ * Blender's up as Y, then Z).
  */
 function blenderModelFacts(outcome: McpToolOutcome): Pick<ObservationEvidence, "modelPreviewId" | "metadata"> {
   const pictured = outcome.pictured;
   if (pictured === undefined) return {};
   const data = isRecord(outcome.data) ? outcome.data : {};
   const file = (Array.isArray(data.files) ? data.files : []).find((entry) => isRecord(entry) && entry.name === pictured.name);
-  const metadata: RunMetadata[] = [];
+  // Which model this is, by the file it was written to: the card shows every
+  // preview of one file as versions of one model.
+  const metadata: RunMetadata[] = [{ label: BLENDER_MODEL_LABEL, value: pictured.name.slice(0, MAX_MODEL_NAME_CHARS) }];
   if (isRecord(file)) {
     const size = Array.isArray(file.size) && file.size.length === 3 && file.size.every((value) => typeof value === "number" && Number.isFinite(value))
       ? file.size as number[]
@@ -501,7 +540,7 @@ function blenderModelFacts(outcome: McpToolOutcome): Pick<ObservationEvidence, "
   }
   return {
     ...(isModelPreviewId(pictured.modelPreviewId) ? { modelPreviewId: pictured.modelPreviewId } : {}),
-    ...(metadata.length > 0 ? { metadata } : {}),
+    metadata,
   };
 }
 
@@ -1274,6 +1313,7 @@ export function createStudioToolRunner(context: PlannerContext): StudioToolRunne
   const scriptReads = new Map<string, ScriptSnapshot>();
   const changedScripts = new Map<string, string | undefined>();
   const recordedAssetIds = new Set<string>();
+  const blenderLineage = new BlenderLineage();
   // Whether a playtest this runner started is still running. Only this run's
   // own start and stop calls move it, so a playtest someone else started is
   // never claimed.
@@ -1441,9 +1481,12 @@ export function createStudioToolRunner(context: PlannerContext): StudioToolRunne
     const preview = observed !== undefined || operation === BLENDER_OPERATION
       ? await evidencePreview(context, outcome)
       : undefined;
+    const subject = outcome.ok && operation === BLENDER_OPERATION ? blenderLineage.follow(outcome) : undefined;
     const observation = observed !== undefined
       ? { ...observed, ...(preview === undefined ? {} : { imageDataUrl: preview }) }
-      : preview !== undefined ? { ...BLENDER_PREVIEW_EVIDENCE, ...blenderModelFacts(outcome), imageDataUrl: preview } : undefined;
+      : preview !== undefined
+        ? { ...BLENDER_PREVIEW_EVIDENCE, ...blenderModelFacts(outcome), ...(subject === undefined ? {} : { subject }), imageDataUrl: preview }
+        : undefined;
     if (observation?.title === UI_AUDIT_TITLE) {
       // Which changes the audit saw, so the gate can tell an interface change made after it.
       const latest = context.changes().at(-1)?.id ?? "none";

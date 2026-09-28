@@ -68,7 +68,9 @@ the tool away again.
    opens in 3D in the viewer, on Roblox's axes and facing the way it will in
    Studio, with its vertex colours as Studio will show them. Roqer's inspection
    exports that model as a self-contained GLB, which only the viewer reads; the
-   agent never sees it.
+   agent never sees it. Previews of one output file (`sword.glb` written again
+   after a revision) are versions of one model: the answer shows the latest and
+   steps back through the others.
 4. To use a model, the agent exports it, uploads it to Roblox as a Model and
    inserts it into your place, then checks its size there. An image uploads as
    a Decal, whose image ID a UI element can display. Uploads ask first too,

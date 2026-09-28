@@ -1,5 +1,5 @@
 import {
-  ANIMATION_NAME_LABEL, ANIMATION_PREVIEW_TITLE, BLENDER_PREVIEW_TITLE, SCREENSHOT_VIEW_LABEL, SCREENSHOT_VIEW_PLAYTEST,
+  ANIMATION_NAME_LABEL, ANIMATION_PREVIEW_TITLE, BLENDER_MODEL_LABEL, BLENDER_PREVIEW_TITLE, SCREENSHOT_VIEW_LABEL, SCREENSHOT_VIEW_PLAYTEST,
   type RunChange, type RunEvidence,
 } from "../shared/run-events";
 
@@ -34,23 +34,33 @@ export type PreviewVersions = {
 };
 
 /**
- * The run's pictures as the card shows them. Every preview of one animation,
- * by its name, is a version of one picture: an agent revising a wave checks it
- * again and again, and each check is the same wave, newer. The picture sits
- * where its latest version was taken and shows that version. Anything else is
- * a picture of its own.
+ * What a picture is of, so every picture of one thing is a version of it: the
+ * subject the host recorded (a Blender model by the job lineage it was built
+ * in), else an animation by its name, else a Blender model by the file it was
+ * written to. An agent revising a wave or a sword checks it again and again,
+ * and each check is the same thing, newer. Anything else — a screenshot, a
+ * render, a preview recorded before models were named — is a thing of its own.
+ */
+export function previewSubject(evidence: RunEvidence): string {
+  const source = previewSource(evidence);
+  // The host's own word on what the picture is of wins; the names below are
+  // for runs saved before it gave one.
+  if (evidence.subject !== undefined) return `${source}:subject:${evidence.subject}`;
+  const label = source === "animation" ? ANIMATION_NAME_LABEL : source === "blender" ? BLENDER_MODEL_LABEL : undefined;
+  const name = label === undefined ? undefined : evidence.metadata?.find((entry) => entry.label === label)?.value;
+  return name === undefined ? `picture:${evidence.id}` : `${source}:${name}`;
+}
+
+/**
+ * The run's pictures as the card shows them: one per thing pictured, sitting
+ * where its latest version was taken and showing that version, with the
+ * earlier versions a step away.
  */
 export function previewVersions(images: readonly RunEvidence[]): PreviewVersions {
-  const keyOf = (evidence: RunEvidence) => {
-    const name = previewSource(evidence) === "animation"
-      ? evidence.metadata?.find((entry) => entry.label === ANIMATION_NAME_LABEL)?.value
-      : undefined;
-    return name === undefined ? `picture:${evidence.id}` : `animation:${name}`;
-  };
   const groups = new Map<string, RunEvidence[]>();
   const last = new Map<string, number>();
   images.forEach((evidence, index) => {
-    const key = keyOf(evidence);
+    const key = previewSubject(evidence);
     groups.set(key, [...(groups.get(key) ?? []), evidence]);
     last.set(key, index);
   });
@@ -59,6 +69,25 @@ export function previewVersions(images: readonly RunEvidence[]): PreviewVersions
     shown: ordered.map((group) => group[group.length - 1]),
     versions: new Map(ordered.filter((group) => group.length > 1).map((group) => [group[group.length - 1].id, group])),
   };
+}
+
+/**
+ * Which of a run's pictures it shows and keeps, when it took more than `max`.
+ *
+ * The budget goes to distinct things first: the latest picture of each thing,
+ * newest thing first. Only what is left goes to earlier versions, newest first.
+ * So revisions of one model never push a different model or screenshot out,
+ * and the pictures a run ended on are always among those kept. Returns the ids
+ * kept.
+ */
+export function keptPreviewIds(images: readonly RunEvidence[], max: number): Set<string> {
+  const latest = new Map<string, number>();
+  images.forEach((evidence, index) => latest.set(previewSubject(evidence), index));
+  const newestFirst = images.map((evidence, index) => ({ evidence, index })).reverse();
+  const isLatest = ({ evidence, index }: { evidence: RunEvidence; index: number }) => latest.get(previewSubject(evidence)) === index;
+  return new Set([...newestFirst.filter(isLatest), ...newestFirst.filter((entry) => !isLatest(entry))]
+    .slice(0, Math.max(0, max))
+    .map(({ evidence }) => evidence.id));
 }
 
 /** Beside the lead there is room for three; past that the last one says how many more. */
