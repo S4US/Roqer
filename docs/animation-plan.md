@@ -193,7 +193,7 @@ What was built, in `packages/core/src/animation/`:
   showed it against a weight-1 control; see the third run under "Live
   results".
 
-### 6. Motion checks
+### 6. Motion checks — implemented
 
 Numeric checks on the compiled motion:
 
@@ -206,6 +206,38 @@ Numeric checks on the compiled motion:
 
 Thresholds are calibrated against Roblox's own R15 animations, which must pass.
 Without that, the thresholds are guesses.
+
+What was built, in `packages/core/src/animation/`:
+
+- **`motion.ts`** samples a compiled sequence and poses the rig.
+  - Each part's keyed poses form a track. Between two keys the joint follows
+    the earlier key's easing: rotations are slerped and positions lerped.
+  - Before a track's first key and after its last, the joint holds that key.
+  - The easing curves are Studio's, as measured, including three quirks:
+    Constant snaps to the next key (at once for In, halfway for InOut),
+    Elastic InOut uses a 0.45 period, and Bounce InOut plays the In shape in
+    both halves.
+  - Forward kinematics puts every part in the `HumanoidRootPart`'s frame.
+- **`motion-checks.ts`** runs the checks at 60 samples a second. Each result
+  carries its measurements and a one-line reason.
+  - Every animation: joint ranges (hinge direction for elbows and knees), peak
+    angular speed, how far the body strays from the root part and whether it
+    returns, and a loop's seam.
+  - Locomotion only: feet sinking into the ground, how much of the gait has a
+    foot down, planted feet sliding forward or sideways, and whether the hips
+    swing evenly half a cycle apart.
+  - A seam is judged against the joint's own motion either side of it, so a
+    stroke that carries on through the seam is not a jump.
+  - A foot counts as planted only after it has stayed down for 0.1 s, so a
+    foot skimming the ground mid-swing is not taken for sliding.
+- **The limits are calibrated.** Each lets Roblox's worst case pass with a
+  margin, and the code notes that worst case beside the limit.
+  `npm run test:calibrate:animation` ([tests/README.md](../tests/README.md#animation-calibration))
+  re-checks all of it against Studio. The run is recorded under
+  "Live results".
+- **For step 7.** A single Linear segment that swings well past 90° plays
+  differently from the model (see "Live results"). The tool should split big
+  swings across more keyframes.
 
 ### 7. Studio `animation` tool
 
@@ -395,3 +427,52 @@ What this settles:
   pinning the arm, torso or root above it.
 - Step 7 must measure from the identity, not from whatever pose a previous
   preview left on the joint.
+
+### 2026-09-28: motion check calibration, Studio 0.740.19
+
+`npm run test:calibrate:animation`, run six times while the checks were
+calibrated; the last run passed every assertion. The default R15 `Animate`
+script listed 27 animations. `mood` was skipped because it moves the face, not
+the body joints, and the other 26 were measured.
+
+- **Sampler.** Core's joints matched Studio's to within 0.27° on all 26
+  (worst: wave). Playing each as a registered temporary clip, as a preview
+  would, came within 0.11° of the published asset.
+- **Easing.** Every style and direction matched to within 0.006°, once three
+  quirks were measured:
+  - Constant snaps to the next key at once for In and halfway for InOut, and
+    holds until the next key for Out.
+  - Elastic InOut uses a 0.45 period, against 0.3 for In and Out.
+  - Bounce InOut plays the In shape in both halves.
+  - Legacy Cubic has In and Out swapped. CubicV2, Bounce and Elastic do not,
+    which contradicts the Blender Animations plugin's assumption that every
+    style is swapped.
+- **Joint conventions.** Knees bend negative about X (down to −143° in the
+  run), and elbows positive (up to 123° in the swim).
+- **Roblox's worst cases**, against which the limits were set:
+  - peak joint speed: 2,098°/s (jump, knee);
+  - a loop seam 4.4 times the joint's own motion (swim, wrist; its shoulders
+    jump 19° at the seam);
+  - planted-foot wander: 0.13 studs (walk);
+  - a foot on the ground for 64% of the gait (run);
+  - hip swing ratio: 0.73 (walk);
+  - body excursion: 0.81 studs (climb).
+- **Two differences stay unexplained**, both inside the sampler's 1° and 0.1
+  stud bound and far below any check's resolution:
+  - Linear keys built by the pose compiler turn by a normalised lerp, not a
+    slerp. That is 0.9° off over a 90° segment and 7.4° off over 175°, and it
+    held for every arc and segment length probed. Roblox's own Linear keys,
+    including toolslash's 80° swings, follow slerp, whether played published
+    or registered.
+  - Root offsets in 10 of Roblox's animations play scaled against the keys
+    read with `GetKeyframeSequenceAsync`: by 1.074 for walk, run, idle, jump,
+    fall, climb, swim and swim idle, and by 1.104 for wave. Every one has
+    `AuthoredHipHeight = 2`, so that property does not explain it. A compiled
+    Root offset plays as written.
+
+What this settles:
+
+- The motion checks measure what Studio plays, and Roblox's own animations pass
+  them.
+- Step 7 should split a swing of more than 90° across several keyframes. The
+  motion is then smoother either way, and the model matches Studio closely.

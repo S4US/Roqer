@@ -226,6 +226,47 @@ dummy's R15 joints (`Motor6D` or `AnimationConstraint`, whichever the rig uses)
 and part sizes for the pose compiler, is written to
 `tmp/animation-spike/report-<time>.json`.
 
+## Animation calibration
+
+`tests/animation-calibration.mjs` checks step 6's motion checks against a real
+Studio. Like the spike, it belongs to neither runner profile.
+
+```bash
+npm run test:calibrate:animation
+```
+
+1. It starts a short playtest to read the animation IDs from the default R15
+   `Animate` script on the character, then stops the playtest.
+2. It fetches each animation and plays it on a fresh in-memory dummy in edit
+   mode, stepped by hand. It compares every joint's `Transform` with core's
+   sampler at the same moment. If Studio refuses to hand over the
+   `KeyframeSequence`, the engine's samples stand in for it, and that
+   animation gets no sampler comparison.
+3. It also registers each fetched sequence as a temporary clip, as a preview
+   would play it, and reports how far that playback strays from the
+   published asset.
+4. It builds probes with the pose compiler and plays them as temporary
+   clips: one per easing style and direction, Linear keys over several arcs,
+   and a Root offset. Each rotation probe's easing curve is judged against
+   both slerp and a normalised lerp.
+5. It runs the motion checks on every default animation. `walk` and `run`
+   count as locomotion. The `mood` animation is skipped, because it moves the
+   face, not the body.
+
+It fails in any of these cases:
+
+- an animation does not load;
+- the sampler is off by more than 1° or 0.1 studs on a default animation;
+- an easing curve is off by more than 0.05° under both interpolations;
+- a compiled Root offset does not play as written;
+- any default animation fails a check;
+- cleanup fails.
+
+It builds core first, because it imports the checks from
+`packages/core/dist`. The report and the fetched sequences go to
+`tmp/animation-calibration/`, which is not committed; only derived numbers go in
+the plan.
+
 ## What each test exercises
 
 | File | What it checks |
