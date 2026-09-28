@@ -491,8 +491,16 @@ What was built:
       for Blender runs.
     - That run also called `verify` with only the built sequence's path. It now
       answers that `verify` needs the checked animation.
-  - A passing run still needs a published scratch place and a key whose
-    account owns it.
+  - With a key, the second run passed in 11 calls and 81 s:
+    - it checked, built, published as the place's owner, and wired the run
+      slot;
+    - it played the published asset in a playtest with the slot holding it.
+  - Three of its calls repaired argument mistakes: `verify` without the
+    animation, `verify` with `expected_id` for `animation_id`, and
+    `solo_playtest` without `mode`. The schema now says what `verify` needs.
+  - The agent noted that the character stood still in its playtest, so the run
+    was not seen playing while a player ran. `verify` plays the clip directly
+    and reads the slot; it does not drive the character.
 
 ## Deferred
 
