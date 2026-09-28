@@ -92,7 +92,10 @@ the activity list.
 - **Blender previews** are labelled "Blender result, before upload". They are
   recorded as an inspection with no requirement, so they never satisfy the
   completion check.
-- **What is saved.** A saved run keeps its newest six previews.
+- **What is saved.** A run shows and keeps six previews, spent on distinct
+  things first: the latest picture of each animation, model or screenshot,
+  newest first, then earlier versions. A picture past that is counted in the
+  answer ("3 earlier pictures not kept"), not dropped silently.
 - **Validation.** The run engine and the load-time validator both refuse a
   preview that is not a bounded PNG or JPEG data URL.
 - **Why no schema bump.** The saved format needed no migration.
@@ -421,7 +424,8 @@ What was built:
     card shows the contact sheet.
   - Previews of one animation, by name, are versions of one picture rather
     than a tile each. The card and the viewer step through them ("Version 3 of
-    6"), and the latest leads.
+    6"), and the latest leads. Blender previews of one output file group the
+    same way.
 - **Aim posing** (`animation/pose-compiler.ts`). A real run showed the agent
   failing to work out the combined Euler rotation that a wave needs (shoulder
   `[90, 0, 90]`). Poses can now say `aim: [right, up, forward]` for a shoulder

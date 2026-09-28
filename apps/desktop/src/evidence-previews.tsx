@@ -1,13 +1,13 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Box, Camera, ChevronLeft, ChevronRight, Gamepad2, ImageIcon, Maximize2, PersonStanding, Rotate3d, X } from "lucide-react";
-import type { RunChange, RunEvidence } from "../shared/run-events";
+import { MAX_RECORDED_EVIDENCE_IMAGES, type RunChange, type RunEvidence } from "../shared/run-events";
 import { ModelViewer } from "./model-viewer";
 import {
   hasModelPreview, previewCaption, previewLayout, previewSource, previewSourceLabel, previewTileLabel, previewVersions,
   type PreviewTile,
 } from "./preview-layout";
-import { evidenceImages } from "./run-view";
+import { evidenceImages, previewsNotShown } from "./run-view";
 
 /** Which version of each picture with several is on show, by the picture's id; absent means the latest. */
 type VersionChoice = {
@@ -45,6 +45,7 @@ export const PreviewsPanel = memo(function PreviewsPanel({ evidence, changes, ch
   onChoose: (id: string, at: number) => void;
 }) {
   const { shown: images, versions } = useMemo(() => previewVersions(evidenceImages(evidence)), [evidence]);
+  const notShown = useMemo(() => previewsNotShown(evidence), [evidence]);
   const layout = useMemo(() => previewLayout(images), [images]);
   const choice = useMemo<VersionChoice>(() => ({ versions, chosen, onChoose }), [versions, chosen, onChoose]);
   const [open, setOpen] = useState<number | null>(null);
@@ -81,6 +82,10 @@ export const PreviewsPanel = memo(function PreviewsPanel({ evidence, changes, ch
         {caption && <span>{caption}</span>}
         {latestVersions !== undefined && <VersionStepper evidence={latest} choice={choice} />}
         {images.length > 1 && <em>Latest of {images.length}</em>}
+        {notShown > 0 && <em
+          className="previews-not-kept"
+          title={`A run keeps ${MAX_RECORDED_EVIDENCE_IMAGES} pictures in the chat: the latest of each thing first, then earlier versions. The rest are listed in Activity without their picture.`}
+        >{notShown} earlier {notShown === 1 ? "picture" : "pictures"} not kept</em>}
         <button type="button" className="previews-open" aria-haspopup="dialog" onClick={(event) => show(images.length - 1, event.currentTarget)}>
           Open viewer<Maximize2 size={13} aria-hidden="true" />
         </button>

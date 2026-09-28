@@ -14,7 +14,7 @@ import { boundedCode, diffDeletedRange, diffText, normalizeNewlines } from "../s
 import {
   ANIMATION_ALL_CHECKS_PASSED, ANIMATION_CHECKED_AS_GAIT, ANIMATION_GAIT_CHECKS_LABEL, ANIMATION_MOTION_CHECKS_LABEL,
   ANIMATION_NAME_LABEL, ANIMATION_PLAYED_FROM_LABEL, ANIMATION_PLAYED_PUBLISHED, ANIMATION_PREVIEW_TITLE, animationSlotLabel,
-  BLENDER_PREVIEW_TITLE, SCREENSHOT_VIEW_LABEL, SCREENSHOT_VIEW_PLAYTEST,
+  BLENDER_MODEL_LABEL, BLENDER_PREVIEW_TITLE, SCREENSHOT_VIEW_LABEL, SCREENSHOT_VIEW_PLAYTEST,
   type RunChange, type RunEvidence, type RunMetadata,
 } from "../shared/run-events";
 import {
@@ -477,18 +477,23 @@ const BLENDER_PREVIEW_EVIDENCE: ObservationEvidence = {
   detail: "Rendered by Blender from the job's output. A Studio screenshot shows what is in the place.",
 };
 
+/** A model's file name, as the preview records it; Blender's own are far shorter. */
+const MAX_MODEL_NAME_CHARS = 120;
+
 /**
  * What a Blender job's result says about the model its preview pictures: the
- * id of that model's 3D preview, when the inspection kept one, and what the
- * inspection measured, in studs on Roblox's axes (X, then Blender's up as Y,
- * then Z).
+ * file it was written to, the id of its 3D preview when the inspection kept
+ * one, and what the inspection measured, in studs on Roblox's axes (X, then
+ * Blender's up as Y, then Z).
  */
 function blenderModelFacts(outcome: McpToolOutcome): Pick<ObservationEvidence, "modelPreviewId" | "metadata"> {
   const pictured = outcome.pictured;
   if (pictured === undefined) return {};
   const data = isRecord(outcome.data) ? outcome.data : {};
   const file = (Array.isArray(data.files) ? data.files : []).find((entry) => isRecord(entry) && entry.name === pictured.name);
-  const metadata: RunMetadata[] = [];
+  // Which model this is, by the file it was written to: the card shows every
+  // preview of one file as versions of one model.
+  const metadata: RunMetadata[] = [{ label: BLENDER_MODEL_LABEL, value: pictured.name.slice(0, MAX_MODEL_NAME_CHARS) }];
   if (isRecord(file)) {
     const size = Array.isArray(file.size) && file.size.length === 3 && file.size.every((value) => typeof value === "number" && Number.isFinite(value))
       ? file.size as number[]
@@ -501,7 +506,7 @@ function blenderModelFacts(outcome: McpToolOutcome): Pick<ObservationEvidence, "
   }
   return {
     ...(isModelPreviewId(pictured.modelPreviewId) ? { modelPreviewId: pictured.modelPreviewId } : {}),
-    ...(metadata.length > 0 ? { metadata } : {}),
+    metadata,
   };
 }
 

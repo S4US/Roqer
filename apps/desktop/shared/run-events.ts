@@ -152,6 +152,13 @@ export type RunEvidence = {
    * serves it under. Never a path; the preview may have expired since.
    */
   modelPreviewId?: string;
+  /**
+   * Set when the run took a picture here that the saved chat does not keep:
+   * past a run's picture budget (`MAX_RECORDED_EVIDENCE_IMAGES`), the picture
+   * is dropped from the record and this says so, so the answer can count what
+   * it no longer shows instead of dropping it silently.
+   */
+  previewNotKept?: true;
   /** Shown only when the reader expands the card. */
   metadata?: RunMetadata[];
   /** Observation dimension this evidence is allowed to satisfy. */
@@ -380,7 +387,13 @@ function isChange(value: unknown): value is RunChange {
  */
 export const MAX_EVIDENCE_IMAGE_CHARACTERS = 128 * 1024;
 
-/** How many evidence previews one saved run keeps, newest first. */
+/**
+ * How many evidence previews one run shows and keeps.
+ *
+ * Spent on distinct things first: the latest picture of each animation, model
+ * or screenshot, newest first, and only then earlier versions of them. So an
+ * agent revising one model five times never pushes a different picture out.
+ */
 export const MAX_RECORDED_EVIDENCE_IMAGES = 6;
 
 /**
@@ -400,6 +413,14 @@ export const ANIMATION_PREVIEW_TITLE = "Animation preview";
  * name are versions of one animation, and the card shows them as one.
  */
 export const ANIMATION_NAME_LABEL = "Animation";
+
+/**
+ * Metadata on a Blender preview: the file the pictured model was written to.
+ * A revised model is written to the same file again, so previews of one file
+ * are versions of one model, and the card shows them as one, the way it does
+ * an animation's.
+ */
+export const BLENDER_MODEL_LABEL = "Model";
 
 /**
  * Metadata on an animation build's verification: whether every motion check
@@ -453,6 +474,7 @@ function isEvidence(value: unknown): value is RunEvidence {
     isOptionalString(value.afterChangeId) &&
     (value.imageDataUrl === undefined || isEvidenceImage(value.imageDataUrl)) &&
     (value.modelPreviewId === undefined || isModelPreviewId(value.modelPreviewId)) &&
+    (value.previewNotKept === undefined || value.previewNotKept === true) &&
     (value.changeKind === undefined ||
       ["script-source", "properties", "instance", "asset"].includes(value.changeKind as string)) &&
     isMetadataList(value.metadata);

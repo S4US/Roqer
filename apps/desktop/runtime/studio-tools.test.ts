@@ -886,15 +886,18 @@ test("a Blender preview carries its model's 3D preview and what was measured, on
   assert.equal(evidence[0].modelPreviewId, "a1b2c3d4-0");
   // Blender's (x, y, z) arrive in Studio as (x, z, y) in size: 7.14 deep, 2.75 up.
   assert.deepEqual(evidence[0].metadata, [
+    { label: "Model", value: "cart.glb" },
     { label: "Size", value: "3.9 × 2.8 × 7.1 studs" },
     { label: "Triangles", value: "1,336" },
     { label: "Objects", value: "2" },
   ]);
   // The facts are the pictured model's, even without a 3D preview of it.
   assert.equal(evidence[1].modelPreviewId, undefined);
-  assert.deepEqual(evidence[1].metadata?.map((entry) => entry.value), ["2.0 × 2.0 × 2.0 studs", "12", "1"]);
-  // An id that is not one the main process serves is dropped, not recorded.
+  assert.deepEqual(evidence[1].metadata?.map((entry) => entry.value), ["crate.glb", "2.0 × 2.0 × 2.0 studs", "12", "1"]);
+  // An id that is not one the main process serves is dropped, not recorded,
+  // but the model is still named: its picture is a version of cart.glb.
   assert.equal(evidence[2].modelPreviewId, undefined);
+  assert.equal(evidence[2].metadata?.[0].value, "cart.glb");
   // With no word on which model the picture shows, nothing is attributed to one.
   assert.equal(evidence[3].modelPreviewId, undefined);
   assert.equal(evidence[3].metadata, undefined);

@@ -12,6 +12,7 @@ import {
   type RunChange, type RunEvent, type RunEvidence, type RunFailure,
   type RunOutcome, type RunRecord, type ToolProposal,
 } from "../shared/run-events";
+import { keptPreviewIds } from "./preview-layout";
 
 /**
  * Folds the run event stream into what the conversation renders.
@@ -420,32 +421,44 @@ export function recordSteps(record: RunRecord): ActivityStep[] {
   ];
 }
 
-/**
- * The evidence as it is saved: every item, but only the newest few previews.
- *
- * A run that takes thirty screenshots would otherwise carry thirty pictures
- * into the chat file. The last ones are kept because they show where the run
- * ended, which is what the answer describes.
- */
-export function recordedEvidence(evidence: readonly RunEvidence[]): RunEvidence[] {
-  let kept = 0;
-  const result = [...evidence];
-  for (let index = result.length - 1; index >= 0; index -= 1) {
-    if (result[index].imageDataUrl === undefined) continue;
-    if (kept < MAX_RECORDED_EVIDENCE_IMAGES) {
-      kept += 1;
-      continue;
-    }
-    const trimmed = { ...result[index] };
-    delete trimmed.imageDataUrl;
-    result[index] = trimmed;
-  }
-  return result;
+/** The ids of the pictures a run shows and keeps; see `keptPreviewIds`. */
+function keptImageIds(evidence: readonly RunEvidence[]): Set<string> {
+  return keptPreviewIds(evidence.filter((item) => item.imageDataUrl !== undefined), MAX_RECORDED_EVIDENCE_IMAGES);
 }
 
-/** The evidence previews to show in an answer, oldest first. */
+/**
+ * The evidence as it is saved: every item, but only the pictures within the
+ * run's budget.
+ *
+ * A run that takes thirty screenshots would otherwise carry thirty pictures
+ * into the chat file. The latest picture of each thing is kept first, so what
+ * the run ended on survives; a picture past the budget leaves its evidence
+ * behind, marked, so the answer can say how many it no longer shows.
+ */
+export function recordedEvidence(evidence: readonly RunEvidence[]): RunEvidence[] {
+  const kept = keptImageIds(evidence);
+  return evidence.map((item) => {
+    if (item.imageDataUrl === undefined || kept.has(item.id)) return item;
+    const trimmed: RunEvidence = { ...item, previewNotKept: true };
+    delete trimmed.imageDataUrl;
+    return trimmed;
+  });
+}
+
+/**
+ * The evidence previews to show in an answer, oldest first: the same pictures
+ * the saved chat keeps, so the card does not change when the run ends.
+ */
 export function evidenceImages(evidence: readonly RunEvidence[]): RunEvidence[] {
-  return evidence.filter((item) => item.imageDataUrl !== undefined).slice(-MAX_RECORDED_EVIDENCE_IMAGES);
+  const kept = keptImageIds(evidence);
+  return evidence.filter((item) => item.imageDataUrl !== undefined && kept.has(item.id));
+}
+
+/** How many pictures the run took that the answer does not show, live or saved. */
+export function previewsNotShown(evidence: readonly RunEvidence[]): number {
+  const images = evidence.filter((item) => item.imageDataUrl !== undefined).length;
+  const dropped = evidence.filter((item) => item.imageDataUrl === undefined && item.previewNotKept === true).length;
+  return images - keptImageIds(evidence).size + dropped;
 }
 
 /**

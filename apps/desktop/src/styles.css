@@ -1010,6 +1010,10 @@ a.small-button:focus-visible { outline: 2px solid var(--accent); outline-offset:
 .preview-caption strong { flex: 0 0 auto; color: var(--ink-secondary); font-size: var(--type-label); font-weight: var(--weight-medium); }
 .preview-caption span { overflow: hidden; color: var(--muted); text-overflow: ellipsis; white-space: nowrap; }
 .preview-caption em { flex: 0 0 auto; margin-left: auto; color: var(--faint); font-style: normal; white-space: nowrap; }
+/* Pictures past the run's budget, counted beside "Latest of" rather than dropped silently. */
+.preview-caption em + .previews-not-kept { margin-left: 0; }
+.preview-caption em + .previews-not-kept::before { content: "· "; }
+.previews-not-kept { cursor: help; }
 /* A picture's versions: one animation checked again and again is one picture. */
 .preview-versions { display: inline-flex; flex: 0 0 auto; align-items: center; gap: 2px; margin-left: auto; color: var(--muted); font-size: var(--type-meta); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .preview-caption .preview-versions { overflow: visible; align-self: center; }
