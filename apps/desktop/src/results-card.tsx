@@ -214,7 +214,7 @@ function UploadTile({ entry }: { entry: UploadEntry }) {
         {entry.assetId !== undefined && <> · <code>{entry.assetId}</code></>}
         {entry.writes > 1 && <> · {entry.writes} uploads</>}
         {entry.moderation && <> · <span className="upload-moderation" data-tone={entry.moderation.tone} title="Moderation, as Roblox reported it">
-          <i aria-hidden="true" />{entry.moderation.label}
+          {entry.moderation.label}
         </span></>}
       </span>
     </div>

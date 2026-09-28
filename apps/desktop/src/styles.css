@@ -1194,13 +1194,8 @@ a.small-button:focus-visible { outline: 2px solid var(--accent); outline-offset:
 .upload-text > strong { overflow: hidden; color: var(--ink); font-size: var(--type-label); font-weight: var(--weight-medium); text-overflow: ellipsis; white-space: nowrap; }
 .upload-text > span { overflow: hidden; color: var(--muted); font-size: var(--type-meta); text-overflow: ellipsis; white-space: nowrap; }
 .upload-text code { color: var(--ink-secondary); font: 11.5px "Geist Mono Variable", monospace; }
-.upload-moderation { display: inline-flex; align-items: center; gap: 5px; }
-.upload-moderation > i { flex: 0 0 auto; width: 6px; height: 6px; background: var(--faint); border-radius: 50%; }
-.upload-moderation[data-tone="approved"] > i { background: var(--success); }
 .upload-moderation[data-tone="pending"] { color: var(--warning); }
-.upload-moderation[data-tone="pending"] > i { background: var(--warning); }
 .upload-moderation[data-tone="rejected"] { color: var(--danger); }
-.upload-moderation[data-tone="rejected"] > i { background: var(--danger); }
 .upload-actions { display: flex; flex: 0 0 auto; gap: 1px; }
 .upload-actions > button, .upload-actions > a { display: grid; place-items: center; width: 28px; height: 28px; padding: 0; color: var(--faint); background: transparent; border: 0; border-radius: 7px; transition: color .15s ease, background-color .15s ease; }
 .upload-actions > button:hover, .upload-actions > a:hover { color: var(--ink); background: var(--surface-sunken); }
