@@ -395,15 +395,19 @@ interpolation.
 
 What was built:
 
-- **The figure** (`animation/box-rig.ts`).
-  - The R15 rig as Roblox's block rig draws it: every part a box with rounded
-    edges, at the stock rig's part sizes, in light grey.
-  - The left limbs are a shade darker, so the legs and arms can still be told
-    apart.
-  - The geometry is generated in core, not taken from Roblox's assets. A probe
-    found Studio lets a plugin read the default body meshes but not the
-    default dynamic head, so real meshes would have needed a stand-in head and
-    Studio for every check.
+- **The figure** (`animation/rig-meshes.ts`, `animation/box-rig.ts`).
+  - The preview draws the stock R15 rig's real meshes, in one light grey.
+  - The first `build` has the plugin build the stock dummy in memory and read
+    each body part's mesh through `EditableMesh`, scaled to the part's size.
+    The dummy's own dynamic head cannot be read ("no permission to load
+    asset"), so the head is Roblox's classic head, which ships with Studio
+    (`rbxasset://avatar/heads/head.mesh`).
+  - The meshes are validated, each triangle turned to face the way its
+    normals do, and cached under `~/.robloxstudio-mcp/cache`. Nothing of
+    Roblox's is committed.
+  - `check` never reaches Studio. Until a build has read the meshes, the
+    preview draws a generated stand-in (rounded boxes at the stock part
+    sizes), and the result says which rig it drew.
 - **The contact sheet** (`animation/contact-sheet.ts`).
   - A software rasteriser with a depth buffer and smooth shading draws that
     figure, posed by core's own sampler, at the same scale in every frame. The

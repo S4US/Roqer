@@ -1,20 +1,15 @@
-// The R15 rig as Roblox's block rig draws it: every part a box with rounded
+// A stand-in for the R15 rig, drawn until a build has read the stock rig's
+// real meshes from Studio (see rig-meshes.ts): every part a box with rounded
 // edges, sized as the stock rig's parts are, in a light grey. Both the contact
-// sheet and the 3D preview draw it from here, so the model sees the same
-// figure the user plays back. The geometry is generated, not taken from
-// Roblox's assets.
+// sheet and the 3D preview draw whichever rig is current, so the model sees
+// the same figure the user plays back.
 
 import { R15_RIG, type Rig, type Vec3 } from './r15-rig.js';
 
 export type Rgb = readonly [number, number, number];
 
-const LIGHT_GREY: Rgb = [214, 217, 222];
-/** Left limbs a shade darker, so the legs and arms can still be told apart. */
-const DARK_GREY: Rgb = [170, 176, 186];
-
-export function partColor(part: string): Rgb {
-  return part.startsWith('Left') ? DARK_GREY : LIGHT_GREY;
-}
+/** One light grey for the whole rig, as a plain R15 dummy is. */
+export const RIG_COLOR: Rgb = [214, 217, 222];
 
 /** The parts drawn: every part but the HumanoidRootPart, which Roblox hides. */
 export function drawnParts(rig: Rig = R15_RIG): string[] {

@@ -1,4 +1,10 @@
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
 import { BridgeService } from '../bridge-service.js';
+
+// A cache of real rig meshes on this machine must not change what the tests draw.
+process.env.ROBLOXSTUDIO_MCP_CACHE_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'roqer-rig-cache-'));
 import { RobloxStudioTools } from '../tools/index.js';
 import {
   PREVIEW_SAMPLES,
@@ -105,6 +111,8 @@ describe('RobloxStudioTools.animation', () => {
     const calls: { endpoint: string; data: Payload; instance_id?: string }[] = [];
     // The plugin round trip, replaced: each endpoint answers from `responses`.
     (tools as unknown as { _callSingle: unknown })._callSingle = async (endpoint: string, data: Payload, _target: unknown, instance_id?: string) => {
+      // A build reads the stock rig's meshes first; here there are none, so it draws the stand-in.
+      if (endpoint === '/api/animation-rig-meshes') return { error: 'no meshes in tests' };
       calls.push({ endpoint, data, instance_id });
       const respond = responses[endpoint];
       if (!respond) throw new Error(`unexpected call to ${endpoint}`);

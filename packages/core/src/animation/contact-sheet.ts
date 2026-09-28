@@ -9,7 +9,8 @@
 // dark ground with a soft contact shadow.
 
 import { rgbaToPng } from '../png-encoder.js';
-import { drawnParts, groundHeight, partColor, partMesh, type PartMesh, type Rgb } from './box-rig.js';
+import { groundHeight, RIG_COLOR, type Rgb } from './box-rig.js';
+import { generatedRigMeshes, type RigMeshes } from './rig-meshes.js';
 import { buildTracks, poseRig, sequenceDuration, type Frame, type MotionSequence } from './motion.js';
 import type { Vec3 } from './r15-rig.js';
 
@@ -154,8 +155,6 @@ function lighting(normal: Vec3, camera: View): number {
   return 0.3 + 0.62 * key + 0.18 * fill + 0.12 * rim;
 }
 
-const MESHES = new Map<string, PartMesh>(drawnParts().map((part) => [part, partMesh(part)]));
-
 function drawBackground(canvas: Canvas, left: number, top: number, height: number) {
   for (let y = 0; y < height; y += 1) {
     const share = y / height;
@@ -164,7 +163,7 @@ function drawBackground(canvas: Canvas, left: number, top: number, height: numbe
   }
 }
 
-function drawCell(canvas: Canvas, parts: Map<string, Frame>, camera: View, left: number, top: number) {
+function drawCell(canvas: Canvas, meshes: RigMeshes, parts: Map<string, Frame>, camera: View, left: number, top: number) {
   const scale = CELL_HEIGHT / VIEW_HEIGHT_STUDS;
   const ground = groundHeight();
   const originX = left + CELL_WIDTH / 2;
@@ -191,10 +190,10 @@ function drawCell(canvas: Canvas, parts: Map<string, Frame>, camera: View, left:
   }
 
   const clip = { x0: left, y0: top, x1: left + CELL_WIDTH - 1, y1: top + CELL_HEIGHT - 1 };
-  for (const [part, mesh] of MESHES) {
+  for (const [part, mesh] of meshes.parts) {
     const frame = parts.get(part);
     if (!frame) continue;
-    const color = partColor(part);
+    const color = RIG_COLOR;
     const vertices: Vertex[] = [];
     const world: Vec3[] = [];
     for (let index = 0; index < mesh.positions.length; index += 3) {
@@ -241,7 +240,7 @@ export function sheetTimes(sequence: MotionSequence, columns = COLUMNS): number[
   return Array.from({ length: columns }, (_unused, index) => (duration * index) / spans);
 }
 
-export function renderContactSheet(sequence: MotionSequence): ContactSheet {
+export function renderContactSheet(sequence: MotionSequence, meshes: RigMeshes = generatedRigMeshes()): ContactSheet {
   const times = sheetTimes(sequence);
   const tracks = buildTracks(sequence);
   const width = CELL_WIDTH * times.length;
@@ -254,7 +253,7 @@ export function renderContactSheet(sequence: MotionSequence): ContactSheet {
     [THREE_QUARTER, SIDE].forEach((camera, row) => {
       const top = row * rowHeight;
       drawBackground(canvas, left, top, rowHeight);
-      drawCell(canvas, parts, camera, left, top);
+      drawCell(canvas, meshes, parts, camera, left, top);
       canvas.text(`${time.toFixed(2)}s`, left + 10, top + CELL_HEIGHT + 2, 2, TEXT);
     });
     if (column > 0) for (let y = 0; y < height; y += 1) canvas.put(left, y, DIVIDER);

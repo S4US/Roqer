@@ -577,9 +577,72 @@ function animationVerify(requestData: Data) {
 	return { ...(result as object), ...(wiredIds ? { wiredIds, playingIds } : {}) };
 }
 
+/** Roblox's classic head, which ships with Studio; the stock rig's own dynamic head cannot be read. */
+const CLASSIC_HEAD = "rbxasset://avatar/heads/head.mesh";
+const MAX_RIG_FACES = 4000;
+
+function round4(value: number): number {
+	return math.round(value * 10000) / 10000;
+}
+
+/**
+ * The stock R15 dummy's real meshes, for the animation preview: each body
+ * part's mesh, and the classic head, as triangles in the part's own frame,
+ * scaled to the part's size. Nothing is left in the place: the dummy is never
+ * parented, and each mesh is destroyed once read.
+ */
+function animationRigMeshes() {
+	const assets = game.GetService("AssetService");
+	const rig = Players.CreateHumanoidModelFromDescription(new Instance("HumanoidDescription"), Enum.HumanoidRigType.R15);
+	const parts: Record<string, { positions: number[]; normals: number[] }> = {};
+	const [ok, err] = pcall(() => {
+		for (const child of rig.GetChildren()) {
+			if (!child.IsA("MeshPart")) continue;
+			const head = child.Name === "Head";
+			const mesh = assets.CreateEditableMeshAsync(Content.fromUri(head ? CLASSIC_HEAD : child.MeshId));
+			const faces = mesh.GetFaces() as number[];
+			if (faces.size() > MAX_RIG_FACES) {
+				mesh.Destroy();
+				error(`${child.Name}'s mesh has ${faces.size()} faces`);
+			}
+			// The body meshes span their MeshSize; the classic head spans its own
+			// bounds. Either is stretched onto the part's size, about its centre.
+			let min = new Vector3(math.huge, math.huge, math.huge);
+			let max = new Vector3(-math.huge, -math.huge, -math.huge);
+			for (const vertex of mesh.GetVertices() as number[]) {
+				const position = mesh.GetPosition(vertex);
+				min = min.Min(position);
+				max = max.Max(position);
+			}
+			const extent = head ? max.sub(min) : child.MeshSize;
+			const centre = head ? min.add(max).div(2) : Vector3.zero;
+			const scale = new Vector3(child.Size.X / extent.X, child.Size.Y / extent.Y, child.Size.Z / extent.Z);
+			const positions: number[] = [];
+			const normals: number[] = [];
+			for (const face of faces) {
+				const corners = mesh.GetFaceVertices(face) as number[];
+				const faceNormals = mesh.GetFaceNormals(face) as number[];
+				if (corners.size() !== 3 || faceNormals.size() !== 3) continue;
+				for (let corner = 0; corner < 3; corner++) {
+					const position = mesh.GetPosition(corners[corner]).sub(centre).mul(scale);
+					const normal = mesh.GetNormal(faceNormals[corner]) ?? Vector3.yAxis;
+					positions.push(round4(position.X), round4(position.Y), round4(position.Z));
+					normals.push(round4(normal.X), round4(normal.Y), round4(normal.Z));
+				}
+			}
+			mesh.Destroy();
+			parts[child.Name] = { positions, normals };
+		}
+	});
+	rig.Destroy();
+	if (!ok) return { error: `The stock rig's meshes could not be read: ${tostring(err)}` };
+	return { parts, head: "classic" };
+}
+
 export = {
 	previewAnimation,
 	buildAnimation,
+	animationRigMeshes,
 	animationPublishInfo,
 	animationReadBack,
 	animationWire,

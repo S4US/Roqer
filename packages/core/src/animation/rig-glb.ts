@@ -13,7 +13,8 @@
 // glTF models half a turn onto Roblox's axes, so the figure ends up facing -Z,
 // as it does in Studio.
 
-import { drawnParts, partColor, partMesh } from './box-rig.js';
+import { drawnParts, RIG_COLOR } from './box-rig.js';
+import { generatedRigMeshes, type RigMeshes } from './rig-meshes.js';
 import { buildTracks, rotationQuaternion, sampleTrack, sequenceDuration, type MotionSequence } from './motion.js';
 import { R15_RIG, type Rig } from './r15-rig.js';
 
@@ -102,27 +103,23 @@ export function glbSampleTimes(sequence: MotionSequence): number[] {
   return Array.from({ length: count + 1 }, (_unused, index) => (duration * index) / count);
 }
 
-export function renderRigGlb(sequence: MotionSequence, name: string, rig: Rig = R15_RIG): Buffer {
+export function renderRigGlb(
+  sequence: MotionSequence,
+  name: string,
+  rigMeshes: RigMeshes = generatedRigMeshes(),
+  rig: Rig = R15_RIG,
+): Buffer {
   const builder = new BinaryBuilder();
 
-  // One material per colour, and one mesh per part: a part's rounded edges
-  // keep their radius at its own size, so meshes cannot be shared by scaling.
-  const materials: Record<string, unknown>[] = [];
-  const materialByColor = new Map<string, number>();
-  const materialFor = (part: string): number => {
-    const color = partColor(part);
-    const key = color.join(',');
-    const existing = materialByColor.get(key);
-    if (existing !== undefined) return existing;
-    materials.push({
-      pbrMetallicRoughness: { baseColorFactor: [...color.map((value) => (value / 255) ** 2.2), 1], metallicFactor: 0, roughnessFactor: 0.72 },
-    });
-    materialByColor.set(key, materials.length - 1);
-    return materials.length - 1;
-  };
+  // One material for the whole rig, and one mesh per part, each already at its
+  // part's size.
+  const materials: Record<string, unknown>[] = [{
+    pbrMetallicRoughness: { baseColorFactor: [...RIG_COLOR.map((value) => (value / 255) ** 2.2), 1], metallicFactor: 0, roughnessFactor: 0.72 },
+  }];
   const meshes: Record<string, unknown>[] = [];
   const meshFor = (part: string): number => {
-    const mesh = partMesh(part, rig);
+    const mesh = rigMeshes.parts.get(part);
+    if (!mesh) throw new Error(`no mesh for ${part}`);
     meshes.push({
       name: part,
       primitives: [{
@@ -131,7 +128,7 @@ export function renderRigGlb(sequence: MotionSequence, name: string, rig: Rig = 
           NORMAL: builder.floats(mesh.normals, 'VEC3', { target: ARRAY_BUFFER }),
         },
         indices: builder.indices(mesh.indices),
-        material: materialFor(part),
+        material: 0,
       }],
     });
     return meshes.length - 1;

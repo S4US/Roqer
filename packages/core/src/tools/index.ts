@@ -39,6 +39,7 @@ import {
 import { compilePoseAnimation, type KeyframeSequenceDescription } from '../animation/pose-compiler.js';
 import { renderContactSheet } from '../animation/contact-sheet.js';
 import { renderRigGlb } from '../animation/rig-glb.js';
+import { cachedRigMeshes, currentRigMeshes, storeRigMeshes } from '../animation/rig-meshes.js';
 import * as fs from 'fs';
 import * as path from 'path';
 
@@ -1766,6 +1767,7 @@ export class RobloxStudioTools {
       }, sequence);
     }
 
+    await this._fetchRigMeshes(instance_id);
     const payload = { name: sequence.name, loop: sequence.loop, priority: sequence.priority, keyframes: sequence.keyframes };
     const preview = await this._callSingle(
       '/api/preview-animation',
@@ -1815,9 +1817,29 @@ export class RobloxStudioTools {
    * the model can check, drawn here from the compiled sequence, and a GLB of
    * the same box rig for Roqer's viewer, which MCP clients never receive.
    */
+  private rigMeshRetryAt = 0;
+
+  /**
+   * Read the stock R15 rig's real meshes from Studio once, so previews draw the
+   * rig Roblox does. Only build asks, since it is in Studio anyway; check never
+   * reaches Studio. Once kept, they serve every later call, in this process and
+   * the next, and a failed read falls back to the generated rig until a retry.
+   */
+  private async _fetchRigMeshes(instance_id?: string): Promise<void> {
+    if (cachedRigMeshes() || Date.now() < this.rigMeshRetryAt) return;
+    this.rigMeshRetryAt = Date.now() + 60_000;
+    try {
+      const raw = await this._callSingle('/api/animation-rig-meshes', {}, undefined, instance_id);
+      if (!raw?.error) storeRigMeshes(raw);
+    } catch {
+      // The preview is drawn on the generated rig instead.
+    }
+  }
+
   private _animationResult(body: Record<string, unknown>, sequence: KeyframeSequenceDescription) {
-    const sheet = renderContactSheet(sequence);
-    const preview = renderRigGlb(sequence, sequence.name);
+    const meshes = currentRigMeshes();
+    const sheet = renderContactSheet(sequence, meshes);
+    const preview = renderRigGlb(sequence, sequence.name, meshes);
     return {
       content: [
         {
@@ -1826,7 +1848,8 @@ export class RobloxStudioTools {
             ...body,
             sheet: {
               times: sheet.times.map((time) => Math.round(time * 1000) / 1000),
-              reading: 'Block rig, one column per time. Top row from the front three-quarter, bottom row from its right side facing right; left limbs are the darker grey; the shadow marks the ground under the body.',
+              rig: meshes.source === 'studio' ? 'the stock R15 rig' : 'a stand-in block rig, until a build reads the stock rig from Studio',
+              reading: 'One column per time. Top row from the front three-quarter, bottom row from its right side facing right; the shadow marks the ground under the body.',
             },
           }),
         },
