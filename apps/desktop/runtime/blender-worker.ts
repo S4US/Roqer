@@ -757,6 +757,43 @@ if meshes:
     # out, images packed in. Draco stays off, so the viewer needs no decoder.
     if model_preview_path:
         try:
+            # Studio shows the vertex colours a glTF file stores as sRGB, where
+            # glTF and Blender mean them as linear, so the same colour looks
+            # darker in Studio than in Blender. The preview stores the colour
+            # Studio will show, so a viewer that follows glTF shows it too. FBX
+            # and OBJ files store sRGB, which their importers have already
+            # undone. A saved scene is taken as it would export to glTF.
+            if extension not in (".fbx", ".obj"):
+                import numpy
+                converted = set()
+                for item in meshes:
+                    if item.data.as_pointer() in converted:
+                        continue
+                    converted.add(item.data.as_pointer())
+                    for layer in item.data.color_attributes:
+                        values = numpy.empty(len(layer.data) * 4, dtype=numpy.float32)
+                        layer.data.foreach_get("color", values)
+                        rgb = values.reshape(-1, 4)[:, :3]
+                        rgb[:] = numpy.where(rgb <= 0.04045, rgb / 12.92, ((numpy.maximum(rgb, 0.04045) + 0.055) / 1.055) ** 2.4)
+                        layer.data.foreach_set("color", values)
+            # Studio takes an FBX file's vertex colours whatever its materials
+            # say, and ignores a material's own colour, but Blender exports
+            # only colours a material uses: wire each plain base colour to them.
+            if extension == ".fbx":
+                for item in meshes:
+                    layer = item.data.color_attributes.active_color
+                    if layer is None:
+                        continue
+                    for slot in item.material_slots:
+                        material = slot.material
+                        if material is None or not material.use_nodes or material.node_tree is None:
+                            continue
+                        bsdf = next((node for node in material.node_tree.nodes if node.type == "BSDF_PRINCIPLED"), None)
+                        if bsdf is None or bsdf.inputs["Base Color"].is_linked:
+                            continue
+                        colors = material.node_tree.nodes.new("ShaderNodeVertexColor")
+                        colors.layer_name = layer.name
+                        material.node_tree.links.new(colors.outputs["Color"], bsdf.inputs["Base Color"])
             for item in scene.objects:
                 try:
                     item.select_set(item in meshes)

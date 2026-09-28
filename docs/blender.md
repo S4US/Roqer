@@ -66,8 +66,9 @@ the tool away again.
 
    The preview also shows in the chat's answer. There, the model it pictures
    opens in 3D in the viewer, on Roblox's axes and facing the way it will in
-   Studio. Roqer's inspection exports that model as a self-contained GLB, which
-   only the viewer reads; the agent never sees it.
+   Studio, with its vertex colours as Studio will show them. Roqer's inspection
+   exports that model as a self-contained GLB, which only the viewer reads; the
+   agent never sees it.
 4. To use a model, the agent exports it, uploads it to Roblox as a Model and
    inserts it into your place, then checks its size there. An image uploads as
    a Decal, whose image ID a UI element can display. Uploads ask first too,
@@ -105,4 +106,8 @@ Both live in Roqer's data folder:
 - Colour survives the upload when it is painted as vertex colours or a packed
   image texture. Plain material colours arrive white, so the agent sets those
   colours in Studio after inserting the model.
+- Studio shows a GLB's vertex colours darker and richer than Blender does: it
+  reads the stored values as sRGB, where glTF and Blender mean them as linear.
+  The 3D view shows them as Studio will; the still picture shows them as
+  Blender does.
 - Rigging, skinning, UGC accessories and animation are not supported yet.

@@ -116,9 +116,10 @@ export function ModelViewer({ evidence, onShowPicture }: { evidence: RunEvidence
       renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
       renderer.setSize(width, height);
       renderer.outputColorSpace = THREE.SRGBColorSpace;
-      // Made for showing products as they are: base colours stay put and only
-      // the highlights are rolled off.
-      renderer.toneMapping = THREE.NeutralToneMapping;
+      // No tone mapping, so a face turned to the light shows its colour as
+      // painted. Neutral tone mapping would take a fixed share off every
+      // colour and turn dark ones black under this dim room.
+      renderer.toneMapping = THREE.NoToneMapping;
       renderer.shadowMap.enabled = true;
       renderer.shadowMap.type = THREE.PCFShadowMap;
       container.appendChild(renderer.domElement);
@@ -131,29 +132,36 @@ export function ModelViewer({ evidence, onShowPicture }: { evidence: RunEvidence
 
       const scene = new THREE.Scene();
       scene.add(model);
-      // A soft room to light and reflect: without one, metal renders black.
+      // A dim room to reflect, so metal is not black. The light comes from the
+      // sky and the sun instead: a brighter room would lay a grey sheen over
+      // every colour.
       const environments = new THREE.PMREMGenerator(renderer);
       const room = new RoomEnvironment();
       const environment = environments.fromScene(room, 0.04).texture;
       room.dispose();
       environments.dispose();
       scene.environment = environment;
-      scene.environmentIntensity = 0.45;
+      scene.environmentIntensity = 0.12;
+      scene.add(new THREE.HemisphereLight(0xffffff, 0x999999, 1.8));
 
       const radius = Math.max(size.length() / 2, 0.05);
       // One stud a square, as far as the model reaches and a little beyond.
       const span = Math.max(4, Math.ceil(Math.max(size.x, size.z) * 1.6));
       const grid = new THREE.GridHelper(span, Math.min(span, 200), 0x4a505d, 0x2a2e37);
       scene.add(grid);
-      const floor = new THREE.Mesh(new THREE.PlaneGeometry(span, span), new THREE.ShadowMaterial({ opacity: 0.4 }));
+      // The shadow's floor reaches past the grid, so a tall model's shadow is not cut short.
+      const floorSpan = Math.max(span, radius * 6);
+      const floor = new THREE.Mesh(new THREE.PlaneGeometry(floorSpan, floorSpan), new THREE.ShadowMaterial({ opacity: 0.4 }));
       floor.rotation.x = -Math.PI / 2;
       floor.position.y = 0.001;
       floor.receiveShadow = true;
       scene.add(floor);
 
-      // The key light over the model's front right, so the shadow falls behind it.
-      const sun = new THREE.DirectionalLight(0xffffff, 2.2);
-      sun.position.set(radius * 1.1, radius * 2.6, radius * -1.5);
+      // The key light low over the model's front right, so the shadow falls
+      // behind it and the front the first view sees shows its colours as
+      // painted, the top a little brighter and the far side in shade.
+      const sun = new THREE.DirectionalLight(0xffffff, 3.2);
+      sun.position.set(radius * 0.8, radius * 1.6, radius * -1.9);
       sun.castShadow = true;
       sun.shadow.mapSize.set(1024, 1024);
       const reach = radius * 2;
