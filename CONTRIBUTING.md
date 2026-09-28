@@ -116,4 +116,6 @@ Security problems go through a private report instead; see
 [SECURITY.md](SECURITY.md).
 
 By contributing you agree that your contribution is licensed under the
-project's [MIT licence](LICENSE).
+project's licence: the [GNU Affero General Public License, version 3 or any
+later version](LICENSE), with the additional permission in
+[NOTICE.md](NOTICE.md).

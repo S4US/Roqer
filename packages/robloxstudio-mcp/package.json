@@ -12,7 +12,9 @@
   },
   "files": [
     "dist/**/*",
-    "studio-plugin/MCPPlugin.rbxmx"
+    "studio-plugin/MCPPlugin.rbxmx",
+    "NOTICE.md",
+    "THIRD_PARTY_NOTICES.md"
   ],
   "scripts": {
     "build": "tsup",
@@ -28,7 +30,7 @@
     "game-development"
   ],
   "author": "S4US",
-  "license": "MIT",
+  "license": "AGPL-3.0-or-later",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/S4US/Roqer.git",

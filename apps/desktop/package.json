@@ -4,7 +4,7 @@
   "version": "0.1.6",
   "private": true,
   "description": "Roqer, a local desktop agent for Roblox Studio.",
-  "license": "MIT",
+  "license": "AGPL-3.0-or-later",
   "author": "S4US",
   "repository": {
     "type": "git",

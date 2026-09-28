@@ -30,6 +30,14 @@ const packages = [
   },
 ];
 
+// What each published package lists in "files"; npm adds LICENSE on its own.
+const packageFiles = (asset) => ['dist/**/*', `studio-plugin/${asset}`, 'NOTICE.md', 'THIRD_PARTY_NOTICES.md'];
+const licenseFiles = {
+  LICENSE: 'licence-text',
+  'NOTICE.md': 'notice-text',
+  'THIRD_PARTY_NOTICES.md': 'third-party-notices-text',
+};
+
 const fixtureRoot = mkdtempSync(path.join(os.tmpdir(), 'robloxstudio-mcp-prepack-'));
 const fixtureScriptsDir = path.join(fixtureRoot, 'scripts');
 mkdirSync(fixtureScriptsDir, { recursive: true });
@@ -43,6 +51,9 @@ try {
   writeFileSync(path.join(sourcePluginDir, 'MCPInspectorPlugin.rbxmx'), 'inspector-built-plugin');
   writeFileSync(path.join(sourcePluginDir, 'src', 'source.ts'), 'source-only');
   writeFileSync(path.join(sourcePluginDir, 'include', 'LibMP.lua'), 'large-runtime-source');
+  for (const [name, content] of Object.entries(licenseFiles)) {
+    writeFileSync(path.join(fixtureRoot, name), content);
+  }
 
   for (const packageDefinition of packages) {
     const packageDir = path.join(fixtureRoot, 'packages', packageDefinition.directory);
@@ -55,7 +66,7 @@ try {
       JSON.stringify({
         name: packageDefinition.name,
         version: '1.0.0',
-        files: ['dist/**/*', `studio-plugin/${packageDefinition.asset}`],
+        files: packageFiles(packageDefinition.asset),
         scripts: { prepack: 'node ../../scripts/prepack.mjs' },
       }),
     );
@@ -79,9 +90,21 @@ try {
     const [packReport] = JSON.parse(reportJson);
     assert.deepEqual(
       packReport.files.map((file) => file.path).sort(),
-      ['dist/index.js', 'package.json', `studio-plugin/${packageDefinition.asset}`].sort(),
-      `${packageDefinition.name} tarball contains only runtime files`,
+      [
+        ...Object.keys(licenseFiles),
+        'dist/index.js',
+        'package.json',
+        `studio-plugin/${packageDefinition.asset}`,
+      ].sort(),
+      `${packageDefinition.name} tarball contains only runtime and licence files`,
     );
+    for (const [name, content] of Object.entries(licenseFiles)) {
+      assert.equal(
+        readFileSync(path.join(packageDir, name), 'utf8'),
+        content,
+        `${packageDefinition.name} stages the repository's ${name}`,
+      );
+    }
     assert.deepEqual(
       readdirSync(destination),
       [packageDefinition.asset],
@@ -99,8 +122,8 @@ try {
     );
     assert.deepEqual(
       manifest.files,
-      ['dist/**/*', `studio-plugin/${packageDefinition.asset}`],
-      `${packageDefinition.name} publishes only dist and its runtime plugin asset`,
+      packageFiles(packageDefinition.asset),
+      `${packageDefinition.name} publishes only dist, its runtime plugin asset and the licence notices`,
     );
   }
 
@@ -116,6 +139,20 @@ try {
     missingResult.stderr + missingResult.stdout,
     /Run npm run build:plugins first/,
     'prepack explains how to produce a missing plugin build',
+  );
+
+  writeFileSync(path.join(sourcePluginDir, packages[0].asset), 'main-built-plugin');
+  rmSync(path.join(fixtureRoot, 'NOTICE.md'));
+  const unlicensedResult = spawnSync(
+    process.execPath,
+    [path.join(fixtureScriptsDir, 'prepack.mjs')],
+    { cwd: missingPackageDir, encoding: 'utf8' },
+  );
+  assert.notEqual(unlicensedResult.status, 0, 'prepack fails when a licence file is missing');
+  assert.match(
+    unlicensedResult.stderr + unlicensedResult.stdout,
+    /NOTICE\.md not found[\s\S]*never published without its licence files/,
+    'prepack names the missing licence file',
   );
 
   console.log('prepack package contents passed');

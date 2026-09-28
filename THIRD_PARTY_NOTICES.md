@@ -1,17 +1,44 @@
 # Third-party notices
 
-Roqer is MIT licensed (see [LICENSE](LICENSE)). It builds on the projects below.
-Dependencies installed from npm carry their own licences in `node_modules`, and
-the packaged desktop app ships Electron's and Chromium's licence files alongside
-it.
+Roqer is licensed under the GNU Affero General Public License, version 3 or
+any later version (see [LICENSE](LICENSE) and [NOTICE.md](NOTICE.md)). It
+builds on the projects below, whose code keeps its own licence. Dependencies
+installed from npm carry their own licences in `node_modules`. The packaged
+desktop app ships Electron's and Chromium's licence files alongside it, and
+Roqer's `LICENSE`, `NOTICE.md` and this file in its resources folder; the MCP
+packages on npm carry the same three files.
 
 ## robloxstudio-mcp
 
 The Roblox Studio MCP bridge and Studio plugin in `packages/` and
 `studio-plugin/` began as a fork of
 [chrrxs/robloxstudio-mcp](https://github.com/chrrxs/robloxstudio-mcp) and have
-since been developed independently. The `Copyright (c) 2025` line in
-[LICENSE](LICENSE) is that project's notice, kept as it was published.
+since been developed independently. The code taken from it stays under its MIT
+licence, whose notice is kept here as that project published it:
+
+```text
+MIT License
+
+Copyright (c) 2025
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
 
 ## roblox-mcp-primitives
 
@@ -60,6 +87,8 @@ The Studio plugin's micro-profiler reads captures through Roblox's
 so its source is not in this repository: the plugin build downloads the
 published release and checks it against a pinned SHA-256
 (`scripts/fetch-libmp.mjs`), and a built plugin carries it as a module.
+[NOTICE.md](NOTICE.md) gives the additional permission the GNU AGPL needs for a
+build that carries it; that permission grants no rights in LibMP itself.
 
 ## Roblox assets
 

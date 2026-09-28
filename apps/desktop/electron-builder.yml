@@ -36,6 +36,16 @@ extraResources:
     # library but leaves those as real imports.
     filter:
       - "**/*"
+  # Every installed copy carries Roqer's licence, its notice (with the extra
+  # permission for the LibMP module inside the bundled Studio plugin) and the
+  # notices of the code Roqer builds on, as the GNU AGPL and those MIT notices
+  # require. `.txt` so the licence opens with a double-click on Windows.
+  - from: ../../LICENSE
+    to: LICENSE.txt
+  - from: ../../NOTICE.md
+    to: NOTICE.md
+  - from: ../../THIRD_PARTY_NOTICES.md
+    to: THIRD_PARTY_NOTICES.md
 
 # Where a packaged build looks for its updates, and where a release is uploaded.
 #

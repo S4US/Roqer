@@ -2,7 +2,7 @@
   "name": "@roqer/mcp-core",
   "version": "3.0.3",
   "private": true,
-  "license": "MIT",
+  "license": "AGPL-3.0-or-later",
   "author": "S4US",
   "repository": {
     "type": "git",

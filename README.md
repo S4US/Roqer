@@ -12,7 +12,7 @@
 
 <p align="center">
   <a href="https://github.com/S4US/Roqer/actions/workflows/ci.yml"><img src="https://github.com/S4US/Roqer/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="MIT license"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-AGPL--3.0--or--later-blue.svg" alt="AGPL-3.0-or-later license"></a>
 </p>
 
 <p align="center">
@@ -95,6 +95,8 @@ Contributions are welcome. [CONTRIBUTING.md](CONTRIBUTING.md) explains how to se
 
 ## License
 
-[MIT](LICENSE). The MCP server began as a fork of [chrrxs/robloxstudio-mcp](https://github.com/chrrxs/robloxstudio-mcp); [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) lists the projects Roqer builds on.
+Roqer is free software under the [GNU Affero General Public License, version 3 or any later version](LICENSE). [NOTICE.md](NOTICE.md) has the copyright notice and an additional permission for Roblox's LibMP, which the Studio plugin build includes. Roqer 0.1.6 and earlier releases were published under the MIT License.
+
+The MCP server began as a fork of [chrrxs/robloxstudio-mcp](https://github.com/chrrxs/robloxstudio-mcp); [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) lists the projects Roqer builds on.
 
 Roqer is not affiliated with or endorsed by Roblox Corporation.
