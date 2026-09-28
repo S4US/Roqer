@@ -204,7 +204,10 @@ evidence the host recorded off tool results, never from what the agent said:
 
 The run publishes a real animation through the Open Cloud key of the bridge
 being driven, so point it at a published scratch place owned by that key's
-account. Without a key, the run should say it cannot publish, and it fails.
+account. The first run had no key: it could only build the animation and play
+it as a temporary clip. So, as for T12, the harness now asks the bridge whether
+it has a key before it starts the model, and stops with how to give it one if
+not.
 
 ```bash
 npm run eval -- --task T15-animation-run --provider claude --model opus

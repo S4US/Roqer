@@ -6,7 +6,7 @@ import {
   ANIMATION_NAME_LABEL, ANIMATION_PLAYED_FROM_LABEL, ANIMATION_PLAYED_PUBLISHED, ANIMATION_PREVIEW_TITLE, animationSlotLabel,
   type RunEvidence,
 } from "../shared/run-events";
-import { findEvalTask, type EvalOracleInput } from "./tasks";
+import { findEvalTask, needsUploadKey, type EvalOracleInput } from "./tasks";
 
 function verdict(taskId: string, input: EvalOracleInput) {
   const task = findEvalTask(taskId);
@@ -470,6 +470,15 @@ test("T12 names a missing or wrongly typed cart", () => {
 test("T12 is the only task that needs the Blender worker", () => {
   assert.equal(findEvalTask("T12-model-prop")?.needsBlender, true);
   assert.equal(findEvalTask("T10-world-lowpoly-village")?.needsBlender, undefined);
+});
+
+test("T15 and a Blender run check the bridge's upload key first, and other tasks do not", () => {
+  const task = (id: string) => findEvalTask(id)!;
+  assert.equal(needsUploadKey([task("T15-animation-run")], false), true);
+  assert.equal(needsUploadKey([task("T12-model-prop")], true), true);
+  // Skipped without --blender, so it uploads nothing.
+  assert.equal(needsUploadKey([task("T12-model-prop")], false), false);
+  assert.equal(needsUploadKey([task("T10-world-lowpoly-village")], true), false);
 });
 
 /** A T13 probe of a map that does what the reference and the guidance ask. */

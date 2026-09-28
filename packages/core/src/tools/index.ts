@@ -1978,6 +1978,11 @@ export class RobloxStudioTools {
    * confirm the wired ID reached the character's Animate script.
    */
   private async _animationVerify(args: Record<string, unknown>, instance_id?: string) {
+    // The comparison is against the checked motion, so a built sequence's path
+    // alone gives nothing to compare with; say so rather than "must be an object".
+    if (args.animation === undefined) {
+      return this._textResult({ error: 'verify compares the playtest with the checked motion: pass the same animation you checked and built, not only its path. Nothing was verified.' });
+    }
     const compiled = compilePoseAnimation(args.animation);
     if (!compiled.ok) return this._textResult({ error: 'The animation is not valid; nothing was verified.', errors: compiled.errors });
     const sequence = compiled.sequence;
@@ -2000,7 +2005,7 @@ export class RobloxStudioTools {
       );
     } catch (error) {
       if (error instanceof RoutingFailure) {
-        return this._textResult({ error: 'No playtest client is running; start a playtest first. Nothing was verified.', errorCode: 'no_playtest' });
+        return this._textResult({ error: 'No playtest client is running; start one with solo_playtest {action: "start", mode: "play"} first. Nothing was verified.', errorCode: 'no_playtest' });
       }
       throw error;
     }

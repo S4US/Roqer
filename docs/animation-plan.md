@@ -484,8 +484,15 @@ What was built:
     pictures by size.
   - The build's evidence now also says whether the motion was checked as a
     gait.
-  - Not yet run with a model: the eval needs a published scratch place and an
-    Open Cloud key.
+  - The first model run's bridge had no Open Cloud key. The agent built a run
+    that passed every check and played it as a temporary clip. `publish` then
+    refused, so nothing was wired, and the oracle failed it.
+    - The harness now checks for the key before a T15 run, as it already did
+      for Blender runs.
+    - That run also called `verify` with only the built sequence's path. It now
+      answers that `verify` needs the checked animation.
+  - A passing run still needs a published scratch place and a key whose
+    account owns it.
 
 ## Deferred
 

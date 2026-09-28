@@ -445,11 +445,12 @@ export function formatEvalResult(result: EvalResult): string {
 }
 
 /**
- * A modeling task publishes through the driven bridge's own Open Cloud key, and
- * a bridge Roqer did not start has none unless its environment sets one. The
- * first T12 run spent 190 s of a paid model on exactly that before it could
- * fail. A status check with a malformed operation ID answers without reaching
- * Roblox: the bridge refuses a missing key before it validates the ID.
+ * A modeling or animation task publishes through the driven bridge's own Open
+ * Cloud key, and a bridge Roqer did not start has none unless its environment
+ * sets one. The first T12 run spent 190 s of a paid model on exactly that before
+ * it could fail, and the first T15 run did the same. A status check with a
+ * malformed operation ID answers without reaching Roblox: the bridge refuses a
+ * missing key before it validates the ID.
  */
 export async function requireUploads(caller: McpToolCaller, instanceId: string | null, endpoint: string): Promise<void> {
   const outcome = await caller.callTool("upload_asset", {
@@ -459,7 +460,7 @@ export async function requireUploads(caller: McpToolCaller, instanceId: string |
   });
   if (/No Open Cloud API key/i.test(`${outcome.message ?? ""} ${outcome.text}`)) {
     throw new Error(
-      `The bridge at ${endpoint} has no Roblox Open Cloud key, so a modeling task cannot upload its model. `
+      `The bridge at ${endpoint} has no Roblox Open Cloud key, so a modeling or animation task cannot upload. `
       + "Roqer passes its saved key only to a bridge it starts: close any bridge you started yourself and let Roqer "
       + "start it, or start it with ROBLOX_OPEN_CLOUD_API_KEY and ROBLOX_CREATOR_USER_ID (or _GROUP_ID) set.",
     );

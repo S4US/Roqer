@@ -65,6 +65,12 @@ export type EvalTask = {
    * runs it only when given `--blender` and offers the tool to the planner.
    */
   needsBlender?: boolean;
+  /**
+   * The task uploads to Roblox through the bridge's Open Cloud key, so the
+   * harness checks the bridge has one before it spends a model run. A Blender
+   * task uploads its models too and is checked whenever it runs.
+   */
+  needsUploads?: boolean;
   /** An image in `eval/fixtures` attached to the prompt, as a user pastes a style reference. */
   referenceImage?: string;
   /**
@@ -74,6 +80,11 @@ export type EvalTask = {
   auditInterface?: string;
   oracle: (input: EvalOracleInput) => EvalVerdict;
 };
+
+/** Whether any task that will run uploads, so the bridge must have an Open Cloud key. */
+export function needsUploadKey(tasks: readonly EvalTask[], blender: boolean): boolean {
+  return tasks.some((task) => task.needsUploads === true || (blender && task.needsBlender === true));
+}
 
 /** Whether a recorded change stays inside what the task allows. */
 export function isAllowedTarget(task: EvalTask, target: string): boolean {
@@ -1506,8 +1517,9 @@ ${EXTENT_LUAU}
     // wired to the run slot, a playtest in which the published asset played on
     // the character with the slot holding it, a 3D preview, and a build whose
     // motion checks all passed, run as a gait. It publishes a real animation,
-    // so it needs the bridge's Open Cloud key; without one, the run should say
-    // it cannot publish, and the oracle fails it for that.
+    // so it needs the bridge's Open Cloud key. Its first run had none and could
+    // only build and play a temporary clip, so the harness now checks first.
+    needsUploads: true,
     seed: `
       local loader = game:GetService("ServerScriptService"):FindFirstChild("RoqerAnimate")
       if loader then loader:Destroy() end
