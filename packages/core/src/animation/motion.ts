@@ -104,6 +104,11 @@ export function degreesBetween(a: Frame['r'], b: Frame['r']): number {
   return (Math.acos(cos) * 180) / Math.PI;
 }
 
+/** A rotation as a unit quaternion, [x, y, z, w]. */
+export function rotationQuaternion(r: Frame['r']): [number, number, number, number] {
+  return quatFromMatrix(r);
+}
+
 function quatFromMatrix(r: Frame['r']): Quat {
   const [m00, m01, m02, m10, m11, m12, m20, m21, m22] = r;
   const trace = m00 + m11 + m22;

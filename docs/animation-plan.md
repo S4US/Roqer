@@ -383,7 +383,7 @@ What that needs:
 The easing measured in step 6 applies when converting Blender's
 interpolation.
 
-### 9. Animation playback and contact sheet
+### 9. Animation playback and contact sheet — implemented
 
 - **Playback.** The step 4 viewer plays the rig from the compiled pose data (no
   Blender needed), or a GLB with the animation baked in when Blender made it.
@@ -392,6 +392,70 @@ interpolation.
   trusted code, by a small box-rig renderer in core using the existing PNG
   encoder, or by Blender when it is on. It is never rendered by the chat
   window.
+
+What was built:
+
+- **The figure** (`animation/rig-meshes.ts`, `animation/box-rig.ts`).
+  - The preview draws the stock R15 rig's real meshes, in one light grey.
+  - The first `build` has the plugin build the stock dummy in memory and read
+    each body part's mesh through `EditableMesh`, scaled to the part's size.
+    The dummy's own dynamic head cannot be read ("no permission to load
+    asset"), so the head is Roblox's classic head, which ships with Studio
+    (`rbxasset://avatar/heads/head.mesh`).
+  - The meshes are validated, each triangle turned to face the way its
+    normals do, and cached under `~/.robloxstudio-mcp/cache`. Nothing of
+    Roblox's is committed.
+  - `check` never reaches Studio. Until a build has read the meshes, the
+    preview draws a generated stand-in (rounded boxes at the stock part
+    sizes), and the result says which rig it drew.
+- **The contact sheet** (`animation/contact-sheet.ts`).
+  - A software rasteriser with a depth buffer and smooth shading draws that
+    figure, posed by core's own sampler, at the same scale in every frame. The
+    background is dark, with a soft shadow under the body.
+  - There are five moments across one pass: a loop's wrap is left out, and a
+    one-shot's last frame is kept. The top row shows the front three-quarter.
+    The bottom row looks straight at the front, where arm and head motion
+    reads. For a gait (`locomotion: true`) it looks at the right side instead,
+    facing right, where strides and foot plants read.
+  - `check` and `build` return it as an image, with a note in the result on how
+    to read it. A model that sees images can check the motion; the numeric
+    checks stay enough without it.
+- **The 3D preview** (`animation/rig-glb.ts`).
+  - The same figure as one self-contained GLB, every joint's rotation and
+    translation sampled 30 times a second from the same sampler.
+  - It travels as a host-only resource block. The MCP transport strips it, so
+    MCP clients never receive it; only the desktop's HTTP surface keeps it.
+- **The desktop.**
+  - The main process validates the GLB with step 4's inspector and keeps it in
+    a job folder beside Blender's, under the same id shape. So it is served,
+    checked again and expired exactly as a Blender preview is, and older
+    builds still load the records.
+  - In the answer, the latest animation plays inline in the previews card, with
+    its playback bar underneath, and opens in the full viewer.
+  - Chromium keeps only a few WebGL contexts alive, so the inline view mounts
+    only while the card is on screen and the viewer is closed; otherwise the
+    card shows the contact sheet.
+  - Previews of one animation, by name, are versions of one picture rather
+    than a tile each. The card and the viewer step through them ("Version 3 of
+    6"), and the latest leads.
+- **Aim posing** (`animation/pose-compiler.ts`). A real run showed the agent
+  failing to work out the combined Euler rotation that a wave needs (shoulder
+  `[90, 0, 90]`). Poses can now say `aim: [right, up, forward]` for a shoulder
+  or hip, with `bendToward` to set which way the limb folds, and `bend:
+  degrees` for an elbow or knee. They compile to the same rotations.
+- **Recipes** (`apps/desktop/agent/skills/roblox-animation-vfx/references/character-animation.md`).
+  Wave, idle, walk, run and jump are written with `aim` and `bend`.
+  `animation-recipes.test.ts` compiles each one straight from the reference,
+  runs it through the motion checks and checks its gesture: the wave's hand
+  above the head, the gaits' opposite arms and legs, the jump's raised arms.
+- **The viewer.**
+  - It plays any GLB that carries an animation: looping, with play/pause, a
+    keyboard-operable scrub bar and the time.
+  - Opened in the full viewer it plays at once. Inline, it waits under reduced
+    motion.
+  - A GLB baked by Blender plays the same way, once a Blender job exports one.
+- **Not built: a Blender-rendered sheet.** The box-rig sheet needs no Blender,
+  and a Blender sheet waits for the proposed Blender step.
 
 ### 10. Guidance, docs and evals
 

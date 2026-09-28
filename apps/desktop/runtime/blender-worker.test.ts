@@ -360,11 +360,15 @@ test("a clean, a skipped or a malformed layout is reported for what it is", asyn
 
 test("an overdue or cancelled job takes Blender's process tree down", async () => {
   await withJobs(async (jobsRoot) => {
-    const hanging = fakeBlender(async () => ({ hang: true }));
-    const worker = new BlenderWorker({ executable: EXECUTABLE, jobsRoot, spawn: hanging.spawn, killTree: hanging.killTree, env: {} });
     const controller = new AbortController();
+    // Cancelled once Blender is running, not after a fixed delay: on a busy
+    // machine the job can take longer than any delay to reach the spawn.
+    const hanging = fakeBlender(async () => {
+      setImmediate(() => controller.abort());
+      return { hang: true };
+    });
+    const worker = new BlenderWorker({ executable: EXECUTABLE, jobsRoot, spawn: hanging.spawn, killTree: hanging.killTree, env: {} });
     const pending = worker.run({ script: "while True: pass" }, { signal: controller.signal });
-    setTimeout(() => controller.abort(), 20);
     const cancelled = await pending;
     assert.equal(cancelled.errorCode, "cancelled");
     assert.equal(hanging.killed.length, 1);

@@ -1,4 +1,10 @@
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
 import { BridgeService } from '../bridge-service.js';
+
+// A cache of real rig meshes on this machine must not change what the tests draw.
+process.env.ROBLOXSTUDIO_MCP_CACHE_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'roqer-rig-cache-'));
 import { RobloxStudioTools } from '../tools/index.js';
 import {
   PREVIEW_SAMPLES,
@@ -48,8 +54,10 @@ function faithfulSamples(sequence: KeyframeSequenceDescription, nudge = 0): Prev
   }));
 }
 
-function body(result: { content: { text: string }[] }) {
-  return JSON.parse(result.content[0].text);
+type ToolContent = { type: string; text?: string; data?: string; mimeType?: string; resource?: { mimeType: string; blob: string } };
+
+function body(result: { content: ToolContent[] }) {
+  return JSON.parse(result.content[0].text!);
 }
 
 describe('prepareAnimation', () => {
@@ -103,6 +111,8 @@ describe('RobloxStudioTools.animation', () => {
     const calls: { endpoint: string; data: Payload; instance_id?: string }[] = [];
     // The plugin round trip, replaced: each endpoint answers from `responses`.
     (tools as unknown as { _callSingle: unknown })._callSingle = async (endpoint: string, data: Payload, _target: unknown, instance_id?: string) => {
+      // A build reads the stock rig's meshes first; here there are none, so it draws the stand-in.
+      if (endpoint === '/api/animation-rig-meshes') return { error: 'no meshes in tests' };
       calls.push({ endpoint, data, instance_id });
       const respond = responses[endpoint];
       if (!respond) throw new Error(`unexpected call to ${endpoint}`);
@@ -121,6 +131,20 @@ describe('RobloxStudioTools.animation', () => {
     ]);
     expect(body(await tools.animation({ action: 'check', animation: { ...wave(), keyframes: [] } })))
       .toEqual({ valid: false, errors: ['keyframes: must be a non-empty array'] });
+  });
+
+  test('check shows the motion: a contact sheet for the model and a GLB for the viewer', async () => {
+    const { tools } = toolsWith({});
+    const result = await tools.animation({ action: 'check', animation: wave() });
+    const [text, image, resource] = result.content as ToolContent[];
+    expect(JSON.parse(text.text!).sheet).toMatchObject({ times: [0, 0.2, 0.4, 0.6, 0.8] });
+    expect(image).toMatchObject({ type: 'image', mimeType: 'image/png' });
+    const png = Buffer.from(image.data!, 'base64');
+    expect(png.subarray(1, 4).toString()).toBe('PNG');
+    expect([png.readUInt32BE(16), png.readUInt32BE(20)]).toEqual([860, 508]);
+    expect(resource).toMatchObject({ type: 'resource', resource: { mimeType: 'model/gltf-binary' } });
+    // An invalid animation has nothing to show.
+    expect((await tools.animation({ action: 'check', animation: { ...wave(), keyframes: [] } })).content).toHaveLength(1);
   });
 
   test('build refuses a failing check before Studio sees anything', async () => {

@@ -10,7 +10,7 @@ import {
   MAX_BLENDER_SCRIPT_CHARACTERS,
 } from "../shared/blender";
 import type { McpCallOptions, McpToolImage, McpToolOutcome } from "./mcp-types";
-import { isViewableGlb, modelPreviewFileName } from "./model-preview";
+import { isViewableGlb, JOB_RETENTION_MS, MAX_KEPT_JOBS, modelPreviewFileName, pruneJobFolders } from "./model-preview";
 import { modelPreviewId } from "../shared/model-preview";
 
 /**
@@ -40,8 +40,6 @@ const INSPECT_TIMEOUT_MS = 45_000;
 const MAX_LOG_CHARACTERS = 4_000;
 const MAX_PREVIEW_BYTES = 2 * 1024 * 1024;
 /** Old jobs are cleared once they are this old; a model to upload is uploaded within the day. */
-const JOB_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
-const MAX_KEPT_JOBS = 40;
 /** How many of a scene's objects the result names; the rest are counted. */
 const MAX_LISTED_SCENE_OBJECTS = 60;
 const MAX_SCENE_OBJECTS = 120;
@@ -1333,16 +1331,7 @@ export class BlenderWorker {
    * few, and always keeping `keep`: the job this one continues from.
    */
   private async prune(keep?: string): Promise<void> {
-    const entries = await fs.readdir(this.options.jobsRoot, { withFileTypes: true }).catch(() => []);
-    const jobs = entries.filter((entry) => entry.isDirectory()).map((entry) => entry.name).sort();
-    const cutoff = this.now() - JOB_RETENTION_MS;
-    for (const [index, name] of jobs.entries()) {
-      const directory = path.join(this.options.jobsRoot, name);
-      if (directory === keep) continue;
-      const tooMany = index < jobs.length - MAX_KEPT_JOBS;
-      const modified = (await fs.stat(directory).catch(() => undefined))?.mtimeMs ?? 0;
-      if (tooMany || modified < cutoff) await fs.rm(directory, { recursive: true, force: true }).catch(() => undefined);
-    }
+    await pruneJobFolders(this.options.jobsRoot, this.now(), keep);
   }
 }
 

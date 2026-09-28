@@ -16,7 +16,7 @@ import { CustomProviderStore } from "../runtime/custom-provider-store";
 import { bridgeEnvironment, checkOpenCloudKey } from "../runtime/open-cloud";
 import { BlenderSettings } from "../runtime/blender-settings";
 import { BlenderWorker } from "../runtime/blender-worker";
-import { readModelPreview } from "../runtime/model-preview";
+import { readModelPreview, storeModelPreview } from "../runtime/model-preview";
 import { withLocalOperations } from "../runtime/local-operations";
 import type { McpCallOptions, McpToolOutcome } from "../runtime/mcp-types";
 import { BLENDER_OPERATION, type BlenderSettingsResult, type BlenderSettingsView } from "../shared/blender";
@@ -1478,6 +1478,7 @@ async function startRun(event: IpcMainInvokeEvent, payload: unknown): Promise<Ru
       request: { ...resolvedRequest, runId },
       images: attachmentContext.images,
       previewImage: previewToolImage,
+      storeModelPreview: (glbBase64: string) => storeModelPreview(blenderJobsRoot(), glbBase64),
       emit: (runEvent: RunEvent) => {
         runJournal().record(runEvent);
         if (runEvent.type === "run-completed") completedRuns.add(runId);

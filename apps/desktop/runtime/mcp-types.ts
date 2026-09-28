@@ -57,6 +57,12 @@ export type McpToolOutcome = {
    * Host-only, like the images: the model never reads it.
    */
   pictured?: { name: string; modelPreviewId?: string };
+  /**
+   * A 3D preview the tool returned for Roqer's viewer, base64 GLB, such as an
+   * animation's box rig. Host-only: never shown to the model or the renderer
+   * as bytes; the host keeps it and hands the renderer an id.
+   */
+  modelFile?: string;
   /** 0 when the request never reached the server. */
   httpStatus: number;
   /** e.g. "source_revision_conflict", "unauthorized", "request_failed". */

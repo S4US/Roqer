@@ -1,9 +1,14 @@
+import { randomBytes } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 
 import {
-  isModelPreviewId, MAX_MODEL_PREVIEW_BYTES, type ModelPreviewResult,
+  isModelPreviewId, MAX_MODEL_PREVIEW_BYTES, modelPreviewId, type ModelPreviewResult,
 } from "../shared/model-preview";
+
+/** How long a job folder is kept, and how many at most: Blender jobs and animation previews alike. */
+export const JOB_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
+export const MAX_KEPT_JOBS = 40;
 
 /**
  * The GLB Roqer's inspection exported for a job's model: its file name inside
@@ -97,6 +102,52 @@ async function readViewableGlb(file: string): Promise<Uint8Array | "missing" | "
 /** Whether the file at a path is a preview the viewer may be handed. */
 export async function isViewableGlb(file: string): Promise<boolean> {
   return typeof await readViewableGlb(file) !== "string";
+}
+
+/** A job folder's name: its start time, then its id, as the Blender worker names them. */
+function jobFolderName(started: number, jobId: string): string {
+  return `${new Date(started).toISOString().replace(/[:.]/g, "-")}-${jobId}`;
+}
+
+/**
+ * Keep a 3D preview that a tool returned, such as an animation's box rig, and
+ * return the id the viewer asks for it by; undefined when the bytes are not a
+ * self-contained GLB the viewer can show.
+ *
+ * It goes in a job folder of its own beside Blender's, so it is served,
+ * checked again, and expired exactly as a Blender preview is: after seven
+ * days, or once forty newer job folders exist.
+ */
+export async function storeModelPreview(jobsRoot: string, base64: string, now: number = Date.now()): Promise<string | undefined> {
+  if (base64.length === 0 || base64.length > Math.ceil(MAX_MODEL_PREVIEW_BYTES / 3) * 4 || !/^[A-Za-z0-9+/]+={0,2}$/.test(base64)) {
+    return undefined;
+  }
+  const bytes = new Uint8Array(Buffer.from(base64, "base64"));
+  if (!inspectGlb(bytes).ok) return undefined;
+  const jobId = randomBytes(4).toString("hex");
+  const directory = path.join(jobsRoot, jobFolderName(now, jobId));
+  try {
+    await fs.mkdir(directory, { recursive: true });
+    await fs.writeFile(path.join(directory, modelPreviewFileName(0)), bytes, { flag: "wx" });
+  } catch {
+    return undefined;
+  }
+  await pruneJobFolders(jobsRoot, now, directory);
+  return modelPreviewId(jobId, 0);
+}
+
+/** Clear job folders past their retention, oldest first, always keeping `keep`. */
+export async function pruneJobFolders(jobsRoot: string, now: number, keep?: string): Promise<void> {
+  const entries = await fs.readdir(jobsRoot, { withFileTypes: true }).catch(() => []);
+  const jobs = entries.filter((entry) => entry.isDirectory()).map((entry) => entry.name).sort();
+  const cutoff = now - JOB_RETENTION_MS;
+  for (const [index, name] of jobs.entries()) {
+    const directory = path.join(jobsRoot, name);
+    if (directory === keep) continue;
+    const tooMany = index < jobs.length - MAX_KEPT_JOBS;
+    const modified = (await fs.stat(directory).catch(() => undefined))?.mtimeMs ?? 0;
+    if (tooMany || modified < cutoff) await fs.rm(directory, { recursive: true, force: true }).catch(() => undefined);
+  }
 }
 
 /**

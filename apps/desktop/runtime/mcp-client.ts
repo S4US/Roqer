@@ -31,6 +31,9 @@ const TOOL_IMAGE_MEDIA_TYPES = new Set<McpToolImage["mediaType"]>([
   "image/gif",
 ]);
 
+// A 3D preview may be up to 24 MiB, which is 32 MiB of base64.
+const MAX_TOOL_MODEL_BASE64 = 32 * 1024 * 1024;
+
 const LOOPBACK_HOSTNAMES = new Set(["127.0.0.1", "localhost", "::1", "[::1]"]);
 
 /** Throws McpEndpointError when the value is not an http loopback URL. */
@@ -104,6 +107,15 @@ function isToolImage(
   }
   return value.data.length > 0 && value.data.length <= MAX_TOOL_IMAGE_BASE64 &&
     value.data.length % 4 === 0 && /^[A-Za-z0-9+/]+={0,2}$/.test(value.data);
+}
+
+/** The base64 of a GLB the tool returned for Roqer's viewer, or undefined. */
+function toolModelFile(value: unknown): string | undefined {
+  if (!isRecord(value) || value.type !== "resource" || !isRecord(value.resource)) return undefined;
+  const { mimeType, blob } = value.resource;
+  if (mimeType !== "model/gltf-binary" || typeof blob !== "string") return undefined;
+  return blob.length > 0 && blob.length <= MAX_TOOL_MODEL_BASE64 && blob.length % 4 === 0 &&
+    /^[A-Za-z0-9+/]+={0,2}$/.test(blob) ? blob : undefined;
 }
 
 function isValidInstance(value: unknown): value is McpInstance {
@@ -333,16 +345,20 @@ export class McpClient implements McpToolCaller {
     if (envelope) {
       const texts: string[] = [];
       const images: McpToolImage[] = [];
+      let modelFile: string | undefined;
       for (const block of envelope.content as unknown[]) {
         if (isRecord(block) && block.type === "text" && typeof block.text === "string") {
           texts.push(block.text);
         } else if (images.length < MAX_TOOL_IMAGES && isToolImage(block)) {
           images.push({ data: block.data, mediaType: block.mimeType });
+        } else {
+          modelFile ??= toolModelFile(block);
         }
       }
       text = texts.join("\n");
       data = envelope.structuredContent;
-      return this.parsedOutcome(envelope, data, text, images, httpStatus, durationMs);
+      const outcome = this.parsedOutcome(envelope, data, text, images, httpStatus, durationMs);
+      return modelFile === undefined ? outcome : { ...outcome, modelFile };
     } else {
       data = body;
     }

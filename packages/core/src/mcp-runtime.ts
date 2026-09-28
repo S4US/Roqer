@@ -127,13 +127,27 @@ function parseJsonObject(text: string): Record<string, unknown> | undefined {
 }
 
 /**
+ * Files meant for Roqer's own viewer, such as an animation's 3D preview. MCP
+ * clients have no use for them and could forward them to a model, so they are
+ * served only over the desktop's HTTP surface.
+ */
+export const HOST_ONLY_MIME_TYPES: ReadonlySet<string> = new Set(['model/gltf-binary']);
+
+function isHostOnly(block: ResultContent): boolean {
+  if (block.type !== 'resource') return false;
+  const resource = (block as { resource?: { mimeType?: unknown } }).resource;
+  return typeof resource?.mimeType === 'string' && HOST_ONLY_MIME_TYPES.has(resource.mimeType);
+}
+
+/**
  * Converts the historic JSON-in-text result shape into the lean 2026 MCP shape.
  * Modern clients receive JSON once in structuredContent; legacy clients keep the
  * text projection required by older SDKs. Human-readable text and media survive.
  */
-export function normalizeToolResult(raw: unknown, era: ProtocolEra): CallToolResult {
+export function normalizeToolResult(raw: unknown, era: ProtocolEra, options: { keepHostOnly?: boolean } = {}): CallToolResult {
   const result = (raw && typeof raw === 'object' ? raw : {}) as ToolResultLike;
-  const originalContent = Array.isArray(result.content) ? result.content : [];
+  const originalContent = (Array.isArray(result.content) ? result.content : [])
+    .filter((block) => options.keepHostOnly === true || !isHostOnly(block));
   let structured = asStructuredObject(result.structuredContent);
   const jsonTextIndex = originalContent.findIndex((block) =>
     block.type === 'text' && typeof block.text === 'string' && !!parseJsonObject(block.text));

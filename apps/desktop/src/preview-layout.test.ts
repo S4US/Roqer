@@ -1,10 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
-  BLENDER_PREVIEW_TITLE, SCREENSHOT_VIEW_LABEL, SCREENSHOT_VIEW_PLAYTEST, type RunChange, type RunEvidence,
+  ANIMATION_NAME_LABEL, ANIMATION_PREVIEW_TITLE, BLENDER_PREVIEW_TITLE, SCREENSHOT_VIEW_LABEL, SCREENSHOT_VIEW_PLAYTEST,
+  type RunChange, type RunEvidence,
 } from "../shared/run-events";
 import {
-  hasModelPreview, previewCaption, previewLayout, previewSource, previewSourceLabel, previewTileLabel, shortTarget,
+  hasModelPreview, previewCaption, previewLayout, previewSource, previewSourceLabel, previewTileLabel, previewVersions, shortTarget,
 } from "./preview-layout";
 
 const image = "data:image/jpeg;base64,QUJD";
@@ -55,6 +56,39 @@ test("a picture is labelled by where the host says it came from", () => {
   assert.deepEqual([blender, playtest, shot("s"), other].map(previewSourceLabel), [
     "Blender · before upload", "Playtest", "Studio", "Interface",
   ]);
+});
+
+test("an animation's contact sheet is labelled as an R15 animation, and opens in 3D when its model was kept", () => {
+  const sheet: RunEvidence = { id: "a", kind: "inspection", title: ANIMATION_PREVIEW_TITLE, imageDataUrl: image };
+  assert.equal(previewSource(sheet), "animation");
+  assert.equal(previewSourceLabel(sheet), "Animation · R15");
+  assert.equal(hasModelPreview(sheet), false);
+  assert.equal(hasModelPreview({ ...sheet, modelPreviewId: "a1b2c3d4-0" }), true);
+});
+
+test("previews of one animation are versions of one picture, shown where the latest was taken", () => {
+  const wave = (id: string) => ({
+    id, kind: "inspection", title: ANIMATION_PREVIEW_TITLE, imageDataUrl: image,
+    modelPreviewId: `a1b2c3d4-${id}`, metadata: [{ label: ANIMATION_NAME_LABEL, value: "Wave" }],
+  }) satisfies RunEvidence;
+  const walk: RunEvidence = { ...wave("w"), metadata: [{ label: ANIMATION_NAME_LABEL, value: "Walk" }] };
+  const unnamed: RunEvidence = { id: "u", kind: "inspection", title: ANIMATION_PREVIEW_TITLE, imageDataUrl: image };
+  const images = [wave("1"), shot("s"), wave("2"), walk, unnamed, wave("3")];
+  const { shown, versions } = previewVersions(images);
+  // The screenshot, then the walk and the unnamed preview, then the wave at its latest.
+  assert.deepEqual(shown.map((item) => item.id), ["s", "w", "u", "3"]);
+  assert.deepEqual(versions.get("3")?.map((item) => item.id), ["1", "2", "3"]);
+  assert.equal(versions.size, 1);
+  // The latest version leads the card, as the newest picture does.
+  const layout = previewLayout(shown);
+  assert.equal(layout?.kind === "lead" ? layout.lead.evidence.id : undefined, "3");
+  assert.equal(
+    previewTileLabel({ index: 3, evidence: shown[3] }, 4, 3),
+    `Open image 4 of 4, ${ANIMATION_PREVIEW_TITLE}, 3 versions, with a 3D view`,
+  );
+  // A Blender result named like an animation is still its own picture.
+  const blender: RunEvidence = { ...wave("b"), title: BLENDER_PREVIEW_TITLE };
+  assert.equal(previewVersions([blender, wave("4")]).shown.length, 2);
 });
 
 test("only a Blender result with a kept model opens in 3D, and its tile says so", () => {

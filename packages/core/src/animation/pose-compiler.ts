@@ -1,7 +1,8 @@
 // Turns a compact pose description into a KeyframeSequence description.
 //
 // The input names joints ("RightShoulder") and gives each keyed joint a
-// rotation in degrees. The output is keyed by part name, as a KeyframeSequence
+// rotation in degrees, or, for a limb, the direction it points (`aim`) or how
+// far its elbow or knee flexes (`bend`). The output is keyed by part name, as a KeyframeSequence
 // is: a pose on a joint moves the joint's child part. The second animation
 // spike showed that a part-keyed sequence drives AnimationConstraint joints as
 // it drives Motor6D ones, so nothing here writes joint objects.
@@ -47,9 +48,26 @@ export interface PoseEasing {
   direction?: PoseEasingDirection;
 }
 
+/**
+ * A joint's pose. Give at most one of `rotation`, `aim` or `bend`; none means
+ * the rest pose.
+ */
 export interface JointPoseSpec {
-  /** Degrees about the parent part's X, Y and Z axes, applied as CFrame.Angles does. Omitted means the rest pose. */
+  /** Degrees about the parent part's X, Y and Z axes, applied as CFrame.Angles does. */
   rotation?: [number, number, number];
+  /**
+   * Shoulders and hips: the direction the limb points, as [right, up, forward]
+   * in the parent part's frame (the character's, while the torso is upright).
+   * [0, -1, 0] hangs it at rest.
+   */
+  aim?: [number, number, number];
+  /**
+   * With `aim`: the way the elbow or knee folds, as [right, up, forward].
+   * Defaults to forward for arms and back for legs, as they fold at rest.
+   */
+  bendToward?: [number, number, number];
+  /** Elbows and knees: how far the joint flexes, in degrees; 0 is straight. */
+  bend?: number;
   /** Studs. Only the Root joint takes one: it offsets the whole body. */
   position?: [number, number, number];
   easing?: PoseEasing;
@@ -126,11 +144,92 @@ export type PoseCompileResult =
   | { ok: true; sequence: KeyframeSequenceDescription }
   | { ok: false; errors: string[] };
 
+/** A rotation, row-major. */
+type Matrix3 = readonly [number, number, number, number, number, number, number, number, number];
+
 interface ParsedJoint {
   joint: RigJoint;
-  rotation: readonly [number, number, number];
+  rotation: Matrix3;
   position: readonly [number, number, number];
   easing: { style?: PoseEasingStyle; direction?: PoseEasingDirection };
+}
+
+const IDENTITY_MATRIX: Matrix3 = [1, 0, 0, 0, 1, 0, 0, 0, 1];
+
+/** CFrame.Angles(x, y, z) in degrees, as a matrix: Rx * Ry * Rz. */
+function eulerMatrix(degrees: readonly [number, number, number]): Matrix3 {
+  const [x, y, z] = degrees.map((value) => (value * Math.PI) / 180);
+  const cx = Math.cos(x), sx = Math.sin(x);
+  const cy = Math.cos(y), sy = Math.sin(y);
+  const cz = Math.cos(z), sz = Math.sin(z);
+  return [
+    cy * cz, -cy * sz, sy,
+    sx * sy * cz + cx * sz, -sx * sy * sz + cx * cz, -sx * cy,
+    -cx * sy * cz + sx * sz, cx * sy * sz + sx * cz, cx * cy,
+  ];
+}
+
+type Vec = [number, number, number];
+const dot3 = (a: Vec, b: Vec) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+const cross3 = (a: Vec, b: Vec): Vec => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+const scale3 = (a: Vec, k: number): Vec => [a[0] * k, a[1] * k, a[2] * k];
+const length3 = (a: Vec) => Math.hypot(a[0], a[1], a[2]);
+
+/** [right, up, forward] in the character's terms, as Roblox's axes: forward is -Z. */
+function robloxDirection(value: readonly [number, number, number]): Vec {
+  return [value[0], value[1], -value[2]];
+}
+
+/**
+ * The limbs `aim` and `bend` understand. `fold` is where the limb's lower
+ * half swings, in the upper part's own frame, when the elbow or knee flexes:
+ * a forearm folds forward (-Z), a shin back (+Z). `defaultBend` is the fold
+ * as [right, up, forward], used when a pose gives no `bendToward`.
+ */
+const LIMBS: Readonly<Record<string, { fold: Vec; defaultBend: Vec }>> = {
+  LeftShoulder: { fold: [0, 0, -1], defaultBend: [0, 0, 1] },
+  RightShoulder: { fold: [0, 0, -1], defaultBend: [0, 0, 1] },
+  LeftHip: { fold: [0, 0, 1], defaultBend: [0, 0, -1] },
+  RightHip: { fold: [0, 0, 1], defaultBend: [0, 0, -1] },
+};
+/** The hinges `bend` understands, and the sign of the X rotation that flexes each. */
+const HINGES: Readonly<Record<string, 1 | -1>> ={ LeftElbow: 1, RightElbow: 1, LeftKnee: -1, RightKnee: -1 };
+
+/**
+ * The rotation that points a limb's long axis (-Y in its own frame) along
+ * `aim` and turns its fold toward `bendToward`, both [right, up, forward] in
+ * the parent part's frame. The fold is taken square to the aim; when the two
+ * run together, the limb's usual fold is used, then up, then back.
+ */
+export function aimRotation(jointName: string, aim: readonly [number, number, number], bendToward?: readonly [number, number, number]): Matrix3 {
+  const limb = LIMBS[jointName];
+  if (!limb) throw new Error(`${jointName} cannot aim`);
+  const d = scale3(robloxDirection(aim), 1 / length3(robloxDirection(aim)));
+  const candidates: Vec[] = [
+    ...(bendToward ? [robloxDirection(bendToward)] : []),
+    robloxDirection(limb.defaultBend),
+    [0, 1, 0],
+    [0, 0, 1],
+  ];
+  let fold: Vec = [0, 0, 0];
+  for (const candidate of candidates) {
+    const square: Vec = [0, 1, 2].map((axis) => candidate[axis] - dot3(candidate, d) * d[axis]) as Vec;
+    if (length3(square) > 1e-3 * Math.max(1, length3(candidate))) {
+      fold = scale3(square, 1 / length3(square));
+      break;
+    }
+  }
+  // Map the limb's own axes (long axis, fold, and their cross) onto the aim's.
+  const long: Vec = [0, -1, 0];
+  const local = [long, limb.fold, cross3(long, limb.fold)];
+  const target = [d, fold, cross3(d, fold)];
+  const matrix = [0, 0, 0, 0, 0, 0, 0, 0, 0];
+  for (let k = 0; k < 3; k += 1) {
+    for (let i = 0; i < 3; i += 1) {
+      for (let j = 0; j < 3; j += 1) matrix[i * 3 + j] += target[k][i] * local[k][j];
+    }
+  }
+  return matrix as unknown as Matrix3;
 }
 
 interface ParsedKeyframe {
@@ -243,13 +342,39 @@ function parseJoints(value: unknown, rig: Rig, path: string, issues: Issues): Ma
     }
     const pose = value[name];
     if (!isRecord(pose)) {
-      issues.add(jointPath, 'must be an object with rotation, position and/or easing');
+      issues.add(jointPath, 'must be an object with rotation, aim, bend, position and/or easing');
       continue;
     }
-    checkKeys(pose, ['rotation', 'position', 'easing'], jointPath, issues);
-    const rotation = pose.rotation === undefined
-      ? [0, 0, 0] as const
-      : parseVector(pose.rotation, POSE_LIMITS.maxRotationDegrees, 'degrees', `${jointPath}.rotation`, issues);
+    checkKeys(pose, ['rotation', 'aim', 'bendToward', 'bend', 'position', 'easing'], jointPath, issues);
+    const forms = (['rotation', 'aim', 'bend'] as const).filter((key) => pose[key] !== undefined);
+    if (forms.length > 1) issues.add(jointPath, `give one of rotation, aim or bend, not ${forms.join(' and ')}`);
+    let rotation: Matrix3 = IDENTITY_MATRIX;
+    if (pose.rotation !== undefined) {
+      rotation = eulerMatrix(parseVector(pose.rotation, POSE_LIMITS.maxRotationDegrees, 'degrees', `${jointPath}.rotation`, issues));
+    }
+    if (pose.aim !== undefined || pose.bendToward !== undefined) {
+      if (!LIMBS[joint.name]) {
+        issues.add(jointPath, 'aim and bendToward work on shoulders and hips; use rotation here');
+      } else if (pose.aim === undefined) {
+        issues.add(`${jointPath}.bendToward`, 'goes with aim');
+      } else {
+        const aim = parseVector(pose.aim, 1e6, 'units', `${jointPath}.aim`, issues);
+        const toward = pose.bendToward === undefined ? undefined : parseVector(pose.bendToward, 1e6, 'units', `${jointPath}.bendToward`, issues);
+        if (length3(aim) < 1e-6) issues.add(`${jointPath}.aim`, 'must point somewhere: [right, up, forward], not all zero');
+        else if (toward !== undefined && length3(toward) < 1e-6) issues.add(`${jointPath}.bendToward`, 'must point somewhere: [right, up, forward], not all zero');
+        else rotation = aimRotation(joint.name, aim, toward);
+      }
+    }
+    if (pose.bend !== undefined) {
+      const flex = HINGES[joint.name];
+      if (!flex) {
+        issues.add(`${jointPath}.bend`, 'works on elbows and knees; use rotation here');
+      } else if (typeof pose.bend !== 'number' || !Number.isFinite(pose.bend) || Math.abs(pose.bend) > POSE_LIMITS.maxRotationDegrees) {
+        issues.add(`${jointPath}.bend`, `must be degrees within ±${POSE_LIMITS.maxRotationDegrees}; 0 is straight`);
+      } else {
+        rotation = eulerMatrix([flex * pose.bend, 0, 0]);
+      }
+    }
     let position: readonly [number, number, number] = [0, 0, 0];
     if (pose.position !== undefined) {
       if (joint.name === rig.joints[0].name) {
@@ -335,12 +460,12 @@ function checkTurns(keyframes: ParsedKeyframe[], animationEasing: ParsedJoint['e
     keyframes.forEach((keyframe, index) => {
       const pose = keyframe.joints.get(joint.childPart);
       if (!pose) return;
-      const cframe = poseCFrame(pose.rotation);
+      const cframe = matrixCFrame(pose.rotation);
       if (previous && previous.style !== 'Constant') {
         const turn = turnDegrees(previous.cframe, cframe);
         if (turn > POSE_LIMITS.maxTurnPerSegment + 1e-6) {
           issues.add(
-            `keyframes[${index}].joints.${joint.name}.rotation`,
+            `keyframes[${index}].joints.${joint.name}`,
             `turns ${Math.round(turn)}° from its key at ${previous.time} s; split turns over ${POSE_LIMITS.maxTurnPerSegment}° across more keyframes`,
           );
         }
@@ -360,17 +485,12 @@ export function poseCFrame(
   rotationDegrees: readonly [number, number, number],
   position: readonly [number, number, number] = [0, 0, 0],
 ): CFrameComponents {
-  const [x, y, z] = rotationDegrees.map((degrees) => (degrees * Math.PI) / 180);
-  const cx = Math.cos(x), sx = Math.sin(x);
-  const cy = Math.cos(y), sy = Math.sin(y);
-  const cz = Math.cos(z), sz = Math.sin(z);
-  // Rx * Ry * Rz, row-major.
-  return [
-    position[0], position[1], position[2],
-    cy * cz, -cy * sz, sy,
-    sx * sy * cz + cx * sz, -sx * sy * sz + cx * cz, -sx * cy,
-    -cx * sy * cz + sx * sz, cx * sy * sz + sx * cz, cx * cy,
-  ].map(round) as unknown as CFrameComponents;
+  return matrixCFrame(eulerMatrix(rotationDegrees), position);
+}
+
+/** CFrame components from a rotation matrix and a position, rounded. */
+function matrixCFrame(rotation: Matrix3, position: readonly [number, number, number] = [0, 0, 0]): CFrameComponents {
+  return [position[0], position[1], position[2], ...rotation].map(round) as unknown as CFrameComponents;
 }
 
 const IDENTITY = poseCFrame([0, 0, 0]);
@@ -411,7 +531,7 @@ function compileKeyframe(
       part,
       joint: keyed.joint.name,
       weight: 1,
-      cframe: poseCFrame(keyed.rotation, keyed.position),
+      cframe: matrixCFrame(keyed.rotation, keyed.position),
       easingStyle: keyed.easing.style ?? keyframe.easing.style ?? animationEasing.style ?? 'Linear',
       easingDirection: keyed.easing.direction ?? keyframe.easing.direction ?? animationEasing.direction ?? 'In',
       children,

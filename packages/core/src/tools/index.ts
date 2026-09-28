@@ -36,7 +36,10 @@ import {
   verifyPlayback,
   type AnimateSlot,
 } from '../animation/animation-tool.js';
-import { compilePoseAnimation } from '../animation/pose-compiler.js';
+import { compilePoseAnimation, type KeyframeSequenceDescription } from '../animation/pose-compiler.js';
+import { renderContactSheet } from '../animation/contact-sheet.js';
+import { renderRigGlb } from '../animation/rig-glb.js';
+import { cachedRigMeshes, currentRigMeshes, storeRigMeshes } from '../animation/rig-meshes.js';
 import * as fs from 'fs';
 import * as path from 'path';
 
@@ -1755,15 +1758,16 @@ export class RobloxStudioTools {
       ...(waived.length > 0 ? { waived } : {}),
     };
     if (action === 'check') {
-      return this._textResult({ valid: true, animation: describeAnimation(sequence), checks });
+      return this._animationResult({ valid: true, animation: describeAnimation(sequence), checks }, sequence, locomotion === true);
     }
     if (failing.length > 0) {
-      return this._textResult({
+      return this._animationResult({
         error: `${failing.length === 1 ? 'A motion check' : `${failing.length} motion checks`} failed (${failing.join(', ')}); nothing was built. Fix the motion, or waive a failure you intend.`,
         checks,
-      });
+      }, sequence, locomotion === true);
     }
 
+    await this._fetchRigMeshes(instance_id);
     const payload = { name: sequence.name, loop: sequence.loop, priority: sequence.priority, keyframes: sequence.keyframes };
     const preview = await this._callSingle(
       '/api/preview-animation',
@@ -1788,7 +1792,7 @@ export class RobloxStudioTools {
     if (written?.error) return this._textResult({ ...written, playback });
 
     const expected = expectedCounts(sequence);
-    return this._textResult({
+    return this._animationResult({
       built: true,
       path: written.path,
       instanceRef: written.instanceRef,
@@ -1805,7 +1809,57 @@ export class RobloxStudioTools {
       },
       playback,
       checks,
-    });
+    }, sequence, locomotion === true);
+  }
+
+  /**
+   * A check or build result with what the motion looks like: a contact sheet
+   * the model can check, drawn here from the compiled sequence, and a GLB of
+   * the same box rig for Roqer's viewer, which MCP clients never receive.
+   */
+  private rigMeshRetryAt = 0;
+
+  /**
+   * Read the stock R15 rig's real meshes from Studio once, so previews draw the
+   * rig Roblox does. Only build asks, since it is in Studio anyway; check never
+   * reaches Studio. Once kept, they serve every later call, in this process and
+   * the next, and a failed read falls back to the generated rig until a retry.
+   */
+  private async _fetchRigMeshes(instance_id?: string): Promise<void> {
+    if (cachedRigMeshes() || Date.now() < this.rigMeshRetryAt) return;
+    this.rigMeshRetryAt = Date.now() + 60_000;
+    try {
+      const raw = await this._callSingle('/api/animation-rig-meshes', {}, undefined, instance_id);
+      if (!raw?.error) storeRigMeshes(raw);
+    } catch {
+      // The preview is drawn on the generated rig instead.
+    }
+  }
+
+  private _animationResult(body: Record<string, unknown>, sequence: KeyframeSequenceDescription, locomotion: boolean) {
+    const meshes = currentRigMeshes();
+    const sheet = renderContactSheet(sequence, meshes, { locomotion });
+    const preview = renderRigGlb(sequence, sequence.name, meshes);
+    return {
+      content: [
+        {
+          type: 'text',
+          text: JSON.stringify({
+            ...body,
+            sheet: {
+              times: sheet.times.map((time) => Math.round(time * 1000) / 1000),
+              rig: meshes.source === 'studio' ? 'the stock R15 rig' : 'a stand-in block rig, until a build reads the stock rig from Studio',
+              reading: `One column per time. Top row from the front three-quarter, bottom row ${locomotion ? 'from its right side facing right' : 'straight at its front, its right hand on the left'}; the shadow marks the ground under the body.`,
+            },
+          }),
+        },
+        { type: 'image', data: sheet.png.toString('base64'), mimeType: 'image/png' },
+        {
+          type: 'resource',
+          resource: { uri: 'roqer://animation-preview.glb', mimeType: 'model/gltf-binary', blob: preview.toString('base64') },
+        },
+      ],
+    };
   }
 
   /**

@@ -1,0 +1,151 @@
+# Character animation with the `animation` tool
+
+Use this to author an R15 animation with the `animation` tool (check, build,
+publish, wire, verify). Start from the recipe closest to the request and change
+it. Run `check` before `build`: it validates the format, runs the motion checks
+and returns a contact sheet, without touching Studio.
+
+## Format
+
+```text
+{ name, rig: "R15", loop?, priority?, easing?, keyframes: [{ time, name?, easing?, joints: { <Joint>: pose } }] }
+```
+
+- Joints: `Root`, `Waist`, `Neck`, `LeftShoulder`, `LeftElbow`, `LeftWrist`,
+  `RightShoulder`, `RightElbow`, `RightWrist`, `LeftHip`, `LeftKnee`,
+  `LeftAnkle`, `RightHip`, `RightKnee`, `RightAnkle`.
+- The first keyframe is at 0. A joint keyed in any keyframe must also be keyed
+  in the first. A joint left out of a later keyframe just keeps moving toward
+  its next key.
+- A loop's last keyframe must repeat its first, so the loop joins up.
+- A joint may turn at most 90° between two of its keys. Split a bigger turn
+  with a keyframe in between, as the jump recipe does for its arms.
+- `easing` is `{ style, direction }`. Styles are Linear, Constant, Cubic,
+  CubicV2, Elastic and Bounce; directions are In, Out and InOut. It can be set
+  on a joint, a keyframe or the whole animation, and the nearest one applies.
+
+## Poses
+
+Each pose takes one of these:
+
+- `aim: [right, up, forward]` (shoulders and hips): the direction the upper arm
+  or thigh points, seen from the character. `[0, -1, 0]` hangs it at rest,
+  `[1, 0, 0]` holds the right arm straight out to the side, and `[0, -1, 0.4]`
+  swings a leg forward. The vector does not need to be unit length.
+- `bendToward: [right, up, forward]`, with `aim`: which way the elbow or knee
+  folds. Leave it out to fold as at rest: arms forward, legs back. A raised
+  waving arm folds up: `bendToward: [0, 1, 0]`.
+- `bend: degrees` (elbows and knees): 0 is straight and 90 a right angle.
+- `rotation: [x, y, z]` (any joint): degrees about the parent part's axes,
+  applied as `CFrame.Angles` does. Use it for the torso, head, wrists and
+  ankles. `Waist` at -X leans forward and at +X leans back. `Neck` at +X tips
+  the head back. An ankle at +X lifts the toe.
+- `position: [x, y, z]` (`Root` only): studs that offset the whole body.
+  Negative y lowers the body, as a stride or crouch needs.
+
+Prefer `aim` and `bend` for arms and legs. Working out a combined Euler rotation
+by hand is where poses go wrong.
+
+## Recipes
+
+Every recipe below compiles and passes every motion check. A unit test holds
+each of them to that. Pass `locomotion: true` for walk and run, which turns on
+the ground-contact, foot-sliding and gait-symmetry checks.
+
+### Wave (loop)
+
+```json
+{ "name": "Wave", "rig": "R15", "loop": true, "easing": { "style": "CubicV2", "direction": "InOut" }, "keyframes": [
+  { "time": 0, "joints": { "RightShoulder": { "aim": [1, 0.3, 0.4], "bendToward": [0, 1, 0] }, "RightElbow": { "bend": 70 } } },
+  { "time": 0.3, "joints": { "RightElbow": { "bend": 115 } } },
+  { "time": 0.6, "joints": { "RightShoulder": { "aim": [1, 0.3, 0.4], "bendToward": [0, 1, 0] }, "RightElbow": { "bend": 70 } } }
+] }
+```
+
+The upper arm holds still, out to the side and slightly forward. The forearm
+swings between 70° and 115°. For a bigger wave, widen that range.
+
+### Idle (loop)
+
+```json
+{ "name": "Idle", "rig": "R15", "loop": true, "easing": { "style": "CubicV2", "direction": "InOut" }, "keyframes": [
+  { "time": 0, "joints": { "Waist": { "rotation": [0, 0, 0] }, "Neck": { "rotation": [0, 0, 0] }, "LeftShoulder": { "aim": [-0.08, -1, 0] }, "RightShoulder": { "aim": [0.08, -1, 0] }, "LeftElbow": { "bend": 8 }, "RightElbow": { "bend": 8 } } },
+  { "time": 1.5, "joints": { "Waist": { "rotation": [3, 0, 0] }, "Neck": { "rotation": [-3, 0, 0] }, "LeftShoulder": { "aim": [-0.14, -1, 0] }, "RightShoulder": { "aim": [0.14, -1, 0] }, "LeftElbow": { "bend": 14 }, "RightElbow": { "bend": 14 } } },
+  { "time": 3, "joints": { "Waist": { "rotation": [0, 0, 0] }, "Neck": { "rotation": [0, 0, 0] }, "LeftShoulder": { "aim": [-0.08, -1, 0] }, "RightShoulder": { "aim": [0.08, -1, 0] }, "LeftElbow": { "bend": 8 }, "RightElbow": { "bend": 8 } } }
+] }
+```
+
+This is a slow breath. Keep idle motion small and slow: a few degrees over
+seconds.
+
+### Walk (loop, `locomotion: true`)
+
+```json
+{ "name": "Walk", "rig": "R15", "loop": true, "easing": { "style": "Linear" }, "keyframes": [
+  { "time": 0, "joints": { "Root": { "position": [0, -0.09, 0] }, "LeftHip": { "aim": [0, -0.92, 0.38] }, "LeftKnee": { "bend": 11 }, "LeftAnkle": { "rotation": [-11, 0, 0] }, "RightHip": { "aim": [0, -0.98, -0.19] }, "RightKnee": { "bend": 11 }, "RightAnkle": { "rotation": [22, 0, 0] }, "LeftShoulder": { "aim": [0, -1, -0.35] }, "RightShoulder": { "aim": [0, -1, 0.35] }, "LeftElbow": { "bend": 15 }, "RightElbow": { "bend": 15 } } },
+  { "time": 0.25, "joints": { "Root": { "position": [0, -0.01, 0] }, "LeftHip": { "aim": [0, -0.99, 0.11] }, "LeftKnee": { "bend": 12 }, "LeftAnkle": { "rotation": [6, 0, 0] }, "RightHip": { "aim": [0, -0.76, 0.65] }, "RightKnee": { "bend": 76 }, "RightAnkle": { "rotation": [36, 0, 0] }, "LeftShoulder": { "aim": [0, -1, 0] }, "RightShoulder": { "aim": [0, -1, 0] }, "LeftElbow": { "bend": 15 }, "RightElbow": { "bend": 15 } } },
+  { "time": 0.5, "joints": { "Root": { "position": [0, -0.09, 0] }, "LeftHip": { "aim": [0, -0.98, -0.19] }, "LeftKnee": { "bend": 11 }, "LeftAnkle": { "rotation": [22, 0, 0] }, "RightHip": { "aim": [0, -0.92, 0.38] }, "RightKnee": { "bend": 11 }, "RightAnkle": { "rotation": [-11, 0, 0] }, "LeftShoulder": { "aim": [0, -1, 0.35] }, "RightShoulder": { "aim": [0, -1, -0.35] }, "LeftElbow": { "bend": 15 }, "RightElbow": { "bend": 15 } } },
+  { "time": 0.75, "joints": { "Root": { "position": [0, -0.01, 0] }, "LeftHip": { "aim": [0, -0.76, 0.65] }, "LeftKnee": { "bend": 76 }, "LeftAnkle": { "rotation": [36, 0, 0] }, "RightHip": { "aim": [0, -0.99, 0.11] }, "RightKnee": { "bend": 12 }, "RightAnkle": { "rotation": [6, 0, 0] }, "LeftShoulder": { "aim": [0, -1, 0] }, "RightShoulder": { "aim": [0, -1, 0] }, "LeftElbow": { "bend": 15 }, "RightElbow": { "bend": 15 } } },
+  { "time": 1, "joints": { "Root": { "position": [0, -0.09, 0] }, "LeftHip": { "aim": [0, -0.92, 0.38] }, "LeftKnee": { "bend": 11 }, "LeftAnkle": { "rotation": [-11, 0, 0] }, "RightHip": { "aim": [0, -0.98, -0.19] }, "RightKnee": { "bend": 11 }, "RightAnkle": { "rotation": [22, 0, 0] }, "LeftShoulder": { "aim": [0, -1, -0.35] }, "RightShoulder": { "aim": [0, -1, 0.35] }, "LeftElbow": { "bend": 15 }, "RightElbow": { "bend": 15 } } }
+] }
+```
+
+The keys alternate between contact, with both feet down and the body lowered,
+and passing, with the swing foot lifted under the body. Each arm swings against
+its own side's leg. The ankles keep the planted foot flat. The body is lowered
+at contact so that the straighter legs reach the ground without sinking into
+it.
+
+- To go faster, scale every time down.
+- For a longer stride, raise the hips' forward and back aims together. Then
+  lower `Root` a little more at contact, or the feet sink into the ground.
+
+### Run (loop, `locomotion: true`)
+
+```json
+{ "name": "Run", "rig": "R15", "loop": true, "easing": { "style": "Linear" }, "keyframes": [
+  { "time": 0, "joints": { "Root": { "position": [0, -0.18, 0] }, "Waist": { "rotation": [-10, 0, 0] }, "LeftHip": { "aim": [0, -0.82, 0.57] }, "LeftKnee": { "bend": 25 }, "LeftAnkle": { "rotation": [-10, 0, 0] }, "RightHip": { "aim": [0, -1, 0.05] }, "RightKnee": { "bend": 50 }, "RightAnkle": { "rotation": [48, 0, 0] }, "LeftShoulder": { "aim": [0, -1, -0.6] }, "RightShoulder": { "aim": [0, -1, 0.6] }, "LeftElbow": { "bend": 85 }, "RightElbow": { "bend": 85 } } },
+  { "time": 0.17, "joints": { "Root": { "position": [0, -0.08, 0] }, "Waist": { "rotation": [-10, 0, 0] }, "LeftHip": { "aim": [0, -0.95, 0.3] }, "LeftKnee": { "bend": 33 }, "LeftAnkle": { "rotation": [16, 0, 0] }, "RightHip": { "aim": [0, -0.63, 0.77] }, "RightKnee": { "bend": 95 }, "RightAnkle": { "rotation": [45, 0, 0] }, "LeftShoulder": { "aim": [0, -1, 0] }, "RightShoulder": { "aim": [0, -1, 0] }, "LeftElbow": { "bend": 85 }, "RightElbow": { "bend": 85 } } },
+  { "time": 0.34, "joints": { "Root": { "position": [0, -0.18, 0] }, "Waist": { "rotation": [-10, 0, 0] }, "LeftHip": { "aim": [0, -1, 0.05] }, "LeftKnee": { "bend": 50 }, "LeftAnkle": { "rotation": [48, 0, 0] }, "RightHip": { "aim": [0, -0.82, 0.57] }, "RightKnee": { "bend": 25 }, "RightAnkle": { "rotation": [-10, 0, 0] }, "LeftShoulder": { "aim": [0, -1, 0.6] }, "RightShoulder": { "aim": [0, -1, -0.6] }, "LeftElbow": { "bend": 85 }, "RightElbow": { "bend": 85 } } },
+  { "time": 0.51, "joints": { "Root": { "position": [0, -0.08, 0] }, "Waist": { "rotation": [-10, 0, 0] }, "LeftHip": { "aim": [0, -0.63, 0.77] }, "LeftKnee": { "bend": 95 }, "LeftAnkle": { "rotation": [45, 0, 0] }, "RightHip": { "aim": [0, -0.95, 0.3] }, "RightKnee": { "bend": 33 }, "RightAnkle": { "rotation": [16, 0, 0] }, "LeftShoulder": { "aim": [0, -1, 0] }, "RightShoulder": { "aim": [0, -1, 0] }, "LeftElbow": { "bend": 85 }, "RightElbow": { "bend": 85 } } },
+  { "time": 0.68, "joints": { "Root": { "position": [0, -0.18, 0] }, "Waist": { "rotation": [-10, 0, 0] }, "LeftHip": { "aim": [0, -0.82, 0.57] }, "LeftKnee": { "bend": 25 }, "LeftAnkle": { "rotation": [-10, 0, 0] }, "RightHip": { "aim": [0, -1, 0.05] }, "RightKnee": { "bend": 50 }, "RightAnkle": { "rotation": [48, 0, 0] }, "LeftShoulder": { "aim": [0, -1, -0.6] }, "RightShoulder": { "aim": [0, -1, 0.6] }, "LeftElbow": { "bend": 85 }, "RightElbow": { "bend": 85 } } }
+] }
+```
+
+The run has the same structure as the walk, with these differences:
+
+- a forward lean (`Waist` -10);
+- a longer, lower stride;
+- a higher knee lift;
+- arms bent to 85° and swinging wider.
+
+Keep a knee's change between keys under 90°: that is why the lift stops at 95°
+from about 25°.
+
+### Jump (one shot)
+
+```json
+{ "name": "Jump", "rig": "R15", "loop": false, "priority": "Movement", "easing": { "style": "CubicV2", "direction": "Out" }, "keyframes": [
+  { "time": 0, "joints": { "LeftShoulder": { "aim": [0, -1, 0] }, "RightShoulder": { "aim": [0, -1, 0] }, "LeftElbow": { "bend": 0 }, "RightElbow": { "bend": 0 }, "LeftHip": { "aim": [0, -1, 0] }, "RightHip": { "aim": [0, -1, 0] }, "LeftKnee": { "bend": 0 }, "RightKnee": { "bend": 0 }, "LeftAnkle": { "rotation": [0, 0, 0] }, "RightAnkle": { "rotation": [0, 0, 0] } } },
+  { "time": 0.12, "joints": { "LeftShoulder": { "aim": [-1, -0.2, 0.25] }, "RightShoulder": { "aim": [1, -0.2, 0.25] } } },
+  { "time": 0.3, "joints": { "LeftShoulder": { "aim": [-0.5, 1, 0.2] }, "RightShoulder": { "aim": [0.5, 1, 0.2] }, "LeftElbow": { "bend": 20 }, "RightElbow": { "bend": 20 }, "LeftHip": { "aim": [0, -1, 0.35] }, "RightHip": { "aim": [0, -1, 0.1] }, "LeftKnee": { "bend": 45 }, "RightKnee": { "bend": 25 }, "LeftAnkle": { "rotation": [-15, 0, 0] }, "RightAnkle": { "rotation": [-10, 0, 0] } } }
+] }
+```
+
+The Humanoid does the jumping. The animation only poses the body in the air:
+arms thrown up and knees tucked. The arms pass through the side at 0.12 s,
+because going straight from down to overhead would turn them more than 90° in
+one step.
+
+## Reading the result
+
+- The contact sheet shows five moments. The top row is the front
+  three-quarter. The bottom row looks straight at the front, where arm and head
+  motion reads; for a gait (`locomotion: true`) it looks from the side, where
+  strides and foot plants read.
+- Check the pose against the request, not only the checks. The checks catch
+  broken motion, but a pose can pass them and still not be the gesture that was
+  asked for.
+- Build the same `name` again to revise an animation. Roqer shows the versions
+  in one card, and `build` replaces the sequence when you pass the revision the
+  earlier build returned.

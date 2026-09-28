@@ -108,6 +108,30 @@ test("callTool parses an envelope response, joining text blocks and lifting stru
   }
 });
 
+test("callTool keeps a tool's GLB for the host, and only a well-formed one", async () => {
+  const glb = Buffer.from("glTF preview bytes..").toString("base64");
+  const { server, endpoint } = await startServer(async (req, res) => {
+    await readBody(req);
+    respondJson(res, 200, {
+      content: [
+        { type: "text", text: "{}" },
+        { type: "resource", resource: { uri: "roqer://a.glb", mimeType: "model/gltf-binary", blob: "not base64!" } },
+        { type: "resource", resource: { uri: "roqer://b.bin", mimeType: "application/octet-stream", blob: glb } },
+        { type: "resource", resource: { uri: "roqer://c.glb", mimeType: "model/gltf-binary", blob: glb } },
+      ],
+    });
+  });
+  try {
+    const client = new McpClient({ endpoint, authToken: undefined });
+    const outcome = await client.callTool("animation", {});
+    assert.equal(outcome.modelFile, glb);
+    // The text the model reads carries nothing of it.
+    assert.equal(outcome.text, "{}");
+  } finally {
+    await closeServer(server);
+  }
+});
+
 test("callTool preserves validated MCP image blocks for the model", async () => {
   const image = Buffer.from("studio screenshot").toString("base64");
   const { server, endpoint } = await startServer(async (req, res) => {
