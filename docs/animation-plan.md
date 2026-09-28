@@ -46,7 +46,7 @@ Roqer is AGPL-3.0-or-later as of S4US/Roqer#27. Left over: the release note for
 the next release (0.1.6 and earlier stay MIT), and a decision on a contributor
 agreement before the first outside contribution.
 
-### 2. Live test of the Roblox unknowns
+### 2. Live test of the Roblox unknowns — first run done, second run pending
 
 `npm run test:spike:animation` (see [tests/README.md](../tests/README.md#animation-spike))
 answers four questions on a real Studio before later steps depend on them:
@@ -199,5 +199,32 @@ These wait until the steps above prove out:
 
 ## Live results
 
-None recorded yet. Record each spike or model-driven run here: date, Studio
-version, what was run, and the answer to each question.
+Record each spike or model-driven run here: date, Studio version, what was run,
+and the answer to each question.
+
+### 2026-09-28: first spike run, Studio 0.740.19
+
+Run with the upload on, on an unpublished baseplate.
+
+- **Open Cloud upload: yes.** A 1.8 KB `KeyframeSequence` exported with
+  `export_rbxm` became an Animation asset in about two seconds. Its first status
+  read already said moderation Approved.
+- **Read-back: yes.** `GetKeyframeSequenceAsync` returned the new animation at
+  once, with the 3 keyframes and 21 poses that were built.
+- **Temporary IDs: they register.** `AnimationClipProvider:RegisterAnimationClip`
+  and `KeyframeSequenceProvider:RegisterKeyframeSequence` both returned the same
+  bare 32-digit hex string, in edit mode and on both playtest peers. Whether that
+  string plays as an `AnimationId` is still open.
+- **Playback: not measured.** The probe looked for `Motor6D` joints and found
+  none. That held for the dummy from `CreateHumanoidModelFromDescription` and
+  for the playtest character. These rigs most likely use `AnimationConstraint`
+  joints instead.
+- **Dummy in edit mode: it builds** (R15, 16 parts, an Animator), but its joints
+  went unrecorded for the same reason.
+
+What changes:
+
+- The spike now measures either joint kind, records which kind a rig has and
+  tries each form of the temporary ID. The second run answers the rest.
+- The pose compiler (step 5) and the motion checks (step 6) must not assume
+  `Motor6D`. They take joint data from whichever kind the rig has.

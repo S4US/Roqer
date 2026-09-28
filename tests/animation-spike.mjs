@@ -79,36 +79,93 @@ local function buildSequence(parent)
   return sequence
 end
 
-local function contentString(value)
-  if typeof(value) == "string" then return value end
+-- What a registration returned, as the engine describes it. The first run
+-- got a bare 32-digit hex string from both providers, with no scheme.
+local function describeId(value)
+  local info = { type = typeof(value), text = tostring(value) }
   local ok, uri = pcall(function() return value.Uri end)
-  if ok and typeof(uri) == "string" then return uri end
-  return tostring(value)
+  if ok and uri ~= nil then info.uri = tostring(uri) end
+  return info
+end
+
+-- Every form of a temporary ID worth trying as an AnimationId, most direct first.
+local function idCandidates(value)
+  local list = {}
+  local function add(text)
+    if typeof(text) ~= "string" or text == "" then return end
+    for _, existing in list do
+      if existing == text then return end
+    end
+    table.insert(list, text)
+  end
+  if typeof(value) == "string" then add(value) end
+  local ok, uri = pcall(function() return value.Uri end)
+  if ok then add(uri) end
+  local text = tostring(value)
+  add(text)
+  if not string.find(text, "://", 1, true) then add("active://" .. text) end
+  return list
 end
 
 local function register(sequence)
   local attempts = {}
-  local chosen
+  local candidates = {}
   local ok, id = pcall(function()
     return game:GetService("AnimationClipProvider"):RegisterAnimationClip(sequence)
   end)
-  attempts.animationClipProvider = ok and { id = contentString(id) } or { error = tostring(id) }
-  if ok then chosen = contentString(id) end
+  attempts.animationClipProvider = ok and describeId(id) or { error = tostring(id) }
+  if ok then candidates = idCandidates(id) end
   local ok2, id2 = pcall(function()
     return game:GetService("KeyframeSequenceProvider"):RegisterKeyframeSequence(sequence)
   end)
-  attempts.keyframeSequenceProvider = ok2 and { id = contentString(id2) } or { error = tostring(id2) }
-  if not chosen and ok2 then chosen = contentString(id2) end
-  return chosen, attempts
+  attempts.keyframeSequenceProvider = ok2 and describeId(id2) or { error = tostring(id2) }
+  if #candidates == 0 and ok2 then candidates = idCandidates(id2) end
+  return candidates, attempts
 end
 
-local function motorFor(rig, partName)
+-- The joint that moves partName. Older R15 rigs use a Motor6D; newer ones use
+-- an AnimationConstraint, whose Attachment1 sits in the part it moves. The
+-- first run found no Motor6D at all, on the dummy or on the playtest character.
+local function jointFor(rig, partName)
   for _, descendant in rig:GetDescendants() do
     if descendant:IsA("Motor6D") and descendant.Part1 and descendant.Part1.Name == partName then
       return descendant
     end
+    if descendant:IsA("AnimationConstraint") then
+      local attachment = descendant.Attachment1
+      if attachment and attachment.Parent and attachment.Parent.Name == partName then
+        return descendant
+      end
+    end
   end
   return nil
+end
+
+local function jointsOf(rig)
+  local joints = {}
+  for _, descendant in rig:GetDescendants() do
+    if descendant:IsA("Motor6D") then
+      table.insert(joints, {
+        kind = "Motor6D",
+        name = descendant.Name,
+        part0 = descendant.Part0 and descendant.Part0.Name or "",
+        part1 = descendant.Part1 and descendant.Part1.Name or "",
+        c0 = { descendant.C0:GetComponents() },
+        c1 = { descendant.C1:GetComponents() },
+      })
+    elseif descendant:IsA("AnimationConstraint") then
+      local a0, a1 = descendant.Attachment0, descendant.Attachment1
+      table.insert(joints, {
+        kind = "AnimationConstraint",
+        name = descendant.Name,
+        part0 = a0 and a0.Parent and a0.Parent.Name or "",
+        part1 = a1 and a1.Parent and a1.Parent.Name or "",
+        c0 = a0 and { a0.CFrame:GetComponents() } or {},
+        c1 = a1 and { a1.CFrame:GetComponents() } or {},
+      })
+    end
+  end
+  return joints
 end
 
 local function degreesBetween(a, b)
@@ -121,20 +178,21 @@ end
 local function probePlayback(rig, animationId, stepByHand)
   local result = { animationId = animationId }
   local humanoid = rig:FindFirstChildOfClass("Humanoid")
-  local motor = motorFor(rig, "RightUpperArm")
+  local motor = jointFor(rig, "RightUpperArm")
   if not humanoid or not motor then
     result.error = "rig has no Humanoid or no RightUpperArm joint"
     result.plays = false
     return result
   end
+  result.jointKind = motor.ClassName
   local animator = humanoid:FindFirstChildOfClass("Animator")
   if not animator then
     animator = Instance.new("Animator")
     animator.Parent = humanoid
   end
   local animation = Instance.new("Animation")
-  animation.AnimationId = animationId
   local ok, err = pcall(function()
+    animation.AnimationId = animationId
     local track = animator:LoadAnimation(animation)
     local rest = motor.Transform
     track:Play(0)
@@ -156,6 +214,17 @@ local function probePlayback(rig, animationId, stepByHand)
   if not ok then result.error = tostring(err) end
   result.plays = ok and (result.length or 0) > 0 and (result.rightShoulderDegrees or 0) > 5
   return result
+end
+
+-- Tries each form of a temporary ID until one plays; returns the best and all tries.
+local function probeCandidates(rig, candidates, stepByHand)
+  local tried = {}
+  for _, candidate in candidates do
+    local result = probePlayback(rig, candidate, stepByHand)
+    table.insert(tried, result)
+    if result.plays then return result, tried end
+  end
+  return tried[#tried] or { skipped = "no temporary ID" }, tried
 end
 `;
 
@@ -180,20 +249,21 @@ rig:PivotTo(CFrame.new(0, 500, 0))
 -- Anchored so the copy a playtest makes does not fall; animation still moves the limbs.
 rig.HumanoidRootPart.Anchored = true
 
-local parts, joints = {}, {}
+local parts = {}
 for _, descendant in rig:GetDescendants() do
   if descendant:IsA("BasePart") and not descendant:FindFirstAncestorOfClass("Accessory") then
     parts[descendant.Name] = { descendant.Size.X, descendant.Size.Y, descendant.Size.Z }
-  elseif descendant:IsA("Motor6D") then
-    table.insert(joints, {
-      name = descendant.Name,
-      part0 = descendant.Part0 and descendant.Part0.Name or "",
-      part1 = descendant.Part1 and descendant.Part1.Name or "",
-      c0 = { descendant.C0:GetComponents() },
-      c1 = { descendant.C1:GetComponents() },
-    })
   end
 end
+-- Scanned again after a moment, in case the rig builds its joints late.
+local joints = jointsOf(rig)
+local immediateJoints = #joints
+if immediateJoints == 0 then
+  task.wait(1)
+  joints = jointsOf(rig)
+end
+local kinds = {}
+for _, joint in joints do kinds[joint.kind] = (kinds[joint.kind] or 0) + 1 end
 local humanoid = rig:FindFirstChildOfClass("Humanoid")
 local partCount = 0
 for _ in parts do partCount += 1 end
@@ -205,6 +275,8 @@ return {
   hasAnimator = humanoid ~= nil and humanoid:FindFirstChildOfClass("Animator") ~= nil,
   partCount = partCount,
   jointCount = #joints,
+  immediateJointCount = immediateJoints,
+  jointKinds = kinds,
   parts = parts,
   joints = joints,
 }
@@ -213,11 +285,11 @@ return {
 const EDIT_TEMP_PLAYBACK = `${PRELUDE}
 local folder = workspace:FindFirstChild(SPIKE)
 local sequence = buildSequence(folder)
-local id, attempts = register(sequence)
+local candidates, attempts = register(sequence)
 local rig = folder:FindFirstChild("SpikeDummy")
-local playback
-if id and rig then playback = probePlayback(rig, id, true) end
-return { registrations = attempts, playback = playback or { skipped = rig and "no temporary ID" or "no dummy" } }
+local playback, tried = { skipped = "no dummy" }, {}
+if rig then playback, tried = probeCandidates(rig, candidates, true) end
+return { registrations = attempts, candidates = candidates, playback = playback, tried = tried }
 `;
 
 const readBack = (assetId) => `${PRELUDE}
@@ -247,11 +319,16 @@ local character = player.Character or player.CharacterAdded:Wait()
 local humanoid = character:WaitForChild("Humanoid", 15)
 if not humanoid then return { error = "character has no Humanoid" } end
 local sequence = buildSequence(nil)
-local id, attempts = register(sequence)
+local candidates, attempts = register(sequence)
+local temporary, tried = probeCandidates(character, candidates, false)
+local joint = jointFor(character, "RightUpperArm")
 local result = {
   rigType = humanoid.RigType.Name,
+  jointKind = joint and joint.ClassName or "none",
   registrations = attempts,
-  temporary = id and probePlayback(character, id, false) or { skipped = "no temporary ID" },
+  candidates = candidates,
+  temporary = temporary,
+  tried = tried,
 }
 sequence:Destroy()
 ${assetId ? `result.published = probePlayback(character, "rbxassetid://${assetId}", false)` : ''}
@@ -360,6 +437,8 @@ const passed = await runTest('animation spike', async ({ track }) => {
       rigType: dummy.rigType,
       partCount: dummy.partCount,
       jointCount: dummy.jointCount,
+      immediateJointCount: dummy.immediateJointCount,
+      jointKinds: dummy.jointKinds,
       hasAnimator: dummy.hasAnimator,
     });
 
@@ -391,8 +470,14 @@ const passed = await runTest('animation spike', async ({ track }) => {
         : editTemp.playback?.plays || clientProbe.temporary?.plays ? 'partly' : 'no',
       evidence: {
         editMode: editTemp,
-        playtestClient: clientProbe.error ? clientProbe : { rigType: clientProbe.rigType, registrations: clientProbe.registrations, playback: clientProbe.temporary },
-        playtestServer: serverProbe.error ? serverProbe : { registrations: serverProbe.registrations, playback: serverProbe.temporary },
+        playtestClient: clientProbe.error ? clientProbe : {
+          rigType: clientProbe.rigType, jointKind: clientProbe.jointKind, registrations: clientProbe.registrations,
+          candidates: clientProbe.candidates, playback: clientProbe.temporary, tried: clientProbe.tried,
+        },
+        playtestServer: serverProbe.error ? serverProbe : {
+          jointKind: serverProbe.jointKind, registrations: serverProbe.registrations,
+          candidates: serverProbe.candidates, playback: serverProbe.temporary, tried: serverProbe.tried,
+        },
       },
     };
 

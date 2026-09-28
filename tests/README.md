@@ -218,7 +218,8 @@ The answers are findings, not assertions. A "no" still exits 0; the script
 fails only when it cannot ask a question or cannot clean up. It works in a
 temporary `Workspace.__RoqerAnimationSpike` folder that it removes on every
 path, and stops the playtest it starts. The report, which also records the
-dummy's R15 joints and part sizes for the pose compiler, is written to
+dummy's R15 joints (`Motor6D` or `AnimationConstraint`, whichever the rig uses)
+and part sizes for the pose compiler, is written to
 `tmp/animation-spike/report-<time>.json`.
 
 ## What each test exercises
