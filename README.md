@@ -12,6 +12,7 @@
 
 <p align="center">
   <a href="https://github.com/S4US/Roqer/actions/workflows/ci.yml"><img src="https://github.com/S4US/Roqer/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://github.com/S4US/Roqer/releases"><img src="https://img.shields.io/github/downloads/S4US/Roqer/total.svg" alt="GitHub Downloads"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-AGPL--3.0--or--later-blue.svg" alt="AGPL-3.0-or-later license"></a>
 </p>
 
