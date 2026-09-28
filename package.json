@@ -3,7 +3,7 @@
   "version": "3.0.3",
   "private": true,
   "description": "Roqer: an open-source desktop agent for Roblox Studio, and the Studio MCP bridge it runs through.",
-  "license": "MIT",
+  "license": "AGPL-3.0-or-later",
   "author": "S4US",
   "repository": {
     "type": "git",

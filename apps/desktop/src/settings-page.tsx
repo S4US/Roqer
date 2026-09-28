@@ -49,6 +49,14 @@ const ACCOUNT_CLIENTS: Partial<Record<ProviderId, string>> = { chatgpt: "Codex",
 const USAGE_SCOPES: Partial<Record<ProviderId, string>> = { chatgpt: "Codex", claude: "Claude" };
 
 /**
+ * Where Roqer's source and licence are published. The About group shows them
+ * with the copyright and the no-warranty statement: the notices the GNU AGPL
+ * asks an interactive program to display, and asks modified copies to keep.
+ */
+const SOURCE_URL = "https://github.com/S4US/Roqer";
+const LICENSE_URL = "https://github.com/S4US/Roqer/blob/main/LICENSE";
+
+/**
  * The endpoint page on screen. `key` names the visit, not the endpoint: a new
  * endpoint keeps its page when its first save gives it an id, so a model list
  * that save was made to fetch still lands on the page that asked for it.
@@ -191,6 +199,14 @@ export function SettingsPage({ preferences, studioStatus, onPreferences, onStudi
           <SettingsGroup title="Your data">
             <SettingsRow title="Chats and settings" detail="Kept on this computer only">
               <button type="button" className="small-button" onClick={onExport}>Export chats</button>
+            </SettingsRow>
+          </SettingsGroup>
+          <SettingsGroup title="About">
+            <SettingsRow title="License" detail="Roqer is free software: you may share and change it under the GNU Affero General Public License, version 3 or later. It comes with no warranty.">
+              <a className="small-button" href={LICENSE_URL} target="_blank" rel="noreferrer">View license</a>
+            </SettingsRow>
+            <SettingsRow title="Source code" detail="Copyright © 2026 S4US and the Roqer contributors">
+              <a className="small-button" href={SOURCE_URL} target="_blank" rel="noreferrer">Open on GitHub</a>
             </SettingsRow>
           </SettingsGroup>
           {/* Only someone running their own bridge needs this, so it stays

@@ -95,3 +95,9 @@ local/
 # Desktop packaging output and the staged MCP bridge it ships
 apps/desktop/release/
 apps/desktop/resources/
+
+# Staged into each published MCP package by scripts/prepack.mjs
+packages/*/studio-plugin/
+packages/*/LICENSE
+packages/*/NOTICE.md
+packages/*/THIRD_PARTY_NOTICES.md
