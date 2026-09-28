@@ -4,7 +4,9 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
-import { inspectGlb, isViewableGlb, modelPreviewFileName, readModelPreview } from "./model-preview";
+import {
+  inspectGlb, isViewableGlb, MAX_KEPT_JOBS, modelPreviewFileName, readModelPreview, storeModelPreview,
+} from "./model-preview";
 import { glbBytes } from "./test-glb";
 import { isModelPreviewId, isModelPreviewResult, MAX_MODEL_PREVIEW_BYTES } from "../shared/model-preview";
 
@@ -97,6 +99,35 @@ test("a preview is served by its id alone, from its own job's folder, and checke
     assert.deepEqual(await readModelPreview(jobsRoot, "a1b2c3d4-1"), { ok: false, reason: "expired" });
     assert.deepEqual(await readModelPreview(jobsRoot, "0badc0de-0"), { ok: false, reason: "expired" });
     assert.deepEqual(await readModelPreview(path.join(jobsRoot, "gone"), "a1b2c3d4-0"), { ok: false, reason: "expired" });
+  });
+});
+
+test("a tool's preview is kept in a job folder of its own and served like a Blender one", async () => {
+  await withJobs(async (jobsRoot) => {
+    const file = glbBytes(MESH, new Uint8Array(8));
+    const id = await storeModelPreview(jobsRoot, file.toString("base64"));
+    assert.ok(isModelPreviewId(id));
+    const served = await readModelPreview(jobsRoot, id);
+    assert.ok(served.ok && Buffer.from(served.bytes).equals(file));
+
+    // Bytes that are not a GLB the viewer can show are not kept at all.
+    const before = await fs.readdir(jobsRoot);
+    assert.equal(await storeModelPreview(jobsRoot, glbBytes({ ...MESH, buffers: [{ byteLength: 8, uri: "model.bin" }] }).toString("base64")), undefined);
+    assert.equal(await storeModelPreview(jobsRoot, "not base64!"), undefined);
+    assert.deepEqual(await fs.readdir(jobsRoot), before);
+  });
+});
+
+test("keeping a preview clears job folders past their retention, as a Blender job does", async () => {
+  await withJobs(async (jobsRoot) => {
+    const now = Date.parse("2026-09-28T12:00:00Z");
+    for (let index = 0; index < MAX_KEPT_JOBS + 2; index += 1) {
+      await fs.mkdir(path.join(jobsRoot, `2026-09-28T11-00-${String(index).padStart(2, "0")}-000Z-${(0x10000000 + index).toString(16)}`));
+    }
+    const id = await storeModelPreview(jobsRoot, glbBytes().toString("base64"), now);
+    const kept = await fs.readdir(jobsRoot);
+    assert.equal(kept.length, MAX_KEPT_JOBS);
+    assert.ok(kept.some((name) => name.endsWith(`-${id?.slice(0, 8)}`)), "the new preview is kept");
   });
 });
 
