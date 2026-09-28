@@ -29,15 +29,15 @@ function onShow(choice: VersionChoice, evidence: RunEvidence): RunEvidence {
 }
 
 /**
- * The pictures a run produced, in the answer: Studio screenshots and Blender
- * previews, in one card that reads like the Activity card above it.
+ * The pictures a run produced: Studio screenshots, Blender previews and
+ * animation checks, as the Previews tab of the run's Results card.
  *
  * Every picture is a preview the host made from what a tool returned; nothing
  * here comes from the model. The newest one leads, the earlier ones sit beside
  * it, and any picture opens the viewer at itself. Previews of one animation are
  * one picture whose versions step back and forth, not a tile each.
  */
-export const PreviewsCard = memo(function PreviewsCard({ evidence, changes }: {
+export const PreviewsPanel = memo(function PreviewsPanel({ evidence, changes }: {
   evidence: readonly RunEvidence[];
   changes: readonly RunChange[];
 }) {
@@ -67,15 +67,7 @@ export const PreviewsCard = memo(function PreviewsCard({ evidence, changes }: {
       ? <LiveAnimationTile key={item.evidence.id} tile={item} count={images.length} choice={choice} paused={open !== null} onOpen={show} />
       : <PreviewTileButton key={item.evidence.id} tile={item} role={role} count={images.length} choice={choice} onOpen={show} />
   );
-  return <section className="previews-card" aria-label="Previews">
-    <div className="previews-header">
-      <ImageIcon size={15} aria-hidden="true" />
-      <strong>Previews</strong>
-      <span>{images.length === 1 ? "1 image" : `${images.length} images`}</span>
-      <button type="button" className="previews-open" aria-haspopup="dialog" onClick={(event) => show(images.length - 1, event.currentTarget)}>
-        Open viewer<Maximize2 size={13} aria-hidden="true" />
-      </button>
-    </div>
+  return <div className="previews-panel">
     <div className="previews-body">
       {layout.kind === "lead"
         ? <div className="preview-grid" data-rail={layout.rail.length}>
@@ -88,10 +80,13 @@ export const PreviewsCard = memo(function PreviewsCard({ evidence, changes }: {
         {caption && <span>{caption}</span>}
         {latestVersions !== undefined && <VersionStepper evidence={latest} choice={choice} />}
         {images.length > 1 && <em>Latest of {images.length}</em>}
+        <button type="button" className="previews-open" aria-haspopup="dialog" onClick={(event) => show(images.length - 1, event.currentTarget)}>
+          Open viewer<Maximize2 size={13} aria-hidden="true" />
+        </button>
       </div>
     </div>
     {open !== null && <PreviewViewer images={images} changes={changes} choice={choice} index={open} onIndex={setOpen} onClose={close} />}
-  </section>;
+  </div>;
 });
 
 function SourceIcon({ evidence, size }: { evidence: RunEvidence; size: number }) {

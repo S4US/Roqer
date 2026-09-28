@@ -69,7 +69,9 @@ whether the engine skips the pose compiler's weight-0 placeholders.
 Studio screenshots and Blender previews show in the answer instead of only in
 the activity list.
 
-- **The previews card.** It is one card in the Activity card's style.
+- **The previews card.** It is the Previews tab of the run's Results card,
+  beside the Changes and Uploads tabs, in the Activity card's style. A
+  finished run opens on it; an earlier run's card folds to its header.
   - The newest picture leads. Up to three earlier ones sit beside it, and past
     that the last tile shows a count of the rest.
   - Each tile says where the picture came from: Studio, Playtest, or Blender ·
@@ -430,7 +432,7 @@ What was built:
     a job folder beside Blender's, under the same id shape. So it is served,
     checked again and expired exactly as a Blender preview is, and older
     builds still load the records.
-  - In the answer, the latest animation plays inline in the previews card, with
+  - In the answer, the latest animation plays inline in the Previews tab, with
     its playback bar underneath, and opens in the full viewer.
   - Chromium keeps only a few WebGL contexts alive, so the inline view mounts
     only while the card is on screen and the viewer is closed; otherwise the

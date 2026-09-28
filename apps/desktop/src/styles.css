@@ -627,6 +627,15 @@ button:focus-visible, textarea:focus-visible, select:focus-visible, input:focus-
 .task-list-heading strong { color: var(--ink); font-size: var(--type-label); font-weight: var(--weight-medium); }
 .task-list-heading span { margin-left: auto; color: var(--muted); }
 .task-list ul { margin: 9px 0 0; padding: 0; list-style: none; }
+/* A finished plan folds to its heading, with the caret where Activity's is. */
+details.task-list { padding: 0; }
+details.task-list > summary { gap: 8px; min-height: 40px; padding: 0 13px; list-style: none; cursor: pointer; border-radius: 11px; }
+details.task-list > summary::-webkit-details-marker { display: none; }
+details.task-list > summary:hover { color: var(--ink); }
+details.task-list[open] > summary { min-height: 34px; padding-top: 6px; }
+details.task-list > ul { margin-top: 7px; padding: 0 13px 11px; }
+.task-list-caret { flex: 0 0 auto; color: var(--faint); transition: transform .16s ease; }
+details.task-list[open] .task-list-caret { transform: rotate(90deg); }
 .task-row { display: flex; align-items: center; gap: 7px; padding: 3px 0; color: var(--ink-secondary); font-size: var(--type-meta); }
 .task-row > svg { flex: 0 0 auto; color: var(--muted); }
 .task-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -865,7 +874,7 @@ a.small-button:focus-visible { outline: 2px solid var(--accent); outline-offset:
 .markdown.result-copy { margin: 5px 0 4px; }
 /* The reply reads as the conclusion of the diff above it, not as a caption
  * stuck to its edge, so it is given room to separate from the card. */
-.change-set + .markdown.result-copy { margin-top: 16px; }
+.results-card + .markdown.result-copy { margin-top: 16px; }
 .markdown > :first-child { margin-top: 0; }
 .markdown > :last-child { margin-bottom: 0; }
 /* pre-wrap: a line the model chose to break stays broken. */
@@ -957,12 +966,8 @@ a.small-button:focus-visible { outline: 2px solid var(--accent); outline-offset:
  * One card in the Activity card's language. The newest picture leads, earlier
  * ones sit beside it, and each opens the viewer. Chips sit on the pictures, so
  * they stay dark in both themes. */
-.previews-card { overflow: hidden; margin-top: 14px; background: var(--surface-raised); border: 1px solid var(--border-subtle); border-radius: 13px; box-shadow: var(--shadow-sm); }
-.previews-card + .markdown.result-copy { margin-top: 16px; }
-.previews-header { display: flex; align-items: center; gap: 8px; min-height: 40px; padding: 0 6px 0 13px; color: var(--muted); border-bottom: 1px solid var(--border); font-size: var(--type-meta); }
-.previews-header > svg { flex: 0 0 auto; color: var(--faint); }
-.previews-header strong { color: var(--ink); font-size: var(--type-label); font-weight: var(--weight-medium); }
-.previews-open { display: inline-flex; align-items: center; gap: 6px; height: 28px; margin-left: auto; padding: 0 10px; color: var(--ink-secondary); background: transparent; border: 0; border-radius: 8px; font-size: var(--type-meta); font-weight: var(--weight-medium); }
+.previews-open { display: inline-flex; flex: 0 0 auto; align-items: center; gap: 6px; align-self: center; height: 26px; margin: -4px -4px -4px auto; padding: 0 9px; color: var(--ink-secondary); background: transparent; border: 0; border-radius: 7px; font-size: var(--type-meta); font-weight: var(--weight-medium); white-space: nowrap; }
+.preview-caption em ~ .previews-open, .preview-versions ~ .previews-open { margin-left: 2px; }
 .previews-open:hover { color: var(--ink); background: var(--surface-sunken); }
 .previews-body { padding: 12px; }
 .preview-grid { display: grid; gap: 8px; }
@@ -1129,6 +1134,63 @@ a.small-button:focus-visible { outline: 2px solid var(--accent); outline-offset:
  * rather than as another code line.
  */
 .change-set { display: grid; gap: 11px; margin-top: 15px; }
+
+/* -- Results: what a run left behind, one kind at a time --------------------
+ * Changes, uploads and pictures share one card in the Activity card's
+ * language. The tabs carry every count, so the header alone — which is all an
+ * earlier run shows until it is opened — reads as an account of the run. */
+.results-card { overflow: hidden; margin-top: 14px; background: var(--surface-raised); border: 1px solid var(--border-subtle); border-radius: 13px; box-shadow: var(--shadow-sm); }
+.results-header { display: flex; align-items: center; gap: 2px; min-height: 44px; padding: 0 7px 0 6px; }
+.results-card[data-open="true"] > .results-header { border-bottom: 1px solid var(--border); }
+.results-tabs { display: flex; flex: 1 1 auto; align-items: center; gap: 2px; min-width: 0; overflow-x: auto; scrollbar-width: none; }
+.results-tabs::-webkit-scrollbar { display: none; }
+.results-tab { display: inline-flex; flex: 0 0 auto; align-items: center; gap: 7px; height: 30px; padding: 0 10px 0 9px; color: var(--muted); background: transparent; border: 0; border-radius: 8px; font-size: var(--type-label); font-weight: var(--weight-medium); white-space: nowrap; transition: color .15s ease, background-color .15s ease; }
+.results-tab > svg { flex: 0 0 auto; color: var(--faint); transition: color .15s ease; }
+.results-tab:hover { color: var(--ink-secondary); background: var(--surface-sunken); }
+.results-tab:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+/* Folded, no tab is chosen: the header is a summary, not a control showing a state. */
+.results-card[data-open="true"] .results-tab[aria-selected="true"] { color: var(--ink); background: var(--surface-sunken); box-shadow: inset 0 0 0 1px var(--border-subtle); }
+.results-card[data-open="true"] .results-tab[aria-selected="true"] > svg { color: var(--ink-secondary); }
+.results-tab-count { display: inline-grid; place-items: center; min-width: 18px; height: 18px; box-sizing: border-box; padding: 0 5px; color: var(--ink-secondary); background: color-mix(in srgb, var(--faint) 16%, transparent); border-radius: 99px; font: var(--weight-medium) 11px/1 "Geist Mono Variable", monospace; font-variant-numeric: tabular-nums; }
+.results-tab .diff-summary { gap: 5px; }
+/* The fold caret leads the row, where Plan's and Activity's are. */
+.results-collapse { display: grid; flex: 0 0 auto; place-items: center; width: 24px; height: 28px; margin-left: 1px; color: var(--faint); background: transparent; border: 0; border-radius: 7px; }
+.results-collapse:hover { color: var(--ink); background: var(--surface-sunken); }
+.results-collapse > svg { transition: transform .16s ease; }
+.results-collapse[aria-expanded="true"] > svg { transform: rotate(90deg); }
+.results-panel { animation: fade .16s ease both; }
+
+/* The Changes tab: files as rows of one list rather than cards in a card. A
+ * row's header toggles its diff; the diff keeps its own bounded height. */
+.results-panel .change-set { display: block; margin: 0; }
+.results-panel .change-set > [role="listitem"] + [role="listitem"] { border-top: 1px solid var(--border-subtle); }
+.results-panel .diff-artifact { background: transparent; border: 0; border-radius: 0; }
+.results-panel .diff-header { cursor: pointer; }
+.results-panel .diff-header:hover { background: color-mix(in srgb, var(--surface-sunken) 55%, transparent); }
+.results-panel .diff-body .code-surface { border-top-color: var(--border-subtle); }
+
+/* The Uploads tab: a tile per asset, two to a row in the chat's width, so the
+ * name, id and moderation of each read whole. */
+.upload-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(300px, 100%), 1fr)); gap: 8px; margin: 0; padding: 12px; list-style: none; }
+.upload-tile { display: flex; align-items: center; gap: 11px; min-width: 0; padding: 9px 7px 9px 9px; background: var(--surface); border: 1px solid var(--border-subtle); border-radius: 10px; transition: border-color .15s ease; }
+.upload-tile:hover { border-color: var(--border); }
+.upload-icon { display: grid; flex: 0 0 auto; place-items: center; width: 34px; height: 34px; color: var(--ink-secondary); background: var(--surface-sunken); border-radius: 9px; }
+.upload-text { display: flex; flex: 1 1 auto; flex-direction: column; gap: 2px; min-width: 0; }
+.upload-text > strong { overflow: hidden; color: var(--ink); font-size: var(--type-label); font-weight: var(--weight-medium); text-overflow: ellipsis; white-space: nowrap; }
+.upload-text > span { overflow: hidden; color: var(--muted); font-size: var(--type-meta); text-overflow: ellipsis; white-space: nowrap; }
+.upload-text code { color: var(--ink-secondary); font: 11.5px "Geist Mono Variable", monospace; }
+.upload-moderation { display: inline-flex; align-items: center; gap: 5px; }
+.upload-moderation > i { flex: 0 0 auto; width: 6px; height: 6px; background: var(--faint); border-radius: 50%; }
+.upload-moderation[data-tone="approved"] > i { background: var(--success); }
+.upload-moderation[data-tone="pending"] { color: var(--warning); }
+.upload-moderation[data-tone="pending"] > i { background: var(--warning); }
+.upload-moderation[data-tone="rejected"] { color: var(--danger); }
+.upload-moderation[data-tone="rejected"] > i { background: var(--danger); }
+.upload-actions { display: flex; flex: 0 0 auto; gap: 1px; }
+.upload-actions > button, .upload-actions > a { display: grid; place-items: center; width: 28px; height: 28px; padding: 0; color: var(--faint); background: transparent; border: 0; border-radius: 7px; transition: color .15s ease, background-color .15s ease; }
+.upload-actions > button:hover, .upload-actions > a:hover { color: var(--ink); background: var(--surface-sunken); }
+.upload-actions > button[data-state="copied"] { color: var(--success); }
+.upload-actions > button[data-state="failed"] { color: var(--danger); }
 /* min-width: 0 so the panel takes the width of the column rather than of its
  * longest line: without it the grid item grows to fit the code and the header
  * actions are pushed past the edge instead of the code scrolling. */
