@@ -53,7 +53,14 @@ const FEATURE_TESTS = [
   'micro-profiler-responsiveness.mjs',
 ];
 const featureSmoke = process.argv.includes('--smoke');
-const TESTS = featureSmoke ? FEATURE_TESTS : FULL_TESTS;
+// `--only=<file>` runs one test from this folder in the same managed session,
+// for suites that are not part of either profile, such as the animation spike.
+const only = process.argv.find((arg) => arg.startsWith('--only='))?.slice('--only='.length);
+if (only !== undefined && !/^[\w.-]+\.mjs$/.test(only)) {
+  console.error(`--only expects a test file name in tests/, got ${JSON.stringify(only)}`);
+  process.exit(2);
+}
+const TESTS = only ? [only] : featureSmoke ? FEATURE_TESTS : FULL_TESTS;
 
 // Studio takes a few seconds to fully tear down a play DM after StudioTestService:EndTest.
 // Without a gap, the next test's solo_playtest start collides with the previous test's
@@ -80,7 +87,7 @@ async function main() {
   const suitePort = testBasePort();
   process.env.ROBLOX_STUDIO_PORT = String(suitePort);
   console.log(
-    `${featureSmoke ? 'Feature E2E smoke' : 'Full integration suite'} using port ${suitePort}` +
+    `${only ?? (featureSmoke ? 'Feature E2E smoke' : 'Full integration suite')} using port ${suitePort}` +
     (hasConfiguredPort ? ' (from ROBLOX_STUDIO_PORT)' : ' (default plugin port)'),
   );
 
