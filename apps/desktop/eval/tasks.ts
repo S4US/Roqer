@@ -11,6 +11,10 @@
  * run that wanders outside it is detectable rather than merely untidy.
  */
 
+import {
+  ANIMATION_ALL_CHECKS_PASSED, ANIMATION_CHECKED_AS_GAIT, ANIMATION_GAIT_CHECKS_LABEL, ANIMATION_MOTION_CHECKS_LABEL,
+  ANIMATION_PLAYED_FROM_LABEL, ANIMATION_PLAYED_PUBLISHED, ANIMATION_PREVIEW_TITLE, animationSlotLabel, type RunEvidence,
+} from "../shared/run-events";
 import { connectedGroups, footprint, footprintGap, readBox } from "./footprints";
 import type { InterfaceAudit } from "./interface-audit";
 
@@ -24,6 +28,11 @@ export type EvalOracleInput = {
   verified: boolean;
   toolCalls: ReadonlyArray<{ tool: string; ok: boolean; detail?: string }>;
   changedTargets: readonly string[];
+  /**
+   * The evidence the host recorded from tool results, in order: verifications,
+   * playtests, previews. The harness always passes it; absent means none.
+   */
+  evidence?: readonly RunEvidence[];
   /** The harness's own audit of the task's interface, when the task names one. */
   interfaceAudit?: InterfaceAudit;
 };
@@ -1486,7 +1495,120 @@ ${EXTENT_LUAU}
     allowedRoots: ["game.StarterGui.WorkbenchEvalSimShop"],
     oracle: ({ probe, verified, toolCalls, interfaceAudit }) => judgePolishedShop(probe, verified, toolCalls, interfaceAudit),
   },
+  {
+    id: "T15-animation-run",
+    prompt: "Make a running animation and set it up in R15. Keep its KeyframeSequence under ServerStorage.WorkbenchEval.",
+    // The animation plan's goal prompt, which a competing tool uses to show the
+    // feature off; only where to keep the sequence is added, so the reset owns
+    // it. The run is done only when every one of the plan's conditions holds,
+    // and each is judged from Studio or from the host's own evidence, never
+    // from what the agent said: a published animation the place's owner owns,
+    // wired to the run slot, a playtest in which the published asset played on
+    // the character with the slot holding it, a 3D preview, and a build whose
+    // motion checks all passed, run as a gait. It publishes a real animation,
+    // so it needs the bridge's Open Cloud key; without one, the run should say
+    // it cannot publish, and the oracle fails it for that.
+    seed: `
+      local loader = game:GetService("ServerScriptService"):FindFirstChild("RoqerAnimate")
+      if loader then loader:Destroy() end
+    `,
+    probe: `
+      local loader = game:GetService("ServerScriptService"):FindFirstChild("RoqerAnimate")
+      local run = loader and loader:GetAttribute("run")
+      local assetId = type(run) == "string" and string.match(run, "(%d+)$") or nil
+      local owner = nil
+      if assetId then
+        local ok, info = pcall(function()
+          return game:GetService("MarketplaceService"):GetProductInfo(tonumber(assetId), Enum.InfoType.Asset)
+        end)
+        if ok and type(info) == "table" and type(info.Creator) == "table" then
+          owner = { id = info.Creator.CreatorTargetId, type = info.Creator.CreatorType, assetType = info.AssetTypeId }
+        end
+      end
+      local sequences = 0
+      for _, item in ipairs(game:GetService("ServerStorage").WorkbenchEval:GetDescendants()) do
+        if item:IsA("KeyframeSequence") then sequences += 1 end
+      end
+      return {
+        loader = loader and loader.ClassName or false,
+        enabled = loader ~= nil and loader:IsA("Script") and loader.Enabled,
+        assetId = assetId,
+        owner = owner,
+        place = { id = game.CreatorId, type = game.CreatorType.Name },
+        sequences = sequences,
+      }
+    `,
+    allowedTargets: [],
+    allowedRoots: [`game.${EVAL_ROOT}`, "game.ServerScriptService.RoqerAnimate"],
+    oracle: ({ probe, verified, evidence }) => judgeAnimationRun(probe, verified, evidence ?? []),
+  },
 ];
+
+/** Roblox's asset type number for an Animation. */
+const ANIMATION_ASSET_TYPE = 24;
+
+function metadataValue(evidence: RunEvidence, label: string): string | undefined {
+  return evidence.metadata?.find((entry) => entry.label === label)?.value;
+}
+
+/**
+ * The animation plan's "done" conditions, each from Studio or from evidence
+ * the host recorded off a tool result. The first unmet one is the verdict.
+ */
+function judgeAnimationRun(probe: unknown, verified: boolean, evidence: readonly RunEvidence[]): EvalVerdict {
+  const published = new Set(evidence.flatMap((item) => {
+    const id = /^rbxassetid:\/\/(\d+)$/.exec(item.title)?.[1];
+    return item.kind === "verification" && item.changeKind === "asset" && item.passed === true && id !== undefined ? [id] : [];
+  }));
+  if (published.size === 0) return { passed: false, detail: "No animation was published and read back from Roblox." };
+
+  const loader = field(probe, "loader");
+  if (loader !== "Script" || field(probe, "enabled") !== true) {
+    return { passed: false, detail: loader === false ? "No RoqerAnimate loader is installed, so no character gets the animation." : "RoqerAnimate is not an enabled Script." };
+  }
+  const assetId = field(probe, "assetId");
+  if (typeof assetId !== "string") return { passed: false, detail: "The run slot is not wired." };
+  if (!published.has(assetId)) {
+    return { passed: false, detail: `The run slot holds ${assetId}, which this run did not publish.` };
+  }
+
+  const owner = field(probe, "owner");
+  const place = field(probe, "place");
+  if (!isRecord(owner) || !isRecord(place)) {
+    return { passed: false, detail: `Roblox would not describe asset ${assetId}, so who owns it could not be confirmed.` };
+  }
+  if (owner.assetType !== ANIMATION_ASSET_TYPE) return { passed: false, detail: `Asset ${assetId} is not an Animation.` };
+  if (owner.id !== place.id || owner.type !== place.type) {
+    return { passed: false, detail: `Asset ${assetId} belongs to ${String(owner.type)} ${String(owner.id)}, not the place's owner, ${String(place.type)} ${String(place.id)}.` };
+  }
+
+  const played = evidence.some((item) => item.kind === "playtest" && item.passed === true &&
+    metadataValue(item, ANIMATION_PLAYED_FROM_LABEL) === ANIMATION_PLAYED_PUBLISHED &&
+    (metadataValue(item, animationSlotLabel("run")) ?? "").startsWith("Wired"));
+  if (!played) {
+    return { passed: false, detail: "No playtest showed the published animation playing on the character with the run slot holding it." };
+  }
+
+  if (!evidence.some((item) => item.title === ANIMATION_PREVIEW_TITLE && item.modelPreviewId !== undefined)) {
+    return { passed: false, detail: "No 3D preview of the motion was shown in the chat." };
+  }
+
+  const builds = evidence.filter((item) => item.kind === "verification" && item.changeKind === "instance" &&
+    metadataValue(item, ANIMATION_MOTION_CHECKS_LABEL) !== undefined);
+  const last = builds[builds.length - 1];
+  if (last === undefined) return { passed: false, detail: "No animation was built in Studio." };
+  if (last.passed !== true) return { passed: false, detail: "The last build did not play or read back as it was checked." };
+  const checks = metadataValue(last, ANIMATION_MOTION_CHECKS_LABEL);
+  if (checks !== ANIMATION_ALL_CHECKS_PASSED) return { passed: false, detail: `The last build's motion checks: ${checks}; none may be left failing.` };
+  if (metadataValue(last, ANIMATION_GAIT_CHECKS_LABEL) !== ANIMATION_CHECKED_AS_GAIT) {
+    return { passed: false, detail: "The run was not checked as a gait, so its feet were never checked." };
+  }
+  if (Number(field(probe, "sequences") ?? 0) < 1) {
+    return { passed: false, detail: "No KeyframeSequence was kept under ServerStorage.WorkbenchEval." };
+  }
+  if (!verified) return { passed: false, detail: "The run finished without satisfying the completion gate." };
+  return { passed: true, detail: `Animation ${assetId}, owned by the place's owner, is wired to the run slot and played in a playtest, with a 3D preview and every motion check passed.` };
+}
 
 /** A plateau is a real height change, not a kerb: the lowest and highest standing levels this far apart. */
 const PLATEAU_STUDS = 4;
