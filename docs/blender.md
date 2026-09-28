@@ -110,4 +110,6 @@ Both live in Roqer's data folder:
   reads the stored values as sRGB, where glTF and Blender mean them as linear.
   The 3D view shows them as Studio will; the still picture shows them as
   Blender does.
-- Rigging, skinning, UGC accessories and animation are not supported yet.
+- Rigging, skinning and UGC accessories are not supported yet, and Blender
+  does not animate. Character animations are made in Studio instead; see
+  [Character animation](animation.md).

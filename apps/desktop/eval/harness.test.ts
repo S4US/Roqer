@@ -16,6 +16,8 @@ import test from "node:test";
 
 import type { McpToolCaller, McpToolOutcome } from "../runtime/mcp-types";
 import type { Planner, PlannerContext } from "../runtime/run-engine";
+import { createStudioToolRunner } from "../runtime/studio-tools";
+import { ANIMATION_PREVIEW_TITLE, type RunEvidence } from "../shared/run-events";
 import { formatEvalResult, requireUploads, runEvalTask } from "./harness";
 import { EVAL_TASKS, type EvalTask } from "./tasks";
 import type { EvalPlannerMetrics } from "./telemetry";
@@ -92,6 +94,44 @@ test("the fixture is reset before the agent runs and probed after", async () => 
     assert.match(String(luau[0].args.code), /marker/, "and rebuilds from the task's own seed");
     assert.equal(luau[0].args.instance_id, "studio-1", "the selected instance is routed through");
     assert.deepEqual(order, ["agent"], "the agent ran between them");
+  });
+});
+
+test("the oracle sees the run's evidence, pictures and all, and the trajectory records their size", async () => {
+  await withTempDirectory(async (directory) => {
+    const base = fakeCaller({ done: true });
+    const sheet = Buffer.from("contact sheet").toString("base64");
+    const caller: McpToolCaller = {
+      async callTool(tool, args, options) {
+        if (tool !== "animation") return base.callTool(tool, args, options);
+        return {
+          ok: true,
+          data: { valid: true, animation: { name: "Run", duration: 0.68, keyframes: 5, loop: true }, checks: { passed: true } },
+          text: "",
+          images: [{ data: sheet, mediaType: "image/png" }],
+          httpStatus: 200,
+          durationMs: 1,
+        };
+      },
+    };
+    let seen: readonly RunEvidence[] | undefined;
+    const result = await runEvalTask({
+      caller,
+      createPlanner: () => fakePlanner(async (context) => {
+        await createStudioToolRunner(context)("animation", { action: "check", animation: { name: "Run" }, locomotion: true });
+        return "done";
+      }),
+      task: { ...PASSING_TASK, oracle: (input) => { seen = input.evidence; return { passed: true, detail: "Seen." }; } },
+      outputDirectory: directory,
+      instanceId: null,
+      endpoint: "http://127.0.0.1:1234",
+    });
+
+    const preview = seen?.find((item) => item.title === ANIMATION_PREVIEW_TITLE);
+    assert.equal(preview?.imageDataUrl, `data:image/png;base64,${sheet}`, "the tool's own bytes, not a stand-in");
+    const trajectory = await readFile(result.trajectoryPath, "utf8");
+    assert.ok(!trajectory.includes(sheet), "the picture itself is left out of the trajectory");
+    assert.match(trajectory, /\[image, \d+ characters\]/);
   });
 });
 
@@ -521,7 +561,7 @@ test("a reset the bridge rejects is an error, not a failing score", async () => 
 });
 
 test("every shipped task declares a prompt, a seed, a probe, and its targets", () => {
-  assert.equal(EVAL_TASKS.length, 14);
+  assert.equal(EVAL_TASKS.length, 15);
   const ids = new Set(EVAL_TASKS.map((task) => task.id));
   assert.equal(ids.size, EVAL_TASKS.length, "task ids are unique");
 

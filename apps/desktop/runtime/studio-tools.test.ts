@@ -1039,7 +1039,11 @@ test("a built animation is one change, verified by its preview and read-back", a
       animation: { name: "Run", duration: 0.6, keyframes: 5, loop: true },
       readBack: { keyframes: 5, poses: 35, matchesCompiled: true },
       playback: { verified: true, samples: 8, maxDegrees: 0.4, maxStuds: 0 },
-      checks: { passed: true, waived: ["rootDrift"] },
+      checks: {
+        passed: true,
+        waived: ["rootDrift"],
+        results: [{ id: "groundContact", status: "pass", detail: "a foot is on the ground for 100% of the gait" }],
+      },
     }),
   ]);
   const run = createStudioToolRunner(context);
@@ -1054,6 +1058,7 @@ test("a built animation is one change, verified by its preview and read-back", a
   assert.equal(evidence[0].passed, true);
   assert.deepEqual(evidence[0].metadata, [
     { label: "Motion checks", value: "Passed, with rootDrift waived" },
+    { label: "Gait checks", value: "Checked as a gait" },
     { label: "Preview", value: "Within 0.4° of the checked model" },
     { label: "Read back", value: "Matches what was compiled" },
     { label: "Undo", value: "One Studio undo step" },

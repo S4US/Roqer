@@ -159,7 +159,7 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
         action: {
           type: 'string',
           enum: ['check', 'build', 'publish', 'wire', 'verify'],
-          description: 'check needs no Studio; verify needs a running playtest.'
+          description: 'check needs no Studio; verify needs a running playtest and the checked animation.'
         },
         animation: {
           type: 'object',
@@ -222,7 +222,7 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
         },
         animation_id: {
           type: 'string',
-          description: 'Wire/verify: published ID, rbxassetid://N.'
+          description: 'Wire/verify: published ID, rbxassetid://N; verify with slot needs it.'
         },
         expected_id: {
           type: 'string',

@@ -1,7 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { findEvalTask, type EvalOracleInput } from "./tasks";
+import {
+  ANIMATION_ALL_CHECKS_PASSED, ANIMATION_CHECKED_AS_GAIT, ANIMATION_GAIT_CHECKS_LABEL, ANIMATION_MOTION_CHECKS_LABEL,
+  ANIMATION_NAME_LABEL, ANIMATION_PLAYED_FROM_LABEL, ANIMATION_PLAYED_PUBLISHED, ANIMATION_PREVIEW_TITLE, animationSlotLabel,
+  type RunEvidence,
+} from "../shared/run-events";
+import { findEvalTask, needsUploadKey, type EvalOracleInput } from "./tasks";
 
 function verdict(taskId: string, input: EvalOracleInput) {
   const task = findEvalTask(taskId);
@@ -467,6 +472,15 @@ test("T12 is the only task that needs the Blender worker", () => {
   assert.equal(findEvalTask("T10-world-lowpoly-village")?.needsBlender, undefined);
 });
 
+test("T15 and a Blender run check the bridge's upload key first, and other tasks do not", () => {
+  const task = (id: string) => findEvalTask(id)!;
+  assert.equal(needsUploadKey([task("T15-animation-run")], false), true);
+  assert.equal(needsUploadKey([task("T12-model-prop")], true), true);
+  // Skipped without --blender, so it uploads nothing.
+  assert.equal(needsUploadKey([task("T12-model-prop")], false), false);
+  assert.equal(needsUploadKey([task("T10-world-lowpoly-village")], true), false);
+});
+
 /** A T13 probe of a map that does what the reference and the guidance ask. */
 const STYLE = {
   found: true, parts: 120, textured: 0, texturedMaterials: [], distinctMeshes: 5, maxReuse: 9, collidingVisuals: 0,
@@ -557,4 +571,78 @@ test("T14 wants a screenshot after the last interface write, a builder script co
   const [build, playtest, inspect, shot] = SHOP_CALLS;
   assert.match(shop({}, CLEAN_AUDIT, [build, shot, playtest, { tool: "set_script_source", ok: true }]).detail, /finally built/);
   assert.equal(shop({}, CLEAN_AUDIT, [build, playtest, inspect, { tool: "execute_luau", ok: false }, shot]).passed, true);
+});
+
+const RUN_PROBE = {
+  loader: "Script", enabled: true, assetId: "555",
+  owner: { id: 42, type: "User", assetType: 24 }, place: { id: 42, type: "User" }, sequences: 1,
+};
+
+/** The evidence a finished run records, labelled as the Studio tool runner labels it. */
+function runEvidence(): RunEvidence[] {
+  return [
+    {
+      id: "e1", kind: "inspection", title: ANIMATION_PREVIEW_TITLE, passed: true, imageDataUrl: "data:image/png;base64,QUJD",
+      modelPreviewId: "a1b2c3d4-0", metadata: [{ label: ANIMATION_NAME_LABEL, value: "Run" }],
+    },
+    {
+      id: "e2", kind: "verification", changeKind: "instance", title: "game.ServerStorage.WorkbenchEval.Run", passed: true,
+      metadata: [
+        { label: ANIMATION_MOTION_CHECKS_LABEL, value: ANIMATION_ALL_CHECKS_PASSED },
+        { label: ANIMATION_GAIT_CHECKS_LABEL, value: ANIMATION_CHECKED_AS_GAIT },
+      ],
+    },
+    { id: "e3", kind: "verification", changeKind: "asset", title: "rbxassetid://555", passed: true },
+    { id: "e4", kind: "verification", changeKind: "instance", title: "game.ServerScriptService.RoqerAnimate", passed: true },
+    {
+      id: "e5", kind: "playtest", title: "Run on the playtest character", passed: true,
+      metadata: [
+        { label: ANIMATION_PLAYED_FROM_LABEL, value: ANIMATION_PLAYED_PUBLISHED },
+        { label: animationSlotLabel("run"), value: "Wired" },
+      ],
+    },
+  ];
+}
+
+function animationRun(probe: Record<string, unknown> = {}, evidence: RunEvidence[] = runEvidence(), verified = true) {
+  return verdict("T15-animation-run", {
+    probe: { ...RUN_PROBE, ...probe }, outcome: "completed", verified, toolCalls: [], changedTargets: [], evidence,
+  });
+}
+
+const withMetadata = (evidence: RunEvidence[], id: string, label: string, value: string) => evidence.map((item) => item.id === id
+  ? { ...item, metadata: item.metadata?.map((entry) => entry.label === label ? { label, value } : entry) }
+  : item);
+
+test("T15 passes a run that meets every one of the plan's conditions", () => {
+  const result = animationRun();
+  assert.equal(result.passed, true, result.detail);
+});
+
+test("T15 wants the published animation, owned by the place's owner, in the run slot", () => {
+  assert.match(animationRun({}, runEvidence().filter((item) => item.id !== "e3")).detail, /No animation was published/);
+  assert.match(animationRun({ loader: false }).detail, /No RoqerAnimate loader/);
+  assert.match(animationRun({ assetId: undefined }).detail, /run slot is not wired/);
+  // Roblox's own run animation in the slot is not this run's.
+  assert.match(animationRun({ assetId: "913376220" }).detail, /did not publish/);
+  assert.match(animationRun({ owner: undefined }).detail, /could not be confirmed/);
+  assert.match(animationRun({ owner: { ...RUN_PROBE.owner, id: 7 } }).detail, /not the place's owner/);
+  assert.match(animationRun({ owner: { ...RUN_PROBE.owner, assetType: 10 } }).detail, /not an Animation/);
+});
+
+test("T15 wants the published asset seen playing, a 3D preview, and a gait whose checks all passed", () => {
+  const evidence = runEvidence();
+  assert.match(animationRun({}, withMetadata(evidence, "e5", ANIMATION_PLAYED_FROM_LABEL, "A temporary clip")).detail, /No playtest/);
+  assert.match(animationRun({}, withMetadata(evidence, "e5", animationSlotLabel("run"), "Not wired")).detail, /No playtest/);
+  assert.match(
+    animationRun({}, evidence.map((item) => item.id === "e1" ? { ...item, modelPreviewId: undefined } : item)).detail,
+    /No 3D preview/,
+  );
+  assert.match(
+    animationRun({}, withMetadata(evidence, "e2", ANIMATION_MOTION_CHECKS_LABEL, "Passed, with footSliding waived")).detail,
+    /footSliding waived/,
+  );
+  assert.match(animationRun({}, withMetadata(evidence, "e2", ANIMATION_GAIT_CHECKS_LABEL, "Not checked as a gait")).detail, /as a gait/);
+  assert.match(animationRun({ sequences: 0 }).detail, /No KeyframeSequence/);
+  assert.match(animationRun({}, evidence, false).detail, /completion gate/);
 });

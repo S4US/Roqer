@@ -26,6 +26,19 @@ install, and connect them; this page says what they can do.
 - Simulate network and device conditions, inspect semantic runtime UI, and
   interact by semantic selector or bounded input.
 
+### Animate characters
+
+- Check, build, publish, wire and verify R15 character animations with
+  `animation`. `check` needs no Studio: it compiles a compact pose description
+  and measures the motion. The pose description gives joint rotations, or where
+  a limb points and how far it bends.
+- `check` and `build` return a contact sheet image of the motion on the stock
+  R15 rig. `build` writes a `KeyframeSequence` only after Studio has played it
+  as checked, and it needs the last build's revision to replace one.
+- `publish` uploads the animation through Open Cloud as the place's owner.
+  `wire` sets it on a default `Animate` slot for every character. `verify`
+  plays it on the playtest character. See [Character animation](animation.md).
+
 ### Collect evidence and diagnose performance
 
 - Capture Studio screenshots, script and micro-profiler recordings, memory

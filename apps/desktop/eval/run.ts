@@ -43,7 +43,7 @@ import { CUSTOM_API_FORMATS, DEFAULT_CUSTOM_REASONING_EFFORTS, type CustomApiFor
 import { isReasoningEffort, type ReasoningEffort } from "../shared/provider";
 import { formatEvalResult, requireUploads, resolveBlender, runEvalTask, type EvalResult } from "./harness";
 import { probePlace, resetPlace } from "./reset";
-import { EVAL_TASKS, findEvalTask, type EvalTask } from "./tasks";
+import { EVAL_TASKS, findEvalTask, needsUploadKey, type EvalTask } from "./tasks";
 import { createEvalTelemetryCollector } from "./telemetry";
 
 const DEFAULT_ENDPOINT = "http://127.0.0.1:58741";
@@ -155,7 +155,7 @@ async function main(): Promise<void> {
     ? client
     : withLocalOperations(client, new Map([[BLENDER_OPERATION, (args, call) => worker.run(args, call)]]));
   const blender = worker !== undefined;
-  if (blender && options.tasks.some((task) => task.needsBlender === true)) {
+  if (needsUploadKey(options.tasks, blender)) {
     await requireUploads(client, instanceId, options.endpoint);
   }
 
