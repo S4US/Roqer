@@ -614,3 +614,18 @@ Roblox's wave animation (507770239). In a solo playtest, the client then read:
 
 So a loader that sets Animate's slots at spawn wires an animation to every
 character, with no copy of Roblox's Animate script in the place.
+
+### 2026-09-28: first publish through the tool, Studio 0.740.19
+
+`tests/animation-tool.mjs` with `ROQER_ANIMATION_UPLOAD=1`, on an unpublished
+baseplate, publishing as the signed-in user.
+
+- **Upload:** `publish` uploaded the built test wave as an Animation asset.
+  Moderation said Approved on the first read.
+- **Read-back:** the asset Roblox served back had the same content revision as
+  the build: every keyframe, pose, CFrame, easing, loop and priority survived
+  the round trip.
+- **Playback:** in a solo playtest, `verify` played the published copy on the
+  character within 0.06° of the checked model.
+- **Owner check:** only the unpublished-place path ran. The group-place refusal
+  is covered by unit tests, not yet by a group-owned place.
