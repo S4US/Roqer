@@ -26,7 +26,7 @@ import {
   type StudioStatus,
 } from "./platform";
 import {
-  activitySteps, applyRunEvent, createRunView, describeOutcome, evidenceImages, recordAppliedAndVerified,
+  activitySteps, applyRunEvent, createRunView, describeOutcome, recordAppliedAndVerified,
   recordGateIssues, recordHasWarnings, recordOnlyAnswered, recordSteps, runAppliedAndVerified,
   runGateIssues, runHasWarnings, runOnlyAnswered, toRunRecord,
   type ActivityStep, type PendingApproval, type RunView,
@@ -35,6 +35,7 @@ import { QUESTION_ESCAPE_OPTION, type RunQuestion } from "../shared/question";
 import { summarizeTasks, type RunTask, type RunTaskStatus } from "../shared/tasks";
 import { Markdown } from "./markdown-view";
 import { SettingsPage } from "./settings-page";
+import { PreviewsCard } from "./evidence-previews";
 import { ModelMenu, RunMenu } from "./composer-menus";
 import { blockPreview, characterCount, composedMessage, isLongPaste, lineCount, textSize, type PastedBlock } from "./composer-text";
 
@@ -1730,7 +1731,7 @@ function LiveRun({ view, steps, nodes, explaining, onAnswer, onExplain, onOpenIn
     <TaskList tasks={view.tasks} />
     <ActivitySection steps={steps} nodes={nodes} running={running} />
     <ChangeSet changes={view.changes} onOpenInStudio={onOpenInStudio} />
-    <EvidenceGallery evidence={view.evidence} />
+    <PreviewsCard evidence={view.evidence} changes={view.changes} />
     {answered && (running
       // Parsing the whole growing document for every provider delta makes a
       // long reply quadratic. Preserve the text while streaming, then render
@@ -1897,40 +1898,6 @@ function EvidenceDetail({ evidence }: { evidence: RunEvidence }) {
       : <ul className="evidence-lines">{lines.map((line, index) => <li key={`${evidence.id}-${index}`}>{line}</li>)}</ul>)}
     {metadata.length > 0 && <MetadataList entries={metadata} />}
   </CardDetails>;
-}
-
-/**
- * The pictures a run produced, shown in the answer rather than only behind the
- * activity section: Studio screenshots and Blender previews.
- *
- * Each is a preview the host made from what the tool returned; nothing here
- * comes from the model. Clicking one opens it larger.
- */
-const EvidenceGallery = memo(function EvidenceGallery({ evidence }: { evidence: readonly RunEvidence[] }) {
-  const images = useMemo(() => evidenceImages(evidence), [evidence]);
-  const [opened, setOpened] = useState<RunEvidence | null>(null);
-  if (images.length === 0) return null;
-  return <>
-    <div className="evidence-gallery">
-      {images.map((item) => <button key={item.id} type="button" className="evidence-thumb" onClick={() => setOpened(item)} title={`Open ${item.title}`}>
-        <img src={item.imageDataUrl} alt={item.title} />
-        <span>{item.title}</span>
-      </button>)}
-    </div>
-    {opened && <EvidenceImageModal evidence={opened} onClose={() => setOpened(null)} />}
-  </>;
-});
-
-/**
- * Rendered into the document body: a message is a containing block for fixed
- * positioning, so a backdrop inside one would cover only that message.
- */
-function EvidenceImageModal({ evidence, onClose }: { evidence: RunEvidence; onClose: () => void }) {
-  useEscapeToClose(onClose);
-  return createPortal(<div className="modal-backdrop" role="presentation" onMouseDown={onClose}><div className="image-modal" role="dialog" aria-modal="true" aria-label={evidence.title} onMouseDown={(event) => event.stopPropagation()}>
-    <div className="modal-header"><div><h2>{evidence.title}</h2></div><button className="icon-button" autoFocus onClick={onClose} aria-label="Close"><X size={19} /></button></div>
-    <img src={evidence.imageDataUrl} alt={evidence.title} />
-  </div></div>, document.body);
 }
 
 /**
@@ -2331,7 +2298,7 @@ function RunRecordView({ record, text, latest, onOpenInStudio }: { record: RunRe
     <TaskList tasks={record.tasks ?? []} />
     <ActivitySection steps={steps} running={false} />
     <ChangeSet changes={record.changes} collapsed={!latest} onOpenInStudio={onOpenInStudio} />
-    <EvidenceGallery evidence={record.evidence} />
+    <PreviewsCard evidence={record.evidence} changes={record.changes} />
     <Markdown text={text} className="result-copy" />
     {appliedAndVerified && <AppliedStatus />}
     {!appliedAndVerified && !recordOnlyAnswered(record, text) && <OutcomeCard

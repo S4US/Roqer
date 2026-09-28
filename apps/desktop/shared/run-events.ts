@@ -377,6 +377,19 @@ export const MAX_EVIDENCE_IMAGE_CHARACTERS = 128 * 1024;
 /** How many evidence previews one saved run keeps, newest first. */
 export const MAX_RECORDED_EVIDENCE_IMAGES = 6;
 
+/**
+ * The title of a Blender job's preview. The answer labels a preview by where it
+ * came from, and this is how it tells a render of a file from a Studio capture.
+ */
+export const BLENDER_PREVIEW_TITLE = "Blender result, before upload";
+
+/**
+ * Metadata on a Studio screenshot taken while a playtest this run started was
+ * running, so the answer can say the picture shows the playtest.
+ */
+export const SCREENSHOT_VIEW_LABEL = "View";
+export const SCREENSHOT_VIEW_PLAYTEST = "Playtest";
+
 /** A bounded PNG or JPEG data URL: the only previews the host produces. */
 export function isEvidenceImage(value: unknown): value is string {
   return typeof value === "string" &&

@@ -66,7 +66,21 @@ it. Results are recorded below.
 ### 3. Thumbnails in the answer — implemented
 
 Studio screenshots and Blender previews show in the answer instead of only in
-the activity list. Clicking one opens it larger.
+the activity list.
+
+- **The previews card.** It is one card in the Activity card's style.
+  - The newest picture leads. Up to three earlier ones sit beside it, and past
+    that the last tile shows a count of the rest.
+  - Each tile says where the picture came from: Studio, Playtest, or Blender ·
+    before upload.
+  - A caption says when the latest was taken: during the playtest, and after
+    which change.
+- **The viewer.** It shows the pictures one at a time over the window, with a
+  strip of all of them. The arrow keys move through them and Escape closes it.
+  The tile that opened it gets the focus back.
+- **Playtest pictures.** A screenshot is marked as a playtest picture only when
+  a playtest this run started was running. The runner knows that from its own
+  start and stop calls, so a playtest someone else started is never claimed.
 
 - **Who makes them.** The main process makes each preview from the image the
   tool returned: a JPEG of at most 640 px on the long edge and at most 128 KiB.
