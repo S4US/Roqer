@@ -39,6 +39,7 @@ a second weapon, the Scarlet Requiem, with its own combo, a flash step, and thre
 - **Your own model.** ChatGPT through the Codex app, Claude through Claude Code, or any OpenAI- or Anthropic-compatible endpoint, including local models.
 - **Works in your place.** Reads and edits instances, properties, and scripts. A script edit is refused if the script changed after the agent read it, so it won't overwrite your own changes.
 - **Models in Blender.** Turn on the optional Blender integration and the agent models what parts can't make (curved shapes, detailed props, vehicle bodies), checks each model with a preview render, and uploads it into your place. It can render UI icons too.
+- **Character animations.** Ask for a run, a wave or a dance and the agent makes an R15 animation. Roqer checks the motion before Studio sees it, and you can play it in 3D in the chat. The agent then publishes the animation as the place's owner, sets it on your players' characters, and checks in a playtest that it plays.
 - **Tests its own work.** Runs solo and multi-client playtests, reads server and client output, takes screenshots, and profiles performance.
 - **You stay in control.** Choose how much it may do on its own, from Read only to Full auto, and see every script change as a diff.
 - **Built for Roblox.** Bundled Roblox skills, Creator Store search and insertion, and Open Cloud uploads with your own key.
@@ -79,6 +80,7 @@ claude mcp add robloxstudio -- node C:\path\to\Roqer\packages\robloxstudio-mcp\d
 - [Building from source](docs/building-from-source.md)
 - [Configuration](docs/configuration.md)
 - [3D modeling with Blender](docs/blender.md)
+- [Character animation](docs/animation.md)
 - [The Studio MCP server](docs/mcp-server.md)
 - [Creator Store assets](docs/creator-store-assets.md)
 - [Removed tools and parameters](docs/deprecated-api.md)

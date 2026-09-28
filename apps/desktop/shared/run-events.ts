@@ -402,6 +402,25 @@ export const ANIMATION_PREVIEW_TITLE = "Animation preview";
 export const ANIMATION_NAME_LABEL = "Animation";
 
 /**
+ * Metadata on an animation build's verification: whether every motion check
+ * passed ("All passed"), and whether the gait checks ran, which they do only
+ * when the motion was checked as a gait.
+ */
+export const ANIMATION_MOTION_CHECKS_LABEL = "Motion checks";
+export const ANIMATION_ALL_CHECKS_PASSED = "All passed";
+export const ANIMATION_GAIT_CHECKS_LABEL = "Gait checks";
+export const ANIMATION_CHECKED_AS_GAIT = "Checked as a gait";
+
+/** Metadata on a playtest verification of an animation: what played, the published asset or a temporary clip. */
+export const ANIMATION_PLAYED_FROM_LABEL = "Played from";
+export const ANIMATION_PLAYED_PUBLISHED = "The published asset";
+
+/** Metadata on a playtest verification that also checked a default Animate slot, such as "run slot". */
+export function animationSlotLabel(slot: string): string {
+  return `${slot} slot`;
+}
+
+/**
  * Metadata on a Studio screenshot taken while a playtest this run started was
  * running, so the answer can say the picture shows the playtest.
  */

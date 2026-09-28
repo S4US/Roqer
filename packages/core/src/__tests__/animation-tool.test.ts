@@ -351,4 +351,13 @@ describe('verifying in a playtest', () => {
       wiring: { slot: 'idle', matches: true, playingNow: true },
     });
   });
+
+  test('given only a path, asks for the checked animation and calls nothing', async () => {
+    const tools = new RobloxStudioTools(new BridgeService());
+    const calls: string[] = [];
+    (tools as unknown as { _callSingle: unknown })._callSingle = async (endpoint: string) => { calls.push(endpoint); return {}; };
+    const result = body(await tools.animation({ action: 'verify', path: 'game.ServerStorage.Run' }));
+    expect(result.error).toMatch(/pass the same animation you checked and built, not only its path/);
+    expect(calls).toEqual([]);
+  });
 });

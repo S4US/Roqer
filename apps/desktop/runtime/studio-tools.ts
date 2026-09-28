@@ -12,7 +12,9 @@ import {
 } from "../shared/mcp-tool-help";
 import { boundedCode, diffDeletedRange, diffText, normalizeNewlines } from "../shared/text-diff";
 import {
-  ANIMATION_NAME_LABEL, ANIMATION_PREVIEW_TITLE, BLENDER_PREVIEW_TITLE, SCREENSHOT_VIEW_LABEL, SCREENSHOT_VIEW_PLAYTEST,
+  ANIMATION_ALL_CHECKS_PASSED, ANIMATION_CHECKED_AS_GAIT, ANIMATION_GAIT_CHECKS_LABEL, ANIMATION_MOTION_CHECKS_LABEL,
+  ANIMATION_NAME_LABEL, ANIMATION_PLAYED_FROM_LABEL, ANIMATION_PLAYED_PUBLISHED, ANIMATION_PREVIEW_TITLE, animationSlotLabel,
+  BLENDER_PREVIEW_TITLE, SCREENSHOT_VIEW_LABEL, SCREENSHOT_VIEW_PLAYTEST,
   type RunChange, type RunEvidence, type RunMetadata,
 } from "../shared/run-events";
 import {
@@ -1107,6 +1109,12 @@ function recordAnimationBuild(context: PlannerContext, outcome: McpToolOutcome):
   });
 
   const waived = Array.isArray(checks.waived) ? checks.waived.filter((id): id is string => typeof id === "string") : [];
+  // The gait checks run only when the call said the motion is a gait; a walk
+  // or run built without them has not had its feet checked.
+  const groundContact = Array.isArray(checks.results)
+    ? checks.results.find((result) => isRecord(result) && result.id === "groundContact")
+    : undefined;
+  const gaitChecked = isRecord(groundContact) ? groundContact.status !== "skipped" : undefined;
   const maxDegrees = numberField(playback, "maxDegrees");
   const passed = readBack.matchesCompiled === true && playback.verified === true;
   context.recordEvidence({
@@ -1118,7 +1126,8 @@ function recordAnimationBuild(context: PlannerContext, outcome: McpToolOutcome):
       ? "Roqer checked the motion before building. Studio played it on a temporary dummy and matched the checked model, then wrote the sequence and read it back."
       : "Studio wrote the sequence, but what it read back or played does not match what Roqer compiled and checked.",
     metadata: [
-      { label: "Motion checks", value: waived.length > 0 ? `Passed, with ${waived.join(", ")} waived` : "All passed" },
+      { label: ANIMATION_MOTION_CHECKS_LABEL, value: waived.length > 0 ? `Passed, with ${waived.join(", ")} waived` : ANIMATION_ALL_CHECKS_PASSED },
+      ...(gaitChecked === undefined ? [] : [{ label: ANIMATION_GAIT_CHECKS_LABEL, value: gaitChecked ? ANIMATION_CHECKED_AS_GAIT : "Not checked as a gait" }]),
       ...(maxDegrees === undefined ? [] : [{ label: "Preview", value: `Within ${maxDegrees}° of the checked model` }]),
       { label: "Read back", value: readBack.matchesCompiled === true ? "Matches what was compiled" : "Differs from what was compiled" },
       { label: "Undo", value: data.undoable !== false ? "One Studio undo step" : "Not recorded in Studio's undo history" },
@@ -1199,9 +1208,9 @@ function recordAnimationVerify(context: PlannerContext, args: JsonRecord, outcom
       ? `It played on the character${wiring ? ", and its Animate slot holds the wired ID" : ""}, matching the checked motion.`
       : stringField(played, "reason") ?? (wiring && wiring.matches !== true ? "The character's Animate slot does not hold the wired ID." : "It did not play as checked."),
     metadata: [
-      { label: "Played from", value: played.source === "published" ? "The published asset" : "A temporary clip" },
+      { label: ANIMATION_PLAYED_FROM_LABEL, value: played.source === "published" ? ANIMATION_PLAYED_PUBLISHED : "A temporary clip" },
       ...(maxDegrees === undefined ? [] : [{ label: "Largest difference", value: `${maxDegrees}°` }]),
-      ...(wiring ? [{ label: `${String(wiring.slot)} slot`, value: wiring.matches === true ? (wiring.playingNow === true ? "Wired, and playing now" : "Wired") : "Not wired" }] : []),
+      ...(wiring ? [{ label: animationSlotLabel(String(wiring.slot)), value: wiring.matches === true ? (wiring.playingNow === true ? "Wired, and playing now" : "Wired") : "Not wired" }] : []),
     ],
   });
 }

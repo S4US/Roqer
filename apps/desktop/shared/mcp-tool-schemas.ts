@@ -44,13 +44,13 @@ export type ToolSchema = {
 };
 
 /** sha256 of `packages/core/src/tools/definitions.ts` with LF newlines. */
-export const TOOL_DEFINITIONS_DIGEST = "c6b24d736938e48c8257bdf2fb82eb25b09bd8fd715cac59b54671ff9d04a52a";
+export const TOOL_DEFINITIONS_DIGEST = "a5164ef609419b2182d05af9b149e8ee2d263455252bb276d450465743fba114";
 
 export const TOOL_SCHEMAS: Readonly<Record<string, ToolSchema>> = {
   animation: {
     description: "Use to check, build, publish, wire, or verify an R15 character animation.",
     parameters: [
-      { name: "action", type: "string", required: true, enumValues: ["check", "build", "publish", "wire", "verify"], description: "check needs no Studio; verify needs a running playtest." },
+      { name: "action", type: "string", required: true, enumValues: ["check", "build", "publish", "wire", "verify"], description: "check needs no Studio; verify needs a running playtest and the checked animation." },
       { name: "animation", type: "object", required: false, description: "Pose description for an R15 rig." },
       { name: "locomotion", type: "boolean", required: false, description: "A gait: adds ground, foot, and symmetry checks." },
       { name: "parent", type: "string", required: false, description: "Build: instance the KeyframeSequence goes in." },
@@ -59,7 +59,7 @@ export const TOOL_SCHEMAS: Readonly<Record<string, ToolSchema>> = {
       { name: "path", type: "string", required: false, description: "Publish: the KeyframeSequence a build wrote." },
       { name: "display_name", type: "string", required: false, description: "Publish: asset name; defaults to the sequence name." },
       { name: "slot", type: "string", required: false, enumValues: ["idle", "walk", "run", "jump", "fall", "climb", "swim", "swimidle", "sit"], description: "Wire/verify: default Animate slot." },
-      { name: "animation_id", type: "string", required: false, description: "Wire/verify: published ID, rbxassetid://N." },
+      { name: "animation_id", type: "string", required: false, description: "Wire/verify: published ID, rbxassetid://N; verify with slot needs it." },
       { name: "expected_id", type: "string", required: false, description: "Wire: ID the slot holds now; required to replace it." },
       { name: "instance_id", type: "string", required: false, description: "Connected place ID; required with multiple places." },
     ],

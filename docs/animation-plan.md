@@ -457,15 +457,51 @@ What was built:
 - **Not built: a Blender-rendered sheet.** The box-rig sheet needs no Blender,
   and a Blender sheet waits for the proposed Blender step.
 
-### 10. Guidance, docs and evals
+### 10. Guidance, docs and evals — implemented
 
 - **Docs.**
-  - A new `docs/animation.md` in the style of [blender.md](blender.md).
-  - Update the MCP tool list, the README features and the "animation not
-    supported" line in `blender.md`.
-- **Guidance.** Studio guidance for the agent.
-- **Eval.** The goal prompt above becomes an eval scenario with an oracle for
-  each "done" condition.
+  - [animation.md](animation.md) is written for users, in the style of
+    [blender.md](blender.md).
+  - The MCP server guide, the README features and documentation list, and
+    `blender.md`'s limits (which said animation was not supported) now point
+    to it.
+- **Guidance.**
+  - The tool guide, the desktop guidance and the recipe reference came with
+    step 9.
+  - The `roblox-studio-mcp` skill now lists `animation` and sends the agent to
+    the recipes.
+- **Eval.** `T15-animation-run` in `apps/desktop/eval` is the goal prompt,
+  with one added sentence saying where to keep the sequence.
+  - Its oracle checks each "done" condition from Studio or from the host's
+    evidence:
+    - `MarketplaceService` reports the asset in the `run` slot as an Animation
+      owned by the place's creator, and this run published it;
+    - a playtest played the published asset with the slot holding it;
+    - a 3D preview was shown;
+    - the last build's checks all passed and ran as a gait.
+  - For that, the harness now passes the run's evidence to oracles. It keeps
+    tool images and 3D previews as the app does, and trajectories record
+    pictures by size.
+  - The build's evidence now also says whether the motion was checked as a
+    gait.
+  - The first model run's bridge had no Open Cloud key. The agent built a run
+    that passed every check and played it as a temporary clip. `publish` then
+    refused, so nothing was wired, and the oracle failed it.
+    - The harness now checks for the key before a T15 run, as it already did
+      for Blender runs.
+    - That run also called `verify` with only the built sequence's path. It now
+      answers that `verify` needs the checked animation.
+  - With a key, the second run passed in 11 calls and 81 s:
+    - it checked, built, published as the place's owner, and wired the run
+      slot;
+    - it played the published asset in a playtest with the slot holding it.
+  - Three of its calls repaired argument mistakes: `verify` without the
+    animation, `verify` with `expected_id` for `animation_id`, and
+    `solo_playtest` without `mode`. The schema now says what `verify` needs.
+  - The agent noted that the character stood still in its playtest. `verify`
+    plays the clip directly and reads the slot; it does not drive the
+    character. A manual playtest afterwards confirmed the published run plays
+    while the player moves.
 
 ## Deferred
 

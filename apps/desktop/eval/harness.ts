@@ -18,7 +18,8 @@ import { appendFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 import { blenderVersion, detectBlender, isBlenderExecutablePath } from "../runtime/blender-settings";
-import type { McpToolCaller } from "../runtime/mcp-types";
+import type { McpToolCaller, McpToolImage } from "../runtime/mcp-types";
+import { storeModelPreview } from "../runtime/model-preview";
 import { RunSession, type Planner, type PlannerImage } from "../runtime/run-engine";
 import type { ApprovalMode } from "../shared/policy";
 import { isKnownTool, TOOL_RISK } from "../shared/mcp-tools";
@@ -62,7 +63,33 @@ export type EvalRunOptions = {
   fixturesDirectory?: string;
   /** Timings for the harness's own interface audit; tests shorten them. */
   interfaceAuditOptions?: InterfaceAuditOptions;
+  /**
+   * Where a tool's 3D preview is kept, through the app's own validator, so a
+   * run records the same animation and Blender previews the app does.
+   * `<outputDirectory>/model-previews` by default.
+   */
+  modelPreviewDirectory?: string;
 };
+
+/**
+ * The image kept with evidence. The app downsizes it with Electron's encoder,
+ * which a headless run does not have, so the harness keeps the tool's own
+ * bytes: the evidence still carries the picture the tool returned, not a
+ * stand-in for it.
+ */
+async function keepToolImage(image: McpToolImage): Promise<string> {
+  return `data:${image.mediaType};base64,${image.data}`;
+}
+
+/**
+ * An event as the trajectory records it: an evidence picture becomes its size.
+ * The pictures are for looking at in the app; a trajectory is for reading, and
+ * a run's screenshots would make it megabytes.
+ */
+function trajectoryEvent(event: RunEvent): RunEvent | Record<string, unknown> {
+  if (event.type !== "evidence" || event.evidence.imageDataUrl === undefined) return event;
+  return { ...event, evidence: { ...event.evidence, imageDataUrl: `[image, ${event.evidence.imageDataUrl.length} characters]` } };
+}
 
 const FIXTURE_MEDIA_TYPES: Readonly<Record<string, string>> = { ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg" };
 
@@ -262,6 +289,7 @@ export async function runEvalTask(options: EvalRunOptions): Promise<EvalResult> 
   await mkdir(options.outputDirectory, { recursive: true });
   const images = await referenceImages(task, options.fixturesDirectory ?? path.join(process.cwd(), "eval", "fixtures"));
   await resetPlace(caller, task, instanceId);
+  const modelPreviews = options.modelPreviewDirectory ?? path.join(options.outputDirectory, "model-previews");
 
   const events: RunEvent[] = [];
   const startedAt = Date.now();
@@ -271,6 +299,8 @@ export async function runEvalTask(options: EvalRunOptions): Promise<EvalResult> 
     caller,
     ...(images.length > 0 ? { images } : {}),
     planner: options.createPlanner(task, runId),
+    previewImage: keepToolImage,
+    storeModelPreview: (glbBase64) => storeModelPreview(modelPreviews, glbBase64),
     request: {
       runId,
       projectId: "eval",
@@ -318,8 +348,9 @@ export async function runEvalTask(options: EvalRunOptions): Promise<EvalResult> 
     : await auditInterface(caller, instanceId, task.auditInterface, options.interfaceAuditOptions);
   const probe = await probePlace(caller, task, instanceId);
   const verified = verification?.verified === true;
+  const evidence = events.flatMap((event) => event.type === "evidence" ? [event.evidence] : []);
   const verdict = task.oracle({
-    probe, outcome, verified, toolCalls, changedTargets, ...(interfaceAudit === undefined ? {} : { interfaceAudit }),
+    probe, outcome, verified, toolCalls, changedTargets, evidence, ...(interfaceAudit === undefined ? {} : { interfaceAudit }),
   });
   const plannerMetrics = options.plannerMetrics?.();
   const metrics = deriveMetrics(events, plannerMetrics);
@@ -338,7 +369,7 @@ export async function runEvalTask(options: EvalRunOptions): Promise<EvalResult> 
       provider: options.provider ?? "claude",
       at: now(),
     },
-    ...events.map((event) => ({ kind: "event", event })),
+    ...events.map((event) => ({ kind: "event", event: trajectoryEvent(event) })),
     // One line per model turn, before the verdict's totals. The totals say
     // where the run's time went; these say whether it was getting worse, which
     // is the difference between a fixed cost upstream and one that grows with
@@ -414,11 +445,12 @@ export function formatEvalResult(result: EvalResult): string {
 }
 
 /**
- * A modeling task publishes through the driven bridge's own Open Cloud key, and
- * a bridge Roqer did not start has none unless its environment sets one. The
- * first T12 run spent 190 s of a paid model on exactly that before it could
- * fail. A status check with a malformed operation ID answers without reaching
- * Roblox: the bridge refuses a missing key before it validates the ID.
+ * A modeling or animation task publishes through the driven bridge's own Open
+ * Cloud key, and a bridge Roqer did not start has none unless its environment
+ * sets one. The first T12 run spent 190 s of a paid model on exactly that before
+ * it could fail, and the first T15 run did the same. A status check with a
+ * malformed operation ID answers without reaching Roblox: the bridge refuses a
+ * missing key before it validates the ID.
  */
 export async function requireUploads(caller: McpToolCaller, instanceId: string | null, endpoint: string): Promise<void> {
   const outcome = await caller.callTool("upload_asset", {
@@ -428,7 +460,7 @@ export async function requireUploads(caller: McpToolCaller, instanceId: string |
   });
   if (/No Open Cloud API key/i.test(`${outcome.message ?? ""} ${outcome.text}`)) {
     throw new Error(
-      `The bridge at ${endpoint} has no Roblox Open Cloud key, so a modeling task cannot upload its model. `
+      `The bridge at ${endpoint} has no Roblox Open Cloud key, so a modeling or animation task cannot upload. `
       + "Roqer passes its saved key only to a bridge it starts: close any bridge you started yourself and let Roqer "
       + "start it, or start it with ROBLOX_OPEN_CLOUD_API_KEY and ROBLOX_CREATOR_USER_ID (or _GROUP_ID) set.",
     );

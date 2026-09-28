@@ -1,7 +1,7 @@
 ---
 name: roblox-studio-mcp
 description: "Detailed reference for Roqer's Studio bridge beyond the contract already in your instructions: Creator Store assets, generated models, rbxm import/export, network and device simulation, profilers and breakpoints, and Studio process lifecycle."
-last_reviewed: 2026-09-22
+last_reviewed: 2026-09-28
 sources:
   - ../../../../../packages/core/src/tools/definitions.ts
   - ../../../../../docs/configuration.md
@@ -45,6 +45,7 @@ When more than one place may be connected, start with `get_connected_instances`.
 - UI and visual evidence: `inspect_ui`, `interact_ui`, `capture_screenshot`, `simulate_mouse_input`, `simulate_keyboard_input`
 - Performance and simulation: `capture_script_profiler`, `capture_micro_profiler`, `get_memory_breakdown`, `get_scene_analysis`, `get_simulation_state`, `set_network_profile`, `set_device_simulator`, `capture_device_matrix`, `reset_simulation_state`
 - Assets and files: `search_assets`, `get_asset_details`, `get_asset_thumbnail`, `preview_asset`, `insert_asset`, `generate_model`, `upload_asset`, `import_rbxm`, `export_rbxm`
+- Character animation: `animation` (check, build, publish, wire, verify). Load `roblox-animation-vfx` with its `references/character-animation.md` first, for the pose format and tested recipes.
 - Reference and lifecycle: `get_roblox_docs`, `get_roblox_skills`, `manage_instance`
 
 `solo_playtest` and `multiplayer_playtest` are stateful: a started playtest keeps Studio in play mode until something stops it. Start with `solo_playtest {action: "start", mode: "play"}`, read logs from the exact peer that produced them, and always stop with `solo_playtest {action: "stop"}` when the scenario is done. `manage_instance` belongs to that lifecycle group too — it launches and closes Studio processes, and never creates a DataModel instance.
