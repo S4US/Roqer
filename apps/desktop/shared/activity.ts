@@ -105,6 +105,7 @@ export function activityKind(tool: string, target: string | null = null): ToolAc
   if (tool === "upload_asset" && target === "status") return "read";
   // An animation summary starts with its action; checking reads nothing but writes nothing either.
   if (tool === "animation" && target?.startsWith("check ")) return "read";
+  if (tool === "animation" && target?.startsWith("verify ")) return "run";
   return Object.prototype.hasOwnProperty.call(KIND_BY_TOOL, tool) ? KIND_BY_TOOL[tool] : "run";
 }
 
@@ -288,6 +289,9 @@ export function activityLabel(tool: string, target: string | null, past: boolean
   if (tool === "run_blender_script") return past ? "Modeled in Blender" : "Modeling in Blender";
   if (tool === "animation") {
     if (target?.startsWith("build ")) return past ? "Built an animation" : "Building an animation";
+    if (target?.startsWith("publish ")) return past ? "Published an animation" : "Publishing an animation";
+    if (target?.startsWith("wire ")) return past ? "Wired an animation" : "Wiring an animation";
+    if (target?.startsWith("verify ")) return past ? "Verified an animation in the playtest" : "Verifying an animation in the playtest";
     return past ? "Checked an animation" : "Checking an animation";
   }
   if (target === null) return `${verb} ${toolPhrase(tool)}`;

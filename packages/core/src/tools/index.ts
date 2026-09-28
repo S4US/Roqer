@@ -24,13 +24,19 @@ import { rgbaToPng } from '../png-encoder.js';
 import { createUISnapshot, normalizeUIInspection } from '../ui-semantics.js';
 import { auditUI } from '../ui-audit.js';
 import {
+  ANIMATE_SLOTS,
+  choosePublisher,
   compactChecks,
   describeAnimation,
   expectedCounts,
+  normalizeAnimationId,
   prepareAnimation,
   previewSampleTimes,
+  verifyLivePlayback,
   verifyPlayback,
+  type AnimateSlot,
 } from '../animation/animation-tool.js';
+import { compilePoseAnimation } from '../animation/pose-compiler.js';
 import * as fs from 'fs';
 import * as path from 'path';
 
@@ -1704,6 +1710,20 @@ export class RobloxStudioTools {
   }
 
   /**
+   * The animation tool: check, build, publish, wire and verify an R15 character
+   * animation. Arguments arrive as the tool's own object, since each action
+   * reads a different few of them.
+   */
+  async animation(args: Record<string, unknown>, instance_id?: string) {
+    const action = args?.action;
+    if (action === 'check' || action === 'build') return this._animationBuild(action, args, instance_id);
+    if (action === 'publish') return this._animationPublish(args, instance_id);
+    if (action === 'wire') return this._animationWire(args, instance_id);
+    if (action === 'verify') return this._animationVerify(args, instance_id);
+    throw new Error('animation action must be check, build, publish, wire or verify');
+  }
+
+  /**
    * Check a pose description, or build it as a KeyframeSequence in Studio.
    *
    * Both compile the description and run the motion checks here, without
@@ -1712,18 +1732,8 @@ export class RobloxStudioTools {
    * Studio played it as the checks measured it. The write is one undo step and
    * is read back; replacing a sequence needs the revision its build returned.
    */
-  async animation(
-    action: unknown,
-    animation: unknown,
-    parent: unknown,
-    expected_revision: unknown,
-    waive: unknown,
-    locomotion: unknown,
-    instance_id?: string,
-  ) {
-    if (action !== 'check' && action !== 'build') {
-      throw new Error('animation action must be "check" or "build"');
-    }
+  private async _animationBuild(action: 'check' | 'build', args: Record<string, unknown>, instance_id?: string) {
+    const { animation, parent, expected_revision, waive, locomotion } = args;
     if (action === 'build' && (typeof parent !== 'string' || parent.trim() === '')) {
       throw new Error('parent (the instance the KeyframeSequence goes in) is required to build an animation');
     }
@@ -1795,6 +1805,168 @@ export class RobloxStudioTools {
       },
       playback,
       checks,
+    });
+  }
+
+  /**
+   * Upload a built animation to Roblox, owned by the place's owner, and read
+   * the published asset back to confirm it holds what was built.
+   *
+   * Nothing is uploaded unless the sequence is one `build` wrote and nobody
+   * has edited since, and unless the upload creator owns the place. A rejected
+   * upload is reported as not published; one still in moderation is published
+   * but not yet approved, and the result says so.
+   */
+  private async _animationPublish(args: Record<string, unknown>, instance_id?: string) {
+    const target = args.path;
+    if (typeof target !== 'string' || target.trim() === '') {
+      throw new Error('path (the KeyframeSequence a build wrote) is required to publish an animation');
+    }
+    if (args.display_name !== undefined && (typeof args.display_name !== 'string' || args.display_name.trim() === '')) {
+      throw new Error('display_name must be a non-empty string');
+    }
+    if (!this.openCloudClient.hasApiKey()) {
+      return this._textResult({
+        error: 'No Open Cloud API key is configured, so nothing was uploaded. Add one in Roqer Settings (Assets API with write access) to publish. Meanwhile, action verify plays the animation in a playtest without publishing it.',
+        errorCode: 'open_cloud_not_configured',
+      });
+    }
+
+    const info = await this._callSingle('/api/animation-publish-info', { path: target }, undefined, instance_id);
+    if (info?.error) return this._textResult({ ...info, error: `${info.error} Nothing was uploaded.` });
+
+    const choice = choosePublisher(
+      { creatorType: String(info.placeCreatorType), creatorId: Number(info.placeCreatorId) },
+      { userId: process.env.ROBLOX_CREATOR_USER_ID, groupId: process.env.ROBLOX_CREATOR_GROUP_ID },
+    );
+    if (!choice.ok) return this._textResult({ error: choice.error, errorCode: choice.errorCode });
+
+    const exported = await this._callSingle('/api/export-rbxm', { instance_paths: [info.path] }, 'edit', instance_id);
+    if (exported?.error || typeof exported?.base64 !== 'string') {
+      return this._textResult({ error: `Studio could not export ${info.path}: ${exported?.error ?? 'no file came back'}. Nothing was uploaded.` });
+    }
+
+    const displayName = (args.display_name as string | undefined)?.trim() ?? String(info.name);
+    const upload = await this.openCloudClient.createAsset(
+      {
+        assetType: 'Animation',
+        displayName,
+        description: 'Character animation built and checked by Roqer.',
+        creationContext: { creator: choice.creator },
+      },
+      Buffer.from(exported.base64, 'base64'),
+      `${info.name}.rbxm`,
+    );
+    const uploaded = this._assetUploadResult(upload);
+    if (upload.error) {
+      return this._textResult({ error: `Roblox refused the upload: ${upload.error.message ?? JSON.stringify(upload.error)}`, upload: uploaded });
+    }
+    if (!upload.done || !upload.response?.assetId) {
+      return this._textResult({
+        published: false,
+        pending: true,
+        operationId: uploaded.operation_id,
+        note: 'Roblox is still processing the upload. Check it with upload_asset {action: "status", operationId}; the animation is not verified until then.',
+      });
+    }
+
+    const assetId = String(upload.response.assetId);
+    const moderation = typeof uploaded.moderation_state === 'string' ? uploaded.moderation_state : 'unknown';
+    let readBack: Record<string, unknown> = {};
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      readBack = await this._callSingle('/api/animation-read-back', { assetId, expectedRevision: info.revision }, undefined, instance_id);
+      if (!readBack?.error) break;
+      await new Promise((resolve) => setTimeout(resolve, 3000));
+    }
+    const result = {
+      assetId,
+      animationId: `rbxassetid://${assetId}`,
+      displayName,
+      creator: choice.creator.groupId ? { group: choice.creator.groupId } : { user: choice.creator.userId },
+      ownerCheck: choice.ownerCheck,
+      moderation,
+      approved: /^approved$/i.test(moderation),
+      readBack: readBack?.error
+        ? { matches: false, error: readBack.error }
+        : { matches: readBack.matches === true, keyframes: readBack.keyframes, poses: readBack.poses },
+    };
+    if (/reject/i.test(moderation)) {
+      return this._textResult({ published: false, error: `Roblox moderation rejected the animation (${moderation}); it will not play.`, ...result });
+    }
+    return this._textResult({ published: true, ...result });
+  }
+
+  /**
+   * Set a published animation on one slot of every character's default
+   * Animate script, through the loader script this tool keeps in
+   * ServerScriptService. Its code never changes; each slot's ID is one of its
+   * attributes, and an ID is replaced only when the caller names the current
+   * one, so an ID changed by anyone else is never overwritten.
+   */
+  private async _animationWire(args: Record<string, unknown>, instance_id?: string) {
+    const slot = args.slot;
+    if (typeof slot !== 'string' || !ANIMATE_SLOTS.includes(slot as AnimateSlot)) {
+      throw new Error(`slot must be one of ${ANIMATE_SLOTS.join(', ')}`);
+    }
+    const animationId = normalizeAnimationId(args.animation_id);
+    if (!animationId) throw new Error('animation_id must be a published asset ID, such as rbxassetid://123');
+    const expectedId = args.expected_id === undefined ? undefined : normalizeAnimationId(args.expected_id);
+    if (args.expected_id !== undefined && !expectedId) {
+      throw new Error('expected_id must be the asset ID the slot holds now, such as rbxassetid://123');
+    }
+    const response = await this._callSingle('/api/animation-wire', { slot, animationId, expectedId }, undefined, instance_id);
+    return this._textResult(response?.error ? response : { wired: true, ...response });
+  }
+
+  /**
+   * Play the animation on the character in a running playtest, as the player
+   * sees it, and compare its joints with the checked model. Given a slot, also
+   * confirm the wired ID reached the character's Animate script.
+   */
+  private async _animationVerify(args: Record<string, unknown>, instance_id?: string) {
+    const compiled = compilePoseAnimation(args.animation);
+    if (!compiled.ok) return this._textResult({ error: 'The animation is not valid; nothing was verified.', errors: compiled.errors });
+    const sequence = compiled.sequence;
+    const animationId = args.animation_id === undefined ? undefined : normalizeAnimationId(args.animation_id);
+    if (args.animation_id !== undefined && !animationId) throw new Error('animation_id must be a published asset ID, such as rbxassetid://123');
+    const slot = args.slot;
+    if (slot !== undefined && (typeof slot !== 'string' || !ANIMATE_SLOTS.includes(slot as AnimateSlot))) {
+      throw new Error(`slot must be one of ${ANIMATE_SLOTS.join(', ')}`);
+    }
+    if (slot !== undefined && !animationId) throw new Error('animation_id is required with slot: it is the ID the slot should hold');
+
+    const payload = { name: sequence.name, loop: sequence.loop, priority: sequence.priority, keyframes: sequence.keyframes };
+    let response: { error?: string; length?: number; samples?: unknown; wiredIds?: unknown; playingIds?: unknown };
+    try {
+      response = await this._callSingle(
+        '/api/animation-verify',
+        { ...(animationId ? { animationId } : { sequence: payload }), slot, duration: sequence.duration },
+        'client-1',
+        instance_id,
+      );
+    } catch (error) {
+      if (error instanceof RoutingFailure) {
+        return this._textResult({ error: 'No playtest client is running; start a playtest first. Nothing was verified.', errorCode: 'no_playtest' });
+      }
+      throw error;
+    }
+    if (response?.error) return this._textResult({ ...response, error: `${response.error} Nothing was verified.` });
+
+    const playback = verifyLivePlayback(sequence, response.samples);
+    const wiring = slot === undefined ? undefined : (() => {
+      const ids = Array.isArray(response.wiredIds) ? response.wiredIds.map((id: unknown) => normalizeAnimationId(id) ?? String(id)) : [];
+      const playing = Array.isArray(response.playingIds) ? response.playingIds.map((id: unknown) => normalizeAnimationId(id) ?? String(id)) : [];
+      return {
+        slot,
+        animationIds: ids,
+        matches: ids.length > 0 && ids.every((id: string) => id === animationId),
+        playingNow: animationId !== undefined && playing.includes(animationId),
+      };
+    })();
+    return this._textResult({
+      verified: playback.verified && (wiring === undefined || wiring.matches),
+      played: { source: animationId ? 'published' : 'temporary clip', length: response.length, ...playback },
+      ...(wiring ? { wiring } : {}),
     });
   }
 

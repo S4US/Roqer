@@ -176,6 +176,115 @@ export function verifyPlayback(sequence: KeyframeSequenceDescription, samples: u
   };
 }
 
+/**
+ * Slots of Roblox's default Animate script that `wire` may fill. Each is the
+ * name of a StringValue under Animate whose Animation children it plays.
+ */
+export const ANIMATE_SLOTS = ['idle', 'walk', 'run', 'jump', 'fall', 'climb', 'swim', 'swimidle', 'sit'] as const;
+export type AnimateSlot = (typeof ANIMATE_SLOTS)[number];
+
+/** An asset ID in any of the forms Roblox accepts, as rbxassetid://N; undefined otherwise. */
+export function normalizeAnimationId(value: unknown): string | undefined {
+  if (typeof value === 'number' && Number.isSafeInteger(value) && value > 0) return `rbxassetid://${value}`;
+  if (typeof value !== 'string') return undefined;
+  const match = /^(?:rbxassetid:\/\/|https?:\/\/www\.roblox\.com\/asset\/\?id=)?(\d{1,20})$/.exec(value.trim());
+  return match && match[1] !== '0' ? `rbxassetid://${match[1]}` : undefined;
+}
+
+export interface PlaceOwner {
+  creatorType: string;
+  creatorId: number;
+}
+
+export type PublisherChoice =
+  | { ok: true; creator: { userId?: string; groupId?: string }; ownerCheck: string }
+  | { ok: false; errorCode: string; error: string };
+
+/**
+ * Who uploads the animation. It must be the place's owner, or it will not play
+ * in the live game: a group place needs the group, a user place that user. An
+ * unpublished place has no owner yet, so the configured creator is used and
+ * the result says the place must be published under it.
+ */
+export function choosePublisher(place: PlaceOwner, config: { userId?: string; groupId?: string }): PublisherChoice {
+  const configured = config.groupId ? `group ${config.groupId}` : config.userId ? `user ${config.userId}` : undefined;
+  if (!configured) {
+    return {
+      ok: false,
+      errorCode: 'creator_not_configured',
+      error: 'No Roblox creator is configured for uploads, so nothing was uploaded. Set the creator user or group in Roqer Settings.',
+    };
+  }
+  if (!Number.isFinite(place.creatorId) || place.creatorId <= 0) {
+    return {
+      ok: true,
+      creator: config.groupId ? { groupId: config.groupId } : { userId: config.userId },
+      ownerCheck: `The place is not published, so it has no owner yet. The animation belongs to ${configured}; publish the place under the same owner, or the animation will not play in the live game.`,
+    };
+  }
+  const owner = place.creatorType === 'Group' ? `group ${place.creatorId}` : `user ${place.creatorId}`;
+  if (owner !== configured) {
+    return {
+      ok: false,
+      errorCode: 'owner_mismatch',
+      error: `This place belongs to ${owner}, but uploads go to ${configured}. An animation plays in the live game only for its owner, so nothing was uploaded. Set the upload creator to ${owner}${place.creatorType === 'Group' ? ' with a key that can upload for the group' : ''}.`,
+    };
+  }
+  return {
+    ok: true,
+    creator: place.creatorType === 'Group' ? { groupId: String(place.creatorId) } : { userId: String(place.creatorId) },
+    ownerCheck: `The animation belongs to ${owner}, who owns the place.`,
+  };
+}
+
+/**
+ * How closely a live playtest must match. The Animator runs on its own clock
+ * and blends in other tracks, so only the joints this animation keys are
+ * compared, and a little more room is left than for the stepped preview.
+ */
+export const LIVE_PLAYBACK_TOLERANCE = { degrees: 2, studs: 0.05 } as const;
+
+/** Compares a live playtest's keyed joints with the checked model. */
+export function verifyLivePlayback(sequence: KeyframeSequenceDescription, samples: unknown): PlaybackCheck {
+  const fail = (reason: string): PlaybackCheck => ({ verified: false, samples: 0, maxDegrees: 0, maxStuds: 0, reason });
+  if (!Array.isArray(samples) || samples.length === 0) return fail('the playtest returned no samples');
+  const tracks = buildTracks(sequence);
+  const keyed = R15_RIG.joints.filter((joint) => sequence.joints.includes(joint.name));
+  let maxDegrees = 0;
+  let maxStuds = 0;
+  let worst: PlaybackCheck['worst'];
+  for (const sample of samples as PreviewSample[]) {
+    if (typeof sample?.time !== 'number' || typeof sample.transforms !== 'object' || sample.transforms === null) {
+      return fail('the playtest returned a malformed sample');
+    }
+    for (const joint of keyed) {
+      const actual = sample.transforms[joint.childPart];
+      if (!Array.isArray(actual) || actual.length !== 12 || !actual.every(Number.isFinite)) {
+        return fail(`the character reported no joint for ${joint.childPart}`);
+      }
+      const expected = sampleTrack(tracks.get(joint.childPart), sample.time);
+      const played = frameFromComponents(actual);
+      const degrees = degreesBetween(expected.r, played.r);
+      if (degrees > maxDegrees) {
+        maxDegrees = degrees;
+        worst = { part: joint.childPart, time: round(sample.time, 3) };
+      }
+      maxStuds = Math.max(maxStuds, Math.hypot(expected.p[0] - played.p[0], expected.p[1] - played.p[1], expected.p[2] - played.p[2]));
+    }
+  }
+  const verified = maxDegrees <= LIVE_PLAYBACK_TOLERANCE.degrees && maxStuds <= LIVE_PLAYBACK_TOLERANCE.studs;
+  return {
+    verified,
+    samples: samples.length,
+    maxDegrees: round(maxDegrees, 2),
+    maxStuds: round(maxStuds, 3),
+    ...(worst && maxDegrees > 0.01 ? { worst } : {}),
+    ...(verified ? {} : {
+      reason: `the character played it up to ${round(maxDegrees, 2)}° and ${round(maxStuds, 3)} studs from the checked model; the limit is ${LIVE_PLAYBACK_TOLERANCE.degrees}° and ${LIVE_PLAYBACK_TOLERANCE.studs} studs`,
+    }),
+  };
+}
+
 /** Poses in a compiled sequence, placeholders included: what a read-back must find. */
 export function expectedCounts(sequence: KeyframeSequenceDescription) {
   return { keyframes: sequence.keyframes.length, poses: sequence.poseCount };

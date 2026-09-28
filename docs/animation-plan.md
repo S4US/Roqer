@@ -308,7 +308,7 @@ What was built:
   - `tests/animation-tool.mjs` exercises all of it against a live Studio, in
     the full managed suite.
 
-### 8. Publish and wire up
+### 8. Publish and wire up — implemented
 
 - **Publish.** `export_rbxm` plus `upload_asset` with type `Animation`, with an
   owner check: the animation must belong to the place's owner, user or group.
@@ -319,6 +319,69 @@ What was built:
     how to publish.
   - A group-owned place with a personal key: stop before uploading.
   - Moderation pending or rejected: report it; never claim success.
+
+What was built, as three more actions of the `animation` tool:
+
+- **`publish`.**
+  - It uploads only a sequence that `build` wrote and nobody has edited since.
+  - It uploads only as the place's owner. A group place needs the group as
+    creator, a user place that user. A mismatch stops before anything is
+    uploaded.
+  - An unpublished place has no owner yet, so the configured creator is used,
+    and the result says to publish the place under the same owner.
+  - After the upload it reads the asset back from Roblox and compares its
+    content revision with what was built.
+  - A rejected animation is reported as not published. One still in review is
+    published but not approved, and the result says so.
+  - Without an Open Cloud key it uploads nothing and says how to publish.
+    `verify` still tests the animation unpublished.
+  - The desktop rates `publish` irreversible, so it always asks first.
+- **`wire`.**
+  - It keeps one loader Script, `ServerScriptService.RoqerAnimate`, whose code
+    never changes; each slot's animation ID is one of its attributes. The first
+    wire installs it, so later wiring changes data, not code.
+  - At spawn, the loader sets that slot's Animation IDs on each character's
+    default Animate script. A probe showed that Animate plays the new ID
+    (see "Live results").
+  - Replacing a slot's ID needs the current one as `expected_id`, so an ID
+    someone else changed is never overwritten. This is step 7's
+    "`AnimationId` that changed underneath" rule.
+  - A loader whose code was edited is left alone.
+  - Each wire is one undo step.
+- **`verify`.**
+  - It needs a running playtest, and runs on the client.
+  - It plays the animation on the player's character, from the pose
+    description or from the published `animation_id`, and samples the
+    animated joints on the Animator's own clock. It passes within 2° of the
+    checked model.
+  - Given a slot and an ID, it also confirms that the character's Animate slot
+    holds the ID, and whether Animate is playing it.
+  - The desktop records it as playtest evidence.
+- **Tests.**
+  - `tests/animation-tool.mjs` covers wiring, both kinds of verification, and
+    the publish refusal without a key on a live Studio, with nothing uploaded.
+    It wires Roblox's own wave animation.
+  - With `ROQER_ANIMATION_UPLOAD=1` and a key, it also publishes one real test
+    animation, reads it back, and verifies the published copy.
+
+### Proposed: animations from Blender
+
+Not scheduled; to be confirmed. When Blender is on, it could author or refine
+an animation for the standard R15 rig. A worker script would export the
+animation as a pose description, and `animation` would check, build, publish
+and wire it like any other. Studio would then have one path in, whether the
+model writes the poses or Blender does.
+
+What that needs:
+
+- converting Blender's bone rotations (Z-up, with bone rest orientations) into
+  joint rotations;
+- keyframe reduction, since a 30 fps bake reaches the 240-keyframe limit at
+  8 seconds;
+- a clear refusal for rigs that are not the standard R15.
+
+The easing measured in step 6 applies when converting Blender's
+interpolation.
 
 ### 9. Animation playback and contact sheet
 
@@ -537,3 +600,32 @@ hand to 0.5 s.
   left `GetCanUndo` false.
 - **Detached sequence:** a `KeyframeSequence` that was never parented
   registered and played.
+
+### 2026-09-28: wiring probe, Studio 0.740.19
+
+A one-off probe for step 8's wiring. A server Script in ServerScriptService
+set the Animation IDs of each character's `Animate.idle` slot at spawn, to
+Roblox's wave animation (507770239). In a solo playtest, the client then read:
+
+- **Replication:** both idle Animations under the character's Animate script
+  held the wave's ID. The server's change had replicated to the client.
+- **Playback:** the wave was among the Animator's playing tracks, so the
+  default Animate script played it as the idle.
+
+So a loader that sets Animate's slots at spawn wires an animation to every
+character, with no copy of Roblox's Animate script in the place.
+
+### 2026-09-28: first publish through the tool, Studio 0.740.19
+
+`tests/animation-tool.mjs` with `ROQER_ANIMATION_UPLOAD=1`, on an unpublished
+baseplate, publishing as the signed-in user.
+
+- **Upload:** `publish` uploaded the built test wave as an Animation asset.
+  Moderation said Approved on the first read.
+- **Read-back:** the asset Roblox served back had the same content revision as
+  the build: every keyframe, pose, CFrame, easing, loop and priority survived
+  the round trip.
+- **Playback:** in a solo playtest, `verify` played the published copy on the
+  character within 0.06° of the checked model.
+- **Owner check:** only the unpublished-place path ran. The group-place refusal
+  is covered by unit tests, not yet by a group-owned place.

@@ -49,9 +49,9 @@ export const TOOL_RISK: Readonly<Record<string, ToolRisk>> = {
   // Removes as well as builds, but only inside its own root, and the whole
   // batch is one ChangeHistory step, so Studio's undo reverses it.
   build_instances: "mutation",
-  // Writes one KeyframeSequence as one ChangeHistory step, and replaces only a
-  // sequence it built itself whose revision the caller names. `check` never
-  // reaches Studio; `riskForTool` rates it a read.
+  // build and wire write one undoable ChangeHistory step each, and replace only
+  // what the caller names by revision or current ID. `riskForTool` rates check
+  // and verify as reads and publish as irreversible.
   animation: "mutation",
   set_script_source: "mutation",
   edit_script_lines: "mutation",
@@ -130,8 +130,13 @@ export function riskForTool(tool: string, args?: Record<string, unknown>): ToolR
   // Reading a durable Roblox operation cannot publish or mutate anything. The
   // upload action remains irreversible and keeps its normal confirmation.
   if (tool === "upload_asset" && args?.action === "status") return "read";
-  // Checking an animation compiles and measures it on the MCP host; only build writes.
-  if (tool === "animation" && args?.action === "check") return "read";
+  if (tool === "animation") {
+    // Checking compiles and measures on the MCP host. Verifying plays a track on
+    // the playtest character and leaves nothing behind.
+    if (args?.action === "check" || args?.action === "verify") return "read";
+    // Uploads to the user's Roblox account, which Studio's undo cannot reverse.
+    if (args?.action === "publish") return "irreversible";
+  }
   // A profiler capture only reads Studio, but a path argument has it write a
   // file anywhere on the user's disk, or read one, so Read only mode refuses it
   // and Ask first asks, as for `export_rbxm`.
@@ -177,6 +182,9 @@ const TOOL_TIMEOUT_MS: Readonly<Record<string, number>> = {
   // The bridge polls Roblox for up to 60s before returning a durable pending
   // operation that the model can check later.
   upload_asset: 75_000,
+  // Publishing is an upload (up to 60s of polling) plus an export and up to
+  // three read-backs; a build waits up to 10s for its preview track to load.
+  animation: 120_000,
   // The script's own limit (at most 200s) plus Roqer's inspection of up to
   // three exported models (30s each); the worker enforces both itself.
   run_blender_script: 300_000,
@@ -241,7 +249,17 @@ const IDENTIFYING_ARGUMENTS = [
  * defensively and anything unexpected is simply left out.
  */
 function summarizeAnimation(args: Record<string, unknown>): string {
-  const action = args.action === "build" ? "build" : "check";
+  if (args.action === "publish") {
+    const path = typeof args.path === "string" && args.path !== "" ? truncate(args.path, 80) : "an animation";
+    return `animation · publish ${path} to Roblox`;
+  }
+  if (args.action === "wire") {
+    const slot = typeof args.slot === "string" ? truncate(args.slot, 20) : "a slot";
+    const id = typeof args.animation_id === "string" ? truncate(args.animation_id, 40) : "an animation";
+    const replaces = typeof args.expected_id === "string" ? `, replacing ${truncate(args.expected_id, 40)}` : "";
+    return `animation · wire ${id} to the ${slot} slot of every character${replaces}`;
+  }
+  const action = args.action === "build" ? "build" : args.action === "verify" ? "verify" : "check";
   const animation = typeof args.animation === "object" && args.animation !== null && !Array.isArray(args.animation)
     ? args.animation as Record<string, unknown>
     : {};

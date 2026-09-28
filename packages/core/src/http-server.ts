@@ -152,15 +152,7 @@ export const TOOL_HANDLERS: Record<string, ToolHandler> = {
   get_project_structure: (tools, body) => tools.getProjectStructure(body.path, body.maxDepth, body.scriptsOnly, body.instance_id, body.instanceRef),
   set_properties: (tools, body) => tools.setProperties(body.instancePath, body.properties, body.instance_id, body.instanceRef),
   build_instances: (tools, body) => tools.buildInstances(body.path, body.operations, body.instance_id),
-  animation: (tools, body) => tools.animation(
-    body.action,
-    body.animation,
-    body.parent,
-    body.expected_revision,
-    body.waive,
-    body.locomotion,
-    body.instance_id,
-  ),
+  animation: (tools, body) => tools.animation(body, body.instance_id),
   grep_scripts: (tools, body) => tools.grepScripts(body.pattern, {
     caseSensitive: body.caseSensitive,
     usePattern: body.usePattern,

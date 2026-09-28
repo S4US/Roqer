@@ -58,6 +58,10 @@ const routeMap: Record<string, Handler> = {
     "/api/build-instances": BuildHandlers.buildInstances,
     "/api/preview-animation": AnimationHandlers.previewAnimation,
     "/api/build-animation": AnimationHandlers.buildAnimation,
+    "/api/animation-publish-info": AnimationHandlers.animationPublishInfo,
+    "/api/animation-read-back": AnimationHandlers.animationReadBack,
+    "/api/animation-wire": AnimationHandlers.animationWire,
+    "/api/animation-verify": AnimationHandlers.animationVerify,
 
 	"/api/get-script-source": ScriptHandlers.getScriptSource,
 	"/api/set-script-source": ScriptHandlers.setScriptSource,
