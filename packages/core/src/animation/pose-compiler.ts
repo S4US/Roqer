@@ -84,9 +84,8 @@ export interface CompiledPose {
   joint?: string;
   /**
    * 1 for a keyed pose. 0 for a placeholder that only keeps the hierarchy
-   * from the root part down to a keyed part, so it does not key its joint.
-   * That the engine skips a weight-0 pose is not yet observed; the step 7
-   * live test checks it.
+   * from the root part down to a keyed part. The engine skips a weight-0
+   * pose, so it does not key its joint (third animation spike run).
    */
   weight: 0 | 1;
   cframe: CFrameComponents;

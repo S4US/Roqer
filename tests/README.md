@@ -194,13 +194,17 @@ node scripts/studio-lifecycle.mjs wait-connected --variant main --version <expec
 
 `tests/animation-spike.mjs` is step 2 of the [animation plan](../docs/animation-plan.md).
 It is a research probe, not a regression test, and belongs to neither runner
-profile. It answers four questions on a real Studio:
+profile. It answers five questions on a real Studio:
 
 1. Can the stock R15 dummy be built in memory in edit mode?
 2. Do temporary animation IDs play, in edit mode and in a playtest?
 3. Does Open Cloud accept a `KeyframeSequence` exported from Studio as an
    Animation asset?
 4. Can the just-published animation be read back and played?
+5. Does the engine skip a weight-0 `Pose` that only keeps the hierarchy? The
+   pose compiler writes the poses between the root and a keyed part that way.
+   A weight-1 control shows the measurement can see the joint return to rest;
+   without it the answer is "inconclusive".
 
 ```bash
 npm run test:spike:animation

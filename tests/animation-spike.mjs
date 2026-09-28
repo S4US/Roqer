@@ -7,6 +7,8 @@
 //   3. Does Open Cloud accept a KeyframeSequence exported from Studio as an
 //      Animation asset? (Only with ROQER_SPIKE_UPLOAD=1: it creates a real asset.)
 //   4. Can a just-published animation be read back and played?
+//   5. Does the engine skip a weight-0 Pose that only keeps the hierarchy, as
+//      the pose compiler's placeholders assume?
 //
 // The answers are findings, not assertions: a "no" is a result to record in the
 // plan, and the script still exits 0. It fails only when it could not ask a
@@ -292,6 +294,101 @@ if rig then playback, tried = probeCandidates(rig, candidates, true) end
 return { registrations = attempts, candidates = candidates, playback = playback, tried = tried }
 `;
 
+// The pose compiler keys only the parts a keyframe names, and writes the poses
+// between the root and those parts at weight 0 so they key nothing. Here the
+// right shoulder is keyed at 60 degrees at 0 s and 2 s; at 1 s the upper arm is
+// only the parent of a keyed elbow. If the engine skips the weight-0 pose, the
+// shoulder holds 60 degrees at 1 s. The weight-1 identity control shows the
+// measurement can see it return to rest.
+const EDIT_PLACEHOLDER = `${PRELUDE}
+local function placeholderSequence(parent, middleWeight)
+  local sequence = Instance.new("KeyframeSequence")
+  sequence.Name = "SpikePlaceholder" .. middleWeight
+  sequence.Loop = false
+  sequence.Priority = Enum.AnimationPriority.Action
+  for _, time in { 0, 1, 2 } do
+    local keyframe = Instance.new("Keyframe")
+    keyframe.Time = time
+    local root = addPose("HumanoidRootPart", nil, keyframe)
+    local lower = addPose("LowerTorso", nil, root)
+    local upper = addPose("UpperTorso", nil, lower)
+    root.Weight, lower.Weight, upper.Weight = 0, 0, 0
+    local arm = addPose("RightUpperArm", time == 1 and CFrame.identity or CFrame.Angles(math.rad(60), 0, 0), upper)
+    if time == 1 then arm.Weight = middleWeight end
+    addPose("RightLowerArm", nil, arm)
+    keyframe.Parent = sequence
+  end
+  sequence.Parent = parent
+  return sequence
+end
+
+-- Right shoulder angle from rest, sampled every 0.25 s, trying each form of
+-- the temporary ID until one loads.
+local function sample(rig, candidates)
+  local humanoid = rig:FindFirstChildOfClass("Humanoid")
+  local joint = jointFor(rig, "RightUpperArm")
+  if not humanoid or not joint then return { error = "rig has no Humanoid or no RightUpperArm joint" } end
+  local animator = humanoid:FindFirstChildOfClass("Animator")
+  if not animator then
+    animator = Instance.new("Animator")
+    animator.Parent = humanoid
+  end
+  local failures = {}
+  for _, candidate in candidates do
+    local animation = Instance.new("Animation")
+    local ok, result = pcall(function()
+      animation.AnimationId = candidate
+      local track = animator:LoadAnimation(animation)
+      -- Measured from the identity, the joint's true rest: a stopped track
+      -- leaves its last pose on the joint, so the Transform read now is stale.
+      local rest = CFrame.identity
+      track:Play(0)
+      local deadline = os.clock() + 10
+      while track.Length == 0 and os.clock() < deadline do task.wait(0.1) end
+      if track.Length == 0 then
+        track:Destroy()
+        return nil
+      end
+      local samples = {}
+      for _ = 1, 8 do
+        animator:StepAnimations(0.25)
+        table.insert(samples, { time = track.TimePosition, degrees = degreesBetween(rest, joint.Transform) })
+      end
+      local length = track.Length
+      track:Stop(0)
+      track:Destroy()
+      return { animationId = candidate, length = length, samples = samples }
+    end)
+    animation:Destroy()
+    if ok and result then return result end
+    table.insert(failures, { animationId = candidate, error = ok and "track never loaded" or tostring(result) })
+  end
+  return { error = "no temporary ID loaded", failures = failures }
+end
+
+local folder = workspace:FindFirstChild(SPIKE)
+local rig = folder and folder:FindFirstChild("SpikeDummy")
+if not rig then return { skipped = "no dummy" } end
+local results = {}
+for _, weight in { 0, 1 } do
+  local sequence = placeholderSequence(folder, weight)
+  local candidates, attempts = register(sequence)
+  local result = sample(rig, candidates)
+  result.registrations = attempts
+  results["weight" .. weight] = result
+end
+return results
+`;
+
+// The sample nearest the middle keyframe (1 s).
+function degreesAtMiddle(result) {
+  const samples = result?.samples ?? [];
+  const nearest = samples.reduce((best, sample) => (
+    !best || Math.abs(sample.time - 1) < Math.abs(best.time - 1) ? sample : best
+  ), null);
+  return nearest && Math.abs(nearest.time - 1) <= 0.13 ? nearest.degrees : null;
+}
+
 const readBack = (assetId) => `${PRELUDE}
 local ok, sequence = pcall(function()
   return game:GetService("KeyframeSequenceProvider"):GetKeyframeSequenceAsync("rbxassetid://${assetId}")
@@ -444,6 +541,19 @@ const passed = await runTest('animation spike', async ({ track }) => {
 
     const editTemp = await luau(client, EDIT_TEMP_PLAYBACK);
     assert(!editTemp.error, `temporary ID probe ran in edit mode (${editTemp.error ?? 'ok'})`);
+
+    const placeholder = await luau(client, EDIT_PLACEHOLDER);
+    assert(!placeholder.error, `placeholder probe ran in edit mode (${placeholder.error ?? 'ok'})`);
+    const heldAtZero = degreesAtMiddle(placeholder.weight0);
+    const restedAtOne = degreesAtMiddle(placeholder.weight1);
+    // Only a control that visibly returned to rest makes the weight-0 reading mean anything.
+    const controlWorked = restedAtOne !== null && restedAtOne < 15;
+    report.questions.weightZeroPlaceholderSkipped = {
+      answer: !controlWorked || heldAtZero === null ? 'inconclusive'
+        : heldAtZero > 45 ? 'yes'
+          : heldAtZero < 15 ? 'no' : 'inconclusive',
+      evidence: { degreesAtOneSecond: { weight0: heldAtZero, weight1: restedAtOne }, ...placeholder },
+    };
 
     let upload = { skipped: true };
     let published = null;
