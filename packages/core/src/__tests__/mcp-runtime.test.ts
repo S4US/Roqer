@@ -139,7 +139,10 @@ describe('MCP v2 tool runtime', () => {
     // keeping the tool count fixed instead of introducing another operation.
     // The line-edit revisions on insert_script_lines and delete_script_lines
     // added about 150 characters: a compare-and-set is worth the tokens.
-    expect(serialized.length).toBeLessThanOrEqual(49_310);
+    // The action branches on solo_playtest added about 200: a recorded run
+    // started a playtest without mode because it looked optional, and each
+    // miss cost a round trip to learn the rule.
+    expect(serialized.length).toBeLessThanOrEqual(49_500);
     expect(catalog.filter((tool) => tool.outputSchema)).toHaveLength(51);
     expect(catalog.every((tool) => tool.description.length <= 120)).toBe(true);
     expect(inspectorCatalog).toHaveLength(25);

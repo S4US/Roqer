@@ -230,6 +230,58 @@ return table.concat({
   assertNoError(floatWrite, 'build_instances accepts a 32-bit float property on a live part');
   assert((await readBuild()).endsWith('|0.300'), 'build_instances wrote the float property');
 
+  // A ParticleEmitter's Color is a ColorSequence and its Size a NumberSequence,
+  // so the [r, g, b] and bare-number forms that set a Part must become
+  // sequences here, and an Attachment's CFrame needs its own form.
+  const effects = await client.callTool('build_instances', {
+    path: buildPath,
+    instance_id: instanceId,
+    operations: [
+      {
+        op: 'create', id: 'mount', className: 'Attachment', name: 'Mount', parent: `${buildPath}.Block`,
+        properties: { CFrame: { position: [0, 1, 0], rotation: [0, 90, 0] } },
+      },
+      {
+        op: 'create', className: 'ParticleEmitter', name: 'Mist', parent: '$mount',
+        properties: {
+          Color: [0.5, 0.6, 0.7],
+          Size: 3,
+          Transparency: [{ time: 0, value: 1 }, { time: 0.5, value: 0.6, envelope: 0.1 }, { time: 1, value: 1 }],
+          Lifetime: [4, 8],
+          Enabled: false,
+        },
+      },
+    ],
+  });
+  assertNoError(effects, 'build_instances converts CFrame and sequence properties');
+  const effectsRead = await client.callTool('execute_luau', {
+    target: 'edit',
+    instance_id: instanceId,
+    code: `
+local mount = workspace.__RSMCP_ToolingSmoke.Build.Block.Mount
+local mist = mount.Mist
+local color = mist.Color.Keypoints[1].Value
+local fade = mist.Transparency.Keypoints
+return table.concat({
+  string.format("%.1f,%.1f,%.1f", mount.Position.X, mount.Position.Y, mount.Position.Z),
+  string.format("%.0f", math.deg(select(2, mount.CFrame:ToOrientation()))),
+  string.format("%.2f,%.2f,%.2f", color.R, color.G, color.B),
+  string.format("%.1f", mist.Size.Keypoints[1].Value),
+  string.format("%d:%.1f:%.1f", #fade, fade[2].Value, fade[2].Envelope),
+  string.format("%.0f-%.0f", mist.Lifetime.Min, mist.Lifetime.Max),
+}, "|")`,
+  });
+  assert(effectsRead.returnValue === '0.0,1.0,0.0|90|0.50,0.60,0.70|3.0|3:0.6:0.1|4-8',
+    `build_instances wrote the CFrame and sequences it was given (${JSON.stringify(effectsRead)})`);
+
+  const badCFrame = await client.callTool('build_instances', {
+    path: buildPath,
+    instance_id: instanceId,
+    operations: [{ op: 'set', target: `${buildPath}.Block.Mount`, properties: { CFrame: [0, 1, 0] } }],
+  });
+  assert(typeof badCFrame.error === 'string' && badCFrame.error.includes('CFrame is {position'),
+    `build_instances names the CFrame form it accepts (${JSON.stringify(badCFrame)})`);
+
   const refused = await client.callTool('build_instances', {
     path: buildPath,
     instance_id: instanceId,

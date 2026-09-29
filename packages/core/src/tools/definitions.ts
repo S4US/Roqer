@@ -867,7 +867,11 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
           description: 'Connected place ID; required with multiple places.'
         }
       },
-      required: ['action']
+      required: ['action'],
+      oneOf: [
+        { properties: { action: { enum: ['start'], description: 'Start branch.' } }, required: ['mode'] },
+        { properties: { action: { enum: ['stop', 'status'], description: 'Stop or status branch.' } } }
+      ]
     }
   },
   {

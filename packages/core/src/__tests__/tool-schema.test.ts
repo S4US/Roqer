@@ -3,6 +3,8 @@ import { TOOL_HANDLERS } from '../http-server.js';
 import { RobloxStudioTools } from '../tools/index.js';
 import { BridgeService } from '../bridge-service.js';
 import { TOOL_GUIDE_MARKDOWN } from '../mcp-compat.js';
+import { publicToolDefinition } from '../mcp-runtime.js';
+import { fromJsonSchema } from '@modelcontextprotocol/server';
 
 type JsonSchema = Record<string, unknown>;
 
@@ -135,6 +137,21 @@ describe('Tool schema compatibility', () => {
     expect(TOOL_HANDLERS.selection).toBeDefined();
     expect(TOOL_GUIDE_MARKDOWN).toContain('## Selection and viewport');
     expect(TOOL_GUIDE_MARKDOWN).toContain('An empty paths array in set mode clears it');
+  });
+
+  // Start's mode is declared as a branch, so a client (and Roqer's flattened
+  // signature) sees it is required before a call is refused for it.
+  test.each([
+    ['solo_playtest', { action: 'start', mode: 'play' }, true],
+    ['solo_playtest', { action: 'start', mode: 'run', timeout: 30 }, true],
+    ['solo_playtest', { action: 'start' }, false],
+    ['solo_playtest', { action: 'stop', timeout: 15 }, true],
+    ['solo_playtest', { action: 'status' }, true],
+  ])('%s accepts %j: %s', async (name, args, valid) => {
+    const tool = TOOL_DEFINITIONS.find(candidate => candidate.name === name)!;
+    const schema = fromJsonSchema(publicToolDefinition(tool).inputSchema as Parameters<typeof fromJsonSchema>[0]);
+    const result = await schema['~standard'].validate(args);
+    expect(result.issues === undefined).toBe(valid);
   });
 
   test('grep_scripts exposes one explicit pattern-mode switch', () => {

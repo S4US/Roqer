@@ -15,7 +15,7 @@ test("mcp-tool-help - a signature names required and optional arguments apart", 
 
   assert.strictEqual(
     signature,
-    "solo_playtest {action: 'start'|'stop'|'status', mode?: 'play'|'run', timeout?: number}",
+    "solo_playtest {action: 'start'|'stop'|'status', mode?: 'play'|'run', timeout?: number} (action='start' requires mode)",
   );
 });
 
@@ -41,14 +41,15 @@ test("mcp-tool-help - schema lookup is not fooled by inherited object properties
   assert.deepStrictEqual(requiredArgumentProblems("constructor", {}), []);
 });
 
-test("mcp-tool-help - a hint carries the conditional requirement the schema cannot", () => {
+test("mcp-tool-help - a hint carries the conditional requirement", () => {
   const hint = toolSchemaHint("solo_playtest");
 
   assert.ok(hint);
   assert.ok(hint.startsWith("Schema for solo_playtest {action: 'start'|'stop'|'status'"));
   assert.ok(hint.includes("- action (required, 'start'|'stop'|'status') Lifecycle action to run."));
   // The failure this whole path exists for: mode is required only for a start,
-  // which lives in the description rather than in `required`.
+  // which is a branch of the schema rather than part of `required`.
+  assert.ok(hint.includes("- when action='start' requires mode"));
   assert.ok(hint.includes('- mode (optional, \'play\'|\'run\') Required for action="start".'));
 });
 
@@ -94,7 +95,11 @@ test("mcp-tool-help - missing required arguments are reported in declaration ord
   assert.deepStrictEqual(requiredArgumentProblems("solo_playtest", {}), [
     { name: "action", reason: "missing" },
   ]);
-  assert.deepStrictEqual(requiredArgumentProblems("solo_playtest", { action: "start" }), []);
+  // Start's mode is a declared branch requirement, so it is answered here.
+  assert.deepStrictEqual(requiredArgumentProblems("solo_playtest", { action: "start" }), [
+    { name: "mode", reason: "missing" },
+  ]);
+  assert.deepStrictEqual(requiredArgumentProblems("solo_playtest", { action: "stop" }), []);
   assert.deepStrictEqual(
     requiredArgumentProblems("edit_script_lines", { instancePath: "game.Workspace.Script" }),
     [{ name: "old_string", reason: "missing" }, { name: "new_string", reason: "missing" }],
