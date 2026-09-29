@@ -236,7 +236,9 @@ the blade is level in front of the chest. The follow-through carries it low
 with `CubicV2 Out`, and the last key returns to the guard.
 
 - To swing faster, shrink the gap between the wind-up and `Hit`. Below about
-  0.08 s the velocity check fails; waive `velocity` when that snap is meant.
+  0.08 s the shoulder passes the velocity check's 2500°/s; waive `velocity`
+  when that snap is meant. `Weapon` has its own limit of 7200°/s, so a fast
+  flick of the blade alone needs no waiver.
 - For a thrust, keep the arm aimed forward and move `Weapon` to `[-90, 0, 0]`.
 
 ## R6

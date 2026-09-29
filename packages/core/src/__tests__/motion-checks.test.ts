@@ -159,7 +159,18 @@ describe('checkMotion', () => {
     const velocity = check(report, 'velocity');
     expect(velocity.status).toBe('fail');
     expect(velocity.measured.RightShoulder).toBe(3000);
-    expect(velocity.detail).toBe('fastest: RightShoulder at 3000°/s around 0.02 s; limit 2500°/s');
+    expect(velocity.detail).toBe('fastest for its limit: RightShoulder at 3000°/s around 0.02 s; limit 2500°/s');
+  });
+
+  test('lets a held weapon turn faster than a body joint, within its own limit', () => {
+    const flick = (degrees: number, seconds: number) => check(checkMotion(animation([
+      { time: 0, joints: { Weapon: { rotation: [0, 0, 0] } } },
+      { time: seconds, joints: { Weapon: { rotation: [degrees, 0, 0] } } },
+    ])), 'velocity');
+    // 90° in 0.03 s is 3000°/s: too fast for a shoulder, a flick for a sword.
+    expect(flick(90, 0.03)).toMatchObject({ status: 'pass', measured: { Weapon: 3000 } });
+    // 80° in 0.01 s is 8000°/s: a prop flipping round in a frame.
+    expect(flick(80, 0.01)).toMatchObject({ status: 'fail', detail: 'fastest for its limit: Weapon at 8000°/s around 0.01 s; limit 7200°/s' });
   });
 
   test('fails a loop whose last pose does not meet its first', () => {

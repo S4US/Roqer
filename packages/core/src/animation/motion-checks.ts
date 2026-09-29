@@ -93,8 +93,15 @@ export const MOTION_LIMITS = {
     LeftKnee: { min: -160, max: 10, offAxis: 35 },
     RightKnee: { min: -160, max: 10, offAxis: 35 },
   } as Record<string, HingeLimit>,
-  /** Degrees per second, any joint. Roblox's worst: 2098 (jump, knee). */
+  /** Degrees per second, any body joint. Roblox's worst: 2098 (jump, knee). */
   angularSpeed: 2500,
+  /**
+   * Degrees per second for a held prop's joint, such as the weapon grip. A
+   * sword flicked through a quarter turn in two frames is meant; this only
+   * catches a prop flipping round in a frame by mistake. Not calibrated: no
+   * Roblox animation holds a prop through this joint.
+   */
+  propAngularSpeed: 7200,
   /** Studs the body may move sideways from the HumanoidRootPart while playing. Roblox's worst: 0.81 (climb). */
   rootExcursion: 2,
   /** Studs between where the body starts and where it ends. Roblox's worst: 0.04. */
@@ -229,8 +236,10 @@ function checkJointLimits(data: Sampled, rig: Rig): MotionCheckResult {
 
 function checkVelocity(data: Sampled, rig: Rig): MotionCheckResult {
   const measured: Record<string, number> = {};
-  let worst = { joint: '', speed: 0, time: 0 };
+  // The worst joint is the one furthest past, or nearest, its own limit.
+  let worst = { joint: '', speed: 0, time: 0, limit: MOTION_LIMITS.angularSpeed };
   for (const joint of rig.joints) {
+    const limit = joint.optional ? MOTION_LIMITS.propAngularSpeed : MOTION_LIMITS.angularSpeed;
     let peak = 0;
     for (let index = 1; index < data.poses.length; index += 1) {
       const step = degreesBetween(
@@ -240,16 +249,15 @@ function checkVelocity(data: Sampled, rig: Rig): MotionCheckResult {
       // The actual gap: a short animation is sampled more coarsely than the rate.
       const speed = step / (data.times[index] - data.times[index - 1]);
       if (speed > peak) peak = speed;
-      if (speed > worst.speed) worst = { joint: joint.name, speed, time: data.times[index] };
+      if (speed / limit > worst.speed / worst.limit) worst = { joint: joint.name, speed, time: data.times[index], limit };
     }
     measured[joint.name] = round(peak, 0);
   }
-  const limit = MOTION_LIMITS.angularSpeed;
   return result(
     'velocity',
-    worst.speed > limit,
+    worst.speed > worst.limit,
     worst.joint
-      ? `fastest: ${worst.joint} at ${round(worst.speed, 0)}°/s around ${seconds(worst.time)}; limit ${limit}°/s`
+      ? `fastest for its limit: ${worst.joint} at ${round(worst.speed, 0)}°/s around ${seconds(worst.time)}; limit ${worst.limit}°/s`
       : 'nothing moves',
     measured,
   );
