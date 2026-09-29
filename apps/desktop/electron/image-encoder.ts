@@ -4,7 +4,7 @@ import {
   type TurnImageMediaType,
 } from "../runtime/model-api/turn-contract";
 
-import type { EncodedImage, ImageEncoder } from "../runtime/attachment-context";
+import { imageAsAttached, MAX_ATTACHED_IMAGE_EDGE, type EncodedImage, type ImageEncoder } from "../runtime/attachment-context";
 import type { McpToolImage } from "../runtime/mcp-types";
 import { isEvidenceImage } from "../shared/run-events";
 import { MAX_ATTACHMENT_THUMBNAIL_CHARACTERS } from "../shared/workspace-validation";
@@ -18,13 +18,6 @@ import { MAX_ATTACHMENT_THUMBNAIL_CHARACTERS } from "../shared/workspace-validat
  * one decoder available without adding an image library, and `runtime/` is
  * meant to stay testable without importing Electron.
  */
-
-/**
- * The long edge a picture is scaled down to. Past roughly this size no provider
- * resolves more detail from a screenshot; it only costs more to send and more
- * to bill.
- */
-const MAX_IMAGE_EDGE = 1568;
 
 /** Progressively smaller retries for an image that will not fit at full size. */
 const FALLBACK_EDGES = [1024, 768];
@@ -94,7 +87,8 @@ function thumbnail(image: NativeImage): string | undefined {
 }
 
 /**
- * Encode an attached image, downscaling until it fits the wire contract.
+ * Encode an attached image, downscaling until it fits the wire contract. A
+ * PNG or JPEG that already fits goes as it was attached (`imageAsAttached`).
  *
  * A format `nativeImage` cannot decode — WebP and GIF, which it does not read
  * from a buffer — is passed through untouched when it already fits, since the
@@ -109,19 +103,17 @@ export const encodeAttachmentImage: ImageEncoder = async ({ bytes, mediaType, na
     throw new Error(`“${name}” could not be resized here. Save it as a PNG or JPEG and attach it again.`);
   }
 
+  const preview = thumbnail(source);
+  const withPreview = (image: EncodedImage): EncodedImage => preview === undefined ? image : { ...image, thumbnailDataUrl: preview };
+  const attached = imageAsAttached(bytes, source.getSize());
+  if (attached !== undefined) return withPreview(attached);
+
   const lossless = mediaType !== "image/jpeg";
-  for (const edge of [MAX_IMAGE_EDGE, ...FALLBACK_EDGES]) {
+  for (const edge of [MAX_ATTACHED_IMAGE_EDGE, ...FALLBACK_EDGES]) {
     const candidate = scaled(source, edge);
     const encoded = encodeWithin(candidate, lossless);
     if (encoded === undefined) continue;
-    return {
-      mediaType: encoded.mediaType,
-      data: encoded.buffer.toString("base64"),
-      ...(() => {
-        const preview = thumbnail(source);
-        return preview === undefined ? {} : { thumbnailDataUrl: preview };
-      })(),
-    };
+    return withPreview({ mediaType: encoded.mediaType, data: encoded.buffer.toString("base64") });
   }
   throw new Error(`“${name}” could not be made small enough to send.`);
 };

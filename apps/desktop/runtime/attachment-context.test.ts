@@ -5,11 +5,14 @@ import { join } from "node:path";
 import test from "node:test";
 import {
   AttachmentRegistry,
+  imageAsAttached,
+  MAX_ATTACHED_IMAGE_EDGE,
   MAX_IMAGE_ATTACHMENTS,
   MAX_TEXT_BYTES,
   MAX_TOTAL_IMAGE_BASE64,
   type ImageEncoder,
 } from "./attachment-context";
+import { MAX_TURN_IMAGE_BASE64 } from "./model-api/turn-contract";
 
 async function withTempFiles(run: (dir: string) => Promise<void>): Promise<void> {
   const dir = await mkdtemp(join(tmpdir(), "attachment-context-"));
@@ -217,6 +220,31 @@ test("bounds how many images and how much image data one message carries", async
   const first = await heavy.registerImage({ name: "a.png", mediaType: "image/png", bytes: PNG_BYTES });
   const second = await heavy.registerImage({ name: "b.png", mediaType: "image/png", bytes: PNG_BYTES });
   await assert.rejects(heavy.context([first.id, second.id]), /too large to send together/);
+
+  // Two pasted pictures, which the clipboard hands over as PNGs near a
+  // megabyte each, were once refused together; four at the per-image bound go.
+  const pasted: ImageEncoder = async ({ mediaType }) => ({ mediaType, data: "A".repeat(MAX_TURN_IMAGE_BASE64) });
+  const clipboard = new AttachmentRegistry(pasted);
+  const four = [];
+  for (let index = 0; index < MAX_IMAGE_ATTACHMENTS; index += 1) {
+    four.push(await clipboard.registerImage({ name: `image-${index}.png`, mediaType: "image/png", bytes: PNG_BYTES }));
+  }
+  assert.equal((await clipboard.context(four.map((attachment) => attachment.id))).images.length, MAX_IMAGE_ATTACHMENTS);
+});
+
+test("a small PNG or JPEG goes exactly as attached, typed by its bytes rather than its name", () => {
+  // Two 80 KB pictures were refused as too large to send together: re-encoded
+  // by the native PNG encoder, each came back near a megabyte.
+  const png = Buffer.concat([PNG_BYTES, Buffer.alloc(80 * 1024)]);
+  assert.deepEqual(imageAsAttached(png, { width: 1200, height: 800 }), { mediaType: "image/png", data: png.toString("base64") });
+  const jpeg = Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), Buffer.alloc(80 * 1024)]);
+  assert.equal(imageAsAttached(jpeg, { width: 800, height: 1200 })?.mediaType, "image/jpeg");
+
+  // Anything else is re-encoded: too many pixels to be worth sending, too
+  // many bytes for one image, or a format this cannot vouch for.
+  assert.equal(imageAsAttached(png, { width: MAX_ATTACHED_IMAGE_EDGE + 1, height: 800 }), undefined);
+  assert.equal(imageAsAttached(Buffer.concat([PNG_BYTES, Buffer.alloc(1_100_000)]), { width: 100, height: 100 }), undefined);
+  assert.equal(imageAsAttached(Buffer.from("GIF89a"), { width: 10, height: 10 }), undefined);
 });
 
 test("sends the image that was attached, even if the file later changes", async () => {

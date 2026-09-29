@@ -15,12 +15,17 @@ export const MAX_TEXT_BYTES = 64 * 1024;
 
 /**
  * How many pictures one message may carry, and how large they may be once
- * encoded. The per-image bound is the wire contract's own; the total is lower
- * than four times it because the contract caps a whole turn request at 4 MB and
- * the conversation, instructions, and tool schemas travel in the same body.
+ * encoded: as many as the wire contract allows, each within its per-image
+ * bound.
+ *
+ * The total was once half that, for a hosted gateway that capped a whole
+ * request at 4 MB. The gateway is gone, and every provider Roqer sends to takes
+ * requests many times this size, while the half refused two ordinary pasted
+ * pictures: the clipboard hands over a copied image as a freshly encoded,
+ * lightly compressed PNG, so an 80 KB WebP arrives near a megabyte.
  */
 export const MAX_IMAGE_ATTACHMENTS = MAX_TURN_IMAGES;
-export const MAX_TOTAL_IMAGE_BASE64 = 2 * 1024 * 1024;
+export const MAX_TOTAL_IMAGE_BASE64 = MAX_TURN_IMAGES * MAX_TURN_IMAGE_BASE64;
 
 /**
  * The largest file this will read in order to produce an image from it. A
@@ -118,6 +123,38 @@ function fileType(extension: string): "text" | "image" | "model" | "metadata" | 
 
 export function isImageMediaType(value: unknown): value is TurnImageMediaType {
   return typeof value === "string" && (TURN_IMAGE_MEDIA_TYPES as readonly string[]).includes(value);
+}
+
+/**
+ * The long edge an attached picture is scaled down to. Past roughly this size
+ * no provider resolves more detail from a screenshot; it only costs more to
+ * send and more to bill.
+ */
+export const MAX_ATTACHED_IMAGE_EDGE = 1568;
+
+/** A PNG or JPEG by its own bytes, whatever its name or the picker said. */
+function sniffedImageType(bytes: Buffer): "image/png" | "image/jpeg" | undefined {
+  if (bytes.length >= 8 && bytes.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))) return "image/png";
+  if (bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) return "image/jpeg";
+  return undefined;
+}
+
+/**
+ * The attached file itself, when it can go as it is: a PNG or JPEG no larger
+ * than the edge it would be scaled to and within the per-image bound.
+ *
+ * Re-encoding such a file can only make it worse. The native PNG encoder
+ * compresses far less than the tools people save with, so an 80 KB picture
+ * came back near a megabyte, and two of them were refused as too large to
+ * send together; a JPEG only loses quality again. The media type is read from
+ * the bytes, because a provider refuses an image whose declared type is not
+ * what it contains.
+ */
+export function imageAsAttached(bytes: Buffer, size: Readonly<{ width: number; height: number }>): EncodedImage | undefined {
+  const mediaType = sniffedImageType(bytes);
+  if (mediaType === undefined || Math.max(size.width, size.height) > MAX_ATTACHED_IMAGE_EDGE) return undefined;
+  const data = bytes.toString("base64");
+  return data.length <= MAX_TURN_IMAGE_BASE64 ? { mediaType, data } : undefined;
 }
 
 /**

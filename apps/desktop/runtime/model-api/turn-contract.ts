@@ -112,9 +112,9 @@ export type TurnImageMediaType = typeof TURN_IMAGE_MEDIA_TYPES[number];
 /**
  * Per-image and per-request image bounds.
  *
- * The contract caps a whole turn request at 4 MB, so these leave room for the
- * conversation, the instructions, and the tool schemas that travel beside the
- * pictures. A caller that wants to send more should downscale first: past
+ * Four pictures at this bound come to under 6 MB, well within what every
+ * provider takes in one request beside the conversation, the instructions, and
+ * the tool schemas. A caller that wants to send more should downscale first: past
  * roughly 1568 pixels on the long edge no provider gains detail, it only pays
  * for it.
  */
