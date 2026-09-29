@@ -8,8 +8,12 @@
 
 import {
   GRIP_ROTATION,
+  OFF_HAND_PART,
+  PROP_DRAW_OFFSETS,
+  SHEATH_PART,
+  SHEATH_ROTATION,
+  SHEATH_STAND_IN_SIZE,
   WEAPON_PART,
-  WEAPON_STAND_IN_OFFSET,
   WEAPON_STAND_IN_SIZE,
   type Rig,
   type Rotation,
@@ -31,7 +35,7 @@ export const R6_RIG: Rig = {
   feet: ['Left Leg', 'Right Leg'],
   hips: ['LeftHip', 'RightHip'],
   body: 'Torso',
-  drawOffsets: { [WEAPON_PART]: WEAPON_STAND_IN_OFFSET },
+  drawOffsets: PROP_DRAW_OFFSETS,
   // Rigid legs cannot roll a foot flat, and the foot-sliding limit was
   // calibrated on Roblox's R15 animations only.
   uncheckedChecks: {
@@ -46,6 +50,8 @@ export const R6_RIG: Rig = {
     'Left Leg': [1, 2, 1],
     'Right Leg': [1, 2, 1],
     [WEAPON_PART]: WEAPON_STAND_IN_SIZE,
+    [OFF_HAND_PART]: WEAPON_STAND_IN_SIZE,
+    [SHEATH_PART]: SHEATH_STAND_IN_SIZE,
   },
   joints: [
     { name: 'Root', parentPart: 'HumanoidRootPart', childPart: 'Torso', parentOffset: [0, 0, 0], childOffset: [0, 0, 0], parentRotation: TORSO_FRAME, childRotation: TORSO_FRAME },
@@ -54,6 +60,9 @@ export const R6_RIG: Rig = {
     { name: 'RightShoulder', parentPart: 'Torso', childPart: 'Right Arm', parentOffset: [1, 0.5, 0], childOffset: [-0.5, 0.5, 0], parentRotation: RIGHT_FRAME, childRotation: RIGHT_FRAME },
     { name: 'LeftHip', parentPart: 'Torso', childPart: 'Left Leg', parentOffset: [-1, -1, 0], childOffset: [-0.5, 1, 0], parentRotation: LEFT_FRAME, childRotation: LEFT_FRAME },
     { name: 'RightHip', parentPart: 'Torso', childPart: 'Right Leg', parentOffset: [1, -1, 0], childOffset: [0.5, 1, 0], parentRotation: RIGHT_FRAME, childRotation: RIGHT_FRAME },
-    { name: 'Weapon', parentPart: 'Right Arm', childPart: WEAPON_PART, parentOffset: [0, -1, 0], childOffset: [0, 0, 0], parentRotation: GRIP_ROTATION, optional: true },
+    { name: 'Weapon', parentPart: 'Right Arm', childPart: WEAPON_PART, parentOffset: [0, -1, 0], childOffset: [0, 0, 0], parentRotation: GRIP_ROTATION, optional: true, attachment: 'RightGripAttachment' },
+    { name: 'OffHand', parentPart: 'Left Arm', childPart: OFF_HAND_PART, parentOffset: [0, -1, 0], childOffset: [0, 0, 0], parentRotation: GRIP_ROTATION, optional: true, attachment: 'LeftGripAttachment' },
+    // At the belt: the torso's bottom edge on its left side.
+    { name: 'Sheath', parentPart: 'Torso', childPart: SHEATH_PART, parentOffset: [-1, -0.8, 0], childOffset: [0, 0, 0], parentRotation: SHEATH_ROTATION, optional: true },
   ],
 };

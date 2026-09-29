@@ -7,6 +7,7 @@ import {
 } from '../animation/pose-compiler.js';
 import { R15_RIG } from '../animation/r15-rig.js';
 import { R6_RIG } from '../animation/r6-rig.js';
+import { drawnParts } from '../animation/box-rig.js';
 import { buildTracks, poseRig } from '../animation/motion.js';
 
 function compiled(input: unknown): KeyframeSequenceDescription {
@@ -54,11 +55,13 @@ function swing(overrides: Record<string, unknown> = {}) {
 
 describe('R15 rig', () => {
   test('matches the rest pose the spike measured', () => {
-    // The 15 body joints, and the optional weapon grip in the right hand.
-    expect(R15_RIG.joints).toHaveLength(16);
-    expect(Object.keys(R15_RIG.parts)).toHaveLength(17);
+    // The 15 body joints, and the optional props: a grip in each hand and a sheath at the hip.
+    expect(R15_RIG.joints).toHaveLength(18);
+    expect(Object.keys(R15_RIG.parts)).toHaveLength(19);
     expect(R15_RIG.joints.filter((joint) => joint.optional)).toEqual([
-      expect.objectContaining({ name: 'Weapon', parentPart: 'RightHand', childPart: 'BodyAttach' }),
+      expect.objectContaining({ name: 'Weapon', parentPart: 'RightHand', childPart: 'BodyAttach', attachment: 'RightGripAttachment' }),
+      expect.objectContaining({ name: 'OffHand', parentPart: 'LeftHand', childPart: 'OffHandAttach', attachment: 'LeftGripAttachment' }),
+      expect.objectContaining({ name: 'Sheath', parentPart: 'LowerTorso', childPart: 'SheathAttach' }),
     ]);
     const reached = new Set([R15_RIG.rootPart]);
     for (const joint of R15_RIG.joints) {
@@ -68,7 +71,7 @@ describe('R15 rig', () => {
       expect(R15_RIG.parts[joint.childPart]).toBeDefined();
       reached.add(joint.childPart);
     }
-    expect(reached.size).toBe(17);
+    expect(reached.size).toBe(19);
   });
 });
 
@@ -83,7 +86,7 @@ describe('R6 rig', () => {
     expect(at('Right Leg')).toEqual([0.5, -2, 0]);
     expect(at('Left Leg')).toEqual([-0.5, -2, 0]);
     // Every part stands upright at rest, and the legs end on the ground.
-    for (const part of Object.keys(R6_RIG.parts).filter((name) => name !== 'BodyAttach')) {
+    for (const part of drawnParts(R6_RIG)) {
       rest.get(part)!.r.forEach((value, index) => expect(value).toBeCloseTo([1, 0, 0, 0, 1, 0, 0, 0, 1][index], 6));
     }
     expect(at('Left Leg')[1] - R6_RIG.parts['Left Leg'][1] / 2).toBe(R6_RIG.ground);
@@ -418,8 +421,8 @@ describe('compilePoseAnimation', () => {
     }
 
     expect(errors({ name: 'Bad', rig: 'R6', keyframes: [{ time: 0, joints: { RightElbow: { bend: 30 }, Waist: {} } }] })).toEqual([
-      'keyframes[0].joints.RightElbow: R6 has no RightElbow: its arms and legs are single blocks, and it has no waist; its joints are Root, Neck, LeftShoulder, RightShoulder, LeftHip, RightHip, Weapon',
-      'keyframes[0].joints.Waist: R6 has no Waist: its arms and legs are single blocks, and it has no waist; its joints are Root, Neck, LeftShoulder, RightShoulder, LeftHip, RightHip, Weapon',
+      'keyframes[0].joints.RightElbow: R6 has no RightElbow: its arms and legs are single blocks, and it has no waist; its joints are Root, Neck, LeftShoulder, RightShoulder, LeftHip, RightHip, Weapon, OffHand, Sheath',
+      'keyframes[0].joints.Waist: R6 has no Waist: its arms and legs are single blocks, and it has no waist; its joints are Root, Neck, LeftShoulder, RightShoulder, LeftHip, RightHip, Weapon, OffHand, Sheath',
     ]);
   });
 

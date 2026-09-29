@@ -631,6 +631,10 @@ and the compiler takes a pose in the parent part's axes and converts it.
   table's grip position (0, -0.15, 0), and that the preview dummy's Animator
   drives a `Motor6D` beside its `AnimationConstraint` joints. The suite checks
   both.
+- Two more props followed: `OffHand`, the left hand's grip (`OffHandAttach`
+  at `LeftGripAttachment`), and `Sheath`, worn at the left hip (`SheathAttach`
+  at a fixed C0 the game sets, since no stock attachment sits there). Core
+  now sends the preview the motors to build, so the plugin names no prop.
 
 ### 12. Creatures made of rigid parts — proposed
 

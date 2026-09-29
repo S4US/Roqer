@@ -167,12 +167,18 @@ const passed = await runTest('animation tool', async ({ track }) => {
     // an animation that moves the weapon previews on a stand-in motor.
     const grip = await luau(client, `
       local rig = game:GetService("Players"):CreateHumanoidModelFromDescription(Instance.new("HumanoidDescription"), Enum.HumanoidRigType.R15)
-      local components = { rig.RightHand.RightGripAttachment.CFrame:GetComponents() }
+      local components = {
+        right = { rig.RightHand.RightGripAttachment.CFrame:GetComponents() },
+        left = { rig.LeftHand.LeftGripAttachment.CFrame:GetComponents() },
+      }
       rig:Destroy()
       return components
     `);
     const expectedGrip = [0, -0.15, 0, 1, 0, 0, 0, 0, 1, 0, -1, 0];
-    assert(Array.isArray(grip) && grip.every((value, index) => Math.abs(value - expectedGrip[index]) < 0.02), `the rig table's grip matches the dummy's RightGripAttachment (${JSON.stringify(grip)})`);
+    for (const side of ['right', 'left']) {
+      const found = grip?.[side];
+      assert(Array.isArray(found) && found.every((value, index) => Math.abs(value - expectedGrip[index]) < 0.02), `the rig table's ${side} grip matches the dummy's attachment (${JSON.stringify(found)})`);
+    }
     const flicked = await client.callTool('animation', {
       action: 'build',
       animation: {
@@ -197,6 +203,8 @@ const passed = await runTest('animation tool', async ({ track }) => {
       end
       local grip = rig["Right Arm"]:FindFirstChild("RightGripAttachment")
       found.grip = grip and { grip.CFrame:GetComponents() } or false
+      local leftGrip = rig["Left Arm"]:FindFirstChild("LeftGripAttachment")
+      found.leftGrip = leftGrip and { leftGrip.CFrame:GetComponents() } or false
       rig:Destroy()
       return found
     `);
@@ -215,6 +223,19 @@ const passed = await runTest('animation tool', async ({ track }) => {
     const r6Matches = Object.entries(expectedR6).every(([part, [c0, c1]]) => close(r6[part]?.c0, c0) && close(r6[part]?.c1, c1));
     assert(r6Matches, `the R6 rig table matches an R6 dummy's Motor6Ds (${JSON.stringify(r6)})`);
     assert(close(r6.grip, [0, -1, 0, 1, 0, 0, 0, 0, 1, 0, -1, 0]), `the R6 grip matches the Right Arm's RightGripAttachment (${JSON.stringify(r6.grip)})`);
+    assert(close(r6.leftGrip, [0, -1, 0, 1, 0, 0, 0, 0, 1, 0, -1, 0]), `the R6 left grip matches the Left Arm's LeftGripAttachment (${JSON.stringify(r6.leftGrip)})`);
+    const drawn = await client.callTool('animation', {
+      action: 'build',
+      animation: {
+        name: 'DrawR6', rig: 'R6',
+        keyframes: [
+          { time: 0, joints: { Sheath: { rotation: [0, 0, 0] }, OffHand: { rotation: [0, 0, 0] }, Weapon: { rotation: [0, 0, 0] } } },
+          { time: 0.3, joints: { Sheath: { rotation: [-20, 15, 0] }, OffHand: { rotation: [-60, 0, 0] }, Weapon: { rotation: [-90, 0, 0] } } },
+        ],
+      },
+      parent: PARENT,
+    }, 120_000);
+    assert(drawn.built === true && drawn.playback?.verified === true, `sheath and both hand props build and play as checked on R6 (${drawn.error ?? `within ${drawn.playback?.maxDegrees}°`})`);
     const marched = await client.callTool('animation', {
       action: 'build',
       animation: {

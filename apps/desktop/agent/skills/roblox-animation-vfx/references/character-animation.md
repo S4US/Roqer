@@ -16,8 +16,8 @@ floor, which a crouch or lunge easily does.
 
 - Joints: `Root`, `Waist`, `Neck`, `LeftShoulder`, `LeftElbow`, `LeftWrist`,
   `RightShoulder`, `RightElbow`, `RightWrist`, `LeftHip`, `LeftKnee`,
-  `LeftAnkle`, `RightHip`, `RightKnee`, `RightAnkle`, and `Weapon` for a held
-  weapon (see "Weapons").
+  `LeftAnkle`, `RightHip`, `RightKnee`, `RightAnkle`, and the props `Weapon`,
+  `OffHand` and `Sheath` (see "Props").
 - The first keyframe is at 0. A joint keyed in any keyframe must also be keyed
   in the first. A joint left out of a later keyframe just keeps moving toward
   its next key.
@@ -161,63 +161,102 @@ arms thrown up and knees tucked. The arms pass through the side at 0.12 s,
 because going straight from down to overhead would be about half a turn, and
 the key at the side says which way round the arms go.
 
-## Weapons
+## Props
 
-A sword, axe or staff is animated through one more joint, `Weapon`. It moves
-a part named `BodyAttach` from the right hand, so a swing can flick, tilt and
-roll the blade, not only carry it on a stiff wrist.
+A sword, a second blade, a shield or a sheath is animated through a prop
+joint. Each moves one part, and the prop's other parts are welded to it:
 
-- `Weapon` takes `rotation` only: degrees about the hand's own axes, pivoting
-  at the grip. At rest the blade points forward out of the fist, square to the
-  forearm. `[-90, 0, 0]` runs it straight out along the forearm, as in a
-  thrust; `[90, 0, 0]` folds it back along the arm; `Y` rolls it about the
-  forearm.
-- The preview draws a 4-stud stand-in blade, and only when the animation
-  keys `Weapon`.
-- Roblox's own grip weld cannot be animated, so the game has to rig the
-  weapon for it. Build the tool this way:
-  - `RequiresHandle` off, and no part named `Handle`, so Roblox adds no weld of
-    its own;
-  - one part named `BodyAttach` at the grip, unanchored, `CanCollide` off and
-    `Massless` on, with every other part of the weapon welded to it
-    (`WeldConstraint`);
-  - the weapon modelled with its blade along `BodyAttach`'s up (+Y) axis;
-  - this Script in the tool, which swaps in the motor the animation drives:
+| Joint | Moves | From | C0 (the game sets it) |
+| --- | --- | --- | --- |
+| `Weapon` | `BodyAttach` | right hand (R6: `Right Arm`) | the hand's `RightGripAttachment` |
+| `OffHand` | `OffHandAttach` | left hand (R6: `Left Arm`) | the hand's `LeftGripAttachment` |
+| `Sheath` | `SheathAttach` | `LowerTorso` (R6: `Torso`) | R15 `CFrame.new(-1, 0, 0) * CFrame.Angles(math.rad(100), 0, 0)`; R6 `CFrame.new(-1, -0.8, 0) * CFrame.Angles(math.rad(100), 0, 0)` |
+
+- A prop joint takes `rotation` only: degrees about its body part's own axes,
+  pivoting at the prop's part.
+- A hand prop points forward out of the fist at rest, square to the forearm
+  (the prop part's +Y). `[-90, 0, 0]` runs it straight out along the forearm,
+  as in a thrust; `[90, 0, 0]` folds it back along the arm; `Y` rolls it
+  about the forearm.
+- The sheath's mouth sits at the left hip, and at rest it runs back and a
+  little down (the prop part's +Y). `rotation` about `X` tips its tail up or
+  down; about `Y`, swings it forward or back round the hip.
+- The preview draws stand-ins, a 4-stud blade for a hand prop and a 3.8-stud
+  sheath, and only for props the animation keys.
+- A prop joint may turn up to 7200°/s before the velocity check fails, so a
+  fast flick needs no waiver.
+
+Roblox's own grip weld cannot be animated, so the game has to rig each prop:
+
+- the prop's part (`BodyAttach`, `OffHandAttach` or `SheathAttach`)
+  unanchored, `CanCollide` off and `Massless` on, with every other part of
+  the prop welded to it (`WeldConstraint`), and the prop modelled along the
+  part's up (+Y) axis: a blade from the grip, a sheath from its mouth;
+- for held props, a Tool with `RequiresHandle` off and no part named
+  `Handle`, so Roblox adds no weld of its own, and this Script in the Tool,
+  which swaps in the motors the animation drives on equip:
 
 ```luau
 local tool = script.Parent
-local bodyAttach = tool:WaitForChild("BodyAttach")
-local motor: Motor6D?
+local GRIPS = { BodyAttach = { "RightHand", "Right Arm", "RightGripAttachment" }, OffHandAttach = { "LeftHand", "Left Arm", "LeftGripAttachment" } }
+local motors: { Motor6D } = {}
 
 tool.Equipped:Connect(function()
 	local character = tool.Parent
-	local hand = character:FindFirstChild("RightHand") or character:FindFirstChild("Right Arm")
-	local grip = hand and hand:FindFirstChild("RightGripAttachment")
-	if not grip then
-		return
+	for partName, grip in GRIPS do
+		local part = tool:FindFirstChild(partName)
+		local hand = character:FindFirstChild(grip[1]) or character:FindFirstChild(grip[2])
+		local attachment = hand and hand:FindFirstChild(grip[3])
+		if part and attachment then
+			local motor = Instance.new("Motor6D")
+			motor.Name = partName
+			motor.Part0 = hand
+			motor.Part1 = part
+			motor.C0 = attachment.CFrame
+			motor.Parent = hand
+			table.insert(motors, motor)
+		end
 	end
-	motor = Instance.new("Motor6D")
-	motor.Name = "BodyAttach"
-	motor.Part0 = hand
-	motor.Part1 = bodyAttach
-	motor.C0 = grip.CFrame
-	motor.Parent = hand
 end)
 
 tool.Unequipped:Connect(function()
-	if motor then
+	for _, motor in motors do
 		motor:Destroy()
-		motor = nil
 	end
+	table.clear(motors)
 end)
 ```
 
-- Play the attack from the tool's `Activated` on the character's `Animator`,
+- for a worn sheath, a Model named `Sheath` holding `SheathAttach`, kept in
+  `ServerStorage`, and this Script in `StarterCharacterScripts`, which gives
+  every character one on spawn:
+
+```luau
+local character = script.Parent
+local humanoid = character:WaitForChild("Humanoid")
+local isR6 = humanoid.RigType == Enum.HumanoidRigType.R6
+local body = character:WaitForChild(if isR6 then "Torso" else "LowerTorso")
+local sheath = game:GetService("ServerStorage"):WaitForChild("Sheath"):Clone()
+local mouth = sheath:WaitForChild("SheathAttach")
+local offset = if isR6 then CFrame.new(-1, -0.8, 0) else CFrame.new(-1, 0, 0)
+
+local motor = Instance.new("Motor6D")
+motor.Name = "SheathAttach"
+motor.Part0 = body
+motor.Part1 = mouth
+motor.C0 = offset * CFrame.Angles(math.rad(100), 0, 0)
+motor.Parent = body
+sheath.Parent = character
+```
+
+- Play an attack from the tool's `Activated` on the character's `Animator`,
   and apply damage from the animation's `Hit` marker, not from a timer (see
   `full.md`, "Priorities and markers").
-- To verify a weapon animation in a playtest, equip the weapon first: without
-  the motor, verify reports that the character has nothing for `Weapon` to
-  move.
+- To verify a prop animation in a playtest, equip the tool (and give the
+  character its sheath) first: without the motor, verify reports that the
+  character has nothing for the prop joint to move.
+- For a draw from the sheath, key `Sheath` and `Weapon` together so the blade
+  leaves along the sheath's line.
 
 ### Slash (one shot, with a weapon)
 

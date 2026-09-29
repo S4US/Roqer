@@ -7,7 +7,7 @@
 // that plays as checked is written.
 
 import { compilePoseAnimation, type KeyframeSequenceDescription } from './pose-compiler.js';
-import { buildTracks, degreesBetween, frameFromComponents, sampleTrack } from './motion.js';
+import { buildTracks, degreesBetween, frameFromComponents, jointParentFrame, sampleTrack } from './motion.js';
 import { checkMotion, type MotionCheckId, type MotionCheckResult, type MotionReport } from './motion-checks.js';
 import { rigFor } from './rigs.js';
 
@@ -272,7 +272,7 @@ export function verifyLivePlayback(sequence: KeyframeSequenceDescription, sample
       const actual = sample.transforms[joint.childPart];
       if (!Array.isArray(actual) || actual.length !== 12 || !actual.every(Number.isFinite)) {
         return fail(joint.optional
-          ? `the character has no Motor6D moving ${joint.childPart}; equip a weapon rigged with one (see the animation skill's weapon section) before verifying`
+          ? `the character has no Motor6D moving ${joint.childPart}; equip the prop rigged with one (see the animation skill's Props section) before verifying`
           : `the character reported no joint for ${joint.childPart}`);
       }
       const expected = sampleTrack(tracks.get(joint.childPart), sample.time);
@@ -296,6 +296,34 @@ export function verifyLivePlayback(sequence: KeyframeSequenceDescription, sample
       reason: `the character played it up to ${round(maxDegrees, 2)}° and ${round(maxStuds, 3)} studs from the checked model; the limit is ${LIVE_PLAYBACK_TOLERANCE.degrees}° and ${LIVE_PLAYBACK_TOLERANCE.studs} studs`,
     }),
   };
+}
+
+export interface PreviewProp {
+  /** The prop's part, which the motor moves. */
+  part: string;
+  /** The body part the motor hangs from. */
+  parent: string;
+  /** C0 as CFrame components, unless the dummy's attachment gives it. */
+  c0: number[];
+  attachment?: string;
+}
+
+/**
+ * The prop motors a preview dummy needs: one for each held or worn prop the
+ * animation moves, built as the game builds it.
+ */
+export function previewProps(sequence: KeyframeSequenceDescription): PreviewProp[] {
+  return rigFor(sequence.rig).joints
+    .filter((joint) => joint.optional && sequence.joints.includes(joint.name))
+    .map((joint) => {
+      const c0 = jointParentFrame(joint);
+      return {
+        part: joint.childPart,
+        parent: joint.parentPart,
+        c0: [...c0.p, ...c0.r],
+        ...(joint.attachment ? { attachment: joint.attachment } : {}),
+      };
+    });
 }
 
 /** Poses in a compiled sequence, placeholders included: what a read-back must find. */

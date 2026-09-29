@@ -199,37 +199,55 @@ function destroyQuietly(instance: Instance | undefined) {
 	if (instance) pcall(() => instance.Destroy());
 }
 
-/** The part a weapon's other parts weld to, moved by a Motor6D from the hand. */
-const WEAPON_PART = "BodyAttach";
+const MAX_PROPS = 8;
 
 /**
- * Give a preview dummy the weapon grip a game rigs for animated weapons: a
- * part named BodyAttach, moved by a Motor6D from the hand whose C0 is the
- * hand's RightGripAttachment and whose C1 is the identity.
+ * Give a preview dummy the props the animation moves, rigged as a game rigs
+ * them: a part moved by a Motor6D from a body part, whose C0 is the named
+ * attachment's CFrame, or the given one, and whose C1 is the identity.
  */
-function addWeaponGrip(rig: Model) {
-	const attachment = rig.FindFirstChild("RightGripAttachment", true);
-	const hand = attachment?.Parent;
-	if (!attachment || !attachment.IsA("Attachment") || !hand || !hand.IsA("BasePart")) {
-		error("the preview dummy has no RightGripAttachment for a weapon");
+function addProps(rig: Model, data: unknown) {
+	if (data === undefined) return;
+	if (!typeIs(data, "table") || (data as unknown[]).size() > MAX_PROPS) error(`props must be an array of at most ${MAX_PROPS}`);
+	for (const entry of data as unknown[]) {
+		if (!typeIs(entry, "table")) error("every prop must be an object");
+		const prop = entry as Data;
+		const name = checkName(prop.part, "a prop's part");
+		const parentName = checkName(prop.parent, "a prop's parent");
+		const body = rig.FindFirstChild(parentName);
+		if (!body || !body.IsA("BasePart")) error(`the preview dummy has no ${parentName} to hold ${name}`);
+		let c0: CFrame;
+		if (prop.attachment !== undefined) {
+			const attachment = body.FindFirstChild(checkName(prop.attachment, "a prop's attachment"));
+			if (!attachment || !attachment.IsA("Attachment")) error(`the preview dummy's ${parentName} has no ${tostring(prop.attachment)}`);
+			c0 = attachment.CFrame;
+		} else {
+			const c = prop.c0;
+			if (!typeIs(c, "table") || (c as unknown[]).size() !== 12) error("a prop's c0 must be 12 numbers");
+			const n = c as number[];
+			for (const value of n) {
+				if (!typeIs(value, "number") || value !== value || math.abs(value) === math.huge) error("a prop's c0 must be finite numbers");
+			}
+			c0 = new CFrame(n[0], n[1], n[2], n[3], n[4], n[5], n[6], n[7], n[8], n[9], n[10], n[11]);
+		}
+		const part = new Instance("Part");
+		part.Name = name;
+		part.Size = new Vector3(0.2, 0.2, 0.2);
+		part.CanCollide = false;
+		part.CanQuery = false;
+		part.CanTouch = false;
+		part.Massless = true;
+		part.Transparency = 1;
+		part.CFrame = body.CFrame.mul(c0);
+		const motor = new Instance("Motor6D");
+		motor.Name = name;
+		motor.Part0 = body;
+		motor.Part1 = part;
+		motor.C0 = c0;
+		motor.C1 = new CFrame();
+		motor.Parent = body;
+		part.Parent = rig;
 	}
-	const part = new Instance("Part");
-	part.Name = WEAPON_PART;
-	part.Size = new Vector3(0.2, 0.2, 0.2);
-	part.CanCollide = false;
-	part.CanQuery = false;
-	part.CanTouch = false;
-	part.Massless = true;
-	part.Transparency = 1;
-	part.CFrame = hand.CFrame.mul(attachment.CFrame);
-	const motor = new Instance("Motor6D");
-	motor.Name = WEAPON_PART;
-	motor.Part0 = hand;
-	motor.Part1 = part;
-	motor.C0 = attachment.CFrame;
-	motor.C1 = new CFrame();
-	motor.Parent = hand;
-	part.Parent = rig;
 }
 
 function previewAnimation(requestData: Data) {
@@ -270,7 +288,7 @@ function previewAnimation(requestData: Data) {
 		const root = rig.FindFirstChild("HumanoidRootPart");
 		if (root && root.IsA("BasePart")) root.Anchored = true;
 		rig.Parent = folder;
-		addWeaponGrip(rig);
+		addProps(rig, requestData.props);
 
 		const joints = new Map<string, Instance>();
 		for (const descendant of rig.GetDescendants()) {

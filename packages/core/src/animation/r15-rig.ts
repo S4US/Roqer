@@ -31,6 +31,11 @@ export interface RigJoint {
    * weapon grip. It is previewed and verified only when an animation keys it.
    */
   optional?: boolean;
+  /**
+   * For a prop: the attachment in the parent part whose CFrame the game uses
+   * as the motor's C0. Without one, C0 is parentOffset and parentRotation.
+   */
+  attachment?: string;
 }
 
 export interface Rig {
@@ -64,6 +69,9 @@ export interface Rig {
 /** Rx(-90°): the grip attachment's frame in the hand, its +Y out of the fist toward the character's front at rest. */
 export const GRIP_ROTATION: Rotation = [1, 0, 0, 0, 0, 1, 0, -1, 0];
 
+/** Rx(100°): the sheath's frame at the hip, its +Y running back and a little down at rest. */
+export const SHEATH_ROTATION: Rotation = [1, 0, 0, 0, -0.173648, -0.984808, 0, 0.984808, -0.173648];
+
 /**
  * The weapon: a Motor6D from the hand to a part named BodyAttach that the
  * weapon's other parts are welded to, with C0 at the hand's RightGripAttachment
@@ -75,6 +83,26 @@ export const WEAPON_PART = 'BodyAttach';
 export const WEAPON_STAND_IN_SIZE: Vec3 = [0.15, 4, 0.35];
 export const WEAPON_STAND_IN_OFFSET: Vec3 = [0, 1.6, 0];
 
+/** The off hand's prop, as the weapon is the right hand's: a second blade, a shield, a held sheath. */
+export const OFF_HAND_PART = 'OffHandAttach';
+
+/**
+ * A sheath worn at the left hip: a Motor6D from the lower torso (R6: the
+ * torso) to a part named SheathAttach at the sheath's mouth, whose C0 the
+ * game sets to the rig's constant. The sheath runs along SheathAttach's +Y.
+ */
+export const SHEATH_PART = 'SheathAttach';
+/** A 3.8-stud stand-in sheath, for previews: along SheathAttach's +Y from its mouth. */
+export const SHEATH_STAND_IN_SIZE: Vec3 = [0.25, 3.8, 0.4];
+export const SHEATH_STAND_IN_OFFSET: Vec3 = [0, 1.9, 0];
+
+/** Stand-ins for every prop, where their boxes sit in their parts. */
+export const PROP_DRAW_OFFSETS: Readonly<Record<string, Vec3>> = {
+  [WEAPON_PART]: WEAPON_STAND_IN_OFFSET,
+  [OFF_HAND_PART]: WEAPON_STAND_IN_OFFSET,
+  [SHEATH_PART]: SHEATH_STAND_IN_OFFSET,
+};
+
 export const R15_RIG: Rig = {
   name: 'R15',
   rootPart: 'HumanoidRootPart',
@@ -83,7 +111,7 @@ export const R15_RIG: Rig = {
   feet: ['LeftFoot', 'RightFoot'],
   hips: ['LeftHip', 'RightHip'],
   body: 'LowerTorso',
-  drawOffsets: { [WEAPON_PART]: WEAPON_STAND_IN_OFFSET },
+  drawOffsets: PROP_DRAW_OFFSETS,
   parts: {
     HumanoidRootPart: [2, 2, 1],
     LowerTorso: [1.99, 0.4, 1],
@@ -102,6 +130,8 @@ export const R15_RIG: Rig = {
     RightLowerLeg: [0.99, 1.3, 0.97],
     RightFoot: [1.01, 0.31, 1],
     [WEAPON_PART]: WEAPON_STAND_IN_SIZE,
+    [OFF_HAND_PART]: WEAPON_STAND_IN_SIZE,
+    [SHEATH_PART]: SHEATH_STAND_IN_SIZE,
   },
   joints: [
     { name: 'Root', parentPart: 'HumanoidRootPart', childPart: 'LowerTorso', parentOffset: [0, -1, 0], childOffset: [0, -0.2, 0] },
@@ -122,6 +152,8 @@ export const R15_RIG: Rig = {
     // RightGripAttachment's position is not in the spike's measurements; the
     // live animation suite compares it with the dummy's. Only the preview's
     // drawing depends on it: Studio's playback is compared joint by joint.
-    { name: 'Weapon', parentPart: 'RightHand', childPart: WEAPON_PART, parentOffset: [0, -0.15, 0], childOffset: [0, 0, 0], parentRotation: GRIP_ROTATION, optional: true },
+    { name: 'Weapon', parentPart: 'RightHand', childPart: WEAPON_PART, parentOffset: [0, -0.15, 0], childOffset: [0, 0, 0], parentRotation: GRIP_ROTATION, optional: true, attachment: 'RightGripAttachment' },
+    { name: 'OffHand', parentPart: 'LeftHand', childPart: OFF_HAND_PART, parentOffset: [0, -0.15, 0], childOffset: [0, 0, 0], parentRotation: GRIP_ROTATION, optional: true, attachment: 'LeftGripAttachment' },
+    { name: 'Sheath', parentPart: 'LowerTorso', childPart: SHEATH_PART, parentOffset: [-1, 0, 0], childOffset: [0, 0, 0], parentRotation: SHEATH_ROTATION, optional: true },
   ],
 };

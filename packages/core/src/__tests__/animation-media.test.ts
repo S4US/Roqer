@@ -1,9 +1,11 @@
 import { inflateSync } from 'zlib';
-import { roundedBox } from '../animation/box-rig.js';
+import { drawnParts, roundedBox } from '../animation/box-rig.js';
 import { renderContactSheet, sheetTimes } from '../animation/contact-sheet.js';
 import { GLB_SAMPLE_RATE, glbSampleTimes, renderRigGlb } from '../animation/rig-glb.js';
 import { compilePoseAnimation, type KeyframeSequenceDescription } from '../animation/pose-compiler.js';
 import { R15_RIG } from '../animation/r15-rig.js';
+import { R6_RIG } from '../animation/r6-rig.js';
+import { previewProps } from '../animation/animation-tool.js';
 import { buildTracks, pointToWorld, poseRig } from '../animation/motion.js';
 import { normalizeToolResult } from '../mcp-runtime.js';
 
@@ -112,7 +114,7 @@ describe('rig GLB', () => {
     expect(glb.json.buffers).toEqual([{ byteLength: glb.binary.length }]);
     const drawn = glb.json.nodes.filter((node: { mesh?: number }) => node.mesh !== undefined);
     expect(drawn.map((node: { name: string }) => node.name).sort()).toEqual(
-      Object.keys(R15_RIG.parts).filter((part) => part !== 'HumanoidRootPart' && part !== 'BodyAttach').map((part) => `${part} mesh`).sort(),
+      drawnParts(R15_RIG).map((part) => `${part} mesh`).sort(),
     );
     expect(glb.json.nodes[glb.json.scenes[0].nodes[0]].rotation).toEqual([0, 1, 0, 0]);
   });
@@ -182,6 +184,37 @@ describe('held weapon', () => {
     const withBlade = renderContactSheet(slash).png;
     const bladeless = renderContactSheet({ ...slash, keyframes: slash.keyframes.map((keyframe) => ({ ...keyframe, root: { ...keyframe.root, children: [] } })) }).png;
     expect(withBlade.equals(bladeless)).toBe(false);
+  });
+});
+
+describe('worn and off-hand props', () => {
+  test('hangs the sheath back from the left hip, and mirrors the grip in the left hand', () => {
+    for (const rig of [R15_RIG, R6_RIG]) {
+      const sequence = compiled({
+        name: 'Props', rig: rig.name,
+        keyframes: [{ time: 0, joints: { Sheath: { rotation: [0, 0, 0] }, OffHand: { rotation: [0, 0, 0] } } }],
+      });
+      const rest = poseRig(buildTracks(sequence), 0, rig).parts;
+      const mouth = rest.get('SheathAttach')!.p;
+      const end = pointToWorld(rest.get('SheathAttach')!, [0, 3.8, 0]);
+      // At the left side, running back (+Z) and a little down.
+      expect(mouth[0]).toBeLessThan(-0.9);
+      expect(end[2] - mouth[2]).toBeGreaterThan(3.5);
+      expect(end[1]).toBeLessThan(mouth[1]);
+      const hand = rest.get(rig.name === 'R6' ? 'Left Arm' : 'LeftHand')!;
+      const tip = pointToWorld(rest.get('OffHandAttach')!, [0, 3.6, 0]);
+      expect(tip[2]).toBeLessThan(hand.p[2] - 3);
+      expect(previewProps(sequence).map((prop) => prop.part).sort()).toEqual(['OffHandAttach', 'SheathAttach']);
+    }
+  });
+
+  test('asks the preview dummy for exactly the props the animation moves', () => {
+    const sequence = compiled({ name: 'Draw', rig: 'R6', keyframes: [{ time: 0, joints: { Sheath: { rotation: [0, 0, 0] } } }] });
+    const [sheath] = previewProps(sequence);
+    expect(sheath).toEqual({ part: 'SheathAttach', parent: 'Torso', c0: [-1, -0.8, 0, ...R6_RIG.joints.find((joint) => joint.name === 'Sheath')!.parentRotation!] });
+    const weapon = previewProps(compiled({ name: 'Cut', rig: 'R15', keyframes: [{ time: 0, joints: { Weapon: { rotation: [0, 0, 0] } } }] }));
+    expect(weapon).toEqual([expect.objectContaining({ part: 'BodyAttach', parent: 'RightHand', attachment: 'RightGripAttachment' })]);
+    expect(previewProps(raise(false))).toEqual([]);
   });
 });
 

@@ -31,6 +31,7 @@ import {
   expectedCounts,
   normalizeAnimationId,
   prepareAnimation,
+  previewProps,
   previewSampleTimes,
   verifyLivePlayback,
   verifyPlayback,
@@ -1772,7 +1773,7 @@ export class RobloxStudioTools {
     const payload = { name: sequence.name, rig: sequence.rig, loop: sequence.loop, priority: sequence.priority, keyframes: sequence.keyframes };
     const preview = await this._callSingle(
       '/api/preview-animation',
-      { sequence: payload, sampleTimes: previewSampleTimes(sequence) },
+      { sequence: payload, sampleTimes: previewSampleTimes(sequence), props: previewProps(sequence) },
       undefined,
       instance_id,
     );
@@ -1856,7 +1857,9 @@ export class RobloxStudioTools {
               rig: rig.name === 'R6'
                 ? 'the R6 rig, whose parts are blocks'
                 : meshes.source === 'studio' ? 'the stock R15 rig' : 'a stand-in block rig, until a build reads the stock rig from Studio',
-              ...(sequence.joints.includes('Weapon') ? { weapon: 'a 4-stud stand-in blade along BodyAttach\'s +Y' } : {}),
+              ...(previewProps(sequence).length > 0
+                ? { props: 'stand-ins: a 4-stud blade along each hand prop\'s +Y, a 3.8-stud sheath along SheathAttach\'s +Y' }
+                : {}),
               reading: `One column per time. Top row from the front three-quarter, bottom row ${locomotion ? 'from its right side facing right' : 'straight at its front, its right hand on the left'}; the shadow marks the ground under the body.`,
             },
           }),
