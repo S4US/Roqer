@@ -283,6 +283,26 @@ describe('compilePoseAnimation', () => {
     ]);
   });
 
+  test('says when a near half-turn is a limb twisting, and bendToward fixes it', () => {
+    const raise = (raised: Record<string, unknown>) => compilePoseAnimation({
+      name: 'Raise',
+      rig: 'R15',
+      keyframes: [
+        { time: 0, joints: { RightShoulder: { aim: [0, -1, 0] } } },
+        { time: 0.3, joints: { RightShoulder: { aim: [0, 1, 0.5], ...raised } } },
+      ],
+    });
+    const twisted = raise({});
+    expect(twisted.ok).toBe(false);
+    if (!twisted.ok) {
+      expect(twisted.errors).toEqual([
+        'keyframes[1].joints.RightShoulder: turns 180° from its key at 0 s: the limb swings 153° but also twists about itself, too near half a turn to tell which way round; give bendToward so the elbow or knee keeps folding the same side (a raised arm: [0, 0, -1]), or add a keyframe partway',
+      ]);
+    }
+    const swung = raise({ bendToward: [0, 0, -1] });
+    expect(swung.ok && swung.sequence.inBetweenCount).toBeGreaterThan(0);
+  });
+
   test('keeps the keyframe limit after adding in-betweens', () => {
     const keyframes = Array.from({ length: POSE_LIMITS.maxKeyframes }, (_unused, index) => ({
       time: index / 10,

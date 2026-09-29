@@ -18,7 +18,7 @@ import {
   type PoseEasingDirection,
   type PoseEasingStyle,
 } from './easing.js';
-import { buildTracks, pointToWorld, poseRig, slerpRotation, transformFromParent, type Frame } from './motion.js';
+import { buildTracks, pointToWorld, poseRig, slerpRotation, transformFromParent, transformInParent, type Frame } from './motion.js';
 import { R15_RIG, type Rig, type RigJoint } from './r15-rig.js';
 import { RIGS } from './rigs.js';
 
@@ -1040,7 +1040,19 @@ function splitTurns(
       if (turn <= POSE_LIMITS.maxTurnPerSegment + 1e-6) continue;
       const path = `keyframes[${to.index}].joints.${joint.name}`;
       if (turn >= POSE_LIMITS.maxSplitTurn) {
-        issues.add(path, `turns ${Math.round(turn)}° from its key at ${from.keyframe.time} s, too near half a turn to tell which way round it goes; add a keyframe partway along the way it should turn`);
+        // For an arm or leg, say when most of the turn is the limb twisting
+        // about itself: the usual cause is a raised arm left to fold its
+        // elbow forward, which bendToward puts right.
+        const along = (rotation: Matrix3): Vec => {
+          const body = transformInParent(joint, { p: [0, 0, 0], r: [...rotation] as Frame['r'] }).r;
+          return [-body[1], -body[4], -body[7]];
+        };
+        const swing = LIMBS[joint.name]
+          ? (Math.acos(Math.min(1, Math.max(-1, dot3(along(start.rotation), along(end.rotation))))) * 180) / Math.PI
+          : undefined;
+        issues.add(path, swing !== undefined && swing < POSE_LIMITS.maxSplitTurn - 10
+          ? `turns ${Math.round(turn)}° from its key at ${from.keyframe.time} s: the limb swings ${Math.round(swing)}° but also twists about itself, too near half a turn to tell which way round; give bendToward so the elbow or knee keeps folding the same side (a raised arm: [0, 0, -1]), or add a keyframe partway`
+          : `turns ${Math.round(turn)}° from its key at ${from.keyframe.time} s, too near half a turn to tell which way round it goes; add a keyframe partway along the way it should turn`);
         continue;
       }
       if (style === 'Elastic' || style === 'Bounce') {

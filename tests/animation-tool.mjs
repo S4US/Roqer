@@ -156,7 +156,8 @@ const passed = await runTest('animation tool', async ({ track }) => {
         name: 'Swung', rig: 'R15',
         keyframes: [
           { time: 0, easing: { style: 'CubicV2', direction: 'Out' }, joints: { RightShoulder: { aim: [0, -1, 0] } } },
-          { time: 0.3, joints: { RightShoulder: { aim: [0, 1, 0.5] } } },
+          // Raised up the front, the elbow folds back, as the guidance's slash does.
+          { time: 0.3, joints: { RightShoulder: { aim: [0, 1, 0.5], bendToward: [0, 0, -1] } } },
         ],
       },
       parent: PARENT,
@@ -257,7 +258,8 @@ const passed = await runTest('animation tool', async ({ track }) => {
       animation: {
         name: 'Planted', rig: 'R15',
         keyframes: [
-          { time: 0, joints: { Root: { position: [0, 0, 0] }, LeftHip: { aimAt: [-0.6, -2.93, 0.4] }, RightHip: { aimAt: [0.6, -2.93, -0.5] } } },
+          // A wide stance needs the knees bent: the body starts a little low.
+          { time: 0, joints: { Root: { position: [0, -0.2, 0] }, LeftHip: { aimAt: [-0.6, -2.93, 0.4] }, RightHip: { aimAt: [0.6, -2.93, -0.5] } } },
           { time: 0.4, joints: { Root: { position: [0, -0.5, -0.3], rotation: [0, 15, 0] }, LeftHip: { aimAt: [-0.6, -2.93, 0.4] }, RightHip: { aimAt: [0.6, -2.93, -0.5] } } },
         ],
       },
