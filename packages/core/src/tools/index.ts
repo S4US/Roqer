@@ -1737,7 +1737,7 @@ export class RobloxStudioTools {
    * is read back; replacing a sequence needs the revision its build returned.
    */
   private async _animationBuild(action: 'check' | 'build', args: Record<string, unknown>, instance_id?: string) {
-    const { animation, parent, expected_revision, waive, locomotion } = args;
+    const { animation, parent, expected_revision, waive, locomotion, grounded } = args;
     if (action === 'build' && (typeof parent !== 'string' || parent.trim() === '')) {
       throw new Error('parent (the instance the KeyframeSequence goes in) is required to build an animation');
     }
@@ -1745,7 +1745,7 @@ export class RobloxStudioTools {
       throw new Error('expected_revision must be the revision string a previous build returned');
     }
 
-    const prepared = prepareAnimation(animation, { locomotion, waive });
+    const prepared = prepareAnimation(animation, { locomotion, grounded, waive });
     if (!prepared.ok) {
       return this._textResult({
         ...(action === 'check' ? { valid: false } : { error: 'The animation is not valid; nothing was built.' }),

@@ -68,7 +68,10 @@ tells you that publishing needs a key.
    | Foot sliding | a planted foot skating |
    | Gait symmetry | legs that do not alternate evenly |
 
-   The last three run for walks, runs and other gaits. The limits are set so
+   The last three run for walks, runs and other gaits. For any other
+   animation performed on the ground, such as a crouching attack, the agent
+   can ask for the ground check alone, which fails when a foot sinks into
+   the floor. The limits are set so
    that Roblox's own R15 animations pass every check. On R6, foot sliding is
    reported as not checked: its limit has not been calibrated on R6's block
    legs. A failed check names the

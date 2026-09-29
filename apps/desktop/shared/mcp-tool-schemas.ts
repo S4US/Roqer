@@ -44,7 +44,7 @@ export type ToolSchema = {
 };
 
 /** sha256 of `packages/core/src/tools/definitions.ts` with LF newlines. */
-export const TOOL_DEFINITIONS_DIGEST = "0dab94f67aaab8f2bc7e43f8c29ee220f60dcdf0a4ad42fe794946b01e9ebd66";
+export const TOOL_DEFINITIONS_DIGEST = "24e456c9e9c423ec017c9933a35e6baf4689dc1171441e298e63e3e0a3425ee5";
 
 export const TOOL_SCHEMAS: Readonly<Record<string, ToolSchema>> = {
   animation: {
@@ -53,6 +53,7 @@ export const TOOL_SCHEMAS: Readonly<Record<string, ToolSchema>> = {
       { name: "action", type: "string", required: true, enumValues: ["check", "build", "publish", "wire", "verify"], description: "check needs no Studio; verify needs a running playtest and the checked animation." },
       { name: "animation", type: "object", required: false, description: "Pose description for an R15 or R6 rig." },
       { name: "locomotion", type: "boolean", required: false, description: "A gait: adds ground, foot, and symmetry checks." },
+      { name: "grounded", type: "boolean", required: false, description: "Stands on the ground: checks feet never sink in." },
       { name: "parent", type: "string", required: false, description: "Build: instance the KeyframeSequence goes in." },
       { name: "expected_revision", type: "string", required: false, description: "Build: revision its last build returned; required to replace it." },
       { name: "waive", type: "string[]", required: false, description: "Failed checks to accept." },

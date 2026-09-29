@@ -200,6 +200,10 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
           type: 'boolean',
           description: 'A gait: adds ground, foot, and symmetry checks.'
         },
+        grounded: {
+          type: 'boolean',
+          description: 'Stands on the ground: checks feet never sink in.'
+        },
         parent: {
           type: 'string',
           description: 'Build: instance the KeyframeSequence goes in.'

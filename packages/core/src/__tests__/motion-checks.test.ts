@@ -150,6 +150,25 @@ describe('checkMotion', () => {
     expect(limits).toMatchObject({ status: 'fail', detail: 'Neck turns 120° at 0 s; limit 90°' });
   });
 
+  test('checks feet against the ground on request, without asking a foot to stay down', () => {
+    // Dropping the body half a stud with straight legs puts the feet through the floor.
+    const sink = animation([
+      { time: 0, joints: { Root: { position: [0, 0, 0] } } },
+      { time: 0.5, joints: { Root: { position: [0, -0.5, 0] } } },
+    ]);
+    expect(check(checkMotion(sink), 'groundContact').status).toBe('skipped');
+    const sunk = check(checkMotion(sink, { grounded: true }), 'groundContact');
+    expect(sunk).toMatchObject({ status: 'fail', measured: { penetration: 0.5 } });
+    expect(sunk.detail).toMatch(/^(Left|Right)Foot sinks 0.5 studs into the ground at 0.5 s; limit 0.1$/);
+    // Leaping clear of the ground is fine: only sinking fails.
+    const leap = check(checkMotion(animation([
+      { time: 0, joints: { Root: { position: [0, 0, 0] } } },
+      { time: 0.5, joints: { Root: { position: [0, 2, 0] } } },
+    ]), { grounded: true }), 'groundContact');
+    expect(leap.status).toBe('pass');
+    expect(leap.measured.groundedShare).toBeLessThan(0.5);
+  });
+
   test('fails a joint that moves faster than the speed limit', () => {
     // 90° in 0.03 s: 3000°/s, sampled over two uneven steps.
     const report = checkMotion(animation([

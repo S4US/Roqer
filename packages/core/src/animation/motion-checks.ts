@@ -50,6 +50,12 @@ export interface MotionReport {
 export interface MotionCheckOptions {
   /** Walks, runs and other gaits: adds the ground, foot and symmetry checks. */
   locomotion?: boolean;
+  /**
+   * Any animation performed standing on the ground, such as a crouching
+   * attack: adds the ground check's penetration limit, without asking a foot
+   * to stay down, since a jump attack leaves the ground.
+   */
+  grounded?: boolean;
   /** Samples per second. Defaults to 60. */
   sampleRate?: number;
 }
@@ -349,7 +355,7 @@ function footPoints(data: Sampled, rig: Rig): Map<string, [number, number, numbe
   return points;
 }
 
-function checkGroundContact(data: Sampled, rig: Rig): MotionCheckResult {
+function checkGroundContact(data: Sampled, rig: Rig, gait: boolean): MotionCheckResult {
   const points = footPoints(data, rig);
   let deepest = { value: 0, time: 0, foot: '' };
   let grounded = 0;
@@ -366,6 +372,9 @@ function checkGroundContact(data: Sampled, rig: Rig): MotionCheckResult {
   const measured = { penetration: round(deepest.value), groundedShare: round(share) };
   if (deepest.value > MOTION_LIMITS.groundPenetration) {
     return result('groundContact', true, `${deepest.foot} sinks ${round(deepest.value)} studs into the ground at ${seconds(deepest.time)}; limit ${MOTION_LIMITS.groundPenetration}`, measured);
+  }
+  if (!gait) {
+    return result('groundContact', false, `no foot sinks more than ${round(deepest.value)} studs into the ground; a foot is down for ${Math.round(share * 100)}% of it`, measured);
   }
   if (share < MOTION_LIMITS.groundedShare) {
     return result('groundContact', true, `a foot touches the ground for only ${Math.round(share * 100)}% of the gait; needs ${Math.round(MOTION_LIMITS.groundedShare * 100)}%`, measured);
@@ -463,9 +472,10 @@ export function checkMotion(sequence: MotionSequence, options: MotionCheckOption
     checkLoopContinuity(sequence, data, rig),
   ];
   if (options.locomotion) {
-    checks.push(checkGroundContact(data, rig), checkFootSliding(data, rate, rig), checkGaitSymmetry(sequence, data, rig));
+    checks.push(checkGroundContact(data, rig, true), checkFootSliding(data, rate, rig), checkGaitSymmetry(sequence, data, rig));
   } else {
-    for (const id of ['groundContact', 'footSliding', 'gaitSymmetry'] as const) {
+    checks.push(options.grounded ? checkGroundContact(data, rig, false) : skipped('groundContact', 'only for locomotion or grounded'));
+    for (const id of ['footSliding', 'gaitSymmetry'] as const) {
       checks.push(skipped(id, 'only for locomotion'));
     }
   }

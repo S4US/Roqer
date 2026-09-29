@@ -3,7 +3,10 @@
 Use this to author an R15 animation with the `animation` tool (check, build,
 publish, wire, verify). Start from the recipe closest to the request and change
 it. Run `check` before `build`: it validates the format, runs the motion checks
-and returns a contact sheet, without touching Studio.
+and returns a contact sheet, without touching Studio. Pass `locomotion: true`
+for a walk or run, and `grounded: true` for anything else done standing on
+the ground, such as an attack or an idle: it fails when a foot sinks into the
+floor, which a crouch or lunge easily does.
 
 ## Format
 

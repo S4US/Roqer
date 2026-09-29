@@ -62,11 +62,12 @@ function body(result: { content: ToolContent[] }) {
 
 describe('prepareAnimation', () => {
   test('refuses bad tool arguments together with compile errors', () => {
-    const result = prepareAnimation({ ...wave(), rig: 'R7' }, { locomotion: 'yes', waive: ['gait', 'velocity'] });
+    const result = prepareAnimation({ ...wave(), rig: 'R7' }, { locomotion: 'yes', grounded: 1, waive: ['gait', 'velocity'] });
     expect(result).toEqual({
       ok: false,
       errors: [
         'locomotion: must be true or false',
+        'grounded: must be true or false',
         'waive: unknown check "gait"; checks are jointLimits, velocity, rootDrift, loopContinuity, groundContact, footSliding, gaitSymmetry',
         'rig: must be one of R15, R6',
       ],

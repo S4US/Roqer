@@ -50,10 +50,13 @@ export interface CheckedAnimation {
 export type PrepareResult = { ok: true; value: CheckedAnimation } | { ok: false; errors: string[] };
 
 /** Validates the tool's own arguments, compiles the animation and checks its motion. */
-export function prepareAnimation(animation: unknown, options: { locomotion?: unknown; waive?: unknown }): PrepareResult {
+export function prepareAnimation(animation: unknown, options: { locomotion?: unknown; grounded?: unknown; waive?: unknown }): PrepareResult {
   const errors: string[] = [];
   if (options.locomotion !== undefined && typeof options.locomotion !== 'boolean') {
     errors.push('locomotion: must be true or false');
+  }
+  if (options.grounded !== undefined && typeof options.grounded !== 'boolean') {
+    errors.push('grounded: must be true or false');
   }
   let waive: MotionCheckId[] = [];
   if (options.waive !== undefined) {
@@ -70,7 +73,11 @@ export function prepareAnimation(animation: unknown, options: { locomotion?: unk
   if (!compiled.ok) errors.push(...compiled.errors);
   if (errors.length > 0 || !compiled.ok) return { ok: false, errors };
 
-  const report = checkMotion(compiled.sequence, { locomotion: options.locomotion === true }, rigFor(compiled.sequence.rig));
+  const report = checkMotion(
+    compiled.sequence,
+    { locomotion: options.locomotion === true, grounded: options.grounded === true },
+    rigFor(compiled.sequence.rig),
+  );
   const failed = report.checks.filter((check) => check.status === 'fail').map((check) => check.id);
   return {
     ok: true,

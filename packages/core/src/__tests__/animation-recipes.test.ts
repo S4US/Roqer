@@ -48,7 +48,8 @@ describe('animation recipes', () => {
   it.each([...all.keys()])('%s compiles and passes every check that applies', (name) => {
     const sequence = compiled(all.get(name));
     const rig = rigFor(sequence.rig);
-    const report = checkMotion(sequence, { locomotion: GAITS.has(name) }, rig);
+    // Everything but the jump, which leaves the ground, stands on it.
+    const report = checkMotion(sequence, { locomotion: GAITS.has(name), grounded: name !== 'Jump' }, rig);
     const failing = report.checks.filter((check) => check.status === 'fail').map((check) => `${check.id}: ${check.detail}`);
     expect(failing).toEqual([]);
     if (GAITS.has(name)) {
