@@ -298,6 +298,11 @@ export function ModelViewer({ evidence, onShowPicture, compact = false, autoplay
         }
       };
       frame = requestAnimationFrame(tick);
+      // A wheel, key or pinch zoom moves the camera inside its own event
+      // handler, so the next orbit.update() in the loop reports no change.
+      // Every move says so here, whoever made it.
+      const redraw = () => { dirty = true; };
+      orbit.addEventListener("change", redraw);
       const markMoved = () => setMoved(true);
       renderer.domElement.addEventListener("pointerdown", markMoved);
       renderer.domElement.addEventListener("wheel", markMoved, { passive: true });
@@ -355,6 +360,7 @@ export function ModelViewer({ evidence, onShowPicture, compact = false, autoplay
       release = () => {
         cancelAnimationFrame(frame);
         observer.disconnect();
+        orbit.removeEventListener("change", redraw);
         orbit.dispose();
         renderer.domElement.removeEventListener("pointerdown", markMoved);
         renderer.domElement.removeEventListener("wheel", markMoved);
