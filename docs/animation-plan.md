@@ -531,7 +531,7 @@ The steps are ordered so that each rests on the one before:
 As in step 2, every step starts with a live test of what Roblox actually does.
 Nothing is built on an unconfirmed assumption.
 
-### 11. R6 characters — implemented 2026-09-29, live checks pending
+### 11. R6 characters — implemented and live-verified 2026-09-29
 
 Built ahead of its live test, from the Motor6D C0 and C1 values every R6
 character has; the items below marked live are what
@@ -548,7 +548,9 @@ character has; the items below marked live are what
   R15.
 - Live, 2026-09-29: the rig table matched an R6 dummy's Motor6Ds exactly; its
   grip attachments sit at (0, -1, 0) but unturned, unlike R15's (see Weapons).
-  Still to confirm: an R6 build playing as checked on the R6 preview dummy.
+  An R6 walk-style animation played as checked on the R6 preview dummy
+  (within 0.08°), and an R6 draw moving the sheath and both hand props
+  within 0.91°.
 - Not done: reading the place's avatar type (the agent reads the playtest
   character's `RigType` or the `StarterCharacter`), a loader keeping one ID
   per rig and slot for places that let players choose, and eval T16.
@@ -615,7 +617,7 @@ plays, and nothing would show it.
 **Done when** T16 passes, and a manual R6 playtest shows the run playing while
 the player moves.
 
-### Weapons — implemented 2026-09-29, live checks pending
+### Weapons and combat authoring — implemented and live-verified 2026-09-29
 
 A combat animation moves the weapon as well as the arm. Roblox's `RightGrip`
 weld cannot be animated, so the rig gains one optional joint, `Weapon`: a
@@ -658,6 +660,24 @@ the weapon's handle, solved after every `aimAt` so it follows a placed right
 arm, and every 1/60 s between grip keys, each solve preferring the last one's
 elbow so the arm never flips. A fast two-handed swing keeps the hand within
 0.05 studs of the handle.
+
+### Live results, 2026-09-29
+
+`npm run test:studio:animation` passed in full on Windows Studio. Each build
+below played in Studio as the checks measured it:
+
+| Build | Largest difference from the checked model |
+| --- | --- |
+| A swing split into 5 in-betweens | 0.06° |
+| A weapon flick on the R15 stand-in grip | 0.68° |
+| An R6 draw moving the sheath and both hand props | 0.91° |
+| An R6 animation on the R6 dummy | 0.08° |
+| A planted lunge with 22 solved keys (`aimAt`) | 0.06° |
+| A two-handed swing (`grip`) | 0.72° |
+
+Markers were built and read back as `KeyframeMarker`s at their keyframe's
+time, and a published build was read back from Roblox and played as checked.
+The prop builds differ most, still well inside the 1.5° playback limit.
 
 ### 12. Creatures made of rigid parts — proposed
 
