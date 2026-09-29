@@ -71,6 +71,47 @@ test("a digest is bounded however much a run changed, and still validates", () =
   assert.equal(isRunDigest(digest), true);
 });
 
+test("an upload is named in the digest, so a later run can reuse it instead of uploading again", () => {
+  const upload = (id: string, name: string) => ({
+    id: `c${id}`, kind: "asset" as const, target: `rbxassetid://${id}`, assetId: id, assetType: "Decal",
+    summary: `Uploaded “${name}” to Roblox as asset ${id}. Moderation: Approved.`,
+  });
+  const lighting = { id: "cl", kind: "properties" as const, target: "game.Lighting", summary: "set" };
+  const digest = digestRun({
+    ...RECORD,
+    changes: [
+      lighting,
+      upload("71399549499926", "SnowForest_MistPuff"),
+      lighting,
+      { id: "ca", kind: "asset", target: "rbxassetid://5", summary: "Uploaded the asset to Roblox as asset 5." },
+      lighting,
+    ],
+  });
+  // Uploads lead, since Studio cannot show one that was never placed, and a
+  // property tuned three times is one line rather than three.
+  assert.deepEqual(digest.changes, [
+    "asset rbxassetid://71399549499926 “SnowForest_MistPuff” (Decal)",
+    "asset rbxassetid://5",
+    "properties game.Lighting (×3)",
+  ]);
+  assert.equal(isRunDigest(digest), true);
+});
+
+test("uploads are the entries the bound keeps when a run changed more than it can list", () => {
+  const properties = Array.from({ length: 30 }, (_, index) => ({
+    id: `p${index}`, kind: "properties" as const, target: `game.Workspace.Part${index}`, summary: "set",
+  }));
+  const digest = digestRun({
+    ...RECORD,
+    changes: [
+      ...properties,
+      { id: "a1", kind: "asset", target: "rbxassetid://7", assetType: "Decal", summary: "Uploaded “Moonbeam” to Roblox as asset 7." },
+    ],
+  });
+  assert.equal(digest.changes[0], "asset rbxassetid://7 “Moonbeam” (Decal)");
+  assert.equal(digest.changes.at(-1), "(+11 more)");
+});
+
 test("a record written before decisions existed still validates, and one with them does too", () => {
   const older: Record<string, unknown> = { ...RECORD };
   delete older.decisions;

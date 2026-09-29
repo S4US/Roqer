@@ -57,6 +57,11 @@ function describeRunDigest(digest: RunDigest, which = "that run"): string {
     ].join("\n"));
   }
   sections.push("Revisions above are as that run left them; read Studio before changing anything.");
+  if (digest.changes.some((line) => line.startsWith("asset "))) {
+    // Studio cannot show an upload that was never placed, so without this a
+    // fresh session renders and uploads the same images again.
+    sections.push("Assets listed above are already uploaded to Roblox; reuse those IDs instead of creating or uploading them again.");
+  }
   return sections.join("\n");
 }
 

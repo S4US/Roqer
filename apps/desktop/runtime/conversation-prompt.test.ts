@@ -138,6 +138,25 @@ test("a reply that came from a run carries the host's record of it", () => {
   assert.match(record, /read Studio before changing anything/);
 });
 
+test("a run that uploaded assets tells the next session to reuse them", () => {
+  const record = (changes: string[]) => buildConversationPrompt({
+    messages: [
+      { role: "user", text: "Add ground mist." },
+      {
+        role: "assistant",
+        text: "Next is the ground mist.",
+        run: { outcome: "failed", changes, unfinished: ["[active] Add ground mist"], unverified: [], decisions: [] },
+      },
+    ],
+    truncated: false,
+  }, "Continue");
+
+  const uploaded = record(["asset rbxassetid://71399549499926 “SnowForest_MistPuff” (Decal)", "properties game.Lighting"]);
+  assert.match(uploaded, /- asset rbxassetid:\/\/71399549499926 “SnowForest_MistPuff” \(Decal\)/);
+  assert.match(uploaded, /already uploaded to Roblox; reuse those IDs/);
+  assert.equal(record(["properties game.Lighting"]).includes("already uploaded"), false);
+});
+
 test("a reply without a run renders exactly as it did before records existed", () => {
   const prompt = buildConversationPrompt({
     messages: [{ role: "assistant", text: "Just an answer." }],

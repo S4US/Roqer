@@ -35,7 +35,10 @@ export type RunDigest = {
   outcome: RunOutcome;
   /** Tasks that were not done when the run ended, as `[status] title`. */
   unfinished: string[];
-  /** Every change the run applied, as `kind target at revision R`. */
+  /**
+   * Every change the run applied, as `kind target at revision R`, or for an
+   * upload `asset rbxassetid://N “name” (type)`, uploads first.
+   */
   changes: string[];
   /** Why the gate would not call the run verified, when it would not. */
   unverified: string[];
@@ -58,9 +61,49 @@ export function taskLine(task: RunTask): string {
   return `[${task.status}] ${task.title}${needs}`;
 }
 
-export function changeLine(change: RunChange): string {
+/** Both upload producers name the asset this way in the summary they record. */
+const ASSET_NAME = /^(?:Uploaded|Published) “([^”]+)”/;
+/** Roblox caps a display name at 50 characters; this keeps a line bounded regardless. */
+const MAX_ASSET_NAME_CHARS = 100;
+const MAX_ASSET_TYPE_CHARS = 40;
+
+/**
+ * An upload by id alone reads as a list of numbers: a later run cannot tell
+ * the mist texture from a sky face, so it renders and uploads them again. The
+ * name and type are what make an uploaded asset reusable.
+ */
+function assetLine(change: RunChange): string {
+  const name = ASSET_NAME.exec(change.summary)?.[1];
+  const label = name === undefined ? "" : ` “${name.slice(0, MAX_ASSET_NAME_CHARS)}”`;
+  const type = change.assetType === undefined || change.assetType === ""
+    ? ""
+    : ` (${change.assetType.slice(0, MAX_ASSET_TYPE_CHARS)})`;
+  return `asset ${change.target}${label}${type}`;
+}
+
+function changeLine(change: RunChange): string {
+  if (change.kind === "asset") return assetLine(change);
   const revision = change.revisionAfter === undefined ? "" : ` at revision ${change.revisionAfter}`;
   return `${change.kind} ${change.target}${revision}`;
+}
+
+/**
+ * The change lines a digest or fold lists, before bounding.
+ *
+ * Uploads come first. Studio shows every other change to a run that reads it,
+ * but an asset that was uploaded and not yet placed exists only in this record,
+ * so it is the entry a bound must not be the one to drop. Repeats of the same
+ * line -- a property set tuned four times -- are listed once with a count, so
+ * they do not spend the bound either.
+ */
+export function changeLines(changes: readonly RunChange[]): string[] {
+  const ordered = [
+    ...changes.filter((change) => change.kind === "asset"),
+    ...changes.filter((change) => change.kind !== "asset"),
+  ];
+  const counts = new Map<string, number>();
+  for (const line of ordered.map(changeLine)) counts.set(line, (counts.get(line) ?? 0) + 1);
+  return [...counts].map(([line, count]) => (count > 1 ? `${line} (×${count})` : line));
 }
 
 /**
@@ -82,7 +125,7 @@ export function digestRun(record: RunRecord): RunDigest {
   return {
     outcome: record.outcome,
     unfinished: boundedLines(unfinished),
-    changes: boundedLines(record.changes.map(changeLine)),
+    changes: boundedLines(changeLines(record.changes)),
     unverified: boundedLines(unverified),
     decisions: (record.decisions ?? []).slice(0, MAX_QUESTIONS_PER_RUN),
   };
