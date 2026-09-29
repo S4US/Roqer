@@ -1,11 +1,23 @@
-import { BridgeService, PluginInstance, PublicPluginInstance, toPublic } from './bridge-service.js';
+import {
+  BridgeService,
+  DEFAULT_REQUEST_TIMEOUT_MS,
+  PluginInstance,
+  PublicPluginInstance,
+  toPublic,
+} from './bridge-service.js';
 import { randomUUID } from 'crypto';
+
+/**
+ * How much longer a proxy waits than the primary does. Only the primary knows
+ * whether Studio took a request before it timed out, which decides whether a
+ * change may already have landed, so its answer must arrive first.
+ */
+export const PROXY_TIMEOUT_GRACE_MS = 5_000;
 
 export class ProxyBridgeService extends BridgeService {
   private primaryBaseUrl: string;
   private authToken?: string;
   readonly proxyInstanceId: string;
-  private proxyRequestTimeout = 30000;
   private cachedInstances: PluginInstance[] = [];
   private readonly initialRefresh: Promise<void>;
   private refreshTimer?: ReturnType<typeof setInterval>;
@@ -103,9 +115,12 @@ export class ProxyBridgeService extends BridgeService {
     data: any,
     targetInstanceId: string,
     targetRole: string,
+    timeoutMs?: number,
   ): Promise<any> {
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), this.proxyRequestTimeout);
+    const startedAt = Date.now();
+    const waitMs = (timeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS) + PROXY_TIMEOUT_GRACE_MS;
+    const timeoutId = setTimeout(() => controller.abort(), waitMs);
 
     try {
       const response = await fetch(`${this.primaryBaseUrl}/proxy`, {
@@ -117,6 +132,9 @@ export class ProxyBridgeService extends BridgeService {
           targetInstanceId,
           targetRole,
           proxyInstanceId: this.proxyInstanceId,
+          // The primary waits for Studio as long as the tool asked, as it
+          // would for its own call. Without it, it waits its default.
+          ...(timeoutMs === undefined ? {} : { timeoutMs }),
           ...(this.pluginVariant === undefined ? {} : { pluginVariant: this.pluginVariant }),
         }),
         signal: controller.signal,
@@ -136,8 +154,14 @@ export class ProxyBridgeService extends BridgeService {
       return result.response;
     } catch (err: any) {
       clearTimeout(timeoutId);
-      if (err.name === 'AbortError') {
-        throw new Error('Proxy request timeout');
+      // Node's fetch gives up by itself after five minutes without an answer,
+      // which the longest wait a tool may ask for reaches.
+      if (err?.name === 'AbortError' || err?.cause?.code === 'UND_ERR_HEADERS_TIMEOUT') {
+        throw new Error(
+          `Proxy request timeout: the primary MCP server did not answer ${endpoint} after `
+          + `${Math.round((Date.now() - startedAt) / 1000)} s. Studio may already have received it, so `
+          + 'read the target back before repeating a change.',
+        );
       }
       throw err;
     }

@@ -1,5 +1,5 @@
 import { StudioHttpClient } from './studio-client.js';
-import { BridgeService, RoutingFailure, type PublicPluginInstance } from '../bridge-service.js';
+import { BridgeService, MAX_REQUEST_TIMEOUT_MS, RoutingFailure, type PublicPluginInstance } from '../bridge-service.js';
 import {
   OpenCloudClient,
   type AssetOperationResponse,
@@ -4479,8 +4479,8 @@ export class RobloxStudioTools {
     const timeoutMs = request.timeout_ms !== undefined
       ? this._optionalPositiveInteger(request.timeout_ms, 'timeout_ms')
       : 120000;
-    if (timeoutMs !== undefined && timeoutMs > 300000) {
-      throw new Error('timeout_ms must be 300000 or less.');
+    if (timeoutMs !== undefined && timeoutMs > MAX_REQUEST_TIMEOUT_MS) {
+      throw new Error(`timeout_ms must be ${MAX_REQUEST_TIMEOUT_MS} or less.`);
     }
 
     const payload: Record<string, unknown> = {

@@ -41,6 +41,11 @@ export const REQUEST_TIMEOUT = 'Request timeout';
  */
 export const REQUEST_TIMEOUT_AFTER_DELIVERY = 'Request timeout after delivery';
 
+/** How long a request waits for Studio unless its tool asks for longer. */
+export const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
+/** The longest wait a tool may ask for, which a proxy forwards to the primary. */
+export const MAX_REQUEST_TIMEOUT_MS = 300_000;
+
 function timeoutError(request: { claimOwner?: string }): Error {
   return new Error(request.claimOwner === undefined ? REQUEST_TIMEOUT : REQUEST_TIMEOUT_AFTER_DELIVERY);
 }
@@ -177,7 +182,7 @@ export class BridgeService implements StudioTransportQueue {
   private requestAvailableListeners = new Set<(physicalSessionId: string) => void>();
   private sessionClosedListeners = new Set<(session: StudioSession) => void>();
   private deliveryOwnersByPhysicalSession = new Map<string, Set<string>>();
-  private requestTimeout = 30000;
+  private requestTimeout = DEFAULT_REQUEST_TIMEOUT_MS;
 
   /**
    * Payloads too large to travel in a request event.
