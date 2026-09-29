@@ -103,6 +103,7 @@ export function describeAnimation(sequence: KeyframeSequenceDescription) {
     priority: sequence.priority,
     joints: sequence.joints,
     ...(sequence.markerCount > 0 ? { markers: sequence.markerCount } : {}),
+    ...(sequence.inBetweenCount > 0 ? { inBetweens: sequence.inBetweenCount } : {}),
   };
 }
 

@@ -11,15 +11,20 @@
 // problem is reported at once with its path, so a caller can fix them in one
 // pass. Nothing here touches Studio.
 
+import {
+  POSE_EASING_DIRECTIONS,
+  POSE_EASING_STYLES,
+  easeAlpha,
+  type PoseEasingDirection,
+  type PoseEasingStyle,
+} from './easing.js';
+import { slerpRotation } from './motion.js';
 import { R15_RIG, type Rig, type RigJoint } from './r15-rig.js';
 
-export const ANIMATION_PRIORITIES = ['Core', 'Idle', 'Movement', 'Action', 'Action2', 'Action3', 'Action4'] as const;
-export const POSE_EASING_STYLES = ['Linear', 'Constant', 'Elastic', 'Cubic', 'Bounce', 'CubicV2'] as const;
-export const POSE_EASING_DIRECTIONS = ['In', 'Out', 'InOut'] as const;
+export { POSE_EASING_DIRECTIONS, POSE_EASING_STYLES, type PoseEasingDirection, type PoseEasingStyle };
 
+export const ANIMATION_PRIORITIES = ['Core', 'Idle', 'Movement', 'Action', 'Action2', 'Action3', 'Action4'] as const;
 export type AnimationPriority = (typeof ANIMATION_PRIORITIES)[number];
-export type PoseEasingStyle = (typeof POSE_EASING_STYLES)[number];
-export type PoseEasingDirection = (typeof POSE_EASING_DIRECTIONS)[number];
 
 export const POSE_LIMITS = {
   maxKeyframes: 240,
@@ -32,9 +37,17 @@ export const POSE_LIMITS = {
   /**
    * Degrees a joint may turn between consecutive keys, unless the earlier key
    * snaps (Constant). Past 90° Studio's playback of Linear keys drifts from a
-   * slerp, and past 180° a turn goes the short way round, not the way meant.
+   * slerp, so a longer turn is split into in-between keys (see splitTurns).
    */
   maxTurnPerSegment: 90,
+  /**
+   * A turn this large or larger is never split: near half a turn the short
+   * way round is as likely to be wrong as right, so the caller must say which
+   * way with a key along it.
+   */
+  maxSplitTurn: 175,
+  /** Degrees each in-between of an eased turn covers, so the easing's shape survives. */
+  easedSplitDegrees: 30,
   maxErrors: 20,
 } as const;
 
@@ -161,6 +174,8 @@ export interface KeyframeSequenceDescription {
   keyedPoseCount: number;
   /** Every KeyframeMarker, across all keyframes. */
   markerCount: number;
+  /** Keys the compiler added to split turns over maxTurnPerSegment. */
+  inBetweenCount: number;
 }
 
 export type PoseCompileResult =
@@ -512,6 +527,103 @@ function turnDegrees(a: CFrameComponents, b: CFrameComponents): number {
   return (Math.acos(Math.min(1, Math.max(-1, (trace - 1) / 2))) * 180) / Math.PI;
 }
 
+/** The segment fraction at which an eased joint has come `progress` of the way. */
+function easedTime(style: PoseEasingStyle, direction: PoseEasingDirection, progress: number): number {
+  let low = 0;
+  let high = 1;
+  for (let step = 0; step < 50; step += 1) {
+    const middle = (low + high) / 2;
+    if (easeAlpha(style, direction, middle) < progress) low = middle;
+    else high = middle;
+  }
+  return (low + high) / 2;
+}
+
+/**
+ * Splits every turn over maxTurnPerSegment into in-between keys of the same
+ * joint, so the author writes the swing and not its arithmetic.
+ *
+ * The in-betweens divide the turn evenly along the short way round, and each
+ * runs Linear to the next. A Linear turn splits exactly. An eased turn gets an
+ * in-between every easedSplitDegrees, placed at the time its easing reaches
+ * that point, so the joint still passes each at the moment the easing meant.
+ * Elastic and Bounce overshoot between keys, which in-betweens cannot keep,
+ * and a turn near half a turn has no clear way round: both are refused.
+ *
+ * An in-between keys only its own joint, so every other joint moves as
+ * written. Returns the keyframes with the in-betweens merged in, and how many
+ * it added.
+ */
+function splitTurns(
+  keyframes: ParsedKeyframe[],
+  animationEasing: ParsedJoint['easing'],
+  rig: Rig,
+  issues: Issues,
+): { keyframes: ParsedKeyframe[]; added: number } {
+  const extra: ParsedKeyframe[] = [];
+  let added = 0;
+  const at = (time: number): ParsedKeyframe => {
+    const found = keyframes.find((keyframe) => Math.abs(keyframe.time - time) < 1e-9)
+      ?? extra.find((keyframe) => Math.abs(keyframe.time - time) < 1e-9);
+    if (found) return found;
+    const created: ParsedKeyframe = { time, markers: [], easing: {}, joints: new Map() };
+    extra.push(created);
+    return created;
+  };
+  const LINEAR = { style: 'Linear', direction: 'In' } as const;
+
+  for (const joint of rig.joints) {
+    const keyed = keyframes
+      .map((keyframe, index) => ({ keyframe, index }))
+      .filter(({ keyframe }) => keyframe.joints.has(joint.childPart));
+    for (let i = 1; i < keyed.length; i += 1) {
+      const from = keyed[i - 1];
+      const to = keyed[i];
+      const start = from.keyframe.joints.get(joint.childPart)!;
+      const end = to.keyframe.joints.get(joint.childPart)!;
+      const style = start.easing.style ?? from.keyframe.easing.style ?? animationEasing.style ?? 'Linear';
+      const direction = start.easing.direction ?? from.keyframe.easing.direction ?? animationEasing.direction ?? 'In';
+      if (style === 'Constant') continue;
+      const turn = turnDegrees(matrixCFrame(start.rotation), matrixCFrame(end.rotation));
+      if (turn <= POSE_LIMITS.maxTurnPerSegment + 1e-6) continue;
+      const path = `keyframes[${to.index}].joints.${joint.name}`;
+      if (turn >= POSE_LIMITS.maxSplitTurn) {
+        issues.add(path, `turns ${Math.round(turn)}° from its key at ${from.keyframe.time} s, too near half a turn to tell which way round it goes; add a keyframe partway along the way it should turn`);
+        continue;
+      }
+      if (style === 'Elastic' || style === 'Bounce') {
+        issues.add(path, `turns ${Math.round(turn)}° from its key at ${from.keyframe.time} s with ${style} easing, whose overshoot in-betweens cannot keep; split turns over ${POSE_LIMITS.maxTurnPerSegment}° across more keyframes`);
+        continue;
+      }
+      const pieces = Math.max(
+        Math.ceil(turn / POSE_LIMITS.maxTurnPerSegment),
+        style === 'Linear' ? 1 : Math.ceil(turn / POSE_LIMITS.easedSplitDegrees),
+      );
+      const span = to.keyframe.time - from.keyframe.time;
+      for (let piece = 1; piece < pieces; piece += 1) {
+        const fraction = piece / pieces;
+        const exact = from.keyframe.time + span * (style === 'Linear' ? fraction : easedTime(style, direction, fraction));
+        const rounded = round(exact);
+        const time = rounded > from.keyframe.time && rounded < to.keyframe.time ? rounded : exact;
+        at(time).joints.set(joint.childPart, {
+          joint,
+          rotation: slerpRotation(start.rotation, end.rotation, fraction),
+          position: [0, 1, 2].map((axis) => start.position[axis] + (end.position[axis] - start.position[axis]) * fraction) as [number, number, number],
+          easing: LINEAR,
+        });
+        added += 1;
+      }
+      // The first key now runs straight to the first in-between.
+      from.keyframe.joints.set(joint.childPart, { ...start, easing: LINEAR });
+    }
+  }
+  const merged = [...keyframes, ...extra].sort((a, b) => a.time - b.time);
+  if (merged.length > POSE_LIMITS.maxKeyframes) {
+    issues.add('keyframes', `with the in-betweens its turns over ${POSE_LIMITS.maxTurnPerSegment}° need, it would have ${merged.length} keyframes; at most ${POSE_LIMITS.maxKeyframes}`);
+  }
+  return { keyframes: merged, added };
+}
+
 // Each joint's turn from one of its keys to the next, measured on the
 // rotations as compiled.
 function checkTurns(keyframes: ParsedKeyframe[], animationEasing: ParsedJoint['easing'], rig: Rig, issues: Issues): void {
@@ -626,8 +738,15 @@ export function compilePoseAnimation(input: unknown): PoseCompileResult {
     ? 'Action'
     : parseEnum(input.priority, ANIMATION_PRIORITIES, 'priority', issues);
   const easing = parseEasing(input.easing, 'easing', issues);
-  const keyframes = rig ? parseKeyframes(input.keyframes, rig, issues) : [];
-  if (rig && issues.count === 0) checkTurns(keyframes, easing, rig, issues);
+  let keyframes = rig ? parseKeyframes(input.keyframes, rig, issues) : [];
+  let inBetweenCount = 0;
+  if (rig && issues.count === 0) {
+    const split = splitTurns(keyframes, easing, rig, issues);
+    keyframes = split.keyframes;
+    inBetweenCount = split.added;
+    // Every turn left over the limit snaps; this only guards the split.
+    if (issues.count === 0) checkTurns(keyframes, easing, rig, issues);
+  }
 
   if (issues.count > 0 || !rig || name === undefined || priority === undefined) {
     return { ok: false, errors: issues.report() };
@@ -656,6 +775,7 @@ export function compilePoseAnimation(input: unknown): PoseCompileResult {
       poseCount,
       keyedPoseCount,
       markerCount: keyframes.reduce((total, keyframe) => total + keyframe.markers.length, 0),
+      inBetweenCount,
     },
   };
 }

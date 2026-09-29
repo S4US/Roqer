@@ -18,8 +18,14 @@ and returns a contact sheet, without touching Studio.
   in the first. A joint left out of a later keyframe just keeps moving toward
   its next key.
 - A loop's last keyframe must repeat its first, so the loop joins up.
-- A joint may turn at most 90° between two of its keys. Split a bigger turn
-  with a keyframe in between, as the jump recipe does for its arms.
+- A joint that turns more than 90° between two of its keys gets in-between
+  keys added for it, along the short way round; `animation.inBetweens` in the
+  result counts them. Write a big swing as its key poses, not its arithmetic.
+- The short way round must be the way you mean. A turn of 175° or more is
+  refused, and a wide arc, such as an overhead slash that ends low on the
+  other side, needs a key partway along it (the arm forward at the middle
+  of the swing) so it goes over the top rather than through the body.
+- Elastic and Bounce turns over 90° are not split: split them yourself.
 - `easing` is `{ style, direction }`. Styles are Linear, Constant, Cubic,
   CubicV2, Elastic and Bounce; directions are In, Out and InOut. It can be set
   on a joint, a keyframe or the whole animation, and the nearest one applies.
@@ -134,8 +140,7 @@ The run has the same structure as the walk, with these differences:
 - a higher knee lift;
 - arms bent to 85° and swinging wider.
 
-Keep a knee's change between keys under 90°: that is why the lift stops at 95°
-from about 25°.
+The knee lift stops at 95° from about 25°: a bigger lift reads as a sprint.
 
 ### Jump (one shot)
 
@@ -149,8 +154,8 @@ from about 25°.
 
 The Humanoid does the jumping. The animation only poses the body in the air:
 arms thrown up and knees tucked. The arms pass through the side at 0.12 s,
-because going straight from down to overhead would turn them more than 90° in
-one step.
+because going straight from down to overhead would be about half a turn, and
+the key at the side says which way round the arms go.
 
 ## Reading the result
 

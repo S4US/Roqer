@@ -306,6 +306,11 @@ What was built:
   keys, unless the earlier key snaps (Constant). Past 90°, Studio's playback of
   Linear keys drifts from the model, and past 180° a turn goes the short way
   round.
+  Since 2026-09-29 the compiler keeps the rule itself: a longer turn is split
+  into in-between keys of that joint along the short way round, placed where
+  the key's easing reaches them. Turns of 175° or more, whose way round is
+  unclear, and Elastic or Bounce turns, whose overshoot in-betweens lose, are
+  still refused.
 - **Layers.**
   - Core: the schema (with the tool guide's "Character animation" section),
     HTTP routing, `RobloxStudioTools.animation` and

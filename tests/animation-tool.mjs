@@ -149,6 +149,20 @@ const passed = await runTest('animation tool', async ({ track }) => {
     assert(aimed.built === true && aimed.playback?.verified === true, `an aim-posed wave builds and plays as checked (${aimed.error ?? `within ${aimed.playback?.maxDegrees}°`})`);
     assert(/straight at its front/.test(aimed.sheet?.reading ?? ''), 'a wave\'s contact sheet looks at the front below');
 
+    // A swing over 90° is split into in-betweens that Studio plays as checked.
+    const swung = await client.callTool('animation', {
+      action: 'build',
+      animation: {
+        name: 'Swung', rig: 'R15',
+        keyframes: [
+          { time: 0, easing: { style: 'CubicV2', direction: 'Out' }, joints: { RightShoulder: { aim: [0, -1, 0] } } },
+          { time: 0.3, joints: { RightShoulder: { aim: [0, 1, 0.5] } } },
+        ],
+      },
+      parent: PARENT,
+    }, 120_000);
+    assert(swung.built === true && swung.animation?.inBetweens > 0 && swung.playback?.verified === true, `a split swing builds and plays as checked (${swung.error ?? `${swung.animation?.inBetweens} in-betweens, within ${swung.playback?.maxDegrees}°`})`);
+
     // Markers become KeyframeMarkers a script's GetMarkerReachedSignal fires on.
     const marked = await client.callTool('animation', {
       action: 'build',

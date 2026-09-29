@@ -197,25 +197,72 @@ describe('compilePoseAnimation', () => {
     ]);
   });
 
-  test('refuses a turn over 90° between one key and the next, unless the earlier key snaps', () => {
-    const turn = (style?: string) => ({
+  test('splits a turn over 90° into in-betweens of that joint, keeping its easing\'s timing', () => {
+    const turn = (style?: string, direction?: string) => ({
       name: 'Swing',
       rig: 'R15',
       keyframes: [
-        { time: 0, joints: { RightShoulder: { rotation: [-50, 0, 0], ...(style ? { easing: { style } } : {}) } } },
-        { time: 0.5, joints: { RightShoulder: { rotation: [60, 0, 0] } } },
+        { time: 0, joints: { RightShoulder: { rotation: [-50, 0, 0], ...(style ? { easing: { style, ...(direction ? { direction } : {}) } } : {}) }, Neck: {} } },
+        { time: 0.5, joints: { RightShoulder: { rotation: [60, 0, 0] }, Neck: {} } },
       ],
     });
-    expect(errors(turn())).toEqual([
-      'keyframes[1].joints.RightShoulder: turns 110° from its key at 0 s; split turns over 90° across more keyframes',
+    // Linear: one in-between halfway in time and in angle, keying only the shoulder.
+    const linear = compiled(turn());
+    expect(linear.inBetweenCount).toBe(1);
+    expect(linear.keyframes.map((keyframe) => keyframe.time)).toEqual([0, 0.25, 0.5]);
+    const middle = flatten(linear.keyframes[1].root).filter((pose) => pose.weight === 1);
+    expect(middle.map((pose) => pose.joint)).toEqual(['RightShoulder']);
+    middle[0].cframe.forEach((value, index) => expect(value).toBeCloseTo(poseCFrame([5, 0, 0])[index], 6));
+    expect(middle[0]).toMatchObject({ easingStyle: 'Linear', easingDirection: 'In' });
+
+    // Eased: an in-between every 30° or less, each where the easing reaches it.
+    const eased = compiled(turn('CubicV2', 'In'));
+    expect(eased.inBetweenCount).toBe(3);
+    const times = eased.keyframes.map((keyframe) => keyframe.time);
+    expect(times).toHaveLength(5);
+    [0.25, 0.5, 0.75].forEach((progress, index) => expect(times[index + 1]).toBeCloseTo(0.5 * Math.cbrt(progress), 5));
+    const first = flatten(eased.keyframes[0].root).find((pose) => pose.joint === 'RightShoulder')!;
+    expect(first).toMatchObject({ easingStyle: 'Linear' });
+
+    // Every compiled segment is within the limit.
+    for (const sequence of [linear, eased]) {
+      const keys = sequence.keyframes
+        .map((keyframe) => flatten(keyframe.root).find((pose) => pose.joint === 'RightShoulder' && pose.weight === 1))
+        .filter((pose): pose is CompiledPose => pose !== undefined);
+      for (let index = 1; index < keys.length; index += 1) {
+        let trace = 0;
+        for (let component = 3; component < 12; component += 1) trace += keys[index - 1].cframe[component] * keys[index].cframe[component];
+        expect((Math.acos(Math.min(1, (trace - 1) / 2)) * 180) / Math.PI).toBeLessThanOrEqual(POSE_LIMITS.maxTurnPerSegment + 1e-6);
+      }
+    }
+
+    // A snapping key may turn any amount, and adds nothing.
+    expect(compiled(turn('Constant')).inBetweenCount).toBe(0);
+    // Elastic and Bounce overshoot, which in-betweens would lose.
+    expect(errors(turn('Elastic'))).toEqual([
+      'keyframes[1].joints.RightShoulder: turns 110° from its key at 0 s with Elastic easing, whose overshoot in-betweens cannot keep; split turns over 90° across more keyframes',
     ]);
-    expect(errors(turn('CubicV2'))).toHaveLength(1);
-    expect(compilePoseAnimation(turn('Constant')).ok).toBe(true);
-    // Split across a middle key, the same swing is fine.
-    expect(compilePoseAnimation({
-      ...turn(),
-      keyframes: [...turn().keyframes.slice(0, 1), { time: 0.25, joints: { RightShoulder: { rotation: [5, 0, 0] } } }, { time: 0.5, joints: { RightShoulder: { rotation: [60, 0, 0] } } }],
-    }).ok).toBe(true);
+    // Near half a turn the way round is unclear.
+    expect(errors({
+      name: 'Flip',
+      rig: 'R15',
+      keyframes: [
+        { time: 0, joints: { RightShoulder: { rotation: [-89, 0, 0] } } },
+        { time: 0.5, joints: { RightShoulder: { rotation: [89, 0, 0] } } },
+      ],
+    })).toEqual([
+      'keyframes[1].joints.RightShoulder: turns 178° from its key at 0 s, too near half a turn to tell which way round it goes; add a keyframe partway along the way it should turn',
+    ]);
+  });
+
+  test('keeps the keyframe limit after adding in-betweens', () => {
+    const keyframes = Array.from({ length: POSE_LIMITS.maxKeyframes }, (_unused, index) => ({
+      time: index / 10,
+      joints: { RightShoulder: { rotation: [index % 2 === 0 ? -60 : 60, 0, 0] } },
+    }));
+    expect(errors({ name: 'Flail', rig: 'R15', keyframes })).toEqual([
+      `keyframes: with the in-betweens its turns over 90° need, it would have ${POSE_LIMITS.maxKeyframes * 2 - 1} keyframes; at most ${POSE_LIMITS.maxKeyframes}`,
+    ]);
   });
 
   test('aims a limb and bends a hinge, and refuses them where they do not apply', () => {
