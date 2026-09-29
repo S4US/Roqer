@@ -83,8 +83,11 @@ tells you that publishing needs a key.
    legs. A failed check names the
    joint, the time and the limit. The agent fixes it, or waives it when it is
    meant, such as a jump that leaves the ground.
-3. **You see the motion.** Roqer draws the stock rig at five moments of the
-   animation in one picture, the contact sheet, which the agent can look at.
+3. **You see the motion.** Roqer draws the stock rig at several moments of
+   the animation in one picture, the contact sheet, which the agent can look
+   at: five evenly spaced, plus the moments that matter most (each named
+   keyframe, each marker such as a hit, and the instant the body moves
+   fastest), so a fast strike is never missed between columns.
    - The top row shows the front three-quarter.
    - The bottom row looks straight at the front. For a gait, it looks from the
      side instead, where strides show.

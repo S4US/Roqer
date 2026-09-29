@@ -1854,13 +1854,15 @@ export class RobloxStudioTools {
             ...body,
             sheet: {
               times: sheet.times.map((time) => Math.round(time * 1000) / 1000),
+              // What each column is, beside the even steps: its keyframe name, marker, or the fastest instant.
+              ...(sheet.labels.some((label) => label !== '') ? { shows: sheet.labels } : {}),
               rig: rig.name === 'R6'
                 ? 'the R6 rig, whose parts are blocks'
                 : meshes.source === 'studio' ? 'the stock R15 rig' : 'a stand-in block rig, until a build reads the stock rig from Studio',
               ...(previewProps(sequence).length > 0
                 ? { props: 'stand-ins: a 4-stud blade along each hand prop\'s +Y, a 3.8-stud sheath along SheathAttach\'s +Y' }
                 : {}),
-              reading: `One column per time. Top row from the front three-quarter, bottom row ${locomotion ? 'from its right side facing right' : 'straight at its front, its right hand on the left'}; the shadow marks the ground under the body.`,
+              reading: `One column per time, the key moments named in shows. Top row from the front three-quarter, bottom row ${locomotion ? 'from its right side facing right' : 'straight at its front, its right hand on the left'}; the shadow marks the ground under the body.`,
             },
           }),
         },

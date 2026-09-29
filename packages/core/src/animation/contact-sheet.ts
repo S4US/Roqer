@@ -12,7 +12,7 @@
 import { rgbaToPng } from '../png-encoder.js';
 import { heldParts, RIG_COLOR, type Rgb } from './box-rig.js';
 import { generatedRigMeshes, type RigMeshes } from './rig-meshes.js';
-import { buildTracks, poseRig, sequenceDuration, type Frame, type MotionSequence } from './motion.js';
+import { buildTracks, degreesBetween, poseRig, sampleTrack, sequenceDuration, type Frame, type MotionSequence } from './motion.js';
 import { R15_RIG, type Rig, type Vec3 } from './r15-rig.js';
 
 const CELL_WIDTH = 172;
@@ -21,6 +21,8 @@ const LABEL_HEIGHT = 18;
 /** Studs across the cell's height; the width follows the cell's shape. */
 const VIEW_HEIGHT_STUDS = 7.4;
 const COLUMNS = 5;
+/** The most columns a sheet draws: the even ones, with key moments added or snapped in. */
+export const MAX_COLUMNS = 8;
 
 const TOP: Rgb = [30, 33, 40];
 const BOTTOM: Rgb = [18, 20, 25];
@@ -237,6 +239,67 @@ export interface ContactSheet {
   height: number;
   /** The moment each column shows, in seconds. */
   times: number[];
+  /** Why each column is there: a keyframe's name, a marker, "fastest", or "" for an even step. */
+  labels: string[];
+}
+
+/** A sequence whose keyframes may carry names and markers, as a compiled one does. */
+export type LabelledSequence = MotionSequence & {
+  keyframes: readonly (MotionSequence['keyframes'][number] & { name?: string; markers?: readonly { name: string }[] })[];
+};
+
+/** When the body moves fastest: summed turn of every joint over a 60th of a second. */
+function fastestMoment(sequence: MotionSequence): { time: number; speed: number } | undefined {
+  const duration = sequenceDuration(sequence);
+  if (duration === 0) return undefined;
+  const tracks = buildTracks(sequence);
+  const step = 1 / 60;
+  let best: { time: number; speed: number } | undefined;
+  let previous = new Map([...tracks.keys()].map((part) => [part, sampleTrack(tracks.get(part), 0).r]));
+  for (let time = step; time <= duration + 1e-9; time += step) {
+    const now = new Map([...tracks.keys()].map((part) => [part, sampleTrack(tracks.get(part), time).r]));
+    let turned = 0;
+    for (const [part, r] of now) turned += degreesBetween(previous.get(part)!, r);
+    if (!best || turned / step > best.speed) best = { time: time - step / 2, speed: turned / step };
+    previous = now;
+  }
+  return best;
+}
+
+/**
+ * The moments a sheet shows, with why: the even steps of sheetTimes, and the
+ * moments that matter most, which an even step can miss in a short strike:
+ * each named keyframe, each marker, and the fastest instant. A key moment
+ * near an even step replaces it; the rest are added, up to MAX_COLUMNS.
+ */
+export function sheetMoments(sequence: LabelledSequence): { time: number; label: string }[] {
+  const duration = sequenceDuration(sequence);
+  const moments = sheetTimes(sequence).map((time) => ({ time, label: '' }));
+  if (duration === 0) return moments;
+  const keys: { time: number; label: string; rank: number }[] = [];
+  for (const keyframe of sequence.keyframes) {
+    for (const marker of keyframe.markers ?? []) keys.push({ time: keyframe.time, label: marker.name, rank: 0 });
+    if (keyframe.name) keys.push({ time: keyframe.time, label: keyframe.name, rank: 1 });
+  }
+  const fastest = fastestMoment(sequence);
+  if (fastest && fastest.speed > 90) keys.push({ time: Math.round(fastest.time * 1000) / 1000, label: 'fastest', rank: 2 });
+  // A loop's last moment is its first.
+  const shown = keys.filter((key) => !(sequence.loop && key.time >= duration - 1e-9)).sort((a, b) => a.rank - b.rank);
+  const snap = Math.min(0.04, duration / 20);
+  for (const key of shown) {
+    const near = moments.find((moment) => Math.abs(moment.time - key.time) <= snap);
+    const ends = [moments[0], ...(sequence.loop ? [] : [moments[moments.length - 1]])];
+    // The first and last columns stay where they are; a moment that close to
+    // one is already shown by it, and is named there only if it is the same.
+    if (near && ends.includes(near) && Math.abs(near.time - key.time) > 1e-6) continue;
+    if (near) {
+      if (near.label === '') near.time = key.time;
+      if (!near.label.split(', ').includes(key.label)) near.label = near.label ? `${near.label}, ${key.label}` : key.label;
+    } else if (moments.length < MAX_COLUMNS) {
+      moments.push({ time: key.time, label: key.label });
+    }
+  }
+  return moments.sort((a, b) => a.time - b.time);
 }
 
 /**
@@ -256,7 +319,8 @@ export function renderContactSheet(
   options: { locomotion?: boolean; rig?: Rig } = {},
 ): ContactSheet {
   const rig = options.rig ?? R15_RIG;
-  const times = sheetTimes(sequence);
+  const moments = sheetMoments(sequence as LabelledSequence);
+  const times = moments.map((moment) => moment.time);
   const tracks = buildTracks(sequence);
   const figure: Figure = {
     rig,
@@ -279,5 +343,5 @@ export function renderContactSheet(
     if (column > 0) for (let y = 0; y < height; y += 1) canvas.put(left, y, DIVIDER);
   });
   for (let x = 0; x < width; x += 1) canvas.put(x, rowHeight, DIVIDER);
-  return { png: rgbaToPng(canvas.rgba, width, height), width, height, times };
+  return { png: rgbaToPng(canvas.rgba, width, height), width, height, times, labels: moments.map((moment) => moment.label) };
 }

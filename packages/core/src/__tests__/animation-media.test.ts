@@ -1,6 +1,6 @@
 import { inflateSync } from 'zlib';
 import { drawnParts, roundedBox } from '../animation/box-rig.js';
-import { renderContactSheet, sheetTimes } from '../animation/contact-sheet.js';
+import { MAX_COLUMNS, renderContactSheet, sheetMoments, sheetTimes } from '../animation/contact-sheet.js';
 import { GLB_SAMPLE_RATE, glbSampleTimes, renderRigGlb } from '../animation/rig-glb.js';
 import { compilePoseAnimation, type KeyframeSequenceDescription } from '../animation/pose-compiler.js';
 import { R15_RIG } from '../animation/r15-rig.js';
@@ -59,6 +59,31 @@ describe('contact sheet', () => {
     const sheet = renderContactSheet(still);
     expect(sheet.times).toEqual([0]);
     expect([sheet.width, sheet.height]).toEqual([172, 508]);
+  });
+
+  test('adds columns at markers, named keys and the fastest instant, which even steps miss', () => {
+    const slash = compiled({
+      name: 'Cut',
+      rig: 'R15',
+      keyframes: [
+        { time: 0, joints: { RightShoulder: { rotation: [0, 0, 0] } } },
+        { time: 0.3, name: 'WindUp', joints: { RightShoulder: { rotation: [-80, 0, 0] } } },
+        { time: 0.37, joints: { RightShoulder: { rotation: [10, 0, 0] } }, markers: [{ name: 'Hit' }] },
+        { time: 1, joints: { RightShoulder: { rotation: [0, 0, 0] } } },
+      ],
+    });
+    const moments = sheetMoments(slash);
+    // The even steps are 0, 0.25, 0.5, 0.75 and 1: the strike from 0.3 to 0.37 falls between them.
+    expect(moments.find((moment) => moment.label === 'WindUp')).toEqual({ time: 0.3, label: 'WindUp' });
+    // The strike is fastest just before the hit, so the two share a column.
+    expect(moments.find((moment) => moment.label.startsWith('Hit'))).toEqual({ time: 0.37, label: 'Hit, fastest' });
+    // The first and last columns stay put.
+    expect(moments[0].time).toBe(0);
+    expect(moments[moments.length - 1].time).toBe(1);
+    expect(moments.length).toBeLessThanOrEqual(MAX_COLUMNS);
+    const sheet = renderContactSheet(slash);
+    expect(sheet.labels).toEqual(moments.map((moment) => moment.label));
+    expect(sheet.width).toBe(172 * moments.length);
   });
 
   test('draws the same figure the same way every time', () => {

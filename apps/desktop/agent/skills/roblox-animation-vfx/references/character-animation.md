@@ -381,7 +381,10 @@ the head.
 
 ## Reading the result
 
-- The contact sheet shows five moments. The top row is the front
+- The contact sheet shows five evenly spaced moments, and a column for each
+  named keyframe, each marker and the fastest instant, up to eight in all:
+  `sheet.shows` names them. Name the keys that matter (`WindUp`, `Hit`) so a
+  fast strike is always drawn. The top row is the front
   three-quarter. The bottom row looks straight at the front, where arm and head
   motion reads; for a gait (`locomotion: true`) it looks from the side, where
   strides and foot plants read.
