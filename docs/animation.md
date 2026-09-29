@@ -46,6 +46,9 @@ tells you that publishing needs a key.
    It starts from tested recipes for a wave, idle, walk, run and jump, which
    ship with Roqer's animation skill.
 
+   For a sword or other weapon, the agent can also move the weapon in the
+   hand, so a swing can flick and tilt the blade.
+
    A keyframe can also carry markers: named events, such as the moment a
    sword hit lands, that a game script waits for with
    `GetMarkerReachedSignal`.
@@ -119,8 +122,12 @@ between versions ("Version 3 of 6"), and the newest is shown first.
 
 ## Limits
 
-- R15 only, and only the standard body's joints. Faces, fingers, clothing and
-  skinned-mesh rigs are not animated.
+- R15 only, and only the standard body's joints, plus one held weapon in the
+  right hand. Faces, fingers, clothing and skinned-mesh rigs are not
+  animated.
+- A weapon is animated through a `Motor6D` the game adds when the weapon is
+  equipped, moving a part named `BodyAttach`, because Roblox's own grip weld
+  cannot be animated. The animation skill has the script for it.
 - Animations are `KeyframeSequence`s, not `CurveAnimation`s.
 - Wiring sets the default `Animate` script's slots. A game that plays its own
   animations from its own scripts needs those scripts changed instead.

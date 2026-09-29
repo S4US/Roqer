@@ -198,6 +198,39 @@ function destroyQuietly(instance: Instance | undefined) {
 	if (instance) pcall(() => instance.Destroy());
 }
 
+/** The part a weapon's other parts weld to, moved by a Motor6D from the hand. */
+const WEAPON_PART = "BodyAttach";
+
+/**
+ * Give a preview dummy the weapon grip a game rigs for animated weapons: a
+ * part named BodyAttach, moved by a Motor6D from the hand whose C0 is the
+ * hand's RightGripAttachment and whose C1 is the identity.
+ */
+function addWeaponGrip(rig: Model) {
+	const attachment = rig.FindFirstChild("RightGripAttachment", true);
+	const hand = attachment?.Parent;
+	if (!attachment || !attachment.IsA("Attachment") || !hand || !hand.IsA("BasePart")) {
+		error("the preview dummy has no RightGripAttachment for a weapon");
+	}
+	const part = new Instance("Part");
+	part.Name = WEAPON_PART;
+	part.Size = new Vector3(0.2, 0.2, 0.2);
+	part.CanCollide = false;
+	part.CanQuery = false;
+	part.CanTouch = false;
+	part.Massless = true;
+	part.Transparency = 1;
+	part.CFrame = hand.CFrame.mul(attachment.CFrame);
+	const motor = new Instance("Motor6D");
+	motor.Name = WEAPON_PART;
+	motor.Part0 = hand;
+	motor.Part1 = part;
+	motor.C0 = attachment.CFrame;
+	motor.C1 = new CFrame();
+	motor.Parent = hand;
+	part.Parent = rig;
+}
+
 function previewAnimation(requestData: Data) {
 	const times = requestData.sampleTimes;
 	if (!typeIs(times, "table") || (times as unknown[]).size() === 0 || (times as unknown[]).size() > MAX_SAMPLES) {
@@ -235,6 +268,7 @@ function previewAnimation(requestData: Data) {
 		const root = rig.FindFirstChild("HumanoidRootPart");
 		if (root && root.IsA("BasePart")) root.Anchored = true;
 		rig.Parent = folder;
+		addWeaponGrip(rig);
 
 		const joints = new Map<string, Instance>();
 		for (const descendant of rig.GetDescendants()) {

@@ -594,6 +594,24 @@ plays, and nothing would show it.
 **Done when** T16 passes, and a manual R6 playtest shows the run playing while
 the player moves.
 
+### Weapons — implemented 2026-09-29, live checks pending
+
+A combat animation moves the weapon as well as the arm. Roblox's `RightGrip`
+weld cannot be animated, so the rig gains one optional joint, `Weapon`: a
+`Motor6D` from the right hand to a part named `BodyAttach`, with C0 at the
+hand's `RightGripAttachment` and C1 the identity, which the game swaps in on
+equip (the skill has the script). This is the first joint whose frame is
+turned in its parent, so the motion model now follows C0 and C1 rotations,
+and the compiler takes a pose in the parent part's axes and converts it.
+
+- The joint is optional: it is previewed, drawn and verified only when an
+  animation keys it. The preview dummy always carries a stand-in motor built
+  from its own `RightGripAttachment`.
+- Unconfirmed until `tests/animation-tool.mjs` runs against Studio: the rig
+  table's grip position (0, -0.15, 0), and that the preview dummy's Animator
+  drives a `Motor6D` beside its `AnimationConstraint` joints. The suite checks
+  both.
+
 ### 12. Creatures made of rigid parts — proposed
 
 Animals and monsters that Blender models as separate pieces (a body, a head,

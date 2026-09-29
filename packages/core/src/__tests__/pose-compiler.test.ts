@@ -52,8 +52,12 @@ function swing(overrides: Record<string, unknown> = {}) {
 
 describe('R15 rig', () => {
   test('matches the rest pose the spike measured', () => {
-    expect(R15_RIG.joints).toHaveLength(15);
-    expect(Object.keys(R15_RIG.parts)).toHaveLength(16);
+    // The 15 body joints, and the optional weapon grip in the right hand.
+    expect(R15_RIG.joints).toHaveLength(16);
+    expect(Object.keys(R15_RIG.parts)).toHaveLength(17);
+    expect(R15_RIG.joints.filter((joint) => joint.optional)).toEqual([
+      expect.objectContaining({ name: 'Weapon', parentPart: 'RightHand', childPart: 'BodyAttach' }),
+    ]);
     const reached = new Set([R15_RIG.rootPart]);
     for (const joint of R15_RIG.joints) {
       // Parents come first, so a pose tree can be built in one pass.
@@ -62,7 +66,7 @@ describe('R15 rig', () => {
       expect(R15_RIG.parts[joint.childPart]).toBeDefined();
       reached.add(joint.childPart);
     }
-    expect(reached.size).toBe(16);
+    expect(reached.size).toBe(17);
   });
 });
 
@@ -344,6 +348,32 @@ describe('compilePoseAnimation', () => {
       `keyframes[1].markers: must hold at most ${POSE_LIMITS.maxMarkersPerKeyframe} markers`,
       `keyframes[2].markers[0].value: must be at most ${POSE_LIMITS.maxMarkerValueLength} characters`,
       'keyframes[3].joints: must key at least one joint, or carry markers',
+    ]);
+  });
+
+  test('turns the weapon about the hand\'s axes, and only by rotation', () => {
+    const weapon = (rotation: number[]) => compiled({
+      name: 'Twirl',
+      rig: 'R15',
+      keyframes: [{ time: 0, joints: { Weapon: { rotation } } }],
+    });
+    const pose = (sequence: KeyframeSequenceDescription) => flatten(sequence.keyframes[0].root).find((candidate) => candidate.joint === 'Weapon')!;
+    expect(outline(weapon([0, 0, 0]).keyframes[0].root)).toBe(
+      'HumanoidRootPart*(LowerTorso*(UpperTorso*(RightUpperArm*(RightLowerArm*(RightHand*(BodyAttach))))))',
+    );
+    // The grip's frame is the hand's turned -90° about X: a turn about the
+    // hand's X stays about X, and one about the hand's Y (up the forearm) is
+    // about the grip's Z.
+    pose(weapon([30, 0, 0])).cframe.forEach((value, index) => expect(value).toBeCloseTo(poseCFrame([30, 0, 0])[index], 6));
+    pose(weapon([0, 30, 0])).cframe.forEach((value, index) => expect(value).toBeCloseTo(poseCFrame([0, 0, 30])[index], 6));
+
+    expect(errors({
+      name: 'Bad',
+      rig: 'R15',
+      keyframes: [{ time: 0, joints: { Weapon: { aim: [0, 1, 0] } } }, { time: 1, joints: { Weapon: { position: [0, 1, 0] } } }],
+    })).toEqual([
+      'keyframes[0].joints.Weapon: aim and bendToward work on shoulders and hips; use rotation here',
+      'keyframes[1].joints.Weapon.position: only Root takes a position; other joints only rotate',
     ]);
   });
 

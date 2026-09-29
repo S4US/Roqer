@@ -11,14 +11,23 @@ export type Rgb = readonly [number, number, number];
 /** One light grey for the whole rig, as a plain R15 dummy is. */
 export const RIG_COLOR: Rgb = [214, 217, 222];
 
-/** The parts drawn: every part but the HumanoidRootPart, which Roblox hides. */
+/**
+ * The body's parts, drawn in every preview: every part but the
+ * HumanoidRootPart, which Roblox hides, and a held weapon's.
+ */
 export function drawnParts(rig: Rig = R15_RIG): string[] {
-  return Object.keys(rig.parts).filter((part) => part !== rig.rootPart);
+  const held = new Set(heldParts(rig));
+  return Object.keys(rig.parts).filter((part) => part !== rig.rootPart && !held.has(part));
+}
+
+/** The parts of optional joints, such as the weapon: drawn only when an animation moves them. */
+export function heldParts(rig: Rig = R15_RIG): string[] {
+  return rig.joints.filter((joint) => joint.optional).map((joint) => joint.childPart);
 }
 
 /** Where the ground is, in the HumanoidRootPart's frame. */
 export function groundHeight(rig: Rig = R15_RIG): number {
-  return -(rig.hipHeight + rig.parts[rig.rootPart][1] / 2);
+  return rig.ground;
 }
 
 export interface PartMesh {
@@ -93,5 +102,8 @@ export function roundedBox(size: Vec3, radius: number, steps = 3): PartMesh {
 /** A part's mesh, in the part's own frame. */
 export function partMesh(part: string, rig: Rig = R15_RIG): PartMesh {
   const size = rig.parts[part];
-  return roundedBox(size, edgeRadius(part, size));
+  const mesh = roundedBox(size, edgeRadius(part, size));
+  const offset = rig.drawOffsets?.[part];
+  if (offset) mesh.positions = mesh.positions.map((value, index) => value + offset[index % 3]);
+  return mesh;
 }

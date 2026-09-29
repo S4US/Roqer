@@ -9,9 +9,10 @@
 // transforms Studio produces.
 //
 // Forward kinematics follows AnimationConstraint and Motor6D alike:
-//   child = parent * offsetInParent * Transform * offsetInChild^-1
-// with every attachment rotation the identity, as on the stock R15 rig. All
-// positions are in the HumanoidRootPart's frame.
+//   child = parent * C0 * Transform * C1^-1
+// where C0 and C1 are the joint's frame in the parent and the child. On the
+// stock R15 body they are pure offsets; R6 joints and the weapon grip turn
+// them too. All positions are in the HumanoidRootPart's frame.
 
 import {
   POSE_EASING_DIRECTIONS,
@@ -23,7 +24,7 @@ import {
 import type { CFrameComponents } from './pose-compiler.js';
 
 export { easeAlpha };
-import { R15_RIG, type Rig, type Vec3 } from './r15-rig.js';
+import { IDENTITY_ROTATION, R15_RIG, type Rig, type RigJoint, type Rotation, type Vec3 } from './r15-rig.js';
 
 export interface MotionPose {
   part: string;
@@ -85,6 +86,44 @@ export function multiply(a: Frame, b: Frame): Frame {
       r[6] * s[0] + r[7] * s[3] + r[8] * s[6], r[6] * s[1] + r[7] * s[4] + r[8] * s[7], r[6] * s[2] + r[7] * s[5] + r[8] * s[8],
     ],
   };
+}
+
+function rotationFrame(r: Rotation): Frame {
+  return { p: [0, 0, 0], r: [...r] as Frame['r'] };
+}
+
+function transpose(r: Rotation): Rotation {
+  return [r[0], r[3], r[6], r[1], r[4], r[7], r[2], r[5], r[8]];
+}
+
+/** The joint's frame in its parent part: Motor6D.C0. */
+export function jointParentFrame(joint: RigJoint): Frame {
+  return { p: [...joint.parentOffset], r: [...(joint.parentRotation ?? IDENTITY_ROTATION)] as Frame['r'] };
+}
+
+/** The inverse of the joint's frame in its child part: Motor6D.C1^-1. */
+export function jointChildFrameInverse(joint: RigJoint): Frame {
+  const inverse = transpose(joint.childRotation ?? IDENTITY_ROTATION);
+  return multiply(rotationFrame(inverse), translation([-joint.childOffset[0], -joint.childOffset[1], -joint.childOffset[2]]));
+}
+
+/**
+ * A joint's Transform as a turn in its parent part's own axes, about the
+ * joint: what the pose format's rotation, aim and bend describe. The same as
+ * the Transform on a joint whose frame is not turned.
+ */
+export function transformInParent(joint: RigJoint, transform: Frame): Frame {
+  const turn = joint.parentRotation;
+  if (!turn) return transform;
+  const frame = rotationFrame(turn);
+  return multiply(multiply(frame, transform), rotationFrame(transpose(turn)));
+}
+
+/** The Transform that turns and moves a joint as `inParent` does in its parent's axes. */
+export function transformFromParent(joint: RigJoint, inParent: Frame): Frame {
+  const turn = joint.parentRotation;
+  if (!turn) return inParent;
+  return multiply(multiply(rotationFrame(transpose(turn)), inParent), rotationFrame(turn));
 }
 
 export function pointToWorld(frame: Frame, v: Vec3): [number, number, number] {
@@ -235,10 +274,9 @@ export function poseRig(tracks: MotionTracks, t: number, rig: Rig = R15_RIG): Ri
     const transform = sampleTrack(tracks.get(joint.childPart), t);
     transforms.set(joint.name, transform);
     const parent = parts.get(joint.parentPart) ?? IDENTITY_FRAME;
-    const [x, y, z] = joint.childOffset;
     parts.set(
       joint.childPart,
-      multiply(multiply(multiply(parent, translation(joint.parentOffset)), transform), translation([-x, -y, -z])),
+      multiply(multiply(multiply(parent, jointParentFrame(joint)), transform), jointChildFrameInverse(joint)),
     );
   }
   return { transforms, parts };

@@ -39,6 +39,7 @@ import {
 import { compilePoseAnimation, type KeyframeSequenceDescription } from '../animation/pose-compiler.js';
 import { renderContactSheet } from '../animation/contact-sheet.js';
 import { renderRigGlb } from '../animation/rig-glb.js';
+import { rigFor } from '../animation/rigs.js';
 import { cachedRigMeshes, currentRigMeshes, storeRigMeshes } from '../animation/rig-meshes.js';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -1840,9 +1841,10 @@ export class RobloxStudioTools {
   }
 
   private _animationResult(body: Record<string, unknown>, sequence: KeyframeSequenceDescription, locomotion: boolean) {
-    const meshes = currentRigMeshes();
-    const sheet = renderContactSheet(sequence, meshes, { locomotion });
-    const preview = renderRigGlb(sequence, sequence.name, meshes);
+    const rig = rigFor(sequence.rig);
+    const meshes = currentRigMeshes(rig);
+    const sheet = renderContactSheet(sequence, meshes, { locomotion, rig });
+    const preview = renderRigGlb(sequence, sequence.name, meshes, rig);
     return {
       content: [
         {
@@ -1851,7 +1853,10 @@ export class RobloxStudioTools {
             ...body,
             sheet: {
               times: sheet.times.map((time) => Math.round(time * 1000) / 1000),
-              rig: meshes.source === 'studio' ? 'the stock R15 rig' : 'a stand-in block rig, until a build reads the stock rig from Studio',
+              rig: rig.name === 'R6'
+                ? 'the R6 rig, whose parts are blocks'
+                : meshes.source === 'studio' ? 'the stock R15 rig' : 'a stand-in block rig, until a build reads the stock rig from Studio',
+              ...(sequence.joints.includes('Weapon') ? { weapon: 'a 4-stud stand-in blade along BodyAttach\'s +Y' } : {}),
               reading: `One column per time. Top row from the front three-quarter, bottom row ${locomotion ? 'from its right side facing right' : 'straight at its front, its right hand on the left'}; the shadow marks the ground under the body.`,
             },
           }),

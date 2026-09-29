@@ -13,10 +13,19 @@
 // glTF models half a turn onto Roblox's axes, so the figure ends up facing -Z,
 // as it does in Studio.
 
-import { drawnParts, RIG_COLOR } from './box-rig.js';
+import { drawnParts, heldParts, RIG_COLOR } from './box-rig.js';
 import { generatedRigMeshes, type RigMeshes } from './rig-meshes.js';
-import { buildTracks, rotationQuaternion, sampleTrack, sequenceDuration, type MotionSequence } from './motion.js';
-import { R15_RIG, type Rig } from './r15-rig.js';
+import {
+  buildTracks,
+  jointChildFrameInverse,
+  jointParentFrame,
+  multiply,
+  rotationQuaternion,
+  sampleTrack,
+  sequenceDuration,
+  type MotionSequence,
+} from './motion.js';
+import { R15_RIG, type Rig, type RigJoint } from './r15-rig.js';
 
 /** Samples a second: enough for eased motion to read smoothly. */
 export const GLB_SAMPLE_RATE = 30;
@@ -106,9 +115,13 @@ export function glbSampleTimes(sequence: MotionSequence): number[] {
 export function renderRigGlb(
   sequence: MotionSequence,
   name: string,
-  rigMeshes: RigMeshes = generatedRigMeshes(),
+  rigMeshes?: RigMeshes,
   rig: Rig = R15_RIG,
 ): Buffer {
+  const partMeshes = rigMeshes ?? generatedRigMeshes(rig);
+  const tracks = buildTracks(sequence);
+  // A weapon appears only in an animation that moves it.
+  const joints = rig.joints.filter((joint) => !joint.optional || tracks.has(joint.childPart));
   const builder = new BinaryBuilder();
 
   // One material for the whole rig, and one mesh per part, each already at its
@@ -118,7 +131,7 @@ export function renderRigGlb(
   }];
   const meshes: Record<string, unknown>[] = [];
   const meshFor = (part: string): number => {
-    const mesh = rigMeshes.parts.get(part);
+    const mesh = partMeshes.parts.get(part);
     if (!mesh) throw new Error(`no mesh for ${part}`);
     meshes.push({
       name: part,
@@ -136,19 +149,26 @@ export function renderRigGlb(
 
   const nodes: Record<string, unknown>[] = [];
   const jointNodes = new Map<string, number>();
-  const drawn = new Set(drawnParts(rig));
+  const drawn = new Set([...drawnParts(rig), ...heldParts(rig).filter((part) => tracks.has(part))]);
   const addNode = (node: Record<string, unknown>): number => {
     nodes.push(node);
     return nodes.length - 1;
   };
-  const frame = (part: string, offset?: readonly number[]): number => {
-    const index = addNode({ name: part, ...(offset ? { translation: [-offset[0], -offset[1], -offset[2]] } : {}) });
+  // A part's node sits at C1^-1 under its joint's node, which sits at C0 and
+  // carries the Transform: child = parent * C0 * Transform * C1^-1.
+  const frame = (part: string, joint?: RigJoint): number => {
+    const inverse = joint ? jointChildFrameInverse(joint) : undefined;
+    const index = addNode({
+      name: part,
+      ...(inverse ? { translation: inverse.p } : {}),
+      ...(joint?.childRotation ? { rotation: rotationQuaternion(inverse!.r) } : {}),
+    });
     const children: number[] = [];
     if (drawn.has(part)) children.push(addNode({ name: `${part} mesh`, mesh: meshFor(part) }));
-    for (const joint of rig.joints.filter((candidate) => candidate.parentPart === part)) {
-      const jointIndex = addNode({ name: joint.name, translation: [...joint.parentOffset] });
-      jointNodes.set(joint.name, jointIndex);
-      nodes[jointIndex].children = [frame(joint.childPart, joint.childOffset)];
+    for (const child of joints.filter((candidate) => candidate.parentPart === part)) {
+      const jointIndex = addNode({ name: child.name, translation: [...child.parentOffset] });
+      jointNodes.set(child.name, jointIndex);
+      nodes[jointIndex].children = [frame(child.childPart, child)];
       children.push(jointIndex);
     }
     if (children.length > 0) nodes[index].children = children;
@@ -158,16 +178,17 @@ export function renderRigGlb(
   nodes[root].children = [frame(rig.rootPart)];
 
   const times = glbSampleTimes(sequence);
-  const tracks = buildTracks(sequence);
   const input = builder.floats(times, 'SCALAR', { bounds: true });
   const samplers: Record<string, unknown>[] = [];
   const channels: Record<string, unknown>[] = [];
-  for (const joint of rig.joints) {
+  for (const joint of joints) {
+    const c0 = jointParentFrame(joint);
     const rotations: number[] = [];
     const translations: number[] = [];
     let previous: number[] | undefined;
     for (const time of times) {
-      const transform = sampleTrack(tracks.get(joint.childPart), time);
+      // The joint node carries C0 * Transform.
+      const transform = multiply(c0, sampleTrack(tracks.get(joint.childPart), time));
       let q = rotationQuaternion(transform.r);
       // Keep neighbouring quaternions in one hemisphere, so the viewer turns the short way.
       if (previous && q[0] * previous[0] + q[1] * previous[1] + q[2] * previous[2] + q[3] * previous[3] < 0) {
@@ -175,11 +196,7 @@ export function renderRigGlb(
       }
       previous = q;
       rotations.push(...q);
-      translations.push(
-        joint.parentOffset[0] + transform.p[0],
-        joint.parentOffset[1] + transform.p[1],
-        joint.parentOffset[2] + transform.p[2],
-      );
+      translations.push(...transform.p);
     }
     const target = jointNodes.get(joint.name)!;
     samplers.push({ input, output: builder.floats(rotations, 'VEC4'), interpolation: 'LINEAR' });

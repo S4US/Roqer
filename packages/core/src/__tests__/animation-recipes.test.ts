@@ -5,7 +5,7 @@ import fs from 'fs';
 import path from 'path';
 import { compilePoseAnimation, type KeyframeSequenceDescription } from '../animation/pose-compiler.js';
 import { checkMotion } from '../animation/motion-checks.js';
-import { buildTracks, poseRig } from '../animation/motion.js';
+import { buildTracks, pointToWorld, poseRig } from '../animation/motion.js';
 import { sheetTimes } from '../animation/contact-sheet.js';
 
 const REFERENCE = 'apps/desktop/agent/skills/roblox-animation-vfx/references/character-animation.md';
@@ -41,7 +41,7 @@ describe('animation recipes', () => {
   const all = recipes();
 
   it('are all in the reference', () => {
-    expect([...all.keys()].sort()).toEqual(['Idle', 'Jump', 'Run', 'Walk', 'Wave']);
+    expect([...all.keys()].sort()).toEqual(['Idle', 'Jump', 'Run', 'Slash', 'Walk', 'Wave']);
   });
 
   it.each([...all.keys()])('%s compiles and passes every check that applies', (name) => {
@@ -51,6 +51,21 @@ describe('animation recipes', () => {
     if (GAITS.has(name)) {
       expect(report.checks.filter((check) => check.status === 'skipped')).toEqual([]);
     }
+  });
+
+  it('slashes the blade from behind the back to level in front at the Hit marker', () => {
+    const slash = compiled(all.get('Slash'));
+    const tip = (time: number) => [...pointToWorld(poseRig(buildTracks(slash), time).parts.get('BodyAttach')!, [0, 3.6, 0])];
+    const windUp = slash.keyframes.find((keyframe) => keyframe.name === 'WindUp')!;
+    const hit = slash.keyframes.find((keyframe) => keyframe.markers?.some((marker) => marker.name === 'Hit'))!;
+    const chest = at(slash, hit.time, 'UpperTorso');
+    // Wound up, the blade hangs behind the body (+Z is back).
+    expect(tip(windUp.time)[2]).toBeGreaterThan(1);
+    // At the hit it is well out in front, near chest height.
+    expect(tip(hit.time)[2]).toBeLessThan(chest[2] - 3);
+    expect(Math.abs(tip(hit.time)[1] - chest[1])).toBeLessThan(1.5);
+    // It ends back at the guard it started from.
+    tip(slash.duration).forEach((value, axis) => expect(value).toBeCloseTo(tip(0)[axis], 5));
   });
 
   it('waves the right hand above the head, out to the side', () => {

@@ -163,6 +163,29 @@ const passed = await runTest('animation tool', async ({ track }) => {
     }, 120_000);
     assert(swung.built === true && swung.animation?.inBetweens > 0 && swung.playback?.verified === true, `a split swing builds and plays as checked (${swung.error ?? `${swung.animation?.inBetweens} in-betweens, within ${swung.playback?.maxDegrees}°`})`);
 
+    // The weapon grip: the rig table's RightGripAttachment is the dummy's, and
+    // an animation that moves the weapon previews on a stand-in motor.
+    const grip = await luau(client, `
+      local rig = game:GetService("Players"):CreateHumanoidModelFromDescription(Instance.new("HumanoidDescription"), Enum.HumanoidRigType.R15)
+      local components = { rig.RightHand.RightGripAttachment.CFrame:GetComponents() }
+      rig:Destroy()
+      return components
+    `);
+    const expectedGrip = [0, -0.15, 0, 1, 0, 0, 0, 0, 1, 0, -1, 0];
+    assert(Array.isArray(grip) && grip.every((value, index) => Math.abs(value - expectedGrip[index]) < 0.02), `the rig table's grip matches the dummy's RightGripAttachment (${JSON.stringify(grip)})`);
+    const flicked = await client.callTool('animation', {
+      action: 'build',
+      animation: {
+        name: 'Flick', rig: 'R15',
+        keyframes: [
+          { time: 0, joints: { RightShoulder: { aim: [0, -1, 0.3] }, Weapon: { rotation: [0, 0, 0] } } },
+          { time: 0.3, joints: { RightShoulder: { aim: [0, -1, 0.3] }, Weapon: { rotation: [-80, 20, 0] } } },
+        ],
+      },
+      parent: PARENT,
+    }, 120_000);
+    assert(flicked.built === true && flicked.playback?.verified === true, `a weapon animation builds and plays as checked on the stand-in grip (${flicked.error ?? `within ${flicked.playback?.maxDegrees}°`})`);
+
     // Markers become KeyframeMarkers a script's GetMarkerReachedSignal fires on.
     const marked = await client.callTool('animation', {
       action: 'build',

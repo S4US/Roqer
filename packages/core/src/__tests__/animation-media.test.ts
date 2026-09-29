@@ -4,6 +4,7 @@ import { renderContactSheet, sheetTimes } from '../animation/contact-sheet.js';
 import { GLB_SAMPLE_RATE, glbSampleTimes, renderRigGlb } from '../animation/rig-glb.js';
 import { compilePoseAnimation, type KeyframeSequenceDescription } from '../animation/pose-compiler.js';
 import { R15_RIG } from '../animation/r15-rig.js';
+import { buildTracks, pointToWorld, poseRig } from '../animation/motion.js';
 import { normalizeToolResult } from '../mcp-runtime.js';
 
 function compiled(input: unknown): KeyframeSequenceDescription {
@@ -111,7 +112,7 @@ describe('rig GLB', () => {
     expect(glb.json.buffers).toEqual([{ byteLength: glb.binary.length }]);
     const drawn = glb.json.nodes.filter((node: { mesh?: number }) => node.mesh !== undefined);
     expect(drawn.map((node: { name: string }) => node.name).sort()).toEqual(
-      Object.keys(R15_RIG.parts).filter((part) => part !== 'HumanoidRootPart').map((part) => `${part} mesh`).sort(),
+      Object.keys(R15_RIG.parts).filter((part) => part !== 'HumanoidRootPart' && part !== 'BodyAttach').map((part) => `${part} mesh`).sort(),
     );
     expect(glb.json.nodes[glb.json.scenes[0].nodes[0]].rotation).toEqual([0, 1, 0, 0]);
   });
@@ -120,7 +121,8 @@ describe('rig GLB', () => {
     const sequence = raise(false);
     const glb = parseGlb(renderRigGlb(sequence, 'Raise'));
     const [animation] = glb.json.animations;
-    expect(animation.channels).toHaveLength(R15_RIG.joints.length * 2);
+    // The weapon grip is left out of an animation that does not move it.
+    expect(animation.channels).toHaveLength(R15_RIG.joints.filter((joint) => !joint.optional).length * 2);
     const times = floats(glb, animation.samplers[0].input);
     expect(times).toHaveLength(GLB_SAMPLE_RATE + 1);
     expect(times).toEqual(glbSampleTimes(sequence).map((time) => Math.fround(time)));
@@ -138,6 +140,48 @@ describe('rig GLB', () => {
     const translations = floats(glb, animation.samplers[moved.sampler].output);
     // The joint's offset in the HumanoidRootPart plus the keyed half-stud drop.
     expect(translations.slice(-3).map((value) => Math.round(value * 1000) / 1000)).toEqual([0, -1.5, 0]);
+  });
+});
+
+describe('held weapon', () => {
+  const slash = compiled({
+    name: 'Flick',
+    rig: 'R15',
+    keyframes: [
+      { time: 0, joints: { Weapon: { rotation: [0, 0, 0] } } },
+      { time: 0.5, joints: { Weapon: { rotation: [60, 0, 0] } } },
+    ],
+  });
+
+  test('points the stand-in blade forward out of a hanging fist, at the grip', () => {
+    const rest = poseRig(buildTracks(slash), 0);
+    const hand = rest.parts.get('RightHand')!;
+    const grip = rest.parts.get('BodyAttach')!;
+    const tip = pointToWorld(grip, [0, 3.6, 0]);
+    expect(grip.p[0]).toBeCloseTo(hand.p[0], 6);
+    expect(grip.p[1]).toBeCloseTo(hand.p[1] - 0.15, 6);
+    // Forward is -Z: the tip lies ahead of the hand at its height.
+    expect(tip[2]).toBeCloseTo(hand.p[2] - 3.6, 6);
+    expect(tip[1]).toBeCloseTo(grip.p[1], 6);
+    // Turning the weapon +60° about the hand's X tilts the tip up.
+    expect(pointToWorld(poseRig(buildTracks(slash), 0.5).parts.get('BodyAttach')!, [0, 3.6, 0])[1]).toBeGreaterThan(grip.p[1] + 3);
+  });
+
+  test('appears in the GLB and the sheet only when the animation moves it', () => {
+    const glb = parseGlb(renderRigGlb(slash, 'Flick'));
+    const names = glb.json.nodes.map((node: { name: string }) => node.name);
+    expect(names).toContain('BodyAttach mesh');
+    const weapon = glb.json.nodes.findIndex((node: { name: string }) => node.name === 'Weapon');
+    const rotation = glb.json.animations[0].channels.find((channel: { target: { node: number; path: string } }) => channel.target.node === weapon && channel.target.path === 'rotation');
+    // At rest the joint node holds C0's turn, -90° about X.
+    const first = floats(glb, glb.json.animations[0].samplers[rotation.sampler].output).slice(0, 4);
+    expect(first[0]).toBeCloseTo(-Math.SQRT1_2, 5);
+    expect(first[3]).toBeCloseTo(Math.SQRT1_2, 5);
+    expect(parseGlb(renderRigGlb(raise(false), 'Raise')).json.nodes.map((node: { name: string }) => node.name)).not.toContain('BodyAttach mesh');
+
+    const withBlade = renderContactSheet(slash).png;
+    const bladeless = renderContactSheet({ ...slash, keyframes: slash.keyframes.map((keyframe) => ({ ...keyframe, root: { ...keyframe.root, children: [] } })) }).png;
+    expect(withBlade.equals(bladeless)).toBe(false);
   });
 });
 

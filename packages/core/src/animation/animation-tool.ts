@@ -9,7 +9,7 @@
 import { compilePoseAnimation, type KeyframeSequenceDescription } from './pose-compiler.js';
 import { buildTracks, degreesBetween, frameFromComponents, sampleTrack } from './motion.js';
 import { checkMotion, type MotionCheckId, type MotionCheckResult, type MotionReport } from './motion-checks.js';
-import { R15_RIG } from './r15-rig.js';
+import { rigFor } from './rigs.js';
 
 export const MOTION_CHECK_IDS: readonly MotionCheckId[] = [
   'jointLimits',
@@ -70,7 +70,7 @@ export function prepareAnimation(animation: unknown, options: { locomotion?: unk
   if (!compiled.ok) errors.push(...compiled.errors);
   if (errors.length > 0 || !compiled.ok) return { ok: false, errors };
 
-  const report = checkMotion(compiled.sequence, { locomotion: options.locomotion === true });
+  const report = checkMotion(compiled.sequence, { locomotion: options.locomotion === true }, rigFor(compiled.sequence.rig));
   const failed = report.checks.filter((check) => check.status === 'fail').map((check) => check.id);
   return {
     ok: true,
@@ -142,6 +142,8 @@ export function verifyPlayback(sequence: KeyframeSequenceDescription, samples: u
   const fail = (reason: string): PlaybackCheck => ({ verified: false, samples: 0, maxDegrees: 0, maxStuds: 0, reason });
   if (!Array.isArray(samples) || samples.length === 0) return fail('Studio returned no preview samples');
   const tracks = buildTracks(sequence);
+  // A weapon grip is compared only when the animation moves it.
+  const joints = rigFor(sequence.rig).joints.filter((joint) => !joint.optional || sequence.joints.includes(joint.name));
   let maxDegrees = 0;
   let maxStuds = 0;
   let worst: PlaybackCheck['worst'];
@@ -149,7 +151,7 @@ export function verifyPlayback(sequence: KeyframeSequenceDescription, samples: u
     if (typeof sample?.time !== 'number' || typeof sample.transforms !== 'object' || sample.transforms === null) {
       return fail('Studio returned a malformed preview sample');
     }
-    for (const joint of R15_RIG.joints) {
+    for (const joint of joints) {
       const actual = sample.transforms[joint.childPart];
       if (!Array.isArray(actual) || actual.length !== 12 || !actual.every(Number.isFinite)) {
         return fail(`the preview dummy reported no joint for ${joint.childPart}`);
@@ -251,7 +253,7 @@ export function verifyLivePlayback(sequence: KeyframeSequenceDescription, sample
   const fail = (reason: string): PlaybackCheck => ({ verified: false, samples: 0, maxDegrees: 0, maxStuds: 0, reason });
   if (!Array.isArray(samples) || samples.length === 0) return fail('the playtest returned no samples');
   const tracks = buildTracks(sequence);
-  const keyed = R15_RIG.joints.filter((joint) => sequence.joints.includes(joint.name));
+  const keyed = rigFor(sequence.rig).joints.filter((joint) => sequence.joints.includes(joint.name));
   let maxDegrees = 0;
   let maxStuds = 0;
   let worst: PlaybackCheck['worst'];
@@ -262,7 +264,9 @@ export function verifyLivePlayback(sequence: KeyframeSequenceDescription, sample
     for (const joint of keyed) {
       const actual = sample.transforms[joint.childPart];
       if (!Array.isArray(actual) || actual.length !== 12 || !actual.every(Number.isFinite)) {
-        return fail(`the character reported no joint for ${joint.childPart}`);
+        return fail(joint.optional
+          ? `the character has no Motor6D moving ${joint.childPart}; equip a weapon rigged with one (see the animation skill's weapon section) before verifying`
+          : `the character reported no joint for ${joint.childPart}`);
       }
       const expected = sampleTrack(tracks.get(joint.childPart), sample.time);
       const played = frameFromComponents(actual);

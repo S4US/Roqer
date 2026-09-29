@@ -9,8 +9,8 @@
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { drawnParts, partMesh, type PartMesh } from './box-rig.js';
-import { R15_RIG } from './r15-rig.js';
+import { drawnParts, heldParts, partMesh, type PartMesh } from './box-rig.js';
+import { R15_RIG, type Rig } from './r15-rig.js';
 
 export interface RigMeshes {
   /** Where the meshes came from. */
@@ -25,12 +25,18 @@ export function rigMeshCacheDirectory(): string {
   return process.env.ROBLOXSTUDIO_MCP_CACHE_DIR ?? path.join(os.homedir(), '.robloxstudio-mcp', 'cache');
 }
 
-let generated: RigMeshes | undefined;
+const generated = new Map<string, RigMeshes>();
 let loaded: RigMeshes | undefined;
 
-export function generatedRigMeshes(): RigMeshes {
-  generated ??= { source: 'generated', parts: new Map(drawnParts().map((part) => [part, partMesh(part)])) };
-  return generated;
+/** The block rig: every body part, and a held weapon's stand-in, as rounded boxes. */
+export function generatedRigMeshes(rig: Rig = R15_RIG): RigMeshes {
+  let meshes = generated.get(rig.name);
+  if (!meshes) {
+    const parts = [...drawnParts(rig), ...heldParts(rig)];
+    meshes = { source: 'generated', parts: new Map(parts.map((part) => [part, partMesh(part, rig)])) };
+    generated.set(rig.name, meshes);
+  }
+  return meshes;
 }
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -107,9 +113,19 @@ export function cachedRigMeshes(directory = rigMeshCacheDirectory()): RigMeshes 
   }
 }
 
-/** What the preview draws now: the real meshes when known, the generated rig otherwise. */
-export function currentRigMeshes(): RigMeshes {
-  return cachedRigMeshes() ?? generatedRigMeshes();
+/**
+ * What the preview draws now: the stock R15 rig's real meshes when known, the
+ * generated rig otherwise. A held weapon is always the generated stand-in,
+ * and R6 is always blocks, as its parts are.
+ */
+export function currentRigMeshes(rig: Rig = R15_RIG): RigMeshes {
+  const cached = rig.name === 'R15' ? cachedRigMeshes() : undefined;
+  if (!cached) return generatedRigMeshes(rig);
+  const standIns = generatedRigMeshes(rig).parts;
+  return {
+    source: 'studio',
+    parts: new Map([...cached.parts, ...heldParts(rig).map((part) => [part, standIns.get(part)!] as const)]),
+  };
 }
 
 /** Forget what this process has loaded; for tests. */

@@ -18,8 +18,9 @@ import {
   type PoseEasingDirection,
   type PoseEasingStyle,
 } from './easing.js';
-import { slerpRotation } from './motion.js';
-import { R15_RIG, type Rig, type RigJoint } from './r15-rig.js';
+import { slerpRotation, transformFromParent } from './motion.js';
+import type { Rig, RigJoint } from './r15-rig.js';
+import { RIGS } from './rigs.js';
 
 export { POSE_EASING_DIRECTIONS, POSE_EASING_STYLES, type PoseEasingDirection, type PoseEasingStyle };
 
@@ -51,7 +52,6 @@ export const POSE_LIMITS = {
   maxErrors: 20,
 } as const;
 
-const RIGS: ReadonlyMap<string, Rig> = new Map([['R15', R15_RIG]]);
 
 /**
  * How a pose moves toward the joint's next key. Each field falls back
@@ -111,7 +111,7 @@ export interface PoseKeyframeSpec {
 
 export interface PoseAnimationSpec {
   name: string;
-  rig: 'R15';
+  rig: Rig['name'];
   /** Defaults to false. */
   loop?: boolean;
   /** Defaults to Action, as a new KeyframeSequence does. */
@@ -161,7 +161,7 @@ export interface CompiledKeyframe {
 
 export interface KeyframeSequenceDescription {
   name: string;
-  rig: 'R15';
+  rig: Rig['name'];
   loop: boolean;
   priority: AnimationPriority;
   /** The last keyframe's time, in seconds. */
@@ -456,10 +456,13 @@ function parseJoints(value: unknown, rig: Rig, path: string, issues: Issues, all
         issues.add(`${jointPath}.position`, `only ${rig.joints[0].name} takes a position; other joints only rotate`);
       }
     }
+    // The pose is written in the parent part's axes; a joint whose frame is
+    // turned (R6, the weapon grip) takes it in its own.
+    const transform = transformFromParent(joint, { p: [...position], r: [...rotation] as [number, number, number, number, number, number, number, number, number] });
     joints.set(joint.childPart, {
       joint,
-      rotation,
-      position,
+      rotation: transform.r,
+      position: transform.p,
       easing: parseEasing(pose.easing, `${jointPath}.easing`, issues),
     });
   }
@@ -766,7 +769,7 @@ export function compilePoseAnimation(input: unknown): PoseCompileResult {
     ok: true,
     sequence: {
       name,
-      rig: 'R15',
+      rig: rig.name,
       loop: input.loop === true,
       priority,
       duration: keyframes[keyframes.length - 1].time,

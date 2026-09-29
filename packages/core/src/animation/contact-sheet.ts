@@ -10,10 +10,10 @@
 // dark ground with a soft contact shadow.
 
 import { rgbaToPng } from '../png-encoder.js';
-import { groundHeight, RIG_COLOR, type Rgb } from './box-rig.js';
+import { heldParts, RIG_COLOR, type Rgb } from './box-rig.js';
 import { generatedRigMeshes, type RigMeshes } from './rig-meshes.js';
 import { buildTracks, poseRig, sequenceDuration, type Frame, type MotionSequence } from './motion.js';
-import type { Vec3 } from './r15-rig.js';
+import { R15_RIG, type Rig, type Vec3 } from './r15-rig.js';
 
 const CELL_WIDTH = 172;
 const CELL_HEIGHT = 236;
@@ -165,9 +165,17 @@ function drawBackground(canvas: Canvas, left: number, top: number, height: numbe
   }
 }
 
-function drawCell(canvas: Canvas, meshes: RigMeshes, parts: Map<string, Frame>, camera: View, left: number, top: number) {
+interface Figure {
+  rig: Rig;
+  meshes: RigMeshes;
+  /** Parts not to draw: a weapon the animation does not move. */
+  hidden: ReadonlySet<string>;
+}
+
+function drawCell(canvas: Canvas, figure: Figure, parts: Map<string, Frame>, camera: View, left: number, top: number) {
+  const { meshes, rig, hidden } = figure;
   const scale = CELL_HEIGHT / VIEW_HEIGHT_STUDS;
-  const ground = groundHeight();
+  const ground = rig.ground;
   const originX = left + CELL_WIDTH / 2;
   const groundY = top + CELL_HEIGHT - 22;
   const project = (p: Vec3) => ({
@@ -177,7 +185,7 @@ function drawCell(canvas: Canvas, meshes: RigMeshes, parts: Map<string, Frame>, 
   });
 
   // A soft shadow on the ground under the body, as the viewer's floor casts.
-  const body = parts.get('LowerTorso');
+  const body = parts.get(rig.body);
   if (body) {
     const centre = project([body.p[0], ground, body.p[2]]);
     const radiusX = 1.35 * scale;
@@ -194,7 +202,7 @@ function drawCell(canvas: Canvas, meshes: RigMeshes, parts: Map<string, Frame>, 
   const clip = { x0: left, y0: top, x1: left + CELL_WIDTH - 1, y1: top + CELL_HEIGHT - 1 };
   for (const [part, mesh] of meshes.parts) {
     const frame = parts.get(part);
-    if (!frame) continue;
+    if (!frame || hidden.has(part)) continue;
     const color = RIG_COLOR;
     const vertices: Vertex[] = [];
     const world: Vec3[] = [];
@@ -244,22 +252,28 @@ export function sheetTimes(sequence: MotionSequence, columns = COLUMNS): number[
 
 export function renderContactSheet(
   sequence: MotionSequence,
-  meshes: RigMeshes = generatedRigMeshes(),
-  options: { locomotion?: boolean } = {},
+  meshes?: RigMeshes,
+  options: { locomotion?: boolean; rig?: Rig } = {},
 ): ContactSheet {
+  const rig = options.rig ?? R15_RIG;
   const times = sheetTimes(sequence);
   const tracks = buildTracks(sequence);
+  const figure: Figure = {
+    rig,
+    meshes: meshes ?? generatedRigMeshes(rig),
+    hidden: new Set(heldParts(rig).filter((part) => !tracks.has(part))),
+  };
   const width = CELL_WIDTH * times.length;
   const rowHeight = CELL_HEIGHT + LABEL_HEIGHT;
   const height = rowHeight * 2;
   const canvas = new Canvas(width, height);
   times.forEach((time, column) => {
-    const parts = poseRig(tracks, time).parts;
+    const parts = poseRig(tracks, time, rig).parts;
     const left = column * CELL_WIDTH;
     [THREE_QUARTER, options.locomotion ? SIDE : FRONT].forEach((camera, row) => {
       const top = row * rowHeight;
       drawBackground(canvas, left, top, rowHeight);
-      drawCell(canvas, meshes, parts, camera, left, top);
+      drawCell(canvas, figure, parts, camera, left, top);
       canvas.text(`${time.toFixed(2)}s`, left + 10, top + CELL_HEIGHT + 2, 2, TEXT);
     });
     if (column > 0) for (let y = 0; y < height; y += 1) canvas.put(left, y, DIVIDER);

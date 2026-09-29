@@ -13,7 +13,8 @@ and returns a contact sheet, without touching Studio.
 
 - Joints: `Root`, `Waist`, `Neck`, `LeftShoulder`, `LeftElbow`, `LeftWrist`,
   `RightShoulder`, `RightElbow`, `RightWrist`, `LeftHip`, `LeftKnee`,
-  `LeftAnkle`, `RightHip`, `RightKnee`, `RightAnkle`.
+  `LeftAnkle`, `RightHip`, `RightKnee`, `RightAnkle`, and `Weapon` for a held
+  weapon (see "Weapons").
 - The first keyframe is at 0. A joint keyed in any keyframe must also be keyed
   in the first. A joint left out of a later keyframe just keeps moving toward
   its next key.
@@ -156,6 +157,87 @@ The Humanoid does the jumping. The animation only poses the body in the air:
 arms thrown up and knees tucked. The arms pass through the side at 0.12 s,
 because going straight from down to overhead would be about half a turn, and
 the key at the side says which way round the arms go.
+
+## Weapons
+
+A sword, axe or staff is animated through one more joint, `Weapon`. It moves
+a part named `BodyAttach` from the right hand, so a swing can flick, tilt and
+roll the blade, not only carry it on a stiff wrist.
+
+- `Weapon` takes `rotation` only: degrees about the hand's own axes, pivoting
+  at the grip. At rest the blade points forward out of the fist, square to the
+  forearm. `[-90, 0, 0]` runs it straight out along the forearm, as in a
+  thrust; `[90, 0, 0]` folds it back along the arm; `Y` rolls it about the
+  forearm.
+- The preview draws a 4-stud stand-in blade, and only when the animation
+  keys `Weapon`.
+- Roblox's own grip weld cannot be animated, so the game has to rig the
+  weapon for it. Build the tool this way:
+  - `RequiresHandle` off, and no part named `Handle`, so Roblox adds no weld of
+    its own;
+  - one part named `BodyAttach` at the grip, unanchored, `CanCollide` off and
+    `Massless` on, with every other part of the weapon welded to it
+    (`WeldConstraint`);
+  - the weapon modelled with its blade along `BodyAttach`'s up (+Y) axis;
+  - this Script in the tool, which swaps in the motor the animation drives:
+
+```luau
+local tool = script.Parent
+local bodyAttach = tool:WaitForChild("BodyAttach")
+local motor: Motor6D?
+
+tool.Equipped:Connect(function()
+	local character = tool.Parent
+	local hand = character:FindFirstChild("RightHand") or character:FindFirstChild("Right Arm")
+	local grip = hand and hand:FindFirstChild("RightGripAttachment")
+	if not grip then
+		return
+	end
+	motor = Instance.new("Motor6D")
+	motor.Name = "BodyAttach"
+	motor.Part0 = hand
+	motor.Part1 = bodyAttach
+	motor.C0 = grip.CFrame
+	motor.Parent = hand
+end)
+
+tool.Unequipped:Connect(function()
+	if motor then
+		motor:Destroy()
+		motor = nil
+	end
+end)
+```
+
+- Play the attack from the tool's `Activated` on the character's `Animator`,
+  and apply damage from the animation's `Hit` marker, not from a timer (see
+  `full.md`, "Priorities and markers").
+- To verify a weapon animation in a playtest, equip the weapon first: without
+  the motor, verify reports that the character has nothing for `Weapon` to
+  move.
+
+### Slash (one shot, with a weapon)
+
+```json
+{ "name": "Slash", "rig": "R15", "priority": "Action", "keyframes": [
+  { "time": 0, "joints": { "Waist": { "rotation": [0, 0, 0] }, "RightShoulder": { "aim": [0.2, -0.8, 0.6] }, "RightElbow": { "bend": 50 }, "Weapon": { "rotation": [0, 0, 0] } } },
+  { "time": 0.25, "name": "WindUp", "joints": { "Waist": { "rotation": [0, 30, 0] }, "RightShoulder": { "aim": [0.4, 1, 0.2], "bendToward": [0, 0, -1] }, "RightElbow": { "bend": 70 }, "Weapon": { "rotation": [0, 0, 0] } } },
+  { "time": 0.37, "joints": { "Waist": { "rotation": [0, -5, 0] }, "RightShoulder": { "aim": [0.15, 0, 1], "bendToward": [0, 1, 0] }, "RightElbow": { "bend": 10 }, "Weapon": { "rotation": [-95, 0, 0] } }, "markers": [{ "name": "Hit" }] },
+  { "time": 0.47, "easing": { "style": "CubicV2", "direction": "Out" }, "joints": { "Waist": { "rotation": [0, -30, 0] }, "RightShoulder": { "aim": [-0.4, -0.6, 0.7], "bendToward": [0, 1, 0.3] }, "RightElbow": { "bend": 15 }, "Weapon": { "rotation": [-70, 0, 0] } } },
+  { "time": 0.8, "joints": { "Waist": { "rotation": [0, 0, 0] }, "RightShoulder": { "aim": [0.2, -0.8, 0.6] }, "RightElbow": { "bend": 50 }, "Weapon": { "rotation": [0, 0, 0] } } }
+] }
+```
+
+An overhead chop. The ready guard holds the blade up in front. The wind-up
+lifts the arm with the elbow folding back, so the blade hangs down the back,
+and twists the waist right. The swing brings the arm forward over the top
+while `Weapon` snaps the blade out along the arm; the `Hit` marker fires when
+the blade is level in front of the chest. The follow-through carries it low
+with `CubicV2 Out`, and the last key returns to the guard.
+
+- To swing faster, shrink the gap between the wind-up and `Hit`. Below about
+  0.08 s the velocity check fails; waive `velocity` when that snap is meant.
+- For a thrust, keep the arm aimed forward and move `Weapon` to `[-90, 0, 0]`.
 
 ## Reading the result
 

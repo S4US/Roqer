@@ -16,6 +16,7 @@ import {
   poseRig,
   rotationDegrees,
   sequenceDuration,
+  transformInParent,
   type Frame,
   type MotionSequence,
   type RigPose,
@@ -132,8 +133,6 @@ export const MOTION_LIMITS = {
 };
 
 const ROOT_JOINT = 'Root';
-const FEET = ['LeftFoot', 'RightFoot'] as const;
-const HIPS = ['LeftHip', 'RightHip'] as const;
 
 function round(value: number, places = 2): number {
   const factor = 10 ** places;
@@ -188,7 +187,7 @@ function checkJointLimits(data: Sampled, rig: Rig): MotionCheckResult {
     let off = { value: 0, time: 0 };
     let most = { value: 0, time: 0 };
     data.poses.forEach((pose, index) => {
-      const r = pose.transforms.get(joint.name)!.r;
+      const r = transformInParent(joint, pose.transforms.get(joint.name)!).r;
       const time = data.times[index];
       if (hinge) {
         const bend = bendDegrees(r);
@@ -328,15 +327,11 @@ function footCorners(rig: Rig, foot: string): Vec3[] {
   return corners;
 }
 
-function groundHeight(rig: Rig): number {
-  return -(rig.hipHeight + rig.parts[rig.rootPart][1] / 2);
-}
-
 /** Each foot's corners over time, in the HumanoidRootPart's frame, as heights above the ground. */
 function footPoints(data: Sampled, rig: Rig): Map<string, [number, number, number][][]> {
-  const ground = groundHeight(rig);
+  const ground = rig.ground;
   const points = new Map<string, [number, number, number][][]>();
-  for (const foot of FEET) {
+  for (const foot of rig.feet) {
     const corners = footCorners(rig, foot);
     points.set(foot, data.poses.map((pose) => corners.map((corner) => {
       const p = pointToWorld(pose.parts.get(foot)!, corner);
@@ -352,7 +347,7 @@ function checkGroundContact(data: Sampled, rig: Rig): MotionCheckResult {
   let grounded = 0;
   data.times.forEach((time, index) => {
     let lowest = Infinity;
-    for (const foot of FEET) {
+    for (const foot of rig.feet) {
       const low = Math.min(...points.get(foot)![index].map((p) => p[1]));
       lowest = Math.min(lowest, low);
       if (-low > deepest.value) deepest = { value: -low, time, foot };
@@ -379,7 +374,7 @@ function checkFootSliding(data: Sampled, rate: number, rig: Rig): MotionCheckRes
   const minimum = Math.ceil(MOTION_LIMITS.plantedSeconds * rate);
   let worst = { studs: 0, time: 0, foot: '' };
   let planted = 0;
-  for (const foot of FEET) {
+  for (const foot of rig.feet) {
     const series = points.get(foot)!;
     for (let corner = 0; corner < series[0].length; corner += 1) {
       let start = -1;
@@ -409,12 +404,15 @@ function checkFootSliding(data: Sampled, rate: number, rig: Rig): MotionCheckRes
   return result('footSliding', false, planted ? `planted feet wander at most ${round(worst.studs)} studs` : 'no foot stays planted', measured);
 }
 
-function checkGaitSymmetry(sequence: MotionSequence, data: Sampled): MotionCheckResult {
+function checkGaitSymmetry(sequence: MotionSequence, data: Sampled, rig: Rig): MotionCheckResult {
   if (!sequence.loop) return skipped('gaitSymmetry', 'a gait loops; this animation does not');
   // One cycle, without the last sample, which repeats the first.
   const count = data.poses.length - 1;
   if (count < 4) return skipped('gaitSymmetry', 'the animation is too short to compare the legs');
-  const [left, right] = HIPS.map((hip) => data.poses.slice(0, count).map((pose) => bendDegrees(pose.transforms.get(hip)!.r)));
+  const [left, right] = rig.hips.map((name) => {
+    const hip = rig.joints.find((joint) => joint.name === name)!;
+    return data.poses.slice(0, count).map((pose) => bendDegrees(transformInParent(hip, pose.transforms.get(name)!).r));
+  });
   const amplitude = (series: number[]) => (Math.max(...series) - Math.min(...series)) / 2;
   const ampLeft = amplitude(left);
   const ampRight = amplitude(right);
@@ -457,7 +455,7 @@ export function checkMotion(sequence: MotionSequence, options: MotionCheckOption
     checkLoopContinuity(sequence, data, rig),
   ];
   if (options.locomotion) {
-    checks.push(checkGroundContact(data, rig), checkFootSliding(data, rate, rig), checkGaitSymmetry(sequence, data));
+    checks.push(checkGroundContact(data, rig), checkFootSliding(data, rate, rig), checkGaitSymmetry(sequence, data, rig));
   } else {
     for (const id of ['groundContact', 'footSliding', 'gaitSymmetry'] as const) {
       checks.push(skipped(id, 'only for locomotion'));
