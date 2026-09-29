@@ -13,7 +13,8 @@ const Workspace = game.GetService("Workspace");
  *
  * Core compiles and checks the pose description; the plugin only turns the
  * compiled keyframes into instances. `previewAnimation` plays them on a
- * temporary R15 dummy and reports the joints, without leaving anything behind.
+ * temporary R15 or R6 dummy, as the sequence's rig says, and reports the
+ * joints, without leaving anything behind.
  * `buildAnimation` writes the KeyframeSequence as one undo step, replacing a
  * sequence only when it was built here, is unchanged since, and matches the
  * revision the caller expects.
@@ -25,6 +26,8 @@ const MAX_KEYFRAMES = 240;
 const MAX_POSES_PER_KEYFRAME = 32;
 const MAX_POSE_DEPTH = 8;
 const MAX_NAME_LENGTH = 100;
+const MAX_MARKERS_PER_KEYFRAME = 16;
+const MAX_MARKER_VALUE_LENGTH = 200;
 const MAX_SAMPLES = 32;
 const TRACK_LOAD_SECONDS = 10;
 
@@ -78,6 +81,26 @@ function buildPose(data: unknown, parent: Instance, depth: number, count: { valu
 	instance.Parent = parent;
 }
 
+/** KeyframeMarkers, which AnimationTrack:GetMarkerReachedSignal fires at their keyframe's time. */
+function buildMarkers(data: unknown, keyframe: Keyframe) {
+	if (data === undefined) return;
+	if (!typeIs(data, "table")) error("a keyframe's markers must be an array");
+	const list = data as unknown[];
+	if (list.size() > MAX_MARKERS_PER_KEYFRAME) error(`a keyframe holds at most ${MAX_MARKERS_PER_KEYFRAME} markers`);
+	for (const entry of list) {
+		if (!typeIs(entry, "table")) error("every marker must be an object");
+		const marker = entry as Data;
+		const value = marker.value;
+		if (!typeIs(value, "string") || value.size() > MAX_MARKER_VALUE_LENGTH) {
+			error(`a marker's value must be a string of at most ${MAX_MARKER_VALUE_LENGTH} characters`);
+		}
+		const instance = new Instance("KeyframeMarker");
+		instance.Name = checkName(marker.name, "a marker's name");
+		instance.Value = value;
+		instance.Parent = keyframe;
+	}
+}
+
 /** A detached KeyframeSequence from the compiled description, or an error. */
 function buildSequence(data: unknown): KeyframeSequence {
 	if (!typeIs(data, "table")) error("sequence must be an object");
@@ -106,6 +129,7 @@ function buildSequence(data: unknown): KeyframeSequence {
 			instance.Time = time;
 			if (keyframe.name !== undefined) instance.Name = checkName(keyframe.name, "a keyframe's name");
 			buildPose(keyframe.root, instance, 1, { value: 0 });
+			buildMarkers(keyframe.markers, instance);
 			instance.Parent = sequence;
 		}
 	});
@@ -144,6 +168,11 @@ function sequenceRevision(sequence: KeyframeSequence): string {
 		const poses = keyframe.GetChildren().filter((child): child is Pose => child.IsA("Pose"));
 		poses.sort((a, b) => a.Name < b.Name);
 		for (const pose of poses) describePose(pose, 1, out);
+		// Only a sequence with markers hashes them, so a revision taken before
+		// markers existed still matches its unchanged sequence.
+		const markers = keyframe.GetChildren().filter((child): child is KeyframeMarker => child.IsA("KeyframeMarker"));
+		markers.sort((a, b) => (a.Name === b.Name ? a.Value < b.Value : a.Name < b.Name));
+		for (const marker of markers) out.push(`m:${marker.Name}:${marker.Value}`);
 	}
 	return `kr1:${sourceRevision(out.join("\n")).sub(5)}`;
 }
@@ -151,11 +180,13 @@ function sequenceRevision(sequence: KeyframeSequence): string {
 function countContent(sequence: KeyframeSequence) {
 	let keyframes = 0;
 	let poses = 0;
+	let markers = 0;
 	for (const descendant of sequence.GetDescendants()) {
 		if (descendant.IsA("Keyframe")) keyframes += 1;
 		else if (descendant.IsA("Pose")) poses += 1;
+		else if (descendant.IsA("KeyframeMarker")) markers += 1;
 	}
-	return { keyframes, poses };
+	return { keyframes, poses, markers };
 }
 
 function componentsOf(cframe: CFrame): number[] {
@@ -166,6 +197,57 @@ function componentsOf(cframe: CFrame): number[] {
 
 function destroyQuietly(instance: Instance | undefined) {
 	if (instance) pcall(() => instance.Destroy());
+}
+
+const MAX_PROPS = 8;
+
+/**
+ * Give a preview dummy the props the animation moves, rigged as a game rigs
+ * them: a part moved by a Motor6D from a body part, whose C0 is the given
+ * one, placed at the named attachment's position when there is one, and
+ * whose C1 is the identity. An attachment's own turn is not used: R15's
+ * grips are turned and R6's are not, and a prop points the same way on both.
+ */
+function addProps(rig: Model, data: unknown) {
+	if (data === undefined) return;
+	if (!typeIs(data, "table") || (data as unknown[]).size() > MAX_PROPS) error(`props must be an array of at most ${MAX_PROPS}`);
+	for (const entry of data as unknown[]) {
+		if (!typeIs(entry, "table")) error("every prop must be an object");
+		const prop = entry as Data;
+		const name = checkName(prop.part, "a prop's part");
+		const parentName = checkName(prop.parent, "a prop's parent");
+		const body = rig.FindFirstChild(parentName);
+		if (!body || !body.IsA("BasePart")) error(`the preview dummy has no ${parentName} to hold ${name}`);
+		const c = prop.c0;
+		if (!typeIs(c, "table") || (c as unknown[]).size() !== 12) error("a prop's c0 must be 12 numbers");
+		const n = c as number[];
+		for (const value of n) {
+			if (!typeIs(value, "number") || value !== value || math.abs(value) === math.huge) error("a prop's c0 must be finite numbers");
+		}
+		let c0 = new CFrame(n[0], n[1], n[2], n[3], n[4], n[5], n[6], n[7], n[8], n[9], n[10], n[11]);
+		if (prop.attachment !== undefined) {
+			const attachment = body.FindFirstChild(checkName(prop.attachment, "a prop's attachment"));
+			if (!attachment || !attachment.IsA("Attachment")) error(`the preview dummy's ${parentName} has no ${tostring(prop.attachment)}`);
+			c0 = new CFrame(attachment.Position).mul(c0.Rotation);
+		}
+		const part = new Instance("Part");
+		part.Name = name;
+		part.Size = new Vector3(0.2, 0.2, 0.2);
+		part.CanCollide = false;
+		part.CanQuery = false;
+		part.CanTouch = false;
+		part.Massless = true;
+		part.Transparency = 1;
+		part.CFrame = body.CFrame.mul(c0);
+		const motor = new Instance("Motor6D");
+		motor.Name = name;
+		motor.Part0 = body;
+		motor.Part1 = part;
+		motor.C0 = c0;
+		motor.C1 = new CFrame();
+		motor.Parent = body;
+		part.Parent = rig;
+	}
 }
 
 function previewAnimation(requestData: Data) {
@@ -199,12 +281,14 @@ function previewAnimation(requestData: Data) {
 		folder.Name = PREVIEW_FOLDER;
 		folder.Archivable = false;
 		folder.Parent = Workspace;
-		const rig = Players.CreateHumanoidModelFromDescription(new Instance("HumanoidDescription"), Enum.HumanoidRigType.R15);
+		const rigType = (requestData.sequence as Data).rig === "R6" ? Enum.HumanoidRigType.R6 : Enum.HumanoidRigType.R15;
+		const rig = Players.CreateHumanoidModelFromDescription(new Instance("HumanoidDescription"), rigType);
 		rig.Archivable = false;
 		rig.PivotTo(new CFrame(0, 100000, 0));
 		const root = rig.FindFirstChild("HumanoidRootPart");
 		if (root && root.IsA("BasePart")) root.Anchored = true;
 		rig.Parent = folder;
+		addProps(rig, requestData.props);
 
 		const joints = new Map<string, Instance>();
 		for (const descendant of rig.GetDescendants()) {
@@ -333,6 +417,7 @@ function buildAnimation(requestData: Data) {
 		replaced: existing !== undefined,
 		keyframes: readBack.keyframes,
 		poses: readBack.poses,
+		markers: readBack.markers,
 		undoable: recordingId !== undefined,
 	};
 }
@@ -376,7 +461,7 @@ function animationReadBack(requestData: Data) {
 	const revision = sequenceRevision(fetched);
 	const counts = countContent(fetched);
 	fetched.Destroy();
-	return { revision, matches: revision === expected, keyframes: counts.keyframes, poses: counts.poses };
+	return { revision, matches: revision === expected, keyframes: counts.keyframes, poses: counts.poses, markers: counts.markers };
 }
 
 const LOADER_NAME = "RoqerAnimate";
@@ -574,7 +659,7 @@ function animationVerify(requestData: Data) {
 	destroyQuietly(animation);
 	destroyQuietly(sequence);
 	if (!ok) return { error: `${tostring(result)}.` };
-	return { ...(result as object), ...(wiredIds ? { wiredIds, playingIds } : {}) };
+	return { ...(result as object), rigType: humanoid.RigType.Name, ...(wiredIds ? { wiredIds, playingIds } : {}) };
 }
 
 /** Roblox's classic head, which ships with Studio; the stock rig's own dynamic head cannot be read. */

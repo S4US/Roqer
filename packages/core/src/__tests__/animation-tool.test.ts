@@ -18,7 +18,7 @@ import {
 } from '../animation/animation-tool.js';
 import { buildTracks, sampleTrack } from '../animation/motion.js';
 import { compilePoseAnimation, type KeyframeSequenceDescription } from '../animation/pose-compiler.js';
-import { R15_RIG } from '../animation/r15-rig.js';
+import { rigFor } from '../animation/rigs.js';
 
 function wave(overrides: Record<string, unknown> = {}) {
   return {
@@ -45,7 +45,7 @@ function faithfulSamples(sequence: KeyframeSequenceDescription, nudge = 0): Prev
   const tracks = buildTracks(sequence);
   return previewSampleTimes(sequence).map((time) => ({
     time,
-    transforms: Object.fromEntries(R15_RIG.joints.map((joint) => {
+    transforms: Object.fromEntries(rigFor(sequence.rig).joints.map((joint) => {
       const frame = sampleTrack(tracks.get(joint.childPart), time);
       const c = [...frame.p, ...frame.r];
       if (joint.name === 'RightShoulder') c[0] += nudge;
@@ -62,13 +62,14 @@ function body(result: { content: ToolContent[] }) {
 
 describe('prepareAnimation', () => {
   test('refuses bad tool arguments together with compile errors', () => {
-    const result = prepareAnimation({ ...wave(), rig: 'R6' }, { locomotion: 'yes', waive: ['gait', 'velocity'] });
+    const result = prepareAnimation({ ...wave(), rig: 'R7' }, { locomotion: 'yes', grounded: 1, waive: ['gait', 'velocity'] });
     expect(result).toEqual({
       ok: false,
       errors: [
         'locomotion: must be true or false',
+        'grounded: must be true or false',
         'waive: unknown check "gait"; checks are jointLimits, velocity, rootDrift, loopContinuity, groundContact, footSliding, gaitSymmetry',
-        'rig: must be one of R15',
+        'rig: must be one of R15, R6',
       ],
     });
   });
@@ -137,11 +138,12 @@ describe('RobloxStudioTools.animation', () => {
     const { tools } = toolsWith({});
     const result = await tools.animation({ action: 'check', animation: wave() });
     const [text, image, resource] = result.content as ToolContent[];
-    expect(JSON.parse(text.text!).sheet).toMatchObject({ times: [0, 0.2, 0.4, 0.6, 0.8] });
+    // The five even steps, and the wave's fastest instant between two of them.
+    expect(JSON.parse(text.text!).sheet).toMatchObject({ times: [0, 0.2, 0.4, 0.558, 0.6, 0.8], shows: ['', '', '', 'fastest', '', ''] });
     expect(image).toMatchObject({ type: 'image', mimeType: 'image/png' });
     const png = Buffer.from(image.data!, 'base64');
     expect(png.subarray(1, 4).toString()).toBe('PNG');
-    expect([png.readUInt32BE(16), png.readUInt32BE(20)]).toEqual([860, 508]);
+    expect([png.readUInt32BE(16), png.readUInt32BE(20)]).toEqual([1032, 508]);
     expect(resource).toMatchObject({ type: 'resource', resource: { mimeType: 'model/gltf-binary' } });
     // An invalid animation has nothing to show.
     expect((await tools.animation({ action: 'check', animation: { ...wave(), keyframes: [] } })).content).toHaveLength(1);
@@ -182,6 +184,59 @@ describe('RobloxStudioTools.animation', () => {
       playback: { verified: true, samples: 8 },
       checks: { passed: true },
     });
+  });
+
+  test('build counts markers in the read-back, so a plugin that drops them does not match', async () => {
+    const slash = {
+      ...wave(),
+      name: 'Slash',
+      keyframes: [...wave().keyframes.slice(0, 2), { ...wave().keyframes[2], markers: [{ name: 'Hit', value: 'light' }] }],
+    };
+    const sequence = compiled(slash);
+    expect(sequence.markerCount).toBe(1);
+    const written = (markers?: number) => ({
+      path: 'game.ServerStorage.Slash', instanceRef: 'ref-1', revision: 'kr1:abc', stampMatches: true,
+      replaced: false, keyframes: 3, poses: sequence.poseCount, undoable: true, ...(markers === undefined ? {} : { markers }),
+    });
+    const current = toolsWith({
+      '/api/preview-animation': () => ({ length: 1, samples: faithfulSamples(sequence) }),
+      '/api/build-animation': () => written(1),
+    });
+    const built = body(await current.tools.animation({ action: 'build', animation: slash, parent: 'game.ServerStorage' }));
+    expect((current.calls[1].data.sequence as KeyframeSequenceDescription).keyframes[2].markers).toEqual([{ name: 'Hit', value: 'light' }]);
+    expect(built).toMatchObject({ animation: { markers: 1 }, readBack: { markers: 1, matchesCompiled: true } });
+
+    // A plugin from before markers ignores them and reports no count.
+    const old = toolsWith({
+      '/api/preview-animation': () => ({ length: 1, samples: faithfulSamples(sequence) }),
+      '/api/build-animation': () => written(),
+    });
+    expect(body(await old.tools.animation({ action: 'build', animation: slash, parent: 'game.ServerStorage' })).readBack.matchesCompiled).toBe(false);
+  });
+
+  test('builds an R6 animation on an R6 preview dummy, compared on R6 joints', async () => {
+    const march = {
+      name: 'March', rig: 'R6', loop: true,
+      keyframes: [
+        { time: 0, joints: { LeftHip: { aim: [0, -1, 0.4] }, RightHip: { aim: [0, -1, -0.4] } } },
+        { time: 0.5, joints: { LeftHip: { aim: [0, -1, -0.4] }, RightHip: { aim: [0, -1, 0.4] } } },
+        { time: 1, joints: { LeftHip: { aim: [0, -1, 0.4] }, RightHip: { aim: [0, -1, -0.4] } } },
+      ],
+    };
+    const sequence = compiled(march);
+    const { tools, calls } = toolsWith({
+      '/api/preview-animation': () => ({ length: 1, samples: faithfulSamples(sequence) }),
+      '/api/build-animation': () => ({
+        path: 'game.ServerStorage.March', instanceRef: 'ref-1', revision: 'kr1:abc', stampMatches: true,
+        replaced: false, keyframes: 3, poses: sequence.poseCount, markers: 0, undoable: true,
+      }),
+    });
+    const result = body(await tools.animation({ action: 'build', animation: march, parent: 'game.ServerStorage' }));
+    expect(calls[0].data.sequence).toMatchObject({ rig: 'R6' });
+    expect(result).toMatchObject({ built: true, playback: { verified: true }, readBack: { matchesCompiled: true }, sheet: { rig: 'the R6 rig, whose parts are blocks' } });
+    // An R15 dummy has no Torso: an old plugin that ignores the rig is caught.
+    const r15Samples = previewSampleTimes(sequence).map((time) => ({ time, transforms: { LowerTorso: [0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1] } }));
+    expect(verifyPlayback(sequence, r15Samples)).toMatchObject({ verified: false, reason: 'the preview dummy reported no joint for Torso' });
   });
 
   test('build writes nothing when the preview fails or strays', async () => {
@@ -350,6 +405,15 @@ describe('verifying in a playtest', () => {
       played: { source: 'published', verified: true },
       wiring: { slot: 'idle', matches: true, playingNow: true },
     });
+  });
+
+  test('refuses to verify on a character of the other rig', async () => {
+    const sequence = compiled(wave());
+    const tools = new RobloxStudioTools(new BridgeService());
+    (tools as unknown as { _callSingle: unknown })._callSingle = async () => ({ length: 1, samples: faithfulSamples(sequence), rigType: 'R6' });
+    const result = body(await tools.animation({ action: 'verify', animation: wave() }));
+    expect(result).toMatchObject({ errorCode: 'rig_mismatch', characterRig: 'R6' });
+    expect(result.error).toBe('The playtest character is R6, but the animation is for R15, so it cannot play on it. Nothing was verified. Make the animation for R6, or set the place\'s avatar type to R15.');
   });
 
   test('given only a path, asks for the checked animation and calls nothing', async () => {

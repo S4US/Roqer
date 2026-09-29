@@ -2,6 +2,7 @@ import type { ToolAnnotations } from '@modelcontextprotocol/server';
 import { MAX_PNG_BASE64_CHARACTERS } from '../image-decode.js';
 import { ANIMATION_PRIORITIES } from '../animation/pose-compiler.js';
 import { ANIMATE_SLOTS, MOTION_CHECK_IDS } from '../animation/animation-tool.js';
+import { RIG_NAMES } from '../animation/rigs.js';
 
 // Styles and directions are listed in the tool guide and in the compiler's
 // errors; spelling the enums out twice here would cost more than they save.
@@ -152,7 +153,7 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
   {
     name: 'animation',
     category: 'write',
-    description: 'Use to check, build, publish, wire, or verify an R15 character animation.',
+    description: 'Use to check, build, publish, wire, or verify an R15 or R6 character animation.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -163,10 +164,10 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
         },
         animation: {
           type: 'object',
-          description: 'Pose description for an R15 rig.',
+          description: 'Pose description for an R15 or R6 rig.',
           properties: {
             name: { type: 'string', description: 'KeyframeSequence name.' },
-            rig: { type: 'string', enum: ['R15'], description: 'Rig type.' },
+            rig: { type: 'string', enum: [...RIG_NAMES], description: 'Rig type.' },
             loop: { type: 'boolean', description: 'Default false.' },
             priority: { type: 'string', enum: [...ANIMATION_PRIORITIES], description: 'Default Action.' },
             easing: POSE_EASING_SCHEMA,
@@ -181,7 +182,12 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
                   easing: POSE_EASING_SCHEMA,
                   joints: {
                     type: 'object',
-                    description: 'Joint -> {rotation|aim+bendToward?|bend, position?, easing?}'
+                    description: 'Joint -> {rotation|aim|aimAt|grip+bendToward?|bend, position?, easing?}; {} with markers.'
+                  },
+                  markers: {
+                    type: 'array',
+                    description: '[{name, value?}] for GetMarkerReachedSignal.',
+                    items: { type: 'object' },
                   },
                 },
                 required: ['time', 'joints'],
@@ -193,6 +199,10 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
         locomotion: {
           type: 'boolean',
           description: 'A gait: adds ground, foot, and symmetry checks.'
+        },
+        grounded: {
+          type: 'boolean',
+          description: 'Stands on the ground: checks feet never sink in.'
         },
         parent: {
           type: 'string',

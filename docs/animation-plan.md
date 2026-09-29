@@ -306,6 +306,11 @@ What was built:
   keys, unless the earlier key snaps (Constant). Past 90°, Studio's playback of
   Linear keys drifts from the model, and past 180° a turn goes the short way
   round.
+  Since 2026-09-29 the compiler keeps the rule itself: a longer turn is split
+  into in-between keys of that joint along the short way round, placed where
+  the key's easing reaches them. Turns of 175° or more, whose way round is
+  unclear, and Elastic or Bounce turns, whose overshoot in-betweens lose, are
+  still refused.
 - **Layers.**
   - Core: the schema (with the tool guide's "Character animation" section),
     HTTP routing, `RobloxStudioTools.animation` and
@@ -503,11 +508,10 @@ What was built:
 
 Proposed on 2026-09-28, after the goal above was met; not yet scheduled.
 
-Everything built so far assumes the stock R15 rig: the rig table, the aim and
-bend conventions, the checks, the preview meshes, and wiring to the default
-`Animate` script. The tool refuses any other rig, and a test holds it to that.
-So R6 does not exist yet, and neither does any rig Roqer did not get from
-Roblox.
+When this was proposed, everything assumed the stock R15 rig: the rig table,
+the aim and bend conventions, the checks, the preview meshes, and wiring to
+the default `Animate` script. Step 11 has since added R6 (see below); no rig
+Roqer did not get from Roblox exists yet.
 
 Each new rig must meet the goal's bar:
 
@@ -527,7 +531,31 @@ The steps are ordered so that each rests on the one before:
 As in step 2, every step starts with a live test of what Roblox actually does.
 Nothing is built on an unconfirmed assumption.
 
-### 11. R6 characters — proposed
+### 11. R6 characters — implemented and live-verified 2026-09-29
+
+Built ahead of its live test, from the Motor6D C0 and C1 values every R6
+character has; the items below marked live are what
+`tests/animation-tool.mjs` checked against Studio, all passing.
+
+- Done: `r6-rig.ts`; `rig: "R6"` in the compiler, with poses converted from
+  body space so `aim` and `rotation` mean the same on both rigs, and a
+  refusal naming the R15 joints R6 lacks; ground contact on the legs' bottom
+  corners; gait symmetry measured in body space; block previews; an R6
+  preview dummy in the plugin; verify refusing a character of the other rig;
+  tested R6 walk and wave recipes.
+- Not calibrated: foot sliding is reported as not checked on R6, never as
+  passed, until Roblox's own R6 walk and run are measured as step 6 did for
+  R15.
+- Live, 2026-09-29: the rig table matched an R6 dummy's Motor6Ds exactly; its
+  grip attachments sit at (0, -1, 0) but unturned, unlike R15's (see Weapons).
+  An R6 walk-style animation played as checked on the R6 preview dummy
+  (within 0.08°), and an R6 draw moving the sheath and both hand props
+  within 0.91°.
+- Not done: reading the place's avatar type (the agent reads the playtest
+  character's `RigType` or the `StarterCharacter`), a loader keeping one ID
+  per rig and slot for places that let players choose, and eval T16.
+
+The original proposal follows.
 
 **Why.** Many places, combat games especially, set their avatar type to R6. An
 R15 animation does not play on an R6 character. Today the agent's best answer
@@ -588,6 +616,68 @@ plays, and nothing would show it.
 
 **Done when** T16 passes, and a manual R6 playtest shows the run playing while
 the player moves.
+
+### Weapons and combat authoring — implemented and live-verified 2026-09-29
+
+A combat animation moves the weapon as well as the arm. Roblox's `RightGrip`
+weld cannot be animated, so the rig gains one optional joint, `Weapon`: a
+`Motor6D` from the right hand to a part named `BodyAttach`, with C0 at the
+position of the hand's `RightGripAttachment`, turned -90° about X, and C1 the
+identity, which the game swaps in on
+equip (the skill has the script). This is the first joint whose frame is
+turned in its parent, so the motion model now follows C0 and C1 rotations,
+and the compiler takes a pose in the parent part's axes and converts it.
+
+- The joint is optional: it is previewed, drawn and verified only when an
+  animation keys it. The preview dummy carries a stand-in motor at its own
+  `RightGripAttachment`'s position.
+- Measured by `tests/animation-tool.mjs` on 2026-09-29: the default R15
+  dummy's grips sit at (0, -0.158, 0), turned -90° about X, and its Animator
+  drives the stand-in `Motor6D` beside its `AnimationConstraint` joints (a
+  weapon animation played within 0.68°). R6's grips sit at (0, -1, 0) but are
+  not turned, so a prop motor takes only an attachment's position and always
+  turns by -90° itself: a prop points the same way on both rigs. The R6 rig
+  table matched an R6 dummy's `Motor6D`s exactly.
+- Two more props followed: `OffHand`, the left hand's grip (`OffHandAttach`
+  at `LeftGripAttachment`), and `Sheath`, worn at the left hip (`SheathAttach`
+  at a fixed C0 the game sets, since no stock attachment sits there). Core
+  now sends the preview the motors to build, so the plugin names no prop.
+
+### Reaching a point — implemented 2026-09-29
+
+Combat animation plants feet and puts hands on hilts, which the direction
+`aim` gives cannot say. `aimAt` gives a shoulder or hip a point, solved at
+compile time against the body as it plays at that key: two-bone IK on R15
+(the elbow or knee bent to reach, a leg's ankle laying the foot flat), and on
+R6 the rigid limb pointed through it. Joints interpolated on their own let a
+planted foot slide or sink between keys, so a limb held on one point from
+one key to the next is solved again every 1/30 s between them; the recipe
+test measures a planted ankle within 0.05 studs. Everything downstream sees
+ordinary keys: the checks, the preview and Studio's playback.
+
+Two-handed holds followed: `grip` on `LeftShoulder` keeps the left hand on
+the weapon's handle, solved after every `aimAt` so it follows a placed right
+arm, and every 1/60 s between grip keys, each solve preferring the last one's
+elbow so the arm never flips. A fast two-handed swing keeps the hand within
+0.05 studs of the handle.
+
+### Live results, 2026-09-29
+
+`npm run test:studio:animation` passed in full on Windows Studio. Each build
+below played in Studio as the checks measured it:
+
+| Build | Largest difference from the checked model |
+| --- | --- |
+| A swing split into 5 in-betweens | 0.06° |
+| A weapon flick on the R15 stand-in grip | 0.68° |
+| An R6 draw moving the sheath and both hand props | 0.91° |
+| An R6 animation on the R6 dummy | 0.08° |
+| A planted lunge with 22 solved keys (`aimAt`) | 0.06° |
+| A two-handed swing (`grip`) | 0.72° |
+
+Markers were built and read back as `KeyframeMarker`s at their keyframe's
+time, and a published build was read back from Roblox and played as checked.
+The prop builds differ most, still well inside the 1.5° playback limit.
 
 ### 12. Creatures made of rigid parts — proposed
 

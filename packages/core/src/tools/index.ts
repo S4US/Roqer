@@ -31,6 +31,7 @@ import {
   expectedCounts,
   normalizeAnimationId,
   prepareAnimation,
+  previewProps,
   previewSampleTimes,
   verifyLivePlayback,
   verifyPlayback,
@@ -39,6 +40,7 @@ import {
 import { compilePoseAnimation, type KeyframeSequenceDescription } from '../animation/pose-compiler.js';
 import { renderContactSheet } from '../animation/contact-sheet.js';
 import { renderRigGlb } from '../animation/rig-glb.js';
+import { rigFor } from '../animation/rigs.js';
 import { cachedRigMeshes, currentRigMeshes, storeRigMeshes } from '../animation/rig-meshes.js';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -1736,7 +1738,7 @@ export class RobloxStudioTools {
    * is read back; replacing a sequence needs the revision its build returned.
    */
   private async _animationBuild(action: 'check' | 'build', args: Record<string, unknown>, instance_id?: string) {
-    const { animation, parent, expected_revision, waive, locomotion } = args;
+    const { animation, parent, expected_revision, waive, locomotion, grounded } = args;
     if (action === 'build' && (typeof parent !== 'string' || parent.trim() === '')) {
       throw new Error('parent (the instance the KeyframeSequence goes in) is required to build an animation');
     }
@@ -1744,7 +1746,7 @@ export class RobloxStudioTools {
       throw new Error('expected_revision must be the revision string a previous build returned');
     }
 
-    const prepared = prepareAnimation(animation, { locomotion, waive });
+    const prepared = prepareAnimation(animation, { locomotion, grounded, waive });
     if (!prepared.ok) {
       return this._textResult({
         ...(action === 'check' ? { valid: false } : { error: 'The animation is not valid; nothing was built.' }),
@@ -1768,10 +1770,10 @@ export class RobloxStudioTools {
     }
 
     await this._fetchRigMeshes(instance_id);
-    const payload = { name: sequence.name, loop: sequence.loop, priority: sequence.priority, keyframes: sequence.keyframes };
+    const payload = { name: sequence.name, rig: sequence.rig, loop: sequence.loop, priority: sequence.priority, keyframes: sequence.keyframes };
     const preview = await this._callSingle(
       '/api/preview-animation',
-      { sequence: payload, sampleTimes: previewSampleTimes(sequence) },
+      { sequence: payload, sampleTimes: previewSampleTimes(sequence), props: previewProps(sequence) },
       undefined,
       instance_id,
     );
@@ -1803,8 +1805,11 @@ export class RobloxStudioTools {
       readBack: {
         keyframes: written.keyframes,
         poses: written.poses,
+        markers: written.markers,
         matchesCompiled: written.keyframes === expected.keyframes
           && written.poses === expected.poses
+          // A plugin from before markers reports none, so any it dropped show here.
+          && (written.markers ?? 0) === expected.markers
           && written.stampMatches === true,
       },
       playback,
@@ -1837,9 +1842,10 @@ export class RobloxStudioTools {
   }
 
   private _animationResult(body: Record<string, unknown>, sequence: KeyframeSequenceDescription, locomotion: boolean) {
-    const meshes = currentRigMeshes();
-    const sheet = renderContactSheet(sequence, meshes, { locomotion });
-    const preview = renderRigGlb(sequence, sequence.name, meshes);
+    const rig = rigFor(sequence.rig);
+    const meshes = currentRigMeshes(rig);
+    const sheet = renderContactSheet(sequence, meshes, { locomotion, rig });
+    const preview = renderRigGlb(sequence, sequence.name, meshes, rig);
     return {
       content: [
         {
@@ -1848,8 +1854,15 @@ export class RobloxStudioTools {
             ...body,
             sheet: {
               times: sheet.times.map((time) => Math.round(time * 1000) / 1000),
-              rig: meshes.source === 'studio' ? 'the stock R15 rig' : 'a stand-in block rig, until a build reads the stock rig from Studio',
-              reading: `One column per time. Top row from the front three-quarter, bottom row ${locomotion ? 'from its right side facing right' : 'straight at its front, its right hand on the left'}; the shadow marks the ground under the body.`,
+              // What each column is, beside the even steps: its keyframe name, marker, or the fastest instant.
+              ...(sheet.labels.some((label) => label !== '') ? { shows: sheet.labels } : {}),
+              rig: rig.name === 'R6'
+                ? 'the R6 rig, whose parts are blocks'
+                : meshes.source === 'studio' ? 'the stock R15 rig' : 'a stand-in block rig, until a build reads the stock rig from Studio',
+              ...(previewProps(sequence).length > 0
+                ? { props: 'stand-ins: a 4-stud blade along each hand prop\'s +Y, a 3.8-stud sheath along SheathAttach\'s +Y' }
+                : {}),
+              reading: `One column per time, the key moments named in shows. Top row from the front three-quarter, bottom row ${locomotion ? 'from its right side facing right' : 'straight at its front, its right hand on the left'}; the shadow marks the ground under the body.`,
             },
           }),
         },
@@ -1942,7 +1955,7 @@ export class RobloxStudioTools {
       approved: /^approved$/i.test(moderation),
       readBack: readBack?.error
         ? { matches: false, error: readBack.error }
-        : { matches: readBack.matches === true, keyframes: readBack.keyframes, poses: readBack.poses },
+        : { matches: readBack.matches === true, keyframes: readBack.keyframes, poses: readBack.poses, markers: readBack.markers },
     };
     if (/reject/i.test(moderation)) {
       return this._textResult({ published: false, error: `Roblox moderation rejected the animation (${moderation}); it will not play.`, ...result });
@@ -1994,8 +2007,8 @@ export class RobloxStudioTools {
     }
     if (slot !== undefined && !animationId) throw new Error('animation_id is required with slot: it is the ID the slot should hold');
 
-    const payload = { name: sequence.name, loop: sequence.loop, priority: sequence.priority, keyframes: sequence.keyframes };
-    let response: { error?: string; length?: number; samples?: unknown; wiredIds?: unknown; playingIds?: unknown };
+    const payload = { name: sequence.name, rig: sequence.rig, loop: sequence.loop, priority: sequence.priority, keyframes: sequence.keyframes };
+    let response: { error?: string; length?: number; samples?: unknown; wiredIds?: unknown; playingIds?: unknown; rigType?: unknown };
     try {
       response = await this._callSingle(
         '/api/animation-verify',
@@ -2010,6 +2023,14 @@ export class RobloxStudioTools {
       throw error;
     }
     if (response?.error) return this._textResult({ ...response, error: `${response.error} Nothing was verified.` });
+    // A plugin from before R6 reports no rig type; the joint comparison still fails on a mismatch.
+    if (typeof response.rigType === 'string' && response.rigType !== sequence.rig) {
+      return this._textResult({
+        error: `The playtest character is ${response.rigType}, but the animation is for ${sequence.rig}, so it cannot play on it. Nothing was verified. Make the animation for ${response.rigType}, or set the place's avatar type to ${sequence.rig}.`,
+        errorCode: 'rig_mismatch',
+        characterRig: response.rigType,
+      });
+    }
 
     const playback = verifyLivePlayback(sequence, response.samples);
     const wiring = slot === undefined ? undefined : (() => {

@@ -44,15 +44,16 @@ export type ToolSchema = {
 };
 
 /** sha256 of `packages/core/src/tools/definitions.ts` with LF newlines. */
-export const TOOL_DEFINITIONS_DIGEST = "a5164ef609419b2182d05af9b149e8ee2d263455252bb276d450465743fba114";
+export const TOOL_DEFINITIONS_DIGEST = "5b25ad807f8a2e909bb62d591d35bb0579aee33d5bb2a262ac69a78065efd891";
 
 export const TOOL_SCHEMAS: Readonly<Record<string, ToolSchema>> = {
   animation: {
-    description: "Use to check, build, publish, wire, or verify an R15 character animation.",
+    description: "Use to check, build, publish, wire, or verify an R15 or R6 character animation.",
     parameters: [
       { name: "action", type: "string", required: true, enumValues: ["check", "build", "publish", "wire", "verify"], description: "check needs no Studio; verify needs a running playtest and the checked animation." },
-      { name: "animation", type: "object", required: false, description: "Pose description for an R15 rig." },
+      { name: "animation", type: "object", required: false, description: "Pose description for an R15 or R6 rig." },
       { name: "locomotion", type: "boolean", required: false, description: "A gait: adds ground, foot, and symmetry checks." },
+      { name: "grounded", type: "boolean", required: false, description: "Stands on the ground: checks feet never sink in." },
       { name: "parent", type: "string", required: false, description: "Build: instance the KeyframeSequence goes in." },
       { name: "expected_revision", type: "string", required: false, description: "Build: revision its last build returned; required to replace it." },
       { name: "waive", type: "string[]", required: false, description: "Failed checks to accept." },

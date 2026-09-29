@@ -149,6 +149,163 @@ const passed = await runTest('animation tool', async ({ track }) => {
     assert(aimed.built === true && aimed.playback?.verified === true, `an aim-posed wave builds and plays as checked (${aimed.error ?? `within ${aimed.playback?.maxDegrees}°`})`);
     assert(/straight at its front/.test(aimed.sheet?.reading ?? ''), 'a wave\'s contact sheet looks at the front below');
 
+    // A swing over 90° is split into in-betweens that Studio plays as checked.
+    const swung = await client.callTool('animation', {
+      action: 'build',
+      animation: {
+        name: 'Swung', rig: 'R15',
+        keyframes: [
+          { time: 0, easing: { style: 'CubicV2', direction: 'Out' }, joints: { RightShoulder: { aim: [0, -1, 0] } } },
+          // Raised up the front, the elbow folds back, as the guidance's slash does.
+          { time: 0.3, joints: { RightShoulder: { aim: [0, 1, 0.5], bendToward: [0, 0, -1] } } },
+        ],
+      },
+      parent: PARENT,
+    }, 120_000);
+    assert(swung.built === true && swung.animation?.inBetweens > 0 && swung.playback?.verified === true, `a split swing builds and plays as checked (${swung.error ?? `${swung.animation?.inBetweens} in-betweens, within ${swung.playback?.maxDegrees}°`})`);
+
+    // The weapon grip: the rig table's RightGripAttachment is the dummy's, and
+    // an animation that moves the weapon previews on a stand-in motor.
+    const grip = await luau(client, `
+      local rig = game:GetService("Players"):CreateHumanoidModelFromDescription(Instance.new("HumanoidDescription"), Enum.HumanoidRigType.R15)
+      local components = {
+        right = { rig.RightHand.RightGripAttachment.CFrame:GetComponents() },
+        left = { rig.LeftHand.LeftGripAttachment.CFrame:GetComponents() },
+      }
+      rig:Destroy()
+      return components
+    `);
+    // Only the position is used: a prop motor's turn is the rig table's own.
+    const expectedGrip = [0, -0.158, 0];
+    for (const side of ['right', 'left']) {
+      const found = grip?.[side];
+      assert(Array.isArray(found) && expectedGrip.every((value, index) => Math.abs(found[index] - value) < 0.02), `the rig table's ${side} grip is at the dummy's attachment (${JSON.stringify(found)})`);
+    }
+    const flicked = await client.callTool('animation', {
+      action: 'build',
+      animation: {
+        name: 'Flick', rig: 'R15',
+        keyframes: [
+          { time: 0, joints: { RightShoulder: { aim: [0, -1, 0.3] }, Weapon: { rotation: [0, 0, 0] } } },
+          { time: 0.3, joints: { RightShoulder: { aim: [0, -1, 0.3] }, Weapon: { rotation: [-80, 20, 0] } } },
+        ],
+      },
+      parent: PARENT,
+    }, 120_000);
+    assert(flicked.built === true && flicked.playback?.verified === true, `a weapon animation builds and plays as checked on the stand-in grip (${flicked.error ?? `within ${flicked.playback?.maxDegrees}°`})`);
+
+    // R6: the rig table is an R6 dummy's, and an R6 animation plays as checked on one.
+    const r6 = await luau(client, `
+      local rig = game:GetService("Players"):CreateHumanoidModelFromDescription(Instance.new("HumanoidDescription"), Enum.HumanoidRigType.R6)
+      local found = {}
+      for _, motor in rig:GetDescendants() do
+        if motor:IsA("Motor6D") and motor.Part1 then
+          found[motor.Part1.Name] = { c0 = { motor.C0:GetComponents() }, c1 = { motor.C1:GetComponents() } }
+        end
+      end
+      local grip = rig["Right Arm"]:FindFirstChild("RightGripAttachment")
+      found.grip = grip and { grip.CFrame:GetComponents() } or false
+      local leftGrip = rig["Left Arm"]:FindFirstChild("LeftGripAttachment")
+      found.leftGrip = leftGrip and { leftGrip.CFrame:GetComponents() } or false
+      rig:Destroy()
+      return found
+    `);
+    const TORSO_FRAME = [-1, 0, 0, 0, 0, 1, 0, 1, 0];
+    const RIGHT_FRAME = [0, 0, 1, 0, 1, 0, -1, 0, 0];
+    const LEFT_FRAME = [0, 0, -1, 0, 1, 0, 1, 0, 0];
+    const expectedR6 = {
+      Torso: [[0, 0, 0, ...TORSO_FRAME], [0, 0, 0, ...TORSO_FRAME]],
+      Head: [[0, 1, 0, ...TORSO_FRAME], [0, -0.5, 0, ...TORSO_FRAME]],
+      'Left Arm': [[-1, 0.5, 0, ...LEFT_FRAME], [0.5, 0.5, 0, ...LEFT_FRAME]],
+      'Right Arm': [[1, 0.5, 0, ...RIGHT_FRAME], [-0.5, 0.5, 0, ...RIGHT_FRAME]],
+      'Left Leg': [[-1, -1, 0, ...LEFT_FRAME], [-0.5, 1, 0, ...LEFT_FRAME]],
+      'Right Leg': [[1, -1, 0, ...RIGHT_FRAME], [0.5, 1, 0, ...RIGHT_FRAME]],
+    };
+    const close = (a, b) => Array.isArray(a) && a.length === b.length && a.every((value, index) => Math.abs(value - b[index]) < 0.02);
+    const r6Matches = Object.entries(expectedR6).every(([part, [c0, c1]]) => close(r6[part]?.c0, c0) && close(r6[part]?.c1, c1));
+    assert(r6Matches, `the R6 rig table matches an R6 dummy's Motor6Ds (${JSON.stringify(r6)})`);
+    // R6's grip attachments are not turned as R15's are (measured 2026-09-29);
+    // only their position is used, so only it is compared.
+    assert(Array.isArray(r6.grip) && close(r6.grip.slice(0, 3), [0, -1, 0]), `the R6 grip is at the Right Arm's RightGripAttachment (${JSON.stringify(r6.grip)})`);
+    assert(Array.isArray(r6.leftGrip) && close(r6.leftGrip.slice(0, 3), [0, -1, 0]), `the R6 left grip is at the Left Arm's LeftGripAttachment (${JSON.stringify(r6.leftGrip)})`);
+    const drawn = await client.callTool('animation', {
+      action: 'build',
+      animation: {
+        name: 'DrawR6', rig: 'R6',
+        keyframes: [
+          { time: 0, joints: { Sheath: { rotation: [0, 0, 0] }, OffHand: { rotation: [0, 0, 0] }, Weapon: { rotation: [0, 0, 0] } } },
+          { time: 0.3, joints: { Sheath: { rotation: [-20, 15, 0] }, OffHand: { rotation: [-60, 0, 0] }, Weapon: { rotation: [-90, 0, 0] } } },
+        ],
+      },
+      parent: PARENT,
+    }, 120_000);
+    assert(drawn.built === true && drawn.playback?.verified === true, `sheath and both hand props build and play as checked on R6 (${drawn.error ?? `within ${drawn.playback?.maxDegrees}°`})`);
+    const marched = await client.callTool('animation', {
+      action: 'build',
+      animation: {
+        name: 'MarchR6', rig: 'R6', loop: true,
+        keyframes: [
+          { time: 0, joints: { LeftHip: { aim: [0, -1, 0.4] }, RightHip: { aim: [0, -1, -0.4] }, Neck: { rotation: [10, 0, 0] } } },
+          { time: 0.4, joints: { LeftHip: { aim: [0, -1, -0.4] }, RightHip: { aim: [0, -1, 0.4] }, Neck: { rotation: [-10, 0, 0] } } },
+          { time: 0.8, joints: { LeftHip: { aim: [0, -1, 0.4] }, RightHip: { aim: [0, -1, -0.4] }, Neck: { rotation: [10, 0, 0] } } },
+        ],
+      },
+      parent: PARENT,
+      locomotion: true,
+    }, 120_000);
+    assert(marched.built === true && marched.playback?.verified === true, `an R6 animation builds and plays as checked on an R6 dummy (${marched.error ?? `within ${marched.playback?.maxDegrees}°`})`);
+
+    // aimAt: a planted lunge builds, with its solved keys, and plays as checked.
+    const lunged = await client.callTool('animation', {
+      action: 'build',
+      animation: {
+        name: 'Planted', rig: 'R15',
+        keyframes: [
+          // A wide stance needs the knees bent: the body starts a little low.
+          { time: 0, joints: { Root: { position: [0, -0.2, 0] }, LeftHip: { aimAt: [-0.6, -2.93, 0.4] }, RightHip: { aimAt: [0.6, -2.93, -0.5] } } },
+          { time: 0.4, joints: { Root: { position: [0, -0.5, -0.3], rotation: [0, 15, 0] }, LeftHip: { aimAt: [-0.6, -2.93, 0.4] }, RightHip: { aimAt: [0.6, -2.93, -0.5] } } },
+        ],
+      },
+      parent: PARENT,
+      grounded: true,
+    }, 120_000);
+    assert(lunged.built === true && lunged.animation?.inBetweens > 0 && lunged.playback?.verified === true, `a planted lunge builds and plays as checked (${lunged.error ?? `${lunged.animation?.inBetweens} solved keys, within ${lunged.playback?.maxDegrees}°`})`);
+
+    // grip: a two-handed swing builds, the left hand solved on the handle, and plays as checked.
+    const gripKey = (time, at, turn) => ({ time, joints: { RightShoulder: { aimAt: at, bendToward: [0, 1, 0] }, Weapon: { rotation: [turn, 0, 0] }, LeftShoulder: { grip: 0.45 } } });
+    const twoHanded = await client.callTool('animation', {
+      action: 'build',
+      animation: { name: 'TwoHanded', rig: 'R15', keyframes: [gripKey(0, [-0.2, 0.5, 0.8], 0), gripKey(0.3, [-0.2, 1.5, 0.5], 30), gripKey(0.42, [-0.2, 0, 0.8], -60)] },
+      parent: PARENT,
+    }, 120_000);
+    assert(twoHanded.built === true && twoHanded.playback?.verified === true, `a two-handed swing builds and plays as checked (${twoHanded.error ?? `within ${twoHanded.playback?.maxDegrees}°`})`);
+
+    // Markers become KeyframeMarkers a script's GetMarkerReachedSignal fires on.
+    const marked = await client.callTool('animation', {
+      action: 'build',
+      animation: {
+        name: 'Marked', rig: 'R15',
+        keyframes: [
+          { time: 0, joints: { RightShoulder: { aim: [0, -1, 0] } } },
+          { time: 0.2, joints: {}, markers: [{ name: 'Hit', value: 'light' }] },
+          { time: 0.4, joints: { RightShoulder: { aim: [0, -1, 0.6] } } },
+        ],
+      },
+      parent: PARENT,
+    }, 120_000);
+    assert(marked.built === true && marked.readBack?.markers === 1 && marked.readBack?.matchesCompiled === true, `markers are built and read back (${marked.error ?? JSON.stringify(marked.readBack)})`);
+    const markerState = await luau(client, `
+      local marked = game:GetService("ServerStorage")[${JSON.stringify(FOLDER_NAME)}]:FindFirstChild("Marked")
+      local found = {}
+      for _, descendant in marked:GetDescendants() do
+        if descendant:IsA("KeyframeMarker") then
+          table.insert(found, { name = descendant.Name, value = descendant.Value, time = descendant.Parent.Time })
+        end
+      end
+      return found
+    `);
+    assert(markerState.length === 1 && markerState[0].name === 'Hit' && markerState[0].value === 'light' && Math.abs(markerState[0].time - 0.2) < 1e-6, `Studio holds the marker at its keyframe (${JSON.stringify(markerState)})`);
+
     // -- Step 8: publish, wire, verify -------------------------------------
     // The hand-edited sequence stays refused; start it afresh to publish from.
     await luau(client, `game:GetService("ServerStorage")[${JSON.stringify(FOLDER_NAME)}].Wave:Destroy() return true`);

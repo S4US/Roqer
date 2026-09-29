@@ -1,6 +1,6 @@
 # Character animation
 
-Roqer can make an R15 character animation from a request in plain words. It
+Roqer can make an R15 or R6 character animation from a request in plain words. It
 checks the motion, shows it to you, builds it in your place, publishes it to
 Roblox, wires it to your players' characters, and checks in a playtest that it
 plays. For "Make a running animation and set it up in R15", a finished run
@@ -19,8 +19,11 @@ Roqer can use it too; see [the MCP server guide](mcp-server.md).
 
 ## What you need
 
-- **An R15 character.** Animations are made for the standard R15 body, which
-  is what Roblox gives players by default.
+- **An R15 or R6 character.** Animations are made for the standard R15 body,
+  which is what Roblox gives players by default, or for the classic six-block
+  R6 body that many combat games use. An animation plays only on the rig it
+  was made for, so the agent checks which one your players use, and a
+  playtest verification refuses a mismatch.
 - **To publish:**
   - a Roblox Open Cloud API key with the Assets API's Write access, set under
     **Settings → Roblox → Open Cloud** (see
@@ -43,8 +46,21 @@ tells you that publishing needs a key.
    - for an arm or a leg, the direction it points and how far the elbow or
      knee bends.
 
-   It starts from tested recipes for a wave, idle, walk, run and jump, which
-   ship with Roqer's animation skill.
+   - for an arm or a leg, a point its hand or foot should reach: Roqer bends
+     the elbow or knee to reach it, and a foot held on one point stays
+     planted while the body lunges over it.
+
+   It starts from tested recipes, which ship with Roqer's animation skill:
+   for R15 a wave, idle, walk, run, jump, sword slash and lunge, and for R6 a
+   walk and a wave.
+
+   For a sword or other weapon, the agent can also move the weapon in the
+   hand, so a swing can flick and tilt the blade, and a second item in the
+   left hand or a sheath at the hip.
+
+   A keyframe can also carry markers: named events, such as the moment a
+   sword hit lands, that a game script waits for with
+   `GetMarkerReachedSignal`.
 2. **Roqer checks it before Studio sees it.** It compiles the description and
    measures the motion:
 
@@ -58,12 +74,20 @@ tells you that publishing needs a key.
    | Foot sliding | a planted foot skating |
    | Gait symmetry | legs that do not alternate evenly |
 
-   The last three run for walks, runs and other gaits. The limits are set so
-   that Roblox's own R15 animations pass every check. A failed check names the
+   The last three run for walks, runs and other gaits. For any other
+   animation performed on the ground, such as a crouching attack, the agent
+   can ask for the ground check alone, which fails when a foot sinks into
+   the floor. The limits are set so
+   that Roblox's own R15 animations pass every check. On R6, foot sliding is
+   reported as not checked: its limit has not been calibrated on R6's block
+   legs. A failed check names the
    joint, the time and the limit. The agent fixes it, or waives it when it is
    meant, such as a jump that leaves the ground.
-3. **You see the motion.** Roqer draws the stock R15 rig at five moments of the
-   animation in one picture, the contact sheet, which the agent can look at.
+3. **You see the motion.** Roqer draws the stock rig at several moments of
+   the animation in one picture, the contact sheet, which the agent can look
+   at: five evenly spaced, plus the moments that matter most (each named
+   keyframe, each marker such as a hit, and the instant the body moves
+   fastest), so a fast strike is never missed between columns.
    - The top row shows the front three-quarter.
    - The bottom row looks straight at the front. For a gait, it looks from the
      side instead, where strides show.
@@ -115,8 +139,13 @@ between versions ("Version 3 of 6"), and the newest is shown first.
 
 ## Limits
 
-- R15 only, and only the standard body's joints. Faces, fingers, clothing and
-  skinned-mesh rigs are not animated.
+- R15 and R6 only, and only the standard bodies' joints, plus three props: a
+  held item in each hand and a sheath at the hip. R6 has no elbows or knees, and the foot-sliding check is
+  not applied to it. Faces, fingers, clothing and skinned-mesh rigs are not
+  animated.
+- A prop is animated through a `Motor6D` the game adds when the weapon is
+  equipped (or, for a sheath, when the character spawns), because Roblox's
+  own grip weld cannot be animated. The animation skill has the scripts.
 - Animations are `KeyframeSequence`s, not `CurveAnimation`s.
 - Wiring sets the default `Animate` script's slots. A game that plays its own
   animations from its own scripts needs those scripts changed instead.

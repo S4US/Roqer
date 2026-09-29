@@ -8,6 +8,7 @@ import {
   type MotionSequence,
 } from '../animation/motion.js';
 import { checkMotion, type MotionCheckId, type MotionReport } from '../animation/motion-checks.js';
+import { R6_RIG } from '../animation/r6-rig.js';
 
 type Joints = Record<string, { rotation?: [number, number, number]; position?: [number, number, number] }>;
 
@@ -149,6 +150,25 @@ describe('checkMotion', () => {
     expect(limits).toMatchObject({ status: 'fail', detail: 'Neck turns 120° at 0 s; limit 90°' });
   });
 
+  test('checks feet against the ground on request, without asking a foot to stay down', () => {
+    // Dropping the body half a stud with straight legs puts the feet through the floor.
+    const sink = animation([
+      { time: 0, joints: { Root: { position: [0, 0, 0] } } },
+      { time: 0.5, joints: { Root: { position: [0, -0.5, 0] } } },
+    ]);
+    expect(check(checkMotion(sink), 'groundContact').status).toBe('skipped');
+    const sunk = check(checkMotion(sink, { grounded: true }), 'groundContact');
+    expect(sunk).toMatchObject({ status: 'fail', measured: { penetration: 0.5 } });
+    expect(sunk.detail).toMatch(/^(Left|Right)Foot sinks 0.5 studs into the ground at 0.5 s; limit 0.1$/);
+    // Leaping clear of the ground is fine: only sinking fails.
+    const leap = check(checkMotion(animation([
+      { time: 0, joints: { Root: { position: [0, 0, 0] } } },
+      { time: 0.5, joints: { Root: { position: [0, 2, 0] } } },
+    ]), { grounded: true }), 'groundContact');
+    expect(leap.status).toBe('pass');
+    expect(leap.measured.groundedShare).toBeLessThan(0.5);
+  });
+
   test('fails a joint that moves faster than the speed limit', () => {
     // 90° in 0.03 s: 3000°/s, sampled over two uneven steps.
     const report = checkMotion(animation([
@@ -158,7 +178,18 @@ describe('checkMotion', () => {
     const velocity = check(report, 'velocity');
     expect(velocity.status).toBe('fail');
     expect(velocity.measured.RightShoulder).toBe(3000);
-    expect(velocity.detail).toBe('fastest: RightShoulder at 3000°/s around 0.02 s; limit 2500°/s');
+    expect(velocity.detail).toBe('fastest for its limit: RightShoulder at 3000°/s around 0.02 s; limit 2500°/s');
+  });
+
+  test('lets a held weapon turn faster than a body joint, within its own limit', () => {
+    const flick = (degrees: number, seconds: number) => check(checkMotion(animation([
+      { time: 0, joints: { Weapon: { rotation: [0, 0, 0] } } },
+      { time: seconds, joints: { Weapon: { rotation: [degrees, 0, 0] } } },
+    ])), 'velocity');
+    // 90° in 0.03 s is 3000°/s: too fast for a shoulder, a flick for a sword.
+    expect(flick(90, 0.03)).toMatchObject({ status: 'pass', measured: { Weapon: 3000 } });
+    // 80° in 0.01 s is 8000°/s: a prop flipping round in a frame.
+    expect(flick(80, 0.01)).toMatchObject({ status: 'fail', detail: 'fastest for its limit: Weapon at 8000°/s around 0.01 s; limit 7200°/s' });
   });
 
   test('fails a loop whose last pose does not meet its first', () => {
@@ -226,5 +257,26 @@ describe('checkMotion', () => {
 
     const limping = check(checkMotion(walk(25, -10), { locomotion: true }), 'gaitSymmetry');
     expect(limping).toMatchObject({ status: 'fail', measured: { amplitudeRatio: 0.4 } });
+  });
+});
+
+describe('R6 motion checks', () => {
+  test('check an R6 gait on its rigid legs, and report foot sliding as not checked', () => {
+    const result = compilePoseAnimation({
+      name: 'March', rig: 'R6', loop: true,
+      keyframes: [
+        { time: 0, joints: { LeftHip: { aim: [0, -1, 0.4] }, RightHip: { aim: [0, -1, -0.4] }, LeftShoulder: { aim: [0, -1, -0.4] }, RightShoulder: { aim: [0, -1, 0.4] } } },
+        { time: 0.5, joints: { LeftHip: { aim: [0, -1, -0.4] }, RightHip: { aim: [0, -1, 0.4] }, LeftShoulder: { aim: [0, -1, 0.4] }, RightShoulder: { aim: [0, -1, -0.4] } } },
+        { time: 1, joints: { LeftHip: { aim: [0, -1, 0.4] }, RightHip: { aim: [0, -1, -0.4] }, LeftShoulder: { aim: [0, -1, -0.4] }, RightShoulder: { aim: [0, -1, 0.4] } } },
+      ],
+    });
+    if (!result.ok) throw new Error(result.errors.join('\n'));
+    const report = checkMotion(result.sequence, { locomotion: true }, R6_RIG);
+    const byId = Object.fromEntries(report.checks.map((check) => [check.id, check]));
+    expect(byId.footSliding).toMatchObject({ status: 'skipped', detail: expect.stringMatching(/^not checked: R6 legs are single blocks/) });
+    expect(byId.groundContact.status).toBe('pass');
+    expect(byId.gaitSymmetry).toMatchObject({ status: 'pass' });
+    expect(byId.gaitSymmetry.measured.amplitudeLeft).toBeCloseTo(21.8, 0);
+    expect(report.passed).toBe(true);
   });
 });

@@ -45,6 +45,10 @@ end)
 attack:Play(0.08)
 ```
 
+The marker must exist in the animation. With Roqer's `animation` tool, put it on
+the keyframe where the hit lands: `markers: [{ "name": "Impact" }]`. A
+keyframe's `name` is not a marker; it only fires the older `KeyframeReached`.
+
 If the animation can be stopped and restarted, make the effect trigger idempotent or clear the previous attack state before playing again.
 
 ## 3. Blending

@@ -3,26 +3,51 @@
 Use this to author an R15 animation with the `animation` tool (check, build,
 publish, wire, verify). Start from the recipe closest to the request and change
 it. Run `check` before `build`: it validates the format, runs the motion checks
-and returns a contact sheet, without touching Studio.
+and returns a contact sheet, without touching Studio. Pass `locomotion: true`
+for a walk or run, and `grounded: true` for anything else done standing on
+the ground, such as an attack or an idle: it fails when a foot sinks into the
+floor, which a crouch or lunge easily does.
 
 ## Format
 
 ```text
-{ name, rig: "R15", loop?, priority?, easing?, keyframes: [{ time, name?, easing?, joints: { <Joint>: pose } }] }
+{ name, rig: "R15" | "R6", loop?, priority?, easing?, keyframes: [{ time, name?, easing?, joints: { <Joint>: pose }, markers? }] }
 ```
 
 - Joints: `Root`, `Waist`, `Neck`, `LeftShoulder`, `LeftElbow`, `LeftWrist`,
   `RightShoulder`, `RightElbow`, `RightWrist`, `LeftHip`, `LeftKnee`,
-  `LeftAnkle`, `RightHip`, `RightKnee`, `RightAnkle`.
+  `LeftAnkle`, `RightHip`, `RightKnee`, `RightAnkle`, and the props `Weapon`,
+  `OffHand` and `Sheath` (see "Props").
 - The first keyframe is at 0. A joint keyed in any keyframe must also be keyed
   in the first. A joint left out of a later keyframe just keeps moving toward
   its next key.
 - A loop's last keyframe must repeat its first, so the loop joins up.
-- A joint may turn at most 90° between two of its keys. Split a bigger turn
-  with a keyframe in between, as the jump recipe does for its arms.
+- A joint that turns more than 90° between two of its keys gets in-between
+  keys added for it, along the short way round; `animation.inBetweens` in the
+  result counts them. Write a big swing as its key poses, not its arithmetic.
+- The short way round must be the way you mean. A turn of 175° or more is
+  refused, and a wide arc, such as an overhead slash that ends low on the
+  other side, needs a key partway along it (the arm forward at the middle
+  of the swing) so it goes over the top rather than through the body.
+- Elastic and Bounce turns over 90° are not split: split them yourself.
 - `easing` is `{ style, direction }`. Styles are Linear, Constant, Cubic,
   CubicV2, Elastic and Bounce; directions are In, Out and InOut. It can be set
   on a joint, a keyframe or the whole animation, and the nearest one applies.
+
+## Markers
+
+A keyframe's `markers` puts named events at its time, for scripts to time
+gameplay to: the frame a sword hit lands, a footstep, a whoosh.
+
+```text
+{ time: 0.32, joints: {}, markers: [{ name: "Hit", value: "light" }] }
+```
+
+- A script listens with `track:GetMarkerReachedSignal("Hit")`; its handler
+  receives `value` (a string, `""` when left out).
+- A keyframe that only carries markers may key no joints: `joints: {}`.
+- A keyframe's `name` is not a marker. It only fires the older
+  `KeyframeReached` event, so use `markers` for anything a script waits on.
 
 ## Poses
 
@@ -45,6 +70,41 @@ Each pose takes one of these:
 
 Prefer `aim` and `bend` for arms and legs. Working out a combined Euler rotation
 by hand is where poses go wrong.
+
+## Reaching a point: aimAt
+
+`aimAt: [right, up, forward]` (shoulders and hips) puts the limb's end on a
+point, in studs from the HumanoidRootPart's centre, however the body is posed
+at that moment. Use it wherever a limb must meet something: a foot on the
+ground, a hand on a hilt or on the sheath.
+
+- On R15 the end is the wrist or the ankle, and the elbow or knee bends to
+  reach it: `aimAt` keys the elbow or knee, so leave them out of that
+  keyframe. On a leg it also keys the ankle, laying the foot flat, facing the
+  way the body does.
+- On R6, whose limbs cannot bend, the block points through the point: its end
+  lands on it only when the point is exactly a limb's length away, and passes
+  beyond it when nearer. Check R6 feet with `grounded: true`.
+- `bendToward` turns the elbow or knee, as with `aim`.
+- A point out of reach is refused, saying how far the limb reaches.
+- **Planting.** A limb aimed at the same point in one of its keys and the next
+  is planted there: the compiler solves it again every thirtieth of a second
+  between them, so a foot stays within a few hundredths of a stud of its point
+  while the body lunges, drops or turns over it, and keeps its heading. `animation.inBetweens` counts those keys.
+- To step, give the foot a different point, and lift it on a key between: a
+  foot moved along the ground drags through it.
+- **Two-handed holds.** `LeftShoulder: { grip: 0.45 }` puts the left hand
+  on the weapon's handle, 0.45 studs from the right hand toward the pommel
+  (hands side by side). Between two keys that both grip, the arm follows the
+  handle, solved every sixtieth of a second, so the hands stay together
+  through the fastest swing. It keys `LeftElbow`: leave it and `LeftWrist`
+  out. The handle must be within the left arm's reach: Roblox shoulders are
+  wide for their arms, so bring the right hand toward the centre front,
+  ideally with `aimAt` (for example `[-0.2, 0.5, 0.8]` for a two-handed
+  guard), and turn the torso toward the weapon for low cuts.
+- Heights: the ground is 3.19 studs below the HumanoidRootPart's centre on
+  R15 and 3 on R6. An R15 ankle stands 0.26 above the ground, so a planted
+  R15 ankle is at `up` -2.93; an R6 leg's end is its sole, at -3.
 
 ## Recipes
 
@@ -119,8 +179,7 @@ The run has the same structure as the walk, with these differences:
 - a higher knee lift;
 - arms bent to 85° and swinging wider.
 
-Keep a knee's change between keys under 90°: that is why the lift stops at 95°
-from about 25°.
+The knee lift stops at 95° from about 25°: a bigger lift reads as a sprint.
 
 ### Jump (one shot)
 
@@ -134,12 +193,209 @@ from about 25°.
 
 The Humanoid does the jumping. The animation only poses the body in the air:
 arms thrown up and knees tucked. The arms pass through the side at 0.12 s,
-because going straight from down to overhead would turn them more than 90° in
-one step.
+because going straight from down to overhead would be about half a turn, and
+the key at the side says which way round the arms go.
+
+## Props
+
+A sword, a second blade, a shield or a sheath is animated through a prop
+joint. Each moves one part, and the prop's other parts are welded to it:
+
+| Joint | Moves | From | C0 (the game sets it) |
+| --- | --- | --- | --- |
+| `Weapon` | `BodyAttach` | right hand (R6: `Right Arm`) | `CFrame.new(RightGripAttachment.Position) * CFrame.Angles(math.rad(-90), 0, 0)` |
+| `OffHand` | `OffHandAttach` | left hand (R6: `Left Arm`) | `CFrame.new(LeftGripAttachment.Position) * CFrame.Angles(math.rad(-90), 0, 0)` |
+| `Sheath` | `SheathAttach` | `LowerTorso` (R6: `Torso`) | R15 `CFrame.new(-1, 0, 0) * CFrame.Angles(math.rad(100), 0, 0)`; R6 `CFrame.new(-1, -0.8, 0) * CFrame.Angles(math.rad(100), 0, 0)` |
+
+- A prop joint takes `rotation` only: degrees about its body part's own axes,
+  pivoting at the prop's part.
+- A hand prop points forward out of the fist at rest, square to the forearm
+  (the prop part's +Y). `[-90, 0, 0]` runs it straight out along the forearm,
+  as in a thrust; `[90, 0, 0]` folds it back along the arm; `Y` rolls it
+  about the forearm.
+- The sheath's mouth sits at the left hip, and at rest it runs back and a
+  little down (the prop part's +Y). `rotation` about `X` tips its tail up or
+  down; about `Y`, swings it forward or back round the hip.
+- The preview draws stand-ins, a 4-stud blade for a hand prop and a 3.8-stud
+  sheath, and only for props the animation keys.
+- A prop joint may turn up to 7200°/s before the velocity check fails, so a
+  fast flick needs no waiver.
+
+Roblox's own grip weld cannot be animated, so the game has to rig each prop:
+
+- the prop's part (`BodyAttach`, `OffHandAttach` or `SheathAttach`)
+  unanchored, `CanCollide` off and `Massless` on, with every other part of
+  the prop welded to it (`WeldConstraint`), and the prop modelled along the
+  part's up (+Y) axis: a blade from the grip, a sheath from its mouth;
+- for held props, a Tool with `RequiresHandle` off and no part named
+  `Handle`, so Roblox adds no weld of its own, and this Script in the Tool,
+  which swaps in the motors the animation drives on equip:
+
+```luau
+local tool = script.Parent
+local GRIPS = { BodyAttach = { "RightHand", "Right Arm", "RightGripAttachment" }, OffHandAttach = { "LeftHand", "Left Arm", "LeftGripAttachment" } }
+local motors: { Motor6D } = {}
+
+tool.Equipped:Connect(function()
+	local character = tool.Parent
+	for partName, grip in GRIPS do
+		local part = tool:FindFirstChild(partName)
+		local hand = character:FindFirstChild(grip[1]) or character:FindFirstChild(grip[2])
+		local attachment = hand and hand:FindFirstChild(grip[3])
+		if part and attachment then
+			local motor = Instance.new("Motor6D")
+			motor.Name = partName
+			motor.Part0 = hand
+			motor.Part1 = part
+			-- The attachment's position, turned the same on every rig: R15's grip
+			-- attachments are already turned this way, R6's are not.
+			motor.C0 = CFrame.new(attachment.Position) * CFrame.Angles(math.rad(-90), 0, 0)
+			motor.Parent = hand
+			table.insert(motors, motor)
+		end
+	end
+end)
+
+tool.Unequipped:Connect(function()
+	for _, motor in motors do
+		motor:Destroy()
+	end
+	table.clear(motors)
+end)
+```
+
+- for a worn sheath, a Model named `Sheath` holding `SheathAttach`, kept in
+  `ServerStorage`, and this Script in `StarterCharacterScripts`, which gives
+  every character one on spawn:
+
+```luau
+local character = script.Parent
+local humanoid = character:WaitForChild("Humanoid")
+local isR6 = humanoid.RigType == Enum.HumanoidRigType.R6
+local body = character:WaitForChild(if isR6 then "Torso" else "LowerTorso")
+local sheath = game:GetService("ServerStorage"):WaitForChild("Sheath"):Clone()
+local mouth = sheath:WaitForChild("SheathAttach")
+local offset = if isR6 then CFrame.new(-1, -0.8, 0) else CFrame.new(-1, 0, 0)
+
+local motor = Instance.new("Motor6D")
+motor.Name = "SheathAttach"
+motor.Part0 = body
+motor.Part1 = mouth
+motor.C0 = offset * CFrame.Angles(math.rad(100), 0, 0)
+motor.Parent = body
+sheath.Parent = character
+```
+
+- Play an attack from the tool's `Activated` on the character's `Animator`,
+  and apply damage from the animation's `Hit` marker, not from a timer (see
+  `full.md`, "Priorities and markers").
+- To verify a prop animation in a playtest, equip the tool (and give the
+  character its sheath) first: without the motor, verify reports that the
+  character has nothing for the prop joint to move.
+- For a draw from the sheath, key `Sheath` and `Weapon` together so the blade
+  leaves along the sheath's line, and put the right hand on the hilt at the
+  sheath's mouth with `aimAt`; the left hand can hold the sheath the same
+  way.
+
+### Lunge (one shot, with a weapon, `grounded: true`)
+
+```json
+{ "name": "Lunge", "rig": "R15", "priority": "Action", "keyframes": [
+  { "time": 0, "joints": { "Root": { "position": [0, 0, 0] }, "Waist": { "rotation": [0, 0, 0] }, "LeftHip": { "aimAt": [-0.5, -2.93, 0] }, "RightHip": { "aimAt": [0.5, -2.93, 0] }, "RightShoulder": { "aim": [0.2, -0.8, 0.6] }, "RightElbow": { "bend": 50 }, "Weapon": { "rotation": [0, 0, 0] } } },
+  { "time": 0.1, "joints": { "Root": { "position": [0, -0.2, 0.2], "rotation": [0, 12, 0] }, "LeftHip": { "aimAt": [-0.6, -2.6, 0.3] }, "RightHip": { "aimAt": [0.55, -2.6, -0.45] } } },
+  { "time": 0.2, "name": "Coil", "joints": { "Root": { "position": [0, -0.5, 0.4], "rotation": [0, 25, 0] }, "Waist": { "rotation": [0, 15, 0] }, "LeftHip": { "aimAt": [-0.7, -2.93, 0.6] }, "RightHip": { "aimAt": [0.6, -2.93, -0.9] }, "RightShoulder": { "aim": [0.6, -0.3, -0.5] }, "RightElbow": { "bend": 90 }, "Weapon": { "rotation": [-90, 0, 0] } } },
+  { "time": 0.32, "joints": { "Root": { "position": [0, -0.8, -0.6], "rotation": [-10, -10, 0] }, "Waist": { "rotation": [-10, -10, 0] }, "LeftHip": { "aimAt": [-0.7, -2.93, 0.6] }, "RightHip": { "aimAt": [0.6, -2.93, -0.9] }, "RightShoulder": { "aim": [0.1, 0.05, 1] }, "RightElbow": { "bend": 5 }, "Weapon": { "rotation": [-90, 0, 0] } }, "markers": [{ "name": "Hit" }] },
+  { "time": 0.75, "easing": { "style": "CubicV2", "direction": "InOut" }, "joints": { "Root": { "position": [0, -0.35, 0], "rotation": [0, 15, 0] }, "Waist": { "rotation": [0, 0, 0] }, "LeftHip": { "aimAt": [-0.7, -2.93, 0.6] }, "RightHip": { "aimAt": [0.6, -2.93, -0.9] }, "RightShoulder": { "aim": [0.3, -0.6, 0.8] }, "RightElbow": { "bend": 40 }, "Weapon": { "rotation": [-40, 0, 0] } } }
+] }
+```
+
+A thrust from a low stance. The feet step out to a wide stance, lifted on the
+way, and stay planted from `Coil` to the end while the body drops, twists and
+drives forward; `Hit` fires with the arm and blade straight out. The recovery
+rises to a guard over the same planted feet.
+
+- To lunge deeper, lower `Root` further at `Hit`; if a leg cannot reach its
+  point, the error says by how much.
+- Mirror it for the left side by swapping the feet's `right` signs.
+
+### Slash (one shot, with a weapon)
+
+```json
+{ "name": "Slash", "rig": "R15", "priority": "Action", "keyframes": [
+  { "time": 0, "joints": { "Waist": { "rotation": [0, 0, 0] }, "RightShoulder": { "aim": [0.2, -0.8, 0.6] }, "RightElbow": { "bend": 50 }, "Weapon": { "rotation": [0, 0, 0] } } },
+  { "time": 0.25, "name": "WindUp", "joints": { "Waist": { "rotation": [0, 30, 0] }, "RightShoulder": { "aim": [0.4, 1, 0.2], "bendToward": [0, 0, -1] }, "RightElbow": { "bend": 70 }, "Weapon": { "rotation": [0, 0, 0] } } },
+  { "time": 0.37, "joints": { "Waist": { "rotation": [0, -5, 0] }, "RightShoulder": { "aim": [0.15, 0, 1], "bendToward": [0, 1, 0] }, "RightElbow": { "bend": 10 }, "Weapon": { "rotation": [-95, 0, 0] } }, "markers": [{ "name": "Hit" }] },
+  { "time": 0.47, "easing": { "style": "CubicV2", "direction": "Out" }, "joints": { "Waist": { "rotation": [0, -30, 0] }, "RightShoulder": { "aim": [-0.4, -0.6, 0.7], "bendToward": [0, 1, 0.3] }, "RightElbow": { "bend": 15 }, "Weapon": { "rotation": [-70, 0, 0] } } },
+  { "time": 0.8, "joints": { "Waist": { "rotation": [0, 0, 0] }, "RightShoulder": { "aim": [0.2, -0.8, 0.6] }, "RightElbow": { "bend": 50 }, "Weapon": { "rotation": [0, 0, 0] } } }
+] }
+```
+
+An overhead chop. The ready guard holds the blade up in front. The wind-up
+lifts the arm with the elbow folding back, so the blade hangs down the back,
+and twists the waist right. The swing brings the arm forward over the top
+while `Weapon` snaps the blade out along the arm; the `Hit` marker fires when
+the blade is level in front of the chest. The follow-through carries it low
+with `CubicV2 Out`, and the last key returns to the guard.
+
+- To swing faster, shrink the gap between the wind-up and `Hit`. Below about
+  0.08 s the shoulder passes the velocity check's 2500°/s; waive `velocity`
+  when that snap is meant. `Weapon` has its own limit of 7200°/s, so a fast
+  flick of the blade alone needs no waiver.
+- For a thrust, keep the arm aimed forward and move `Weapon` to `[-90, 0, 0]`.
+
+## R6
+
+Many places, combat games especially, give players R6 characters: six blocks
+with no elbows, wrists, knees, ankles or waist. An R15 animation does not play
+on them, so find which rig the players use before animating:
+
+- In a running playtest, read the character's `Humanoid.RigType` (for example
+  with `eval_client_runtime`). A `StarterCharacter` in `StarterPlayer` decides
+  it too. If a place lets players choose, make one animation for each rig.
+- `verify` refuses when the playtest character's rig is not the animation's.
+
+Set `rig: "R6"`. Its joints are `Root`, `Neck`, `LeftShoulder`,
+`RightShoulder`, `LeftHip`, `RightHip` and `Weapon`, and they take poses in the
+same terms as on R15: `aim` points an arm or leg the same way, and a
+`rotation` turns about the same body axes. There is no `bend`: an R6 arm or
+leg swings as one rigid block. The contact sheet draws the R6 blocks. Foot
+sliding is reported as not checked for R6: its limit was set on R15 feet.
+
+### Walk (R6, loop, `locomotion: true`)
+
+```json
+{ "name": "WalkR6", "rig": "R6", "loop": true, "easing": { "style": "CubicV2", "direction": "InOut" }, "keyframes": [
+  { "time": 0, "joints": { "LeftHip": { "aim": [0, -1, 0.4] }, "RightHip": { "aim": [0, -1, -0.4] }, "LeftShoulder": { "aim": [0, -1, -0.4] }, "RightShoulder": { "aim": [0, -1, 0.4] } } },
+  { "time": 0.4, "joints": { "LeftHip": { "aim": [0, -1, -0.4] }, "RightHip": { "aim": [0, -1, 0.4] }, "LeftShoulder": { "aim": [0, -1, 0.4] }, "RightShoulder": { "aim": [0, -1, -0.4] } } },
+  { "time": 0.8, "joints": { "LeftHip": { "aim": [0, -1, 0.4] }, "RightHip": { "aim": [0, -1, -0.4] }, "LeftShoulder": { "aim": [0, -1, -0.4] }, "RightShoulder": { "aim": [0, -1, 0.4] } } }
+] }
+```
+
+The legs swing as rigid pendulums, about 22° each way, with each arm against
+its own side's leg. To go faster, scale the times down; for a run, widen the
+swing and lean with `Root` `rotation`.
+
+### Wave (R6, loop)
+
+```json
+{ "name": "WaveR6", "rig": "R6", "loop": true, "easing": { "style": "CubicV2", "direction": "InOut" }, "keyframes": [
+  { "time": 0, "joints": { "RightShoulder": { "aim": [1, 0.5, 0.2] } } },
+  { "time": 0.35, "joints": { "RightShoulder": { "aim": [1, 1.4, 0.2] } } },
+  { "time": 0.7, "joints": { "RightShoulder": { "aim": [1, 0.5, 0.2] } } }
+] }
+```
+
+With no elbow, the whole arm waves, raised out to the side and rocking up and
+down. An R6 arm turns about the top of its inner edge, so one raised past the
+shoulder brushes the head's block: keep the hand out to the side, not over
+the head.
 
 ## Reading the result
 
-- The contact sheet shows five moments. The top row is the front
+- The contact sheet shows five evenly spaced moments, and a column for each
+  named keyframe, each marker and the fastest instant, up to eight in all:
+  `sheet.shows` names them. Name the keys that matter (`WindUp`, `Hit`) so a
+  fast strike is always drawn. The top row is the front
   three-quarter. The bottom row looks straight at the front, where arm and head
   motion reads; for a gait (`locomotion: true`) it looks from the side, where
   strides and foot plants read.

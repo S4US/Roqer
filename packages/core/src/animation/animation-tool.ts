@@ -7,9 +7,9 @@
 // that plays as checked is written.
 
 import { compilePoseAnimation, type KeyframeSequenceDescription } from './pose-compiler.js';
-import { buildTracks, degreesBetween, frameFromComponents, sampleTrack } from './motion.js';
+import { buildTracks, degreesBetween, frameFromComponents, jointParentFrame, sampleTrack } from './motion.js';
 import { checkMotion, type MotionCheckId, type MotionCheckResult, type MotionReport } from './motion-checks.js';
-import { R15_RIG } from './r15-rig.js';
+import { rigFor } from './rigs.js';
 
 export const MOTION_CHECK_IDS: readonly MotionCheckId[] = [
   'jointLimits',
@@ -50,10 +50,13 @@ export interface CheckedAnimation {
 export type PrepareResult = { ok: true; value: CheckedAnimation } | { ok: false; errors: string[] };
 
 /** Validates the tool's own arguments, compiles the animation and checks its motion. */
-export function prepareAnimation(animation: unknown, options: { locomotion?: unknown; waive?: unknown }): PrepareResult {
+export function prepareAnimation(animation: unknown, options: { locomotion?: unknown; grounded?: unknown; waive?: unknown }): PrepareResult {
   const errors: string[] = [];
   if (options.locomotion !== undefined && typeof options.locomotion !== 'boolean') {
     errors.push('locomotion: must be true or false');
+  }
+  if (options.grounded !== undefined && typeof options.grounded !== 'boolean') {
+    errors.push('grounded: must be true or false');
   }
   let waive: MotionCheckId[] = [];
   if (options.waive !== undefined) {
@@ -70,7 +73,11 @@ export function prepareAnimation(animation: unknown, options: { locomotion?: unk
   if (!compiled.ok) errors.push(...compiled.errors);
   if (errors.length > 0 || !compiled.ok) return { ok: false, errors };
 
-  const report = checkMotion(compiled.sequence, { locomotion: options.locomotion === true });
+  const report = checkMotion(
+    compiled.sequence,
+    { locomotion: options.locomotion === true, grounded: options.grounded === true },
+    rigFor(compiled.sequence.rig),
+  );
   const failed = report.checks.filter((check) => check.status === 'fail').map((check) => check.id);
   return {
     ok: true,
@@ -102,6 +109,8 @@ export function describeAnimation(sequence: KeyframeSequenceDescription) {
     loop: sequence.loop,
     priority: sequence.priority,
     joints: sequence.joints,
+    ...(sequence.markerCount > 0 ? { markers: sequence.markerCount } : {}),
+    ...(sequence.inBetweenCount > 0 ? { inBetweens: sequence.inBetweenCount } : {}),
   };
 }
 
@@ -140,6 +149,8 @@ export function verifyPlayback(sequence: KeyframeSequenceDescription, samples: u
   const fail = (reason: string): PlaybackCheck => ({ verified: false, samples: 0, maxDegrees: 0, maxStuds: 0, reason });
   if (!Array.isArray(samples) || samples.length === 0) return fail('Studio returned no preview samples');
   const tracks = buildTracks(sequence);
+  // A weapon grip is compared only when the animation moves it.
+  const joints = rigFor(sequence.rig).joints.filter((joint) => !joint.optional || sequence.joints.includes(joint.name));
   let maxDegrees = 0;
   let maxStuds = 0;
   let worst: PlaybackCheck['worst'];
@@ -147,7 +158,7 @@ export function verifyPlayback(sequence: KeyframeSequenceDescription, samples: u
     if (typeof sample?.time !== 'number' || typeof sample.transforms !== 'object' || sample.transforms === null) {
       return fail('Studio returned a malformed preview sample');
     }
-    for (const joint of R15_RIG.joints) {
+    for (const joint of joints) {
       const actual = sample.transforms[joint.childPart];
       if (!Array.isArray(actual) || actual.length !== 12 || !actual.every(Number.isFinite)) {
         return fail(`the preview dummy reported no joint for ${joint.childPart}`);
@@ -249,7 +260,7 @@ export function verifyLivePlayback(sequence: KeyframeSequenceDescription, sample
   const fail = (reason: string): PlaybackCheck => ({ verified: false, samples: 0, maxDegrees: 0, maxStuds: 0, reason });
   if (!Array.isArray(samples) || samples.length === 0) return fail('the playtest returned no samples');
   const tracks = buildTracks(sequence);
-  const keyed = R15_RIG.joints.filter((joint) => sequence.joints.includes(joint.name));
+  const keyed = rigFor(sequence.rig).joints.filter((joint) => sequence.joints.includes(joint.name));
   let maxDegrees = 0;
   let maxStuds = 0;
   let worst: PlaybackCheck['worst'];
@@ -260,7 +271,9 @@ export function verifyLivePlayback(sequence: KeyframeSequenceDescription, sample
     for (const joint of keyed) {
       const actual = sample.transforms[joint.childPart];
       if (!Array.isArray(actual) || actual.length !== 12 || !actual.every(Number.isFinite)) {
-        return fail(`the character reported no joint for ${joint.childPart}`);
+        return fail(joint.optional
+          ? `the character has no Motor6D moving ${joint.childPart}; equip the prop rigged with one (see the animation skill's Props section) before verifying`
+          : `the character reported no joint for ${joint.childPart}`);
       }
       const expected = sampleTrack(tracks.get(joint.childPart), sample.time);
       const played = frameFromComponents(actual);
@@ -285,7 +298,35 @@ export function verifyLivePlayback(sequence: KeyframeSequenceDescription, sample
   };
 }
 
+export interface PreviewProp {
+  /** The prop's part, which the motor moves. */
+  part: string;
+  /** The body part the motor hangs from. */
+  parent: string;
+  /** C0 as CFrame components, unless the dummy's attachment gives it. */
+  c0: number[];
+  attachment?: string;
+}
+
+/**
+ * The prop motors a preview dummy needs: one for each held or worn prop the
+ * animation moves, built as the game builds it.
+ */
+export function previewProps(sequence: KeyframeSequenceDescription): PreviewProp[] {
+  return rigFor(sequence.rig).joints
+    .filter((joint) => joint.optional && sequence.joints.includes(joint.name))
+    .map((joint) => {
+      const c0 = jointParentFrame(joint);
+      return {
+        part: joint.childPart,
+        parent: joint.parentPart,
+        c0: [...c0.p, ...c0.r],
+        ...(joint.attachment ? { attachment: joint.attachment } : {}),
+      };
+    });
+}
+
 /** Poses in a compiled sequence, placeholders included: what a read-back must find. */
 export function expectedCounts(sequence: KeyframeSequenceDescription) {
-  return { keyframes: sequence.keyframes.length, poses: sequence.poseCount };
+  return { keyframes: sequence.keyframes.length, poses: sequence.poseCount, markers: sequence.markerCount };
 }
