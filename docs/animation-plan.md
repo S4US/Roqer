@@ -535,7 +535,7 @@ Nothing is built on an unconfirmed assumption.
 
 Built ahead of its live test, from the Motor6D C0 and C1 values every R6
 character has; the items below marked live are what
-`tests/animation-tool.mjs` now checks against Studio and has not yet run.
+`tests/animation-tool.mjs` checked against Studio, all passing.
 
 - Done: `r6-rig.ts`; `rig: "R6"` in the compiler, with poses converted from
   body space so `aim` and `rotation` mean the same on both rigs, and a
