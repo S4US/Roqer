@@ -32,8 +32,12 @@ export interface RigJoint {
    */
   optional?: boolean;
   /**
-   * For a prop: the attachment in the parent part whose CFrame the game uses
-   * as the motor's C0. Without one, C0 is parentOffset and parentRotation.
+   * For a prop: the attachment in the parent part whose Position the game
+   * uses as the motor's C0 position, so the prop follows a scaled avatar's
+   * hand. C0's rotation is always parentRotation: the attachments' own turn
+   * differs between rigs (R15's grips are turned -90° about X, R6's are not,
+   * measured by tests/animation-tool.mjs), and a prop points the same way on
+   * both. Without an attachment, C0 is parentOffset and parentRotation.
    */
   attachment?: string;
 }
@@ -80,8 +84,8 @@ export const SHEATH_ROTATION: Rotation = [1, 0, 0, 0, -0.173648, -0.984808, 0, 0
 
 /**
  * The weapon: a Motor6D from the hand to a part named BodyAttach that the
- * weapon's other parts are welded to, with C0 at the hand's RightGripAttachment
- * and C1 the identity. Roblox's own RightGrip weld cannot be animated, so a
+ * weapon's other parts are welded to, with C0 at the position of the hand's
+ * RightGripAttachment, turned by GRIP_ROTATION, and C1 the identity. Roblox's own RightGrip weld cannot be animated, so a
  * game swaps in this motor when the weapon is equipped.
  */
 export const WEAPON_PART = 'BodyAttach';
@@ -164,11 +168,11 @@ export const R15_RIG: Rig = {
     { name: 'RightHip', parentPart: 'LowerTorso', childPart: 'RightUpperLeg', parentOffset: [0.5, -0.2, 0], childOffset: [0, 0.471, 0] },
     { name: 'RightKnee', parentPart: 'RightUpperLeg', childPart: 'RightLowerLeg', parentOffset: [0, -0.449, 0], childOffset: [0, 0.413, 0] },
     { name: 'RightAnkle', parentPart: 'RightLowerLeg', childPart: 'RightFoot', parentOffset: [0, -0.596, 0], childOffset: [0, 0.106, 0] },
-    // RightGripAttachment's position is not in the spike's measurements; the
-    // live animation suite compares it with the dummy's. Only the preview's
-    // drawing depends on it: Studio's playback is compared joint by joint.
-    { name: 'Weapon', parentPart: 'RightHand', childPart: WEAPON_PART, parentOffset: [0, -0.15, 0], childOffset: [0, 0, 0], parentRotation: GRIP_ROTATION, optional: true, attachment: 'RightGripAttachment' },
-    { name: 'OffHand', parentPart: 'LeftHand', childPart: OFF_HAND_PART, parentOffset: [0, -0.15, 0], childOffset: [0, 0, 0], parentRotation: GRIP_ROTATION, optional: true, attachment: 'LeftGripAttachment' },
+    // The grips' position as tests/animation-tool.mjs measured it on the
+    // default dummy (0, -0.158, 0). Only the preview's drawing depends on it:
+    // the game takes the attachment's, and playback is compared joint by joint.
+    { name: 'Weapon', parentPart: 'RightHand', childPart: WEAPON_PART, parentOffset: [0, -0.158, 0], childOffset: [0, 0, 0], parentRotation: GRIP_ROTATION, optional: true, attachment: 'RightGripAttachment' },
+    { name: 'OffHand', parentPart: 'LeftHand', childPart: OFF_HAND_PART, parentOffset: [0, -0.158, 0], childOffset: [0, 0, 0], parentRotation: GRIP_ROTATION, optional: true, attachment: 'LeftGripAttachment' },
     { name: 'Sheath', parentPart: 'LowerTorso', childPart: SHEATH_PART, parentOffset: [-1, 0, 0], childOffset: [0, 0, 0], parentRotation: SHEATH_ROTATION, optional: true },
   ],
 };

@@ -203,8 +203,8 @@ joint. Each moves one part, and the prop's other parts are welded to it:
 
 | Joint | Moves | From | C0 (the game sets it) |
 | --- | --- | --- | --- |
-| `Weapon` | `BodyAttach` | right hand (R6: `Right Arm`) | the hand's `RightGripAttachment` |
-| `OffHand` | `OffHandAttach` | left hand (R6: `Left Arm`) | the hand's `LeftGripAttachment` |
+| `Weapon` | `BodyAttach` | right hand (R6: `Right Arm`) | `CFrame.new(RightGripAttachment.Position) * CFrame.Angles(math.rad(-90), 0, 0)` |
+| `OffHand` | `OffHandAttach` | left hand (R6: `Left Arm`) | `CFrame.new(LeftGripAttachment.Position) * CFrame.Angles(math.rad(-90), 0, 0)` |
 | `Sheath` | `SheathAttach` | `LowerTorso` (R6: `Torso`) | R15 `CFrame.new(-1, 0, 0) * CFrame.Angles(math.rad(100), 0, 0)`; R6 `CFrame.new(-1, -0.8, 0) * CFrame.Angles(math.rad(100), 0, 0)` |
 
 - A prop joint takes `rotation` only: degrees about its body part's own axes,
@@ -247,7 +247,9 @@ tool.Equipped:Connect(function()
 			motor.Name = partName
 			motor.Part0 = hand
 			motor.Part1 = part
-			motor.C0 = attachment.CFrame
+			-- The attachment's position, turned the same on every rig: R15's grip
+			-- attachments are already turned this way, R6's are not.
+			motor.C0 = CFrame.new(attachment.Position) * CFrame.Angles(math.rad(-90), 0, 0)
 			motor.Parent = hand
 			table.insert(motors, motor)
 		end

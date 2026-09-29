@@ -546,8 +546,9 @@ character has; the items below marked live are what
 - Not calibrated: foot sliding is reported as not checked on R6, never as
   passed, until Roblox's own R6 walk and run are measured as step 6 did for
   R15.
-- Live: the rig table against an R6 dummy's Motor6Ds; an R6 build playing as
-  checked on the R6 preview dummy; the R6 `RightGripAttachment`.
+- Live, 2026-09-29: the rig table matched an R6 dummy's Motor6Ds exactly; its
+  grip attachments sit at (0, -1, 0) but unturned, unlike R15's (see Weapons).
+  Still to confirm: an R6 build playing as checked on the R6 preview dummy.
 - Not done: reading the place's avatar type (the agent reads the playtest
   character's `RigType` or the `StarterCharacter`), a loader keeping one ID
   per rig and slot for places that let players choose, and eval T16.
@@ -619,18 +620,22 @@ the player moves.
 A combat animation moves the weapon as well as the arm. Roblox's `RightGrip`
 weld cannot be animated, so the rig gains one optional joint, `Weapon`: a
 `Motor6D` from the right hand to a part named `BodyAttach`, with C0 at the
-hand's `RightGripAttachment` and C1 the identity, which the game swaps in on
+position of the hand's `RightGripAttachment`, turned -90° about X, and C1 the
+identity, which the game swaps in on
 equip (the skill has the script). This is the first joint whose frame is
 turned in its parent, so the motion model now follows C0 and C1 rotations,
 and the compiler takes a pose in the parent part's axes and converts it.
 
 - The joint is optional: it is previewed, drawn and verified only when an
-  animation keys it. The preview dummy always carries a stand-in motor built
-  from its own `RightGripAttachment`.
-- Unconfirmed until `tests/animation-tool.mjs` runs against Studio: the rig
-  table's grip position (0, -0.15, 0), and that the preview dummy's Animator
-  drives a `Motor6D` beside its `AnimationConstraint` joints. The suite checks
-  both.
+  animation keys it. The preview dummy carries a stand-in motor at its own
+  `RightGripAttachment`'s position.
+- Measured by `tests/animation-tool.mjs` on 2026-09-29: the default R15
+  dummy's grips sit at (0, -0.158, 0), turned -90° about X, and its Animator
+  drives the stand-in `Motor6D` beside its `AnimationConstraint` joints (a
+  weapon animation played within 0.68°). R6's grips sit at (0, -1, 0) but are
+  not turned, so a prop motor takes only an attachment's position and always
+  turns by -90° itself: a prop points the same way on both rigs. The R6 rig
+  table matched an R6 dummy's `Motor6D`s exactly.
 - Two more props followed: `OffHand`, the left hand's grip (`OffHandAttach`
   at `LeftGripAttachment`), and `Sheath`, worn at the left hip (`SheathAttach`
   at a fixed C0 the game sets, since no stock attachment sits there). Core

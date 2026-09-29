@@ -203,8 +203,10 @@ const MAX_PROPS = 8;
 
 /**
  * Give a preview dummy the props the animation moves, rigged as a game rigs
- * them: a part moved by a Motor6D from a body part, whose C0 is the named
- * attachment's CFrame, or the given one, and whose C1 is the identity.
+ * them: a part moved by a Motor6D from a body part, whose C0 is the given
+ * one, placed at the named attachment's position when there is one, and
+ * whose C1 is the identity. An attachment's own turn is not used: R15's
+ * grips are turned and R6's are not, and a prop points the same way on both.
  */
 function addProps(rig: Model, data: unknown) {
 	if (data === undefined) return;
@@ -216,19 +218,17 @@ function addProps(rig: Model, data: unknown) {
 		const parentName = checkName(prop.parent, "a prop's parent");
 		const body = rig.FindFirstChild(parentName);
 		if (!body || !body.IsA("BasePart")) error(`the preview dummy has no ${parentName} to hold ${name}`);
-		let c0: CFrame;
+		const c = prop.c0;
+		if (!typeIs(c, "table") || (c as unknown[]).size() !== 12) error("a prop's c0 must be 12 numbers");
+		const n = c as number[];
+		for (const value of n) {
+			if (!typeIs(value, "number") || value !== value || math.abs(value) === math.huge) error("a prop's c0 must be finite numbers");
+		}
+		let c0 = new CFrame(n[0], n[1], n[2], n[3], n[4], n[5], n[6], n[7], n[8], n[9], n[10], n[11]);
 		if (prop.attachment !== undefined) {
 			const attachment = body.FindFirstChild(checkName(prop.attachment, "a prop's attachment"));
 			if (!attachment || !attachment.IsA("Attachment")) error(`the preview dummy's ${parentName} has no ${tostring(prop.attachment)}`);
-			c0 = attachment.CFrame;
-		} else {
-			const c = prop.c0;
-			if (!typeIs(c, "table") || (c as unknown[]).size() !== 12) error("a prop's c0 must be 12 numbers");
-			const n = c as number[];
-			for (const value of n) {
-				if (!typeIs(value, "number") || value !== value || math.abs(value) === math.huge) error("a prop's c0 must be finite numbers");
-			}
-			c0 = new CFrame(n[0], n[1], n[2], n[3], n[4], n[5], n[6], n[7], n[8], n[9], n[10], n[11]);
+			c0 = new CFrame(attachment.Position).mul(c0.Rotation);
 		}
 		const part = new Instance("Part");
 		part.Name = name;

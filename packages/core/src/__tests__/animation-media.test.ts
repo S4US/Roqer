@@ -186,7 +186,7 @@ describe('held weapon', () => {
     const grip = rest.parts.get('BodyAttach')!;
     const tip = pointToWorld(grip, [0, 3.6, 0]);
     expect(grip.p[0]).toBeCloseTo(hand.p[0], 6);
-    expect(grip.p[1]).toBeCloseTo(hand.p[1] - 0.15, 6);
+    expect(grip.p[1]).toBeCloseTo(hand.p[1] - 0.158, 6);
     // Forward is -Z: the tip lies ahead of the hand at its height.
     expect(tip[2]).toBeCloseTo(hand.p[2] - 3.6, 6);
     expect(tip[1]).toBeCloseTo(grip.p[1], 6);
