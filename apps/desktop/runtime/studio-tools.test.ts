@@ -1423,8 +1423,10 @@ test("arbitrary Luau that only creates instances is left alone", async () => {
 test("the tool description spells out the arguments of the operations a run leans on", () => {
   const description = studioToolDescription();
 
+  // A recorded forest run started a playtest without mode in two runs, because
+  // the signature showed mode as optional, before the error revealed the rule.
   assert.ok(description.includes(
-    "solo_playtest {action: 'start'|'stop'|'status', mode?: 'play'|'run', timeout?: number}",
+    "solo_playtest {action: 'start'|'stop'|'status', mode?: 'play'|'run', timeout?: number} (action='start' requires mode)",
   ));
   assert.ok(description.includes("get_script_source {instancePath: string,"));
   // A UI task cannot be done without these, so their arguments are spelled out
@@ -1439,12 +1441,18 @@ test("the tool description spells out the arguments of the operations a run lean
   assert.ok(description.includes("build_instances {path: string, operations: object[]"));
   assert.ok(description.includes("{op: 'create'|'clone'|'set'|'remove'"));
   assert.ok(description.includes("Color3 is [r, g, b] from 0 to 1"));
+  // A recorded run's mist emitters were refused for a CFrame no step said how
+  // to write. Sequences need no line: their natural forms convert, and a
+  // refusal names the keypoint form.
+  assert.ok(description.includes("A CFrame is {position, rotation?} in those forms."));
   // Every recorded world run aimed its screenshots through execute_luau, one
   // approval each outside Full auto, because framing was not described here.
   assert.match(description, /selection \{action: 'get'\|'set'\|'open'\|'view'/);
   assert.ok(description.includes("Do not move the camera with execute_luau."));
   // A live map run spent a call on angleY 90, which the tool refuses.
-  assert.ok(description.includes("angleY the elevation, -89 to 89"));
+  assert.ok(description.includes("angleY: elevation, -89 to 89"));
+  // A recorded forest run framed a campfire with a padding the tool refuses.
+  assert.ok(description.includes("padding: distance scale, above 0, at most 10"));
   // Required for interface work, whether or not the model loads the UI skill.
   assert.ok(description.includes("call inspect_ui {mode: 'audit'} on the client"));
   // The rest of the catalog is reachable without being spelled out here.

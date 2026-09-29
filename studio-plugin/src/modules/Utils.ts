@@ -60,6 +60,14 @@ function samePropertyValue(actual: unknown, requested: unknown): boolean {
 		return sameNumber(a.X.Scale, b.X.Scale) && a.X.Offset === b.X.Offset &&
 			sameNumber(a.Y.Scale, b.Y.Scale) && a.Y.Offset === b.Y.Offset;
 	}
+	if (actualType === "CFrame") {
+		const a = (actual as CFrame).GetComponents();
+		const b = (requested as CFrame).GetComponents();
+		for (let index = 0; index < a.size(); index++) {
+			if (math.abs(a[index] - b[index]) > 1e-5 * math.max(1, math.abs(b[index]))) return false;
+		}
+		return true;
+	}
 
 	return actual === requested;
 }
@@ -411,10 +419,126 @@ function color3From(r: unknown, g: unknown, b: unknown): Color3 {
 	return new Color3(components[0] as number, components[1] as number, components[2] as number);
 }
 
+const CFRAME_FORMAT = "{position: [x, y, z], rotation?: [x, y, z] degrees} or the 12 numbers of CFrame:GetComponents()";
+const COLOR_SEQUENCE_FORMAT = "[r, g, b] from 0 to 1, or keypoints [{time, value: [r, g, b]}, ...] from time 0 to 1";
+const NUMBER_SEQUENCE_FORMAT = "a number, or keypoints [{time, value, envelope?}, ...] from time 0 to 1";
+const NUMBER_RANGE_FORMAT = "a number, or [min, max]";
+
+function isNumberList(value: unknown, size: number): value is number[] {
+	if (!typeIs(value, "table")) return false;
+	const list = value as unknown[];
+	if (list.size() !== size) return false;
+	for (let index = 0; index < size; index++) {
+		if (!typeIs(list[index], "number")) return false;
+	}
+	return true;
+}
+
+/** A Color3 written either way the property writers accept one. */
+function readColor3(value: unknown): Color3 | undefined {
+	if (isNumberList(value, 3)) return color3From(value[0], value[1], value[2]);
+	if (typeIs(value, "table")) {
+		const record = value as Record<string, unknown>;
+		if (record.R !== undefined || record.G !== undefined || record.B !== undefined) {
+			return color3From(record.R, record.G, record.B);
+		}
+	}
+	return undefined;
+}
+
+/** Keypoints as `{time, value}` records, or nothing when the value is not a keypoint list. */
+function readKeypoints(value: unknown): Array<Record<string, unknown>> | undefined {
+	if (!typeIs(value, "table")) return undefined;
+	const list = value as unknown[];
+	if (list.size() === 0) return undefined;
+	for (const entry of list) {
+		if (!typeIs(entry, "table") || !typeIs((entry as Record<string, unknown>).time, "number")) return undefined;
+	}
+	return list as Array<Record<string, unknown>>;
+}
+
+/**
+ * A CFrame from an explicit position and orientation. Rotation is in degrees
+ * and applied the way build_instances places instances, so the same numbers
+ * mean the same pose in both places.
+ */
+function cframeFrom(value: unknown): CFrame {
+	if (isNumberList(value, 12)) {
+		const c = value;
+		return new CFrame(c[0], c[1], c[2], c[3], c[4], c[5], c[6], c[7], c[8], c[9], c[10], c[11]);
+	}
+	if (typeIs(value, "table")) {
+		const record = value as Record<string, unknown>;
+		const rotation = record.rotation ?? [0, 0, 0];
+		if (isNumberList(record.position, 3) && isNumberList(rotation, 3)) {
+			const position = record.position;
+			return new CFrame(position[0], position[1], position[2]).mul(
+				CFrame.fromOrientation(math.rad(rotation[0]), math.rad(rotation[1]), math.rad(rotation[2])),
+			);
+		}
+	}
+	error(`CFrame is ${CFRAME_FORMAT}`, 0);
+}
+
+function colorSequenceFrom(value: unknown): ColorSequence {
+	const constant = readColor3(value);
+	if (constant !== undefined) return new ColorSequence(constant);
+	const keypoints = readKeypoints(value);
+	if (keypoints !== undefined) {
+		return new ColorSequence(keypoints.map((keypoint) => {
+			const color = readColor3(keypoint.value);
+			if (color === undefined) error(`ColorSequence keypoint value is [r, g, b] from 0 to 1`, 0);
+			return new ColorSequenceKeypoint(keypoint.time as number, color);
+		}));
+	}
+	error(`ColorSequence is ${COLOR_SEQUENCE_FORMAT}`, 0);
+}
+
+function numberSequenceFrom(value: unknown): NumberSequence {
+	if (typeIs(value, "number")) return new NumberSequence(value);
+	const keypoints = readKeypoints(value);
+	if (keypoints !== undefined) {
+		return new NumberSequence(keypoints.map((keypoint) => {
+			const envelope = keypoint.envelope ?? 0;
+			if (!typeIs(keypoint.value, "number") || !typeIs(envelope, "number")) {
+				error("NumberSequence keypoint is {time, value, envelope?} with numbers", 0);
+			}
+			return new NumberSequenceKeypoint(keypoint.time as number, keypoint.value, envelope);
+		}));
+	}
+	error(`NumberSequence is ${NUMBER_SEQUENCE_FORMAT}`, 0);
+}
+
+function numberRangeFrom(value: unknown): NumberRange {
+	if (typeIs(value, "number")) return new NumberRange(value);
+	if (isNumberList(value, 2)) return new NumberRange(value[0], value[1]);
+	error(`NumberRange is ${NUMBER_RANGE_FORMAT}`, 0);
+}
+
+/**
+ * Converters for value types whose JSON form cannot be told apart by shape
+ * alone: `[r, g, b]` is a Color3 for Part.Color but a constant ColorSequence
+ * for ParticleEmitter.Color, and a bare number is a NumberSequence for
+ * ParticleEmitter.Size. They run only when the property's current value says
+ * it holds that type, before any guess from the property's name.
+ */
+const TYPED_CONVERTERS: Record<string, (value: unknown) => unknown> = {
+	CFrame: cframeFrom,
+	ColorSequence: colorSequenceFrom,
+	NumberSequence: numberSequenceFrom,
+	NumberRange: numberRangeFrom,
+};
+
 function convertPropertyValue(instance: Instance, propertyName: string, propertyValue: unknown): unknown {
 	if (propertyValue === undefined) return undefined;
 
 	const inst = instance as unknown as Record<string, unknown>;
+
+	if (typeIs(propertyValue, "table") || typeIs(propertyValue, "number")) {
+		const [readable, current] = pcall(() => inst[propertyName]);
+		const converter = readable ? TYPED_CONVERTERS[typeOf(current)] : undefined;
+		if (converter !== undefined) return converter(propertyValue);
+	}
 
 	if (typeIs(propertyValue, "table")) {
 		const arr = propertyValue as unknown[];

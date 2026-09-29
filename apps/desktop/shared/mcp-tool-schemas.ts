@@ -44,7 +44,7 @@ export type ToolSchema = {
 };
 
 /** sha256 of `packages/core/src/tools/definitions.ts` with LF newlines. */
-export const TOOL_DEFINITIONS_DIGEST = "5b25ad807f8a2e909bb62d591d35bb0579aee33d5bb2a262ac69a78065efd891";
+export const TOOL_DEFINITIONS_DIGEST = "3cf9054f0fd998624e315e77e9e2d79bc665b1ea0f875232359b0a1143b08905";
 
 export const TOOL_SCHEMAS: Readonly<Record<string, ToolSchema>> = {
   animation: {
@@ -580,6 +580,9 @@ export const TOOL_SCHEMAS: Readonly<Record<string, ToolSchema>> = {
       { name: "mode", type: "string", required: false, enumValues: ["play", "run"], description: "Required for action=\"start\"." },
       { name: "timeout", type: "number", required: false, description: "Wait in seconds; start defaults to 60 and stop to 15." },
       { name: "instance_id", type: "string", required: false, description: "Connected place ID; required with multiple places." },
+    ],
+    requirements: [
+      { when: [{ name: "action", enumValues: ["start"] }], required: ["mode"] },
     ],
   },
   upload_asset: {

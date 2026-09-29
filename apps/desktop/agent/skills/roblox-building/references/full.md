@@ -97,7 +97,7 @@ Choose the construction per component, not once per build. A single area can mix
 - `clone` needs `source` and makes one copy per `transforms` entry, each with optional `position`, `rotation`, and `scale`. The step's `name`, `properties`, `tags`, and `attributes` apply to every copy.
 - `set` and `remove` need `target`. `remove` unparents, so Studio's undo restores it.
 - `id` names a step's instance for later steps as `$id`. Apart from the build root itself, paths only find instances that already exist.
-- Values follow atomic property writes: Vector3 as `[x, y, z]`, Color3 as `[r, g, b]` from 0 to 1, enums by item name. Script `Source` is refused; create the script, then write it with `set_script_source`.
+- Values follow atomic property writes: Vector3 as `[x, y, z]`, Color3 as `[r, g, b]` from 0 to 1, enums by item name. A CFrame property is `{position: [x, y, z], rotation?: [x, y, z]}` in degrees, or the 12 numbers of `GetComponents()`. A ColorSequence (ParticleEmitter or Beam `Color`) is `[r, g, b]` for one colour or keypoints `[{time, value: [r, g, b]}, ...]`; a NumberSequence (`Transparency`, `Size`, `Squash`) is a number or keypoints `[{time, value, envelope?}, ...]`; keypoint times run from 0 to 1. A NumberRange (`Lifetime`, `Speed`, `Rotation`) is a number or `[min, max]`. Script `Source` is refused; create the script, then write it with `set_script_source`.
 - Limits: 500 steps and 2,000 new instances per batch (20,000 counting clone descendants).
 
 The result reports the root's path, counts by class and tag, world `bounds`, and the path of each `id`. Check them against the plan before the next phase. A refused batch names the failing step and changed nothing.
