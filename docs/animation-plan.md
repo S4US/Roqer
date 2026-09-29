@@ -648,6 +648,12 @@ one key to the next is solved again every 1/30 s between them; the recipe
 test measures a planted ankle within 0.05 studs. Everything downstream sees
 ordinary keys: the checks, the preview and Studio's playback.
 
+Two-handed holds followed: `grip` on `LeftShoulder` keeps the left hand on
+the weapon's handle, solved after every `aimAt` so it follows a placed right
+arm, and every 1/60 s between grip keys, each solve preferring the last one's
+elbow so the arm never flips. A fast two-handed swing keeps the hand within
+0.05 studs of the handle.
+
 ### 12. Creatures made of rigid parts — proposed
 
 Animals and monsters that Blender models as separate pieces (a body, a head,

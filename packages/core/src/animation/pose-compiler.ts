@@ -37,10 +37,14 @@ export const POSE_LIMITS = {
   maxAimAtStuds: 20,
   /** How far past a limb's reach an aimAt target may lie and still be reached. */
   aimAtToleranceStuds: 0.02,
+  /** How far along the handle grip may hold, in studs either way. */
+  maxGripStuds: 3,
   /** The widest bend aimAt gives an elbow or knee, in degrees. */
   maxAimAtBend: 150,
   /** How often a planted limb is solved again between its keys, in seconds. */
   plantedStepSeconds: 1 / 30,
+  /** How often a grip is solved again between its keys: a swung handle moves fast. */
+  gripStepSeconds: 1 / 60,
   maxMarkersPerKeyframe: 16,
   maxMarkerValueLength: 200,
   /**
@@ -98,6 +102,12 @@ export interface JointPoseSpec {
    * of the block on R6. `bendToward` turns the elbow or knee as with `aim`.
    */
   aimAt?: [number, number, number];
+  /**
+   * LeftShoulder only: holds the left hand on the weapon's handle, this many
+   * studs from the right hand's grip toward the pommel, for a two-handed hold.
+   * Kept there between two keys that both grip, as the weapon moves.
+   */
+  grip?: number;
   /** Studs. Only the Root joint takes one: it offsets the whole body. */
   position?: [number, number, number];
   easing?: PoseEasing;
@@ -207,6 +217,8 @@ interface ParsedJoint {
   easing: { style?: PoseEasingStyle; direction?: PoseEasingDirection };
   /** An aimAt still to solve, once the body around it is posed; Roblox axes. */
   aimAt?: { target: Vec; toward?: Vec; path: string };
+  /** A two-handed hold still to solve, once the weapon is posed. */
+  grip?: { along: number; toward?: Vec; path: string };
 }
 
 const IDENTITY_MATRIX: Matrix3 = [1, 0, 0, 0, 1, 0, 0, 0, 1];
@@ -437,15 +449,27 @@ function parseJoints(value: unknown, rig: Rig, path: string, issues: Issues, all
       issues.add(jointPath, 'must be an object with rotation, aim, bend, position and/or easing');
       continue;
     }
-    checkKeys(pose, ['rotation', 'aim', 'aimAt', 'bendToward', 'bend', 'position', 'easing'], jointPath, issues);
-    const forms = (['rotation', 'aim', 'aimAt', 'bend'] as const).filter((key) => pose[key] !== undefined);
-    if (forms.length > 1) issues.add(jointPath, `give one of rotation, aim, aimAt or bend, not ${forms.join(' and ')}`);
+    checkKeys(pose, ['rotation', 'aim', 'aimAt', 'grip', 'bendToward', 'bend', 'position', 'easing'], jointPath, issues);
+    const forms = (['rotation', 'aim', 'aimAt', 'grip', 'bend'] as const).filter((key) => pose[key] !== undefined);
+    if (forms.length > 1) issues.add(jointPath, `give one of rotation, aim, aimAt, grip or bend, not ${forms.join(' and ')}`);
     let aimAt: ParsedJoint['aimAt'];
+    let grip: ParsedJoint['grip'];
     let rotation: Matrix3 = IDENTITY_MATRIX;
     if (pose.rotation !== undefined) {
       rotation = eulerMatrix(parseVector(pose.rotation, POSE_LIMITS.maxRotationDegrees, 'degrees', `${jointPath}.rotation`, issues));
     }
-    if (pose.aimAt !== undefined) {
+    if (pose.grip !== undefined) {
+      const toward = pose.bendToward === undefined ? undefined : parseVector(pose.bendToward, 1e6, 'units', `${jointPath}.bendToward`, issues);
+      if (joint.name !== 'LeftShoulder' || !rig.joints.some((candidate) => candidate.name === 'Weapon')) {
+        issues.add(jointPath, 'grip works on LeftShoulder, holding the weapon two-handed; use aimAt or rotation here');
+      } else if (typeof pose.grip !== 'number' || !Number.isFinite(pose.grip) || Math.abs(pose.grip) > POSE_LIMITS.maxGripStuds) {
+        issues.add(`${jointPath}.grip`, `must be studs along the handle from the right hand, within ±${POSE_LIMITS.maxGripStuds}`);
+      } else if (toward !== undefined && length3(toward) < 1e-6) {
+        issues.add(`${jointPath}.bendToward`, 'must point somewhere: [right, up, forward], not all zero');
+      } else {
+        grip = { along: pose.grip, ...(toward ? { toward: robloxDirection(toward) } : {}), path: `${jointPath}.grip` };
+      }
+    } else if (pose.aimAt !== undefined) {
       if (!LIMBS[joint.name] || !rig.limbs[joint.name]) {
         issues.add(jointPath, 'aimAt works on shoulders and hips; use rotation here');
       } else {
@@ -458,7 +482,7 @@ function parseJoints(value: unknown, rig: Rig, path: string, issues: Issues, all
       if (!LIMBS[joint.name]) {
         issues.add(jointPath, 'aim and bendToward work on shoulders and hips; use rotation here');
       } else if (pose.aim === undefined) {
-        issues.add(`${jointPath}.bendToward`, 'goes with aim or aimAt');
+        issues.add(`${jointPath}.bendToward`, 'goes with aim, aimAt or grip');
       } else {
         const aim = parseVector(pose.aim, 1e6, 'units', `${jointPath}.aim`, issues);
         const toward = pose.bendToward === undefined ? undefined : parseVector(pose.bendToward, 1e6, 'units', `${jointPath}.bendToward`, issues);
@@ -494,6 +518,7 @@ function parseJoints(value: unknown, rig: Rig, path: string, issues: Issues, all
       position: transform.p,
       easing: parseEasing(pose.easing, `${jointPath}.easing`, issues),
       ...(aimAt ? { aimAt } : {}),
+      ...(grip ? { grip } : {}),
     });
   }
   return joints;
@@ -550,10 +575,13 @@ function checkFirstKeys(keyframes: ParsedKeyframe[], complete: boolean, rig: Rig
   if (!first) return;
   const late = rig.joints.filter((joint) => !first.joints.has(joint.childPart)
     && keyframes.some((keyframe) => keyframe.joints.has(joint.childPart)));
+  const failed = issues.count > 0;
   for (const joint of late) {
     const by = solvedBy.get(joint.name);
+    // A limb whose aimAt or grip already failed at some key has said why.
+    if (by && failed) continue;
     issues.add('keyframes[0].joints', by
-      ? `"${joint.name}" is bent later by ${by}'s aimAt, so key it, or aim ${by} with aimAt, in the first keyframe too`
+      ? `"${joint.name}" is set later by ${by}'s aimAt or grip, so key it, or use aimAt or grip on ${by}, in the first keyframe too`
       : `"${joint.name}" is keyed later, so it must be keyed in the first keyframe too`);
   }
 }
@@ -571,6 +599,8 @@ function apply(rows: Vec[], v: Vec): Vec {
 
 type Solved = {
   rotation: Matrix3;
+  /** The way the elbow or knee was turned, in the parent's axes: the next solve's preference. */
+  fold: Vec;
   hinge?: { joint: RigJoint; rotation: Matrix3 };
   foot?: { joint: RigJoint; rotation: Matrix3 };
 };
@@ -616,8 +646,10 @@ function solveLimb(
   toward: Vec | undefined,
   time: number,
   footForward: Vec,
+  hand = false,
 ): Solved | string {
   const limb = rig.limbs[joint.name];
+  const end = (hand ? limb.hand : undefined) ?? limb.end;
   const hinge = limb.hinge ? rig.joints.find((candidate) => candidate.name === limb.hinge)! : undefined;
   const parent = posed.parts.get(joint.parentPart)!;
   const pivot = pointToWorld(parent, joint.parentOffset);
@@ -636,9 +668,9 @@ function solveLimb(
   // start as the parent's.
   const pivotInLimb = joint.childOffset as Vec;
   const endAt = (bend: number): Vec => {
-    if (!hinge) return [0, 1, 2].map((axis) => limb.end[axis] - pivotInLimb[axis]) as Vec;
+    if (!hinge) return [0, 1, 2].map((axis) => end[axis] - pivotInLimb[axis]) as Vec;
     const upper: Vec = [0, 1, 2].map((axis) => hinge.parentOffset[axis] - pivotInLimb[axis]) as Vec;
-    const lower = apply(hingeTurn(HINGES[hinge.name] * bend), [0, 1, 2].map((axis) => limb.end[axis] - hinge.childOffset[axis]) as Vec);
+    const lower = apply(hingeTurn(HINGES[hinge.name] * bend), [0, 1, 2].map((axis) => end[axis] - hinge.childOffset[axis]) as Vec);
     return [0, 1, 2].map((axis) => upper[axis] + lower[axis]) as Vec;
   };
   const longest = length3(endAt(0));
@@ -700,9 +732,105 @@ function solveLimb(
   }
   return {
     rotation,
+    fold: f,
     ...(hinge && hingeRotation ? { hinge: { joint: hinge, rotation: hingeRotation } } : {}),
     ...(foot ? { foot } : {}),
   };
+}
+
+/**
+ * Solves every grip: the left hand held on the weapon's handle. The weapon is
+ * posed as it plays, after every aimAt, so a right arm placed by aimAt
+ * carries the grip with it. Between two keys that both grip, the handle
+ * moves, so the arm is solved again every plantedStepSeconds. Returns how
+ * many keys that added.
+ */
+function resolveGrips(
+  keyframes: ParsedKeyframe[],
+  animationEasing: ParsedJoint['easing'],
+  rig: Rig,
+  issues: Issues,
+  solvedBy: Map<string, string>,
+): number {
+  const joint = rig.joints.find((candidate) => candidate.name === 'LeftShoulder');
+  const weapon = rig.joints.find((candidate) => candidate.name === 'Weapon');
+  if (!joint || !weapon || issues.count > 0) return 0;
+  const grips = keyframes
+    .filter((keyframe) => keyframe.joints.get(joint.childPart)?.grip)
+    .map((keyframe) => ({ keyframe, grip: keyframe.joints.get(joint.childPart)!.grip! }));
+  if (grips.length === 0) return 0;
+  const limb = rig.limbs[joint.name];
+  const hinge = limb.hinge ? rig.joints.find((candidate) => candidate.name === limb.hinge) : undefined;
+  const tracks = buildTracks({ loop: false, keyframes: keyframes.map((keyframe) => compileKeyframe(keyframe, animationEasing, rig).keyframe) });
+  const LINEAR = { style: 'Linear', direction: 'In' } as const;
+  const solveAt = (time: number, grip: NonNullable<ParsedJoint['grip']>, previousFold?: Vec) => {
+    const posed = poseRig(tracks, time, rig);
+    const handle = pointToWorld(posed.parts.get(weapon.childPart)!, [0, -grip.along, 0]);
+    // Without a bendToward, keep the elbow turned as it just was, so it never
+    // flips round between two solves a sixtieth of a second apart.
+    return solveLimb(joint, rig, posed, handle, grip.toward ?? previousFold, time, [0, 0, -1], true);
+  };
+  const place = (keyframe: ParsedKeyframe, solved: Solved, easing: ParsedJoint['easing']) => {
+    keyframe.joints.set(joint.childPart, { joint, rotation: solved.rotation, position: [0, 0, 0], easing });
+    if (solved.hinge) {
+      keyframe.joints.set(solved.hinge.joint.childPart, { joint: solved.hinge.joint, rotation: solved.hinge.rotation, position: [0, 0, 0], easing });
+      solvedBy.set(solved.hinge.joint.name, joint.name);
+    }
+  };
+
+  for (const { keyframe, grip } of grips) {
+    if (hinge && keyframe.joints.has(hinge.childPart)) issues.add(grip.path, `sets ${hinge.name} too; leave ${hinge.name} out of this keyframe`);
+  }
+  if (issues.count > 0) return 0;
+
+  // One pass through time, each solve preferring the last one's elbow, so the
+  // arm never flips between a key and the solves either side of it.
+  const keyed = keyframes.filter((keyframe) => keyframe.joints.has(joint.childPart));
+  const extra: ParsedKeyframe[] = [];
+  let added = 0;
+  let fold: Vec | undefined;
+  for (let index = 0; index < grips.length; index += 1) {
+    const { keyframe, grip } = grips[index];
+    const before = grips[index - 1];
+    if (before && keyed[keyed.indexOf(before.keyframe) + 1] === keyframe) {
+      const span = keyframe.time - before.keyframe.time;
+      const steps = Math.ceil(span / POSE_LIMITS.gripStepSeconds - 1e-9);
+      for (let step = 1; step < steps; step += 1) {
+        const time = round(before.keyframe.time + (span * step) / steps);
+        // The grip eases from one hold to the next along the handle.
+        const along = before.grip.along + ((grip.along - before.grip.along) * step) / steps;
+        const solved = solveAt(time, { ...grip, along }, fold);
+        if (typeof solved === 'string') {
+          issues.add(grip.path, `holds the handle from ${before.keyframe.time} s, but the handle then ${solved}`);
+          return 0;
+        }
+        const target = keyframes.find((candidate) => Math.abs(candidate.time - time) < 1e-9)
+          ?? extra.find((candidate) => Math.abs(candidate.time - time) < 1e-9)
+          ?? (() => {
+            const created: ParsedKeyframe = { time, markers: [], easing: {}, joints: new Map() };
+            extra.push(created);
+            return created;
+          })();
+        place(target, solved, LINEAR);
+        fold = solved.fold;
+        added += 1;
+      }
+      for (const part of [joint.childPart, hinge?.childPart]) {
+        const start = part ? before.keyframe.joints.get(part) : undefined;
+        if (part && start) before.keyframe.joints.set(part, { ...start, easing: LINEAR });
+      }
+    }
+    const solved = solveAt(keyframe.time, grip, fold);
+    if (typeof solved === 'string') {
+      issues.add(grip.path, `cannot hold the handle: it ${solved}`);
+      return 0;
+    }
+    place(keyframe, solved, keyframe.joints.get(joint.childPart)!.easing);
+    fold = solved.fold;
+  }
+  keyframes.push(...extra);
+  keyframes.sort((a, b) => a.time - b.time);
+  return added;
 }
 
 /**
@@ -1071,6 +1199,7 @@ export function compilePoseAnimation(input: unknown): PoseCompileResult {
     keyframes = resolved.keyframes;
     solvedBy = resolved.solvedBy;
     inBetweenCount += resolved.planted;
+    inBetweenCount += resolveGrips(keyframes, easing, rig, issues, solvedBy);
   }
   if (rig) checkFirstKeys(keyframes, complete, rig, issues, solvedBy);
   if (rig && issues.count === 0) {

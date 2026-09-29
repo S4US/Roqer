@@ -266,6 +266,15 @@ const passed = await runTest('animation tool', async ({ track }) => {
     }, 120_000);
     assert(lunged.built === true && lunged.animation?.inBetweens > 0 && lunged.playback?.verified === true, `a planted lunge builds and plays as checked (${lunged.error ?? `${lunged.animation?.inBetweens} solved keys, within ${lunged.playback?.maxDegrees}°`})`);
 
+    // grip: a two-handed swing builds, the left hand solved on the handle, and plays as checked.
+    const gripKey = (time, at, turn) => ({ time, joints: { RightShoulder: { aimAt: at, bendToward: [0, 1, 0] }, Weapon: { rotation: [turn, 0, 0] }, LeftShoulder: { grip: 0.45 } } });
+    const twoHanded = await client.callTool('animation', {
+      action: 'build',
+      animation: { name: 'TwoHanded', rig: 'R15', keyframes: [gripKey(0, [-0.2, 0.5, 0.8], 0), gripKey(0.3, [-0.2, 1.5, 0.5], 30), gripKey(0.42, [-0.2, 0, 0.8], -60)] },
+      parent: PARENT,
+    }, 120_000);
+    assert(twoHanded.built === true && twoHanded.playback?.verified === true, `a two-handed swing builds and plays as checked (${twoHanded.error ?? `within ${twoHanded.playback?.maxDegrees}°`})`);
+
     // Markers become KeyframeMarkers a script's GetMarkerReachedSignal fires on.
     const marked = await client.callTool('animation', {
       action: 'build',

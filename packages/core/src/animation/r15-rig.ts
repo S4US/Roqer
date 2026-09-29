@@ -55,7 +55,7 @@ export interface Rig {
    * hip): the hinge that bends them, if any, and the point that lands on the
    * target, in the last part's frame (the hinge's child, or the joint's own).
    */
-  limbs: Readonly<Record<string, { hinge?: string; end: Vec3; foot?: string }>>;
+  limbs: Readonly<Record<string, { hinge?: string; end: Vec3; foot?: string; hand?: Vec3 }>>;
   /**
    * Where a drawn stand-in's box sits in its part, when not at its centre:
    * the weapon's blade runs out of the fist rather than through it.
@@ -119,7 +119,8 @@ export const R15_RIG: Rig = {
   body: 'LowerTorso',
   // The wrist and the ankle: an ankle stands 0.26 studs above the ground.
   limbs: {
-    LeftShoulder: { hinge: 'LeftElbow', end: [0, -0.532, 0] },
+    // An arm's hand: the hand's centre with the wrist straight, which grip holds on the weapon.
+    LeftShoulder: { hinge: 'LeftElbow', end: [0, -0.532, 0], hand: [0, -0.664, 0] },
     RightShoulder: { hinge: 'RightElbow', end: [0, -0.532, 0] },
     // A leg's aimAt also keys its ankle, to lay the foot flat.
     LeftHip: { hinge: 'LeftKnee', end: [0, -0.596, 0], foot: 'LeftAnkle' },

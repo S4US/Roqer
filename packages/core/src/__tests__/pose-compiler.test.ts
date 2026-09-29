@@ -9,6 +9,7 @@ import { R15_RIG } from '../animation/r15-rig.js';
 import { R6_RIG } from '../animation/r6-rig.js';
 import { drawnParts } from '../animation/box-rig.js';
 import { buildTracks, pointToWorld, poseRig } from '../animation/motion.js';
+import { checkMotion } from '../animation/motion-checks.js';
 
 function compiled(input: unknown): KeyframeSequenceDescription {
   const result = compilePoseAnimation(input);
@@ -213,7 +214,7 @@ describe('compilePoseAnimation', () => {
       'priority: must be one of Core, Idle, Movement, Action, Action2, Action3, Action4',
       'keyframes[0].time: the first keyframe must be at time 0',
       'keyframes[0].joints.RightUpperArm: "RightUpperArm" is a part; key the joint that moves it, "RightShoulder"',
-      'keyframes[0].joints.Neck: unknown field "rotaton"; expected rotation, aim, aimAt, bendToward, bend, position, easing',
+      'keyframes[0].joints.Neck: unknown field "rotaton"; expected rotation, aim, aimAt, grip, bendToward, bend, position, easing',
       'keyframes[1].time: must be later than the previous keyframe (0.1)',
       'keyframes[1].joints.Waist.rotation[1]: must be within ±360 degrees',
       'keyframes[1].joints.Waist.rotation[2]: must be a finite number',
@@ -334,8 +335,8 @@ describe('compilePoseAnimation', () => {
       'keyframes[0].joints.Neck: aim and bendToward work on shoulders and hips; use rotation here',
       'keyframes[0].joints.Waist.bend: works on elbows and knees; use rotation here',
       'keyframes[0].joints.LeftShoulder.aim: must point somewhere: [right, up, forward], not all zero',
-      'keyframes[0].joints.RightShoulder: give one of rotation, aim, aimAt or bend, not rotation and aim',
-      'keyframes[0].joints.LeftHip.bendToward: goes with aim or aimAt',
+      'keyframes[0].joints.RightShoulder: give one of rotation, aim, aimAt, grip or bend, not rotation and aim',
+      'keyframes[0].joints.LeftHip.bendToward: goes with aim, aimAt or grip',
     ]);
   });
 
@@ -503,7 +504,57 @@ describe('compilePoseAnimation', () => {
         { time: 0, joints: { RightShoulder: { aim: [0, -1, 0] } } },
         { time: 0.5, joints: { RightShoulder: { aimAt: [0.6, 0, 1] } } },
       ],
-    })).toEqual(['keyframes[0].joints: "RightElbow" is bent later by RightShoulder\'s aimAt, so key it, or aim RightShoulder with aimAt, in the first keyframe too']);
+    })).toEqual(['keyframes[0].joints: "RightElbow" is set later by RightShoulder\'s aimAt or grip, so key it, or use aimAt or grip on RightShoulder, in the first keyframe too']);
+  });
+
+  test('grip keeps the left hand on the weapon\'s handle through a fast two-handed swing', () => {
+    const key = (time: number, at: number[], turn: number) => ({
+      time,
+      joints: { RightShoulder: { aimAt: at, bendToward: [0, 1, 0] }, Weapon: { rotation: [turn, 0, 0] }, LeftShoulder: { grip: 0.45 } },
+    });
+    const swing = compiled({
+      name: 'TwoHanded',
+      rig: 'R15',
+      keyframes: [key(0, [-0.2, 0.5, 0.8], 0), key(0.3, [-0.2, 1.5, 0.5], 30), key(0.42, [-0.2, 0, 0.8], -60)],
+    });
+    expect(swing.joints).toEqual(['LeftShoulder', 'LeftElbow', 'RightShoulder', 'RightElbow', 'Weapon']);
+    // Solved again every sixtieth of a second between the grip keys.
+    expect(swing.inBetweenCount).toBe(24);
+    const tracks = buildTracks(swing);
+    let worst = 0;
+    for (let time = 0; time <= 0.42 + 1e-9; time += 1 / 240) {
+      const parts = poseRig(tracks, time, R15_RIG).parts;
+      const handle = pointToWorld(parts.get('BodyAttach')!, [0, -0.45, 0]);
+      const hand = pointToWorld(parts.get('LeftLowerArm')!, [0, -0.664, 0]);
+      worst = Math.max(worst, Math.hypot(...hand.map((value, axis) => value - handle[axis])));
+    }
+    expect(worst).toBeLessThan(0.05);
+    // The elbow never flips between solves: nothing moves faster than a body may.
+    expect(checkMotion(swing).checks.filter((entry) => entry.status === 'fail')).toEqual([]);
+
+    // R6 grips too, its rigid arm pointed through the handle.
+    expect(compilePoseAnimation({
+      name: 'TwoHandedR6',
+      rig: 'R6',
+      keyframes: [key(0, [-0.2, 0.5, 0.8], 0), key(0.3, [-0.2, 1, 0.5], 30)],
+    }).ok).toBe(true);
+  });
+
+  test('refuses a grip it cannot make, saying why', () => {
+    const one = (joints: Record<string, unknown>) => errors({ name: 'Bad', rig: 'R15', keyframes: [{ time: 0, joints }] });
+    expect(one({ RightShoulder: { grip: 0.4 } })).toEqual([
+      'keyframes[0].joints.RightShoulder: grip works on LeftShoulder, holding the weapon two-handed; use aimAt or rotation here',
+    ]);
+    expect(one({ LeftShoulder: { grip: 5 } })).toEqual([
+      'keyframes[0].joints.LeftShoulder.grip: must be studs along the handle from the right hand, within ±3',
+    ]);
+    expect(one({ LeftShoulder: { grip: 0.4 }, LeftElbow: { bend: 10 } })).toEqual([
+      'keyframes[0].joints.LeftShoulder.grip: sets LeftElbow too; leave LeftElbow out of this keyframe',
+    ]);
+    // A right hand held out to its side puts the handle beyond the left arm.
+    expect(one({ RightShoulder: { aim: [1, 0, 0] }, LeftShoulder: { grip: 0.4 } })).toEqual([
+      expect.stringMatching(/^keyframes\[0\]\.joints\.LeftShoulder\.grip: cannot hold the handle: it is \d+\.\d+ studs from LeftShoulder; the arm reaches 1\.78 at most at 0 s$/),
+    ]);
   });
 
   test('refuses rigs it does not know, including inherited object keys', () => {

@@ -93,6 +93,15 @@ ground, a hand on a hilt or on the sheath.
   while the body lunges, drops or turns over it, and keeps its heading. `animation.inBetweens` counts those keys.
 - To step, give the foot a different point, and lift it on a key between: a
   foot moved along the ground drags through it.
+- **Two-handed holds.** `LeftShoulder: { grip: 0.45 }` puts the left hand
+  on the weapon's handle, 0.45 studs from the right hand toward the pommel
+  (hands side by side). Between two keys that both grip, the arm follows the
+  handle, solved every sixtieth of a second, so the hands stay together
+  through the fastest swing. It keys `LeftElbow`: leave it and `LeftWrist`
+  out. The handle must be within the left arm's reach: Roblox shoulders are
+  wide for their arms, so bring the right hand toward the centre front,
+  ideally with `aimAt` (for example `[-0.2, 0.5, 0.8]` for a two-handed
+  guard), and turn the torso toward the weapon for low cuts.
 - Heights: the ground is 3.19 studs below the HumanoidRootPart's centre on
   R15 and 3 on R6. An R15 ankle stands 0.26 above the ground, so a planted
   R15 ankle is at `up` -2.93; an R6 leg's end is its sole, at -3.
