@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { digestIsEmpty, digestRun, isRunDigest, MAX_DIGEST_ENTRIES } from "./run-digest";
+import { digestIsEmpty, digestRun, isRunDigest, MAX_DIGEST_ENTRIES, MAX_DIGEST_LINE_CHARS, MAX_DIGEST_NOTE_CHARS } from "./run-digest";
 import { RUN_EVENT_SCHEMA_VERSION, isRunRecord, type RunRecord } from "./run-events";
 
 const RECORD: RunRecord = {
@@ -110,6 +110,53 @@ test("uploads are the entries the bound keeps when a run changed more than it ca
   });
   assert.equal(digest.changes[0], "asset rbxassetid://7 “Moonbeam” (Decal)");
   assert.equal(digest.changes.at(-1), "(+11 more)");
+});
+
+test("a run that did not complete says why it stopped and which calls failed", () => {
+  const failures = [
+    { code: "tool_failed", tool: "build_instances", message: "CFrame expected, got table.", retryable: false },
+    { code: "tool_failed", tool: "build_instances", message: "CFrame expected, got table.", retryable: false },
+    { code: "planner_failed", message: "You've hit your session limit", retryable: false },
+  ];
+  const digest = digestRun({ ...RECORD, outcome: "failed", failures });
+  assert.equal(digest.stoppedBecause, "You've hit your session limit");
+  assert.deepEqual(digest.failedCalls, ["build_instances: CFrame expected, got table. (×2)"]);
+  assert.equal(isRunDigest(digest), true);
+
+  // A completed run recovered from what failed, so neither is carried.
+  const completed = digestRun({ ...RECORD, failures });
+  assert.equal(completed.stoppedBecause, undefined);
+  assert.equal(completed.failedCalls, undefined);
+  // A cancelled run is the user's own doing, unless the host could not save.
+  assert.equal(digestRun({ ...RECORD, outcome: "cancelled", failures }).stoppedBecause, undefined);
+  assert.equal(digestRun({
+    ...RECORD, outcome: "cancelled", failures: [{ code: "persistence-failed", message: "Disk full", retryable: false }],
+  }).stoppedBecause, "Disk full");
+  // A failure is reason enough to carry the record at all.
+  assert.equal(digestIsEmpty(digestRun({
+    ...RECORD, outcome: "failed", changes: [], tasks: undefined, verification: undefined, decisions: undefined,
+    failures: [failures[2]],
+  })), false);
+});
+
+test("the user's notes are carried, newest first to survive the bound", () => {
+  const long = (label: string) => `${label} ${"x".repeat(3_000)}`;
+  const notes = ["Don't touch the snow system.", long("a"), long("b"), long("c")];
+  const digest = digestRun({ ...RECORD, notes });
+  assert.deepEqual(digest.notes, ["(+2 earlier notes)", long("b"), long("c")]);
+  assert.ok(digest.notes!.slice(1).join("").length <= MAX_DIGEST_NOTE_CHARS);
+  assert.equal(isRunDigest(digest), true);
+  assert.deepEqual(digestRun({ ...RECORD, notes: ["Keep the snow."] }).notes, ["Keep the snow."]);
+});
+
+test("an over-long line is clipped rather than refusing the whole chat", () => {
+  const deep = `game.Workspace.${"Folder.".repeat(80)}Script`;
+  const digest = digestRun({
+    ...RECORD, changes: [{ id: "c1", kind: "script-source", target: deep, summary: "wrote" }],
+  });
+  assert.equal(digest.changes[0].length, MAX_DIGEST_LINE_CHARS);
+  assert.ok(digest.changes[0].endsWith("…"));
+  assert.equal(isRunDigest(digest), true);
 });
 
 test("a record written before decisions existed still validates, and one with them does too", () => {

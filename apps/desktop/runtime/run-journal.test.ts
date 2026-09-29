@@ -44,6 +44,43 @@ test("recovers an interrupted run with changes and evidence truthfully", async (
   } finally { await fixture.cleanup(); }
 });
 
+test("a recovered run keeps the user's notes and answers, and its newest changes", async () => {
+  const fixture = await temporaryJournal();
+  const at = "2026-01-01T00:00:00.000Z";
+  try {
+    await fixture.journal.start("run-1", { projectId: "project", chatId: "chat" }, "make it", "Full auto");
+    let seq = 0;
+    fixture.journal.record(event({ type: "steer", runId: "run-1", seq: ++seq, at, text: "Don't touch the snow system." }));
+    fixture.journal.record(event({
+      type: "question-asked", runId: "run-1", seq: ++seq, at,
+      question: { callId: "q1", question: "Which trail gets the mist?", options: ["North", "South"] },
+    }));
+    fixture.journal.record(event({ type: "question-answered", runId: "run-1", seq: ++seq, at, callId: "q1", answerIndex: 0, answer: "North", cancelled: false }));
+    fixture.journal.record(event({
+      type: "change", runId: "run-1", seq: ++seq, at,
+      change: { id: "upload", kind: "asset", target: "rbxassetid://7", summary: "Uploaded “Mist” to Roblox as asset 7." },
+    }));
+    for (let index = 0; index < 60; index += 1) {
+      fixture.journal.record(event({
+        type: "change", runId: "run-1", seq: ++seq, at,
+        change: { id: `c${index}`, kind: "properties", target: `game.Workspace.Part${index}`, summary: "set" },
+      }));
+    }
+    await fixture.journal.drain();
+
+    const [recovered] = await new RunJournal(fixture.root).recover();
+    const run = recovered.message.run!;
+    assert.deepEqual(run.notes, ["Don't touch the snow system."]);
+    assert.deepEqual(run.decisions, [{ question: "Which trail gets the mist?", answer: "North" }]);
+    // Over the bound, the oldest changes Studio can still show go first: the
+    // upload and the newest writes are what a follow-up continues from.
+    assert.equal(run.changes.length, 50);
+    assert.equal(run.changes[0].target, "rbxassetid://7");
+    assert.equal(run.changes.at(-1)?.target, "game.Workspace.Part59");
+    assert.equal(run.changes[1].target, "game.Workspace.Part11");
+  } finally { await fixture.cleanup(); }
+});
+
 test("a recovered run keeps its stored pictures by ref, but never a picture inline", async () => {
   const fixture = await temporaryJournal();
   try {

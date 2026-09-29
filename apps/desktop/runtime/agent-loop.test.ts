@@ -1015,7 +1015,7 @@ test("a Custom chat's next message continues the conversation it left, tool resu
   assert.equal(recorded.progressDetails.some((detail) => detail?.includes("earlier work")), false);
 });
 
-test("a kept conversation is not continued under other settings, after a failed run, or once the chat moved on", async () => {
+test("a kept conversation is not continued under other settings, in another place, after a failed run, or once the chat moved on", async () => {
   const controller = new AbortController();
   const { context } = makeContext(controller);
   const replay = (request: TurnRequest) => {
@@ -1046,6 +1046,13 @@ test("a kept conversation is not continued under other settings, after a failed 
     },
   });
   assert.equal(replay(later.requests[0]), true);
+
+  // Another Studio place: what the conversation read was about the first one.
+  const placed = new ProviderSessionStore<AgentLoopSession>();
+  await keepingPlanner(gateway([DONE("Main prints hi.")]), placed).run(context);
+  const movedPlace = gateway([DONE("Done.")]);
+  await keepingPlanner(movedPlace, placed).run({ ...followUp(context, "Main prints hi.", "Again"), instanceId: "studio-2" });
+  assert.equal(replay(movedPlace.requests[0]), true);
 
   // A run that failed leaves a conversation the chat does not describe.
   const failed = new ProviderSessionStore<AgentLoopSession>();

@@ -86,3 +86,19 @@ test("nothing connected is an empty list rather than a placeholder row", () => {
     message: "MCP is not running",
   }), []);
 });
+
+test("a pinned place is the target even while it is closed, and nothing else is", () => {
+  const open = status([
+    { instanceId: "place:1", role: "edit", placeName: "Tower Defense", isRunning: false },
+  ]);
+  // A chat that changed place 9 is about place 9. Sending its run to whatever
+  // is open would apply that work to another game; the run goes to place 9 and
+  // its Studio calls fail as not connected.
+  assert.equal(resolveInstanceId(open, "place:9", true), "place:9");
+  assert.deepEqual(connectedStudios(open, "place:9", true).map((studio) => studio.isTarget), [false]);
+  assert.equal(resolveInstanceId(status([]), "place:9", true), "place:9");
+  // Once it is open, it is simply the target.
+  assert.equal(resolveInstanceId(status([
+    { instanceId: "place:9", role: "edit", placeName: "Snow", isRunning: false },
+  ]), "place:9", true), "place:9");
+});

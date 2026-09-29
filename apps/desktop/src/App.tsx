@@ -9,9 +9,9 @@ import {
 import { Fragment, memo, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import {
-  appendMessage, chatStudioInstanceId, createChat, createId, createInitialWorkspace, createProject,
+  appendMessage, createChat, createId, createInitialWorkspace, createProject,
   deleteChat, deleteProject, modelPreference, normalizeWorkspace, renameChat,
-  renameProject, selectedModelId, setChatStudioInstance,
+  renameProject, selectedModelId, setChatStudioInstance, chatStudioTarget,
   type AssetAttachment, type ChatMessage, type WorkspaceState,
 } from "./model";
 import {
@@ -58,7 +58,7 @@ import {
 } from "./conversation-window";
 import { DEMO_PLANNER, startDemoRun, type DemoRunHandle } from "./demo-run";
 import { evidenceDetailLabel, type ActivityKind } from "../shared/activity";
-import { boundConversation } from "../shared/conversation";
+import { boundConversation, MAX_MESSAGE_ATTACHMENTS } from "../shared/conversation";
 import { digestIsEmpty, digestRun } from "../shared/run-digest";
 import { MAX_STEER_CHARS } from "../shared/steer";
 import { describePolicyReason } from "../shared/policy";
@@ -626,9 +626,19 @@ function App() {
     // A reply that came from a run carries the host's digest of that run --
     // what it changed, left open, and was told -- so a follow-up starts from
     // the record rather than rediscovering it from Studio.
-    const conversation = boundConversation((targetChat?.messages ?? []).map(({ role, text, run }) => {
+    const conversation = boundConversation((targetChat?.messages ?? []).map(({ role, text, run, attachments: attached }) => {
       const digest = run === undefined ? undefined : digestRun(run);
-      return digest === undefined || digestIsEmpty(digest) ? { role, text } : { role, text, run: digest };
+      // A replay carries the words, not the files; the count says they existed.
+      // Clamped to what the main process accepts, so an odd saved message can
+      // never make the chat impossible to continue.
+      const images = (attached ?? []).filter(isImageAttachment).length;
+      const pictures = Math.min(images, MAX_MESSAGE_ATTACHMENTS);
+      const files = Math.min((attached ?? []).length - images, MAX_MESSAGE_ATTACHMENTS);
+      return {
+        role, text,
+        ...(digest === undefined || digestIsEmpty(digest) ? {} : { run: digest }),
+        ...(role === "user" && pictures + files > 0 ? { attachments: { pictures, files } } : {}),
+      };
     }));
     next = appendMessage(next, projectId, chatId, {
       id: createId("message"), role: "user", text: prompt, createdAt: new Date().toISOString(),
@@ -646,7 +656,10 @@ function App() {
       approvalMode: next.preferences.approvalMode,
       autoPlaytest: next.preferences.autoPlaytest,
       endpoint: next.preferences.mcpEndpoint,
-      instanceId: resolveInstanceId(studioStatus, chatStudioInstanceId(next, projectId, chatId)),
+      instanceId: (() => {
+        const target = chatStudioTarget(next, projectId, chatId);
+        return resolveInstanceId(studioStatus, target.instanceId, target.pinned);
+      })(),
       provider: next.preferences.provider,
       model: availableModel?.id ?? null,
       effort: availableModel?.supportedReasoningEfforts.some((entry) => entry.reasoningEffort === next.preferences.reasoningEffort)
@@ -823,7 +836,9 @@ function App() {
 
   // Old message cards are intentionally memoized. Keep their action stable too,
   // while still reading the latest endpoint and Studio selection when clicked.
-  const chatInstanceId = chatStudioInstanceId(workspace, workspace.selectedProjectId, workspace.selectedChatId);
+  const chatTarget = chatStudioTarget(workspace, workspace.selectedProjectId, workspace.selectedChatId);
+  const chatInstanceId = chatTarget.instanceId;
+  const chatPinned = chatTarget.pinned;
   const openArtifactContext = useRef({
     endpoint: workspace.preferences.mcpEndpoint,
     studioInstanceId: chatInstanceId,
@@ -849,8 +864,8 @@ function App() {
 
   /** Every connected place, so a second one is visible rather than implied. */
   const studios = useMemo(
-    () => connectedStudios(studioStatus, chatInstanceId),
-    [studioStatus, chatInstanceId],
+    () => connectedStudios(studioStatus, chatInstanceId, chatPinned),
+    [studioStatus, chatInstanceId, chatPinned],
   );
   /** Record the place for the chat in view, and for the next chat after it. */
   const chooseStudio = (instanceId: string | null) => {
@@ -1219,7 +1234,7 @@ function App() {
           <div className="topbar-actions">
             <button className="icon-button theme-button" onClick={() => updatePreferences({ theme: theme === "light" ? "dark" : "light" })} aria-label={theme === "light" ? "Switch to dark theme" : "Switch to light theme"} title={theme === "light" ? "Dark theme" : "Light theme"}>{theme === "light" ? <Moon size={18} /> : <Sun size={18} />}</button>
             <div className="connection-wrap" ref={connectionRef}>
-              <button className={`connection-pill status-${studioStatus.kind}`} onClick={() => setShowConnection((value) => !value)}><span className="live-dot" /><span className="connection-label">{targetStudio?.name ?? studioStatus.placeName ?? "Roblox Studio"}</span><span className="connection-detail">{studioStatus.message}</span><ChevronDown size={15} /></button>
+              <button className={`connection-pill status-${studioStatus.kind}`} onClick={() => setShowConnection((value) => !value)}><span className="live-dot" /><span className="connection-label">{targetStudio?.name ?? (chatPinned && chatInstanceId !== null ? "This chat's place is not open" : studioStatus.placeName ?? "Roblox Studio")}</span><span className="connection-detail">{studioStatus.message}</span><ChevronDown size={15} /></button>
               {showConnection && <div className="connection-popover"><div className="popover-title"><div className="studio-icon"><Gamepad2 size={18} /></div><div><strong>Roblox Studio</strong><span>{studioStatus.message}</span></div></div><dl><div><dt>Bridge</dt><dd>{statusLabel(studioStatus.kind)}</dd></div></dl>
                 {/* Every connected place, not just the one a run happens to
                     go to. Two places open used to look identical to one. */}
@@ -1249,8 +1264,9 @@ function App() {
                 {chatInstanceId !== null && <button className="popover-action" onClick={() => chooseStudio(null)}>
                   Choose the place automatically
                 </button>}
-                {chatInstanceId !== null && studios.length > 0 && studios.every((studio) => studio.instanceId !== chatInstanceId) &&
-                  <p className="popover-note">The place you chose is not open. Roqer is using the one above until it is.</p>}
+                {chatInstanceId !== null && studios.length > 0 && studios.every((studio) => studio.instanceId !== chatInstanceId) && (chatPinned
+                  ? <p className="popover-note">This chat already changed a place that is not open, so Roqer will not work in another one. Open that place in Studio, or pick one above to move the chat there.</p>
+                  : <p className="popover-note">The place you chose is not open. Roqer is using the one above until it is.</p>)}
                 {bridgeState.kind === "failed" && <p className="popover-problem" role="alert">{bridgeState.message}</p>}
                 {/* Without this, a plugin that was never installed looks
                     exactly like Studio simply not being open. */}

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   boundConversation,
+  CLIPPED_REPLY_MARKER,
   isConversationContext,
   MAX_CONVERSATION_CHARS,
   MAX_CONVERSATION_MESSAGE_CHARS,
@@ -97,4 +98,37 @@ test("conversation validation refuses a digest that is malformed or on the wrong
   // More entries than the digest ever produces.
   const overlong = { ...DIGEST, changes: Array.from({ length: MAX_DIGEST_ENTRIES + 2 }, () => "change") };
   assert.equal(isConversationContext({ messages: [{ role: "assistant", text: "Built.", run: overlong }], truncated: false }), false);
+});
+
+test("a long reply keeps its end, where a run reports what it did last", () => {
+  const reply = `${"narration ".repeat(3_000)}FINAL SUMMARY: the forest is built.`;
+  const context = boundConversation([{ role: "assistant", text: reply }]);
+  const kept = context.messages[0].text;
+  assert.equal(kept.length, MAX_CONVERSATION_MESSAGE_CHARS);
+  assert.ok(kept.startsWith("narration "));
+  assert.ok(kept.includes(CLIPPED_REPLY_MARKER));
+  assert.ok(kept.endsWith("FINAL SUMMARY: the forest is built."));
+  assert.equal(context.truncated, true);
+  assert.equal(isConversationContext(context), true);
+
+  // A user message keeps its start, which a kept session matches its prompt on.
+  const asked = boundConversation([{ role: "user", text: "a".repeat(MAX_CONVERSATION_MESSAGE_CHARS + 10) }]);
+  assert.ok(asked.messages[0].text.endsWith("…"));
+  assert.equal(asked.messages[0].text.length, MAX_CONVERSATION_MESSAGE_CHARS);
+});
+
+test("a user message says how many attachments it had, and only a user message may", () => {
+  const context = boundConversation([
+    { role: "user", text: "Make it look like this.", attachments: { pictures: 1, files: 0 } },
+    { role: "assistant", text: "Done." },
+  ]);
+  assert.deepEqual(context.messages[0].attachments, { pictures: 1, files: 0 });
+  assert.equal(isConversationContext(context), true);
+
+  const reply = { messages: [{ role: "assistant", text: "Done.", attachments: { pictures: 1, files: 0 } }], truncated: false };
+  assert.equal(isConversationContext(reply), false);
+  const none = { messages: [{ role: "user", text: "Hi.", attachments: { pictures: 0, files: 0 } }], truncated: false };
+  assert.equal(isConversationContext(none), false);
+  const named = { messages: [{ role: "user", text: "Hi.", attachments: { pictures: "tree.png", files: 0 } }], truncated: false };
+  assert.equal(isConversationContext(named), false);
 });

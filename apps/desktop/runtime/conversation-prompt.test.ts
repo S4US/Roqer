@@ -157,6 +157,31 @@ test("a run that uploaded assets tells the next session to reuse them", () => {
   assert.equal(record(["properties game.Lighting"]).includes("already uploaded"), false);
 });
 
+test("a replay says why the last run stopped, what the user noted, and what was attached", () => {
+  const prompt = buildConversationPrompt({
+    messages: [
+      { role: "user", text: "Make the sky like this.", attachments: { pictures: 2, files: 1 } },
+      {
+        role: "assistant",
+        text: "Next is the ground mist.",
+        run: {
+          outcome: "failed", changes: [], unfinished: ["[active] Add ground mist"], unverified: [], decisions: [],
+          stoppedBecause: "You've hit your session limit",
+          failedCalls: ["build_instances: CFrame expected, got table."],
+          notes: ["Don't touch the snow system."],
+        },
+      },
+    ],
+    truncated: false,
+  }, "Continue");
+
+  assert.match(prompt, /Make the sky like this\.\n\[The user attached 2 pictures and 1 file to this message\. They are not part of this replay/);
+  const record = prompt.slice(prompt.indexOf("[Roqer's record"), prompt.indexOf("Current user message"));
+  assert.match(record, /It stopped because: You've hit your session limit/);
+  assert.match(record, /Notes the user added while it worked[^\n]*:\n- Don't touch the snow system\./);
+  assert.match(record, /Tool calls that failed in it:\n- build_instances: CFrame expected, got table\./);
+});
+
 test("a reply without a run renders exactly as it did before records existed", () => {
   const prompt = buildConversationPrompt({
     messages: [{ role: "assistant", text: "Just an answer." }],

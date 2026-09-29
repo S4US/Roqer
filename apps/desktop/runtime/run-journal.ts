@@ -12,6 +12,8 @@ import {
   type RunFailure,
   type RunRecord,
 } from "../shared/run-events";
+import { isRunDecision, type RunDecision } from "../shared/run-digest";
+import { MAX_STEERS_PER_RUN } from "../shared/steer";
 import type { RunTask } from "../shared/tasks";
 import type { ChatMessage } from "../src/model";
 
@@ -39,6 +41,14 @@ type Snapshot = {
   evidence: RunEvidence[];
   failures: RunFailure[];
   tasks?: RunTask[];
+  /**
+   * What the user said and answered while the run worked. Optional so a
+   * journal written before they were kept still recovers.
+   */
+  notes?: string[];
+  decisions?: RunDecision[];
+  /** Questions still waiting on the user, by call, so an answer can be recorded against its question. */
+  pendingQuestions?: Record<string, string>;
   completion?: Extract<RunEvent, { type: "run-completed" }>;
   clipped: boolean;
 };
@@ -68,7 +78,11 @@ function validSnapshot(value: unknown): value is Snapshot {
     evidence: value.evidence as RunEvidence[],
     failures: value.failures as RunFailure[],
     tasks: value.tasks as RunTask[] | undefined,
+    notes: value.notes as string[] | undefined,
+    decisions: value.decisions as RunDecision[] | undefined,
   };
+  const pending = value.pendingQuestions;
+  if (pending !== undefined && (!object(pending) || !Object.values(pending).every((question) => typeof question === "string"))) return false;
   return isRunRecord(record) && typeof value.clipped === "boolean" &&
     (value.completion === undefined || (isRunEvent(value.completion) && value.completion.type === "run-completed"));
 }
@@ -76,6 +90,24 @@ function validSnapshot(value: unknown): value is Snapshot {
 function append<T>(items: T[], item: T, snapshot: Snapshot): void {
   if (items.length < MAX_ITEMS) items.push(item);
   else snapshot.clipped = true;
+}
+
+/**
+ * Make room in the change list by dropping its oldest entry that Studio can
+ * still show. The newest changes are what a follow-up continues from, and an
+ * upload not yet placed exists nowhere but here, so both outlast the rest.
+ */
+function evictChange(changes: RunChange[]): void {
+  const index = changes.findIndex((change) => change.kind !== "asset");
+  changes.splice(index === -1 ? 0 : index, 1);
+}
+
+function appendChange(snapshot: Snapshot, change: RunChange): void {
+  if (snapshot.changes.length >= MAX_ITEMS) {
+    evictChange(snapshot.changes);
+    snapshot.clipped = true;
+  }
+  snapshot.changes.push(change);
 }
 
 function compactChange(change: RunChange): RunChange {
@@ -116,10 +148,33 @@ function applyEvent(snapshot: Snapshot, event: RunEvent): void {
     case "tool-result": append(snapshot.toolCalls, {
       tool: bounded(event.tool, 200), ok: event.ok, durationMs: event.durationMs, summary: bounded(event.summary),
     }, snapshot); break;
-    case "change": append(snapshot.changes, compactChange(event.change), snapshot); break;
+    case "change": appendChange(snapshot, compactChange(event.change)); break;
     case "evidence": append(snapshot.evidence, compactEvidence(event.evidence), snapshot); break;
     case "failure": append(snapshot.failures, { ...event.failure, message: bounded(event.failure.message) }, snapshot); break;
     case "tasks": snapshot.tasks = event.tasks.slice(0, MAX_ITEMS).map((task) => ({ ...task, title: bounded(task.title, 500) })); if (event.tasks.length > MAX_ITEMS) snapshot.clipped = true; break;
+    case "steer": {
+      const notes = snapshot.notes ?? [];
+      if (notes.length < MAX_STEERS_PER_RUN) snapshot.notes = [...notes, event.text];
+      break;
+    }
+    case "question-asked":
+      snapshot.pendingQuestions = { ...snapshot.pendingQuestions, [event.question.callId]: event.question.question };
+      break;
+    case "question-answered": {
+      const question = snapshot.pendingQuestions?.[event.callId];
+      if (snapshot.pendingQuestions !== undefined) {
+        const rest = { ...snapshot.pendingQuestions };
+        delete rest[event.callId];
+        snapshot.pendingQuestions = rest;
+      }
+      const decision = { question: question ?? "", answer: event.answer };
+      // Kept only as the record will validate it, so one odd answer cannot
+      // cost the whole recovery.
+      if (!event.cancelled && isRunDecision(decision)) {
+        snapshot.decisions = [...(snapshot.decisions ?? []), decision];
+      }
+      break;
+    }
     case "run-completed": snapshot.completion = {
       ...event,
       summary: bounded(event.summary),
@@ -151,7 +206,7 @@ function serializeBounded(snapshot: Snapshot): string {
     serialized = JSON.stringify(snapshot);
   }
   while (Buffer.byteLength(serialized, "utf8") > MAX_SNAPSHOT_BYTES && snapshot.changes.length > 0) {
-    snapshot.changes.pop();
+    evictChange(snapshot.changes);
     serialized = JSON.stringify(snapshot);
   }
   if (Buffer.byteLength(serialized, "utf8") > MAX_SNAPSHOT_BYTES) {
@@ -190,6 +245,8 @@ function recoveredMessage(snapshot: Snapshot): ChatMessage {
       : snapshot.failures,
     tasks: snapshot.tasks,
     verification,
+    ...(snapshot.decisions !== undefined && snapshot.decisions.length > 0 ? { decisions: snapshot.decisions } : {}),
+    ...(snapshot.notes !== undefined && snapshot.notes.length > 0 ? { notes: snapshot.notes } : {}),
   };
   const text = snapshot.text.trim() ? `${snapshot.text.trim()}\n\n${summary}` : summary;
   return { id: `recovered-${snapshot.runId}`, role: "assistant", text, createdAt: finishedAt, run };

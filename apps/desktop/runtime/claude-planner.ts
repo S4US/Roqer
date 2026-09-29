@@ -391,9 +391,14 @@ export class ClaudeSession {
   }
 }
 
-/** Every setting baked into a Claude Code process when it starts. */
-function sessionKey(options: ClaudePlannerOptions, autoPlaytest: boolean): string {
+/**
+ * Every setting baked into a Claude Code process when it starts. The Studio
+ * place is part of it: a conversation that read one place's scripts and parts
+ * would carry them into a run against another.
+ */
+function sessionKey(options: ClaudePlannerOptions, { autoPlaytest, instanceId }: Pick<PlannerContext, "autoPlaytest" | "instanceId">): string {
   return JSON.stringify([
+    instanceId,
     options.model, options.supportsEffort ? options.effort : null, autoPlaytest,
     options.agent.id, options.agent.version, options.blender === true,
   ]);
@@ -588,7 +593,7 @@ export function createClaudePlanner(options: ClaudePlannerOptions): Planner {
       };
 
       const chatId = options.sessions !== undefined ? options.chatId : undefined;
-      const key = sessionKey(options, context.autoPlaytest);
+      const key = sessionKey(options, context);
       try {
         // A kept session is used only when it has seen exactly this chat so
         // far, under the settings this run asks for; anything else would put

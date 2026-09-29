@@ -434,6 +434,54 @@ export function chatStudioInstanceId(
 }
 
 /**
+ * The place a chat's earlier runs changed, from the newest change that names
+ * one. Null for a chat that has not changed Studio.
+ */
+export function chatWorkPlace(chat: Pick<Chat, "messages">): string | null {
+  for (let index = chat.messages.length - 1; index >= 0; index -= 1) {
+    const changes = chat.messages[index].run?.changes ?? [];
+    for (let at = changes.length - 1; at >= 0; at -= 1) {
+      const instanceId = changes[at].instanceId;
+      if (instanceId !== undefined && instanceId !== "") return instanceId;
+    }
+  }
+  return null;
+}
+
+export type ChatStudioTarget = {
+  /** The place the chat's next run should go to, when one is known. */
+  instanceId: string | null;
+  /**
+   * Whether that place is the only one the run may go to. A chat that has
+   * already changed a place is about that place: its transcript and records
+   * name that place's scripts and parts, and continuing it in whichever Studio
+   * happens to be open would apply that work to a different game. So such a
+   * chat is pinned, and when its place is not open the run goes to it anyway
+   * and every Studio call fails as not connected, rather than guessing.
+   */
+  pinned: boolean;
+};
+
+/**
+ * Where a chat's next run goes: its own choice, else the place its earlier
+ * runs changed, else the last place picked anywhere.
+ */
+export function chatStudioTarget(
+  state: WorkspaceState,
+  projectId: string,
+  chatId: string | null,
+): ChatStudioTarget {
+  const chat = chatId === null
+    ? undefined
+    : state.projects.find((project) => project.id === projectId)?.chats.find((candidate) => candidate.id === chatId);
+  const worked = chat === undefined ? null : chatWorkPlace(chat);
+  return {
+    instanceId: chat?.studioInstanceId ?? worked ?? state.preferences.studioInstanceId,
+    pinned: worked !== null,
+  };
+}
+
+/**
  * Record the place a chat works in.
  *
  * The choice is written twice on purpose: on the chat, because that is what the

@@ -37,3 +37,8 @@ export function normalizeSteer(value: unknown): string | null {
   }
   return text;
 }
+
+/** Whether a stored note is one the engine could have queued, unchanged. */
+export function isSteerNote(value: unknown): value is string {
+  return typeof value === "string" && normalizeSteer(value) === value;
+}

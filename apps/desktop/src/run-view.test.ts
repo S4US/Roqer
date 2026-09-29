@@ -282,6 +282,27 @@ test("toRunRecord compacts only a finished run", () => {
   assert.equal(record.finishedAt, finished.finishedAt);
 });
 
+test("a note the user added stays with the run once it has ended", () => {
+  const finished = fold(stream(
+    started,
+    { type: "steer", text: "Don't touch the snow system." },
+    { type: "run-completed", outcome: "failed", summary: "You've hit your session limit" },
+  ));
+  const record = toRunRecord(finished);
+  assert.ok(record);
+  assert.deepEqual(record.notes, ["Don't touch the snow system."]);
+  assert.equal(isRunRecord(record), true);
+  const note = recordSteps(record).find((step) => step.kind === "note");
+  assert.equal(note?.label, "You added a note");
+  assert.equal(note?.note, "Don't touch the snow system.");
+
+  // A run nobody steered records no notes, exactly as before.
+  const quiet = toRunRecord(fold(stream(started, { type: "run-completed", outcome: "completed", summary: "done" })));
+  assert.equal(quiet?.notes, undefined);
+  // And a stored note the engine could not have queued does not load.
+  assert.equal(isRunRecord({ ...record, notes: [""] }), false);
+});
+
 test("a completed Roblox upload keeps its asset result in history", () => {
   const asset: RunChange = {
     id: "asset-1",
