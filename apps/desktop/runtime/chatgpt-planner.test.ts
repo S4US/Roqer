@@ -637,10 +637,11 @@ function sessionRun(
   prompt: string,
   messages: PlannerContext["conversation"]["messages"],
   model = "gpt-test",
+  instanceId: string | null = null,
 ) {
   const context: PlannerContext = {
     prompt, conversation: { messages, truncated: false }, images: [],
-    instanceId: null, autoPlaytest: false, signal: new AbortController().signal,
+    instanceId, autoPlaytest: false, signal: new AbortController().signal,
     progress: () => undefined, outputTokens: () => undefined, status: () => undefined, say: () => undefined,
     recordChange: () => undefined, recordEvidence: () => undefined, setTasks: () => undefined,
     tasks: () => [], changes: () => [], evidence: () => [], decisions: () => [], takeSteers: () => [],
@@ -685,6 +686,21 @@ test("ChatGPT starts a new thread when the chat moved on without it", async () =
 
   assert.equal(appServer.threadsStarted, 2);
   assert.match(appServer.turnInputs[1].text, /Asked on another provider/);
+});
+
+test("ChatGPT starts a new thread when the chat moved to another Studio place", async () => {
+  const appServer = new AnsweringAppServer();
+  const sessions = new ProviderSessionStore<CodexThread>();
+
+  await sessionRun(appServer, sessions, "Build the shop.", [], "gpt-test", "place:1");
+  await sessionRun(appServer, sessions, "Add a button.", [
+    { role: "user", text: "Build the shop." },
+    { role: "assistant", text: "Answer 1" },
+  ], "gpt-test", "place:2");
+
+  // The first thread read place 1; it is not carried into a run against place 2.
+  assert.equal(appServer.threadsStarted, 2);
+  assert.match(appServer.turnInputs[1].text, /Prior conversation context/);
 });
 
 /**

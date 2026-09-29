@@ -28,7 +28,7 @@ import {
 } from "./model-api/turn-contract";
 
 import type { CompletionVerification } from "../shared/completion";
-import { boundedLines, changeLine, taskLine, type RunDecision } from "../shared/run-digest";
+import { boundedLines, changeLines, taskLine, type RunDecision } from "../shared/run-digest";
 import type { RunChange, RunEvidence } from "../shared/run-events";
 import type { RunTask } from "../shared/tasks";
 
@@ -102,7 +102,7 @@ export function describeRunState(snapshot: RunStateSnapshot, foldedMessages: num
   const { tasks, changes, evidence, verification, decisions } = snapshot;
   if (tasks.length > 0) sections.push(["Tasks:", ...bulletList(tasks.map(taskLine))].join("\n"));
   if (changes.length > 0) {
-    sections.push(["Changes applied so far:", ...bulletList(changes.map(changeLine))].join("\n"));
+    sections.push(["Changes applied so far:", ...bulletList(changeLines(changes))].join("\n"));
   }
   if (evidence.length > 0) {
     sections.push(["Evidence collected so far:", ...bulletList(evidence.map(evidenceLine))].join("\n"));

@@ -221,10 +221,12 @@ export type CodexThreadStore = ProviderSessionStore<CodexThread>;
 
 /**
  * Everything fixed when a thread starts. Model and effort are not in it: Codex
- * takes both per turn, so changing either keeps the conversation.
+ * takes both per turn, so changing either keeps the conversation. The Studio
+ * place is in it: a thread that read one place's scripts and parts would carry
+ * them into a run against another.
  */
-function threadKey(options: ChatGptPlannerOptions, autoPlaytest: boolean): string {
-  return JSON.stringify([autoPlaytest, options.agent.id, options.agent.version, options.blender === true]);
+function threadKey(options: ChatGptPlannerOptions, { autoPlaytest, instanceId }: Pick<PlannerContext, "autoPlaytest" | "instanceId">): string {
+  return JSON.stringify([instanceId, autoPlaytest, options.agent.id, options.agent.version, options.blender === true]);
 }
 
 async function startThread(options: ChatGptPlannerOptions, autoPlaytest: boolean): Promise<string> {
@@ -277,7 +279,7 @@ export function createChatGptPlanner(options: ChatGptPlannerOptions): Planner {
       // under the instructions this run asks for; anything else would put the
       // model in a conversation the user is not looking at.
       const chatId = options.sessions !== undefined ? options.chatId : undefined;
-      const key = threadKey(options, context.autoPlaytest);
+      const key = threadKey(options, context);
       const kept = chatId === undefined ? undefined : options.sessions!.take(chatId);
       const current = kept !== undefined && kept.key === key &&
         continuesConversation(context.conversation, kept.lastPrompt)

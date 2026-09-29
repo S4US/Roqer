@@ -4,7 +4,7 @@ import type { CompletionVerification, CompletionIssueCode } from "./completion";
 import { isReasoningEffort, type ProviderId, type ReasoningEffort } from "./provider";
 import { isRunQuestion, type RunQuestion } from "./question";
 import { isRunDecision, type RunDecision } from "./run-digest";
-import { MAX_STEER_CHARS } from "./steer";
+import { MAX_STEER_CHARS, MAX_STEERS_PER_RUN, isSteerNote } from "./steer";
 import { isModelPreviewId } from "./model-preview";
 import {
   isRunTaskList,
@@ -343,6 +343,13 @@ export type RunRecord = {
    * follow-up run would otherwise have to ask for again.
    */
   decisions?: RunDecision[];
+  /**
+   * The notes the user added while the run worked, in order. Optional for the
+   * same reason as `decisions`, and kept for the same one: they are the user
+   * speaking, and a follow-up in a fresh provider session has no other way to
+   * hear them. They are what the chat shows under the run once it has ended.
+   */
+  notes?: string[];
 };
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -633,5 +640,7 @@ export function isRunRecord(value: unknown): value is RunRecord {
     (value.tasks === undefined || isRunTaskList(value.tasks)) &&
     (value.verification === undefined || isCompletionVerification(value.verification)) &&
     (value.decisions === undefined ||
-      (Array.isArray(value.decisions) && value.decisions.every(isRunDecision)));
+      (Array.isArray(value.decisions) && value.decisions.every(isRunDecision))) &&
+    (value.notes === undefined ||
+      (Array.isArray(value.notes) && value.notes.length <= MAX_STEERS_PER_RUN && value.notes.every(isSteerNote)));
 }

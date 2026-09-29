@@ -808,6 +808,21 @@ test("Claude starts a new process when the run needs different startup settings"
   await sessions.closeAll();
 });
 
+test("Claude starts a new process when the chat moved to another Studio place", async () => {
+  const sessions = new ProviderSessionStore<ClaudeSession>();
+  const provider = answeringLauncher();
+  const planner = createClaudePlanner({ ...PLANNER_DEFAULTS, launcher: provider.launcher, chatId: "chat-1", sessions });
+  const { context } = makeContext(new AbortController());
+
+  await planner.run({ ...context, instanceId: "place:1" });
+  await planner.run({ ...followUp(context, "Answer 1", "Again."), instanceId: "place:2" });
+
+  assert.equal(provider.launches.length, 2);
+  assert.equal(provider.launches[0].killed, true);
+  assert.match(provider.inputs[1], /Prior conversation context/, "the new process is given the chat, not the old place's reads");
+  await sessions.closeAll();
+});
+
 test("Claude does not keep a process whose run failed", async () => {
   const sessions = new ProviderSessionStore<ClaudeSession>();
   const provider = answeringLauncher();

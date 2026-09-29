@@ -179,9 +179,13 @@ export type AgentLoopSessionStore = ProviderSessionStore<AgentLoopSession>;
 /**
  * Everything fixed when a conversation starts. The effort is not in it: it is
  * sent with every turn, so changing it keeps the conversation.
+ *
+ * The Studio place is part of it: a conversation that read one place's
+ * scripts and parts would carry them into a run against another.
  */
-function sessionKey(options: AgentLoopPlannerOptions, autoPlaytest: boolean): string {
+function sessionKey(options: AgentLoopPlannerOptions, { autoPlaytest, instanceId }: Pick<PlannerContext, "autoPlaytest" | "instanceId">): string {
   return JSON.stringify([
+    instanceId,
     options.transportKey ?? null, options.plannerId ?? "agent-loop", options.modelId, autoPlaytest,
     options.agent.id, options.agent.version, options.blender === true, options.images !== false,
     options.toolOutputBudget ?? null, options.contextWindow ?? null,
@@ -533,7 +537,7 @@ export function createAgentLoopPlanner(options: AgentLoopPlannerOptions): Planne
       // message attaches; anything else would put the model in a conversation
       // the user is not looking at.
       const chatId = options.sessions !== undefined ? options.chatId : undefined;
-      const key = sessionKey(options, context.autoPlaytest);
+      const key = sessionKey(options, context);
       const kept = chatId === undefined ? undefined : options.sessions!.take(chatId);
       const session = kept !== undefined && options.transportKey !== undefined && kept.key === key &&
         continuesConversation(context.conversation, kept.lastPrompt) &&

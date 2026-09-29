@@ -61,9 +61,14 @@ export function defaultInstanceId(status: StudioStatus): string | null {
  * failing the run: the choice is remembered across restarts, so it routinely
  * names a Studio window that is not open yet. The choice is kept either way —
  * reopening that place makes it the target again without the user re-picking.
+ * A pinned place, the one a chat's earlier runs changed, never falls back.
  */
-export function resolveInstanceId(status: StudioStatus, preferred: string | null): string | null {
+export function resolveInstanceId(status: StudioStatus, preferred: string | null, pinned = false): string | null {
   if (preferred === null) return defaultInstanceId(status);
+  // A pinned place is the target whether or not it is open: see
+  // `chatStudioTarget`. The run engine addresses every Studio call at it, so a
+  // closed place fails each call as not connected instead of editing another.
+  if (pinned) return preferred;
   const connected = status.instances?.some((instance) => instance.instanceId === preferred) ?? false;
   return connected ? preferred : defaultInstanceId(status);
 }
@@ -98,8 +103,9 @@ export type ConnectedStudio = {
 export function connectedStudios(
   status: StudioStatus,
   preferred: string | null = null,
+  pinned = false,
 ): readonly ConnectedStudio[] {
-  const target = resolveInstanceId(status, preferred);
+  const target = resolveInstanceId(status, preferred, pinned);
   const byInstance = new Map<string, ConnectedStudio & { roles: string[] }>();
 
   for (const instance of status.instances ?? []) {

@@ -10,7 +10,19 @@ export type ConversationMessage = {
    * and on replies that were not runs.
    */
   run?: RunDigest;
+  /**
+   * How many attachments a user message carried. Counts, not names: a replay
+   * cannot deliver the files themselves, and a file name is text the user did
+   * not send as a message. Knowing that something was attached is what lets a
+   * fresh session ask for it again instead of acting as if nothing was.
+   */
+  attachments?: MessageAttachments;
 };
+
+export type MessageAttachments = { pictures: number; files: number };
+
+/** More than a message can carry; a bound for validation, not a product limit. */
+export const MAX_MESSAGE_ATTACHMENTS = 64;
 
 /**
  * A bounded slice of one chat's transcript.
@@ -51,9 +63,7 @@ export function boundConversation(messages: readonly ConversationMessage[]): Con
     }
 
     const message = messages[index];
-    const text = message.text.length > MAX_CONVERSATION_MESSAGE_CHARS
-      ? `${message.text.slice(0, MAX_CONVERSATION_MESSAGE_CHARS - 1)}…`
-      : message.text;
+    const text = clipMessage(message);
     if (text.length !== message.text.length) truncated = true;
 
     if (totalChars + text.length > MAX_CONVERSATION_CHARS) {
@@ -67,12 +77,45 @@ export function boundConversation(messages: readonly ConversationMessage[]): Con
       truncated = true;
     }
 
-    boundedNewestFirst.push({ role: message.role, text, ...(run === undefined ? {} : { run }) });
+    boundedNewestFirst.push({
+      role: message.role, text,
+      ...(run === undefined ? {} : { run }),
+      ...(message.attachments === undefined ? {} : { attachments: message.attachments }),
+    });
     totalChars += text.length + (run === undefined ? 0 : digestChars(run));
   }
 
   if (boundedNewestFirst.length < messages.length) truncated = true;
   return { messages: boundedNewestFirst.reverse(), truncated };
+}
+
+/** Marks where the middle of a long reply was left out. */
+export const CLIPPED_REPLY_MARKER = "\n\n[… middle of this reply omitted …]\n\n";
+
+/**
+ * A message within the per-message bound.
+ *
+ * A user message keeps its start, and a kept provider session matches the
+ * prompt it ran on that start (`continuesConversation`). A reply keeps both
+ * ends, the end most: a run narrates as it goes and reports what it did last,
+ * so its closing summary is the part a follow-up most needs.
+ */
+function clipMessage(message: ConversationMessage): string {
+  const { text } = message;
+  if (text.length <= MAX_CONVERSATION_MESSAGE_CHARS) return text;
+  if (message.role === "user") return `${text.slice(0, MAX_CONVERSATION_MESSAGE_CHARS - 1)}…`;
+  const room = MAX_CONVERSATION_MESSAGE_CHARS - CLIPPED_REPLY_MARKER.length;
+  const head = Math.floor(room / 3);
+  return `${text.slice(0, head)}${CLIPPED_REPLY_MARKER}${text.slice(text.length - (room - head))}`;
+}
+
+function isAttachmentCount(value: unknown): value is number {
+  return Number.isInteger(value) && (value as number) >= 0 && (value as number) <= MAX_MESSAGE_ATTACHMENTS;
+}
+
+function isMessageAttachments(value: unknown): value is MessageAttachments {
+  return isRecord(value) && isAttachmentCount(value.pictures) && isAttachmentCount(value.files) &&
+    (value.pictures as number) + (value.files as number) > 0;
 }
 
 /** Validate the renderer-provided transcript at the main-process trust boundary. */
@@ -91,6 +134,8 @@ export function isConversationContext(value: unknown): value is ConversationCont
       if (message.role !== "assistant" || !isRunDigest(message.run)) return false;
       totalChars += digestChars(message.run);
     }
+    if (message.attachments !== undefined &&
+      (message.role !== "user" || !isMessageAttachments(message.attachments))) return false;
     if (totalChars > MAX_CONVERSATION_CHARS) return false;
   }
   return true;

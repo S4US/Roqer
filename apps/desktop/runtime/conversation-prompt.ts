@@ -1,5 +1,5 @@
 import {
-  MAX_CONVERSATION_MESSAGE_CHARS, type ConversationContext, type ConversationMessage,
+  MAX_CONVERSATION_MESSAGE_CHARS, type ConversationContext, type ConversationMessage, type MessageAttachments,
 } from "../shared/conversation";
 import type { RunDigest } from "../shared/run-digest";
 
@@ -47,9 +47,20 @@ function bullets(lines: readonly string[]): string[] {
 
 function describeRunDigest(digest: RunDigest, which = "that run"): string {
   const sections: string[] = [`[Roqer's record of ${which} (outcome: ${digest.outcome}).]`];
+  if (digest.stoppedBecause !== undefined) sections.push(`It stopped because: ${digest.stoppedBecause}`);
+  if (digest.notes !== undefined && digest.notes.length > 0) {
+    // The user's own words, so they come before anything the host observed.
+    sections.push([
+      "Notes the user added while it worked (it may have stopped before acting on them):",
+      ...bullets(digest.notes),
+    ].join("\n"));
+  }
   if (digest.changes.length > 0) sections.push(["Changes it applied:", ...bullets(digest.changes)].join("\n"));
   if (digest.unfinished.length > 0) sections.push(["Tasks not done when it ended:", ...bullets(digest.unfinished)].join("\n"));
   if (digest.unverified.length > 0) sections.push(["Left unverified:", ...bullets(digest.unverified)].join("\n"));
+  if (digest.failedCalls !== undefined && digest.failedCalls.length > 0) {
+    sections.push(["Tool calls that failed in it:", ...bullets(digest.failedCalls)].join("\n"));
+  }
   if (digest.decisions.length > 0) {
     sections.push([
       "Decisions the user made when asked:",
@@ -57,11 +68,32 @@ function describeRunDigest(digest: RunDigest, which = "that run"): string {
     ].join("\n"));
   }
   sections.push("Revisions above are as that run left them; read Studio before changing anything.");
+  if (digest.changes.some((line) => line.startsWith("asset "))) {
+    // Studio cannot show an upload that was never placed, so without this a
+    // fresh session renders and uploads the same images again.
+    sections.push("Assets listed above are already uploaded to Roblox; reuse those IDs instead of creating or uploading them again.");
+  }
   return sections.join("\n");
 }
 
+function plural(count: number, noun: string): string {
+  return `${count} ${noun}${count === 1 ? "" : "s"}`;
+}
+
+function describeAttachments({ pictures, files }: MessageAttachments): string {
+  const parts = [
+    ...(pictures > 0 ? [plural(pictures, "picture")] : []),
+    ...(files > 0 ? [plural(files, "file")] : []),
+  ];
+  return `[The user attached ${parts.join(" and ")} to this message. They are not part of this replay; `
+    + "if the request depends on them, ask the user to attach them again.]";
+}
+
 function renderMessage(message: ConversationMessage): string {
-  const body = `${roleLabel(message)}:\n${message.text}`;
+  const said = message.attachments === undefined
+    ? message.text
+    : `${message.text}\n${describeAttachments(message.attachments)}`;
+  const body = `${roleLabel(message)}:\n${said}`;
   return message.run === undefined ? body : `${body}\n\n${describeRunDigest(message.run)}`;
 }
 

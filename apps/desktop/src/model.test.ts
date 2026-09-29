@@ -4,6 +4,7 @@ import { enabledProviderOr, isEnabledProvider, isProviderId } from "../shared/pr
 import {
   appendMessage,
   chatStudioInstanceId,
+  chatStudioTarget,
   createChat,
   createInitialWorkspace,
   createProject,
@@ -88,6 +89,32 @@ test("a chat remembers its own place, and the next chat inherits it", () => {
   assert.equal(chatStudioInstanceId(cleared, projectId, second.id), null);
   assert.equal(cleared.preferences.studioInstanceId, null);
   assert.equal(chatStudioInstanceId(cleared, projectId, first.id), "place:1");
+});
+
+test("a chat that changed a place is pinned to it, and only the user moves it", () => {
+  const base = createChat(createInitialWorkspace());
+  const projectId = base.selectedProjectId;
+  const chatId = base.selectedChatId!;
+  // Nothing changed yet: the chat follows the last place picked, and may fall back.
+  const picked = setChatStudioInstance(base, projectId, null, "place:2");
+  assert.deepEqual(chatStudioTarget(picked, projectId, chatId), { instanceId: "place:2", pinned: false });
+
+  const worked = appendMessage(picked, projectId, chatId, {
+    id: "m1", role: "assistant", text: "Built the forest.", createdAt: "2026-09-29T13:36:28.322Z",
+    run: {
+      schemaVersion: 1, runId: "run-1", planner: "claude-code", approvalMode: "Full auto", outcome: "completed",
+      startedAt: "2026-09-29T13:24:43.230Z", finishedAt: "2026-09-29T13:36:28.250Z", toolCalls: [], evidence: [], failures: [],
+      changes: [
+        { id: "a", kind: "asset", target: "rbxassetid://1", summary: "Uploaded" },
+        { id: "c", kind: "instance", target: "game.Workspace.SnowForest", instanceId: "place:1", summary: "Built" },
+      ],
+    },
+  });
+  // The last place picked elsewhere does not move a chat that already worked in one.
+  assert.deepEqual(chatStudioTarget(worked, projectId, chatId), { instanceId: "place:1", pinned: true });
+  // The user picking a place for this chat does.
+  const moved = setChatStudioInstance(worked, projectId, chatId, "place:3");
+  assert.deepEqual(chatStudioTarget(moved, projectId, chatId), { instanceId: "place:3", pinned: true });
 });
 
 test("a place chosen with no chat open is still remembered for the next one", () => {

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { digestIsEmpty, digestRun, isRunDigest, MAX_DIGEST_ENTRIES } from "./run-digest";
+import { digestIsEmpty, digestRun, isRunDigest, MAX_DIGEST_ENTRIES, MAX_DIGEST_LINE_CHARS, MAX_DIGEST_NOTE_CHARS } from "./run-digest";
 import { RUN_EVENT_SCHEMA_VERSION, isRunRecord, type RunRecord } from "./run-events";
 
 const RECORD: RunRecord = {
@@ -68,6 +68,94 @@ test("a digest is bounded however much a run changed, and still validates", () =
   const digest = digestRun({ ...RECORD, changes });
   assert.equal(digest.changes.length, MAX_DIGEST_ENTRIES + 1);
   assert.equal(digest.changes.at(-1), "(+40 more)");
+  assert.equal(isRunDigest(digest), true);
+});
+
+test("an upload is named in the digest, so a later run can reuse it instead of uploading again", () => {
+  const upload = (id: string, name: string) => ({
+    id: `c${id}`, kind: "asset" as const, target: `rbxassetid://${id}`, assetId: id, assetType: "Decal",
+    summary: `Uploaded “${name}” to Roblox as asset ${id}. Moderation: Approved.`,
+  });
+  const lighting = { id: "cl", kind: "properties" as const, target: "game.Lighting", summary: "set" };
+  const digest = digestRun({
+    ...RECORD,
+    changes: [
+      lighting,
+      upload("71399549499926", "SnowForest_MistPuff"),
+      lighting,
+      { id: "ca", kind: "asset", target: "rbxassetid://5", summary: "Uploaded the asset to Roblox as asset 5." },
+      lighting,
+    ],
+  });
+  // Uploads lead, since Studio cannot show one that was never placed, and a
+  // property tuned three times is one line rather than three.
+  assert.deepEqual(digest.changes, [
+    "asset rbxassetid://71399549499926 “SnowForest_MistPuff” (Decal)",
+    "asset rbxassetid://5",
+    "properties game.Lighting (×3)",
+  ]);
+  assert.equal(isRunDigest(digest), true);
+});
+
+test("uploads are the entries the bound keeps when a run changed more than it can list", () => {
+  const properties = Array.from({ length: 30 }, (_, index) => ({
+    id: `p${index}`, kind: "properties" as const, target: `game.Workspace.Part${index}`, summary: "set",
+  }));
+  const digest = digestRun({
+    ...RECORD,
+    changes: [
+      ...properties,
+      { id: "a1", kind: "asset", target: "rbxassetid://7", assetType: "Decal", summary: "Uploaded “Moonbeam” to Roblox as asset 7." },
+    ],
+  });
+  assert.equal(digest.changes[0], "asset rbxassetid://7 “Moonbeam” (Decal)");
+  assert.equal(digest.changes.at(-1), "(+11 more)");
+});
+
+test("a run that did not complete says why it stopped and which calls failed", () => {
+  const failures = [
+    { code: "tool_failed", tool: "build_instances", message: "CFrame expected, got table.", retryable: false },
+    { code: "tool_failed", tool: "build_instances", message: "CFrame expected, got table.", retryable: false },
+    { code: "planner_failed", message: "You've hit your session limit", retryable: false },
+  ];
+  const digest = digestRun({ ...RECORD, outcome: "failed", failures });
+  assert.equal(digest.stoppedBecause, "You've hit your session limit");
+  assert.deepEqual(digest.failedCalls, ["build_instances: CFrame expected, got table. (×2)"]);
+  assert.equal(isRunDigest(digest), true);
+
+  // A completed run recovered from what failed, so neither is carried.
+  const completed = digestRun({ ...RECORD, failures });
+  assert.equal(completed.stoppedBecause, undefined);
+  assert.equal(completed.failedCalls, undefined);
+  // A cancelled run is the user's own doing, unless the host could not save.
+  assert.equal(digestRun({ ...RECORD, outcome: "cancelled", failures }).stoppedBecause, undefined);
+  assert.equal(digestRun({
+    ...RECORD, outcome: "cancelled", failures: [{ code: "persistence-failed", message: "Disk full", retryable: false }],
+  }).stoppedBecause, "Disk full");
+  // A failure is reason enough to carry the record at all.
+  assert.equal(digestIsEmpty(digestRun({
+    ...RECORD, outcome: "failed", changes: [], tasks: undefined, verification: undefined, decisions: undefined,
+    failures: [failures[2]],
+  })), false);
+});
+
+test("the user's notes are carried, newest first to survive the bound", () => {
+  const long = (label: string) => `${label} ${"x".repeat(3_000)}`;
+  const notes = ["Don't touch the snow system.", long("a"), long("b"), long("c")];
+  const digest = digestRun({ ...RECORD, notes });
+  assert.deepEqual(digest.notes, ["(+2 earlier notes)", long("b"), long("c")]);
+  assert.ok(digest.notes!.slice(1).join("").length <= MAX_DIGEST_NOTE_CHARS);
+  assert.equal(isRunDigest(digest), true);
+  assert.deepEqual(digestRun({ ...RECORD, notes: ["Keep the snow."] }).notes, ["Keep the snow."]);
+});
+
+test("an over-long line is clipped rather than refusing the whole chat", () => {
+  const deep = `game.Workspace.${"Folder.".repeat(80)}Script`;
+  const digest = digestRun({
+    ...RECORD, changes: [{ id: "c1", kind: "script-source", target: deep, summary: "wrote" }],
+  });
+  assert.equal(digest.changes[0].length, MAX_DIGEST_LINE_CHARS);
+  assert.ok(digest.changes[0].endsWith("…"));
   assert.equal(isRunDigest(digest), true);
 });
 

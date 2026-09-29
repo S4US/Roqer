@@ -109,6 +109,8 @@ export type RunView = {
   pendingQuestion: RunQuestion | null;
   /** Every question answered, with the answer, so the record can keep them. */
   decisions: RunDecision[];
+  /** Every note the user added, so the record can keep them. */
+  notes: string[];
   changes: RunChange[];
   evidence: RunEvidence[];
   failures: RunFailure[];
@@ -145,6 +147,7 @@ export function createRunView(runId: string, prompt: string, approvalMode: Appro
     tasks: [],
     pendingQuestion: null,
     decisions: [],
+    notes: [],
     changes: [],
     evidence: [],
     failures: [],
@@ -271,6 +274,7 @@ export function applyRunEvent(view: RunView, event: RunEvent): RunView {
     case "steer":
       return {
         ...base,
+        notes: [...base.notes, event.text],
         timeline: [...base.timeline, { type: "note", key: `note-${event.seq}`, label: "You added a note", detail: event.text }],
       };
     case "question-asked":
@@ -417,6 +421,11 @@ export function recordSteps(record: RunRecord): ActivityStep[] {
       target: call.target ?? null,
       resultSummary: call.summary,
     })),
+    // What the person said stays under the run once it has ended, as it sat
+    // in the live timeline; the record keeps no interleaving to place it by.
+    ...(record.notes ?? []).map((text, index): ActivityStep => ({
+      key: `note-${index}`, kind: "note", state: "done", label: "You added a note", note: text,
+    })),
     ...record.evidence.map((evidence, index) => evidenceStep(`evidence-${index}`, evidence)),
   ];
 }
@@ -517,6 +526,7 @@ export function toRunRecord(view: RunView): RunRecord | null {
     ...(view.tasks.length > 0 ? { tasks: view.tasks } : {}),
     ...(view.verification ? { verification: view.verification } : {}),
     ...(view.decisions.length > 0 ? { decisions: view.decisions } : {}),
+    ...(view.notes.length > 0 ? { notes: view.notes } : {}),
   };
 }
 
