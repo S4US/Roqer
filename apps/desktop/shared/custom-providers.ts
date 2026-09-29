@@ -12,7 +12,12 @@
 
 import type { ReasoningEffort } from "./provider";
 
-export const CUSTOM_API_FORMATS = ["openai", "anthropic"] as const;
+/**
+ * `openai` is chat completions, which nearly every server imitates;
+ * `openai-responses` is OpenAI's Responses API, which some OpenAI models need
+ * and which carries a reasoning model's thinking between turns.
+ */
+export const CUSTOM_API_FORMATS = ["openai", "openai-responses", "anthropic"] as const;
 export type CustomApiFormat = typeof CUSTOM_API_FORMATS[number];
 
 export const MAX_CUSTOM_CONNECTIONS = 16;

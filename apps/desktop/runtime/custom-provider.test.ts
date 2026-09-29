@@ -110,6 +110,26 @@ test("a connection test sends the lowest effort the model takes, and none to a m
   assert.equal("reasoning_effort" in sent[1], false);
 });
 
+test("a Responses connection is tested against its responses endpoint", async () => {
+  const urls: string[] = [];
+  const recording = (async (url: unknown) => {
+    urls.push(String(url));
+    return streaming([
+      JSON.stringify({ type: "response.output_item.added", output_index: 0, item: { type: "function_call", call_id: "c1", name: "report_ready", arguments: "" } }),
+      JSON.stringify({ type: "response.output_item.done", output_index: 0, item: { type: "function_call", call_id: "c1", name: "report_ready", arguments: "{\"ok\":true}" } }),
+      JSON.stringify({ type: "response.completed", response: { status: "completed" } }),
+    ])("");
+  }) as typeof globalThis.fetch;
+  const result = await testCustomModel({
+    connection: { ...CONNECTION, name: "OpenAI", format: "openai-responses", baseUrl: "https://api.openai.com/v1" },
+    model: CONNECTION.models[1],
+    apiKey: null,
+    fetch: recording,
+  });
+  assert.equal(result.ok, true);
+  assert.deepEqual(urls, ["https://api.openai.com/v1/responses"]);
+});
+
 test("the endpoint's model list is read in either format, sorted and deduplicated", async () => {
   let headers: Record<string, string> = {};
   const listing = (body: unknown, status = 200) => (async (_url: unknown, init?: RequestInit) => {

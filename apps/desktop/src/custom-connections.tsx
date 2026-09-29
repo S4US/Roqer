@@ -33,6 +33,7 @@ import { SettingsGroup } from "./settings-parts";
 
 const FORMAT_LABELS: Record<CustomApiFormat, string> = {
   openai: "OpenAI-compatible",
+  "openai-responses": "OpenAI Responses",
   anthropic: "Anthropic",
 };
 
@@ -40,7 +41,8 @@ type Preset = Readonly<{ name: string; format: CustomApiFormat; baseUrl: string;
 
 /** Where most people's models already live. Choosing one only fills the fields. */
 const PRESETS: readonly Preset[] = [
-  { name: "OpenAI", format: "openai", baseUrl: "https://api.openai.com/v1" },
+  // Responses, where OpenAI's reasoning models keep their thinking between tool calls.
+  { name: "OpenAI", format: "openai-responses", baseUrl: "https://api.openai.com/v1" },
   { name: "Anthropic", format: "anthropic", baseUrl: "https://api.anthropic.com/v1" },
   { name: "OpenRouter", format: "openai", baseUrl: "https://openrouter.ai/api/v1" },
   { name: "DeepSeek", format: "openai", baseUrl: "https://api.deepseek.com/v1" },

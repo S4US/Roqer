@@ -18,7 +18,8 @@ drive it:
 
 - `claude` (the default) runs Claude Code on your own Claude subscription. It
   needs a signed-in Claude Code CLI.
-- `endpoint` runs a model on an OpenAI-compatible or Anthropic endpoint through
+- `endpoint` runs a model on an OpenAI-compatible (`--format openai`), OpenAI
+  Responses (`--format openai-responses`) or Anthropic endpoint through
   Roqer's own agent loop, exactly as the app's Custom provider does. It needs
   `--base-url` and `--model`, and reads the endpoint's key, if it needs one,
   from `ROQER_EVAL_API_KEY` so the key stays out of shell history and is never

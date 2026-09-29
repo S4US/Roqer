@@ -7,6 +7,7 @@ import { ContextOverflowError, TransientTurnError, UnusableToolCallError } from 
 import { AnthropicMessagesTurns, usesThinkingBudget } from "./anthropic-messages";
 import { retryAfterMs } from "./http";
 import { OpenAiChatTurns } from "./openai-chat";
+import { OpenAiResponsesTurns } from "./openai-responses";
 
 type Sent = { url: string; headers: Record<string, string>; body: Record<string, unknown> };
 
@@ -971,4 +972,179 @@ test("each way a tool call can be unusable is named as itself, and none ends the
     ],
   });
   assert.match(many!.reason, /more than 64 tool calls in one turn/);
+});
+
+/** Frames of one Responses stream: the events as OpenAI sends them, each carrying its own `type`. */
+const responsesCall = (index: number, callId: string, args: string) => [
+  json({ type: "response.output_item.added", output_index: index, item: { type: "function_call", call_id: callId, name: "roblox_studio", arguments: "" } }),
+  json({ type: "response.function_call_arguments.delta", output_index: index, delta: args }),
+  json({ type: "response.output_item.done", output_index: index, item: { type: "function_call", call_id: callId, name: "roblox_studio", arguments: args } }),
+];
+const RESPONSE_DONE = json({ type: "response.completed", response: { status: "completed", usage: { input_tokens: 120, output_tokens: 30, input_tokens_details: { cached_tokens: 100 } } } });
+const RESPONSES_FINISHED = { frames: [json({ type: "response.output_text.delta", output_index: 0, delta: "Done." }), RESPONSE_DONE] };
+
+type ResponsesInput = Array<Record<string, unknown>>;
+const responsesInput = (sent: Sent) => sent.body.input as ResponsesInput;
+
+test("a Responses turn streams prose and a tool call, with the whole conversation and nothing stored", async () => {
+  const { fetch, sent } = endpoint([{
+    frames: [
+      json({ type: "response.created", response: { status: "in_progress" } }),
+      json({ type: "response.output_item.added", output_index: 0, item: { type: "message", role: "assistant", content: [] } }),
+      json({ type: "response.output_text.delta", output_index: 0, content_index: 0, delta: "Looking" }),
+      ...responsesCall(1, "call_1", "{\"operation\":\"get_place_info\"}"),
+      RESPONSE_DONE,
+    ],
+  }]);
+  const turns = new OpenAiResponsesTurns({ baseUrl: "https://api.openai.com/v1", apiKey: "sk-test-1234567890", label: "OpenAI", reasoning: false, maxOutputTokens: 4_000, fetch });
+
+  assert.deepEqual(await collect(turns.streamTurn(REQUEST, new AbortController().signal)), [
+    { kind: "delta", text: "Looking" },
+    { kind: "tool-input", characters: 30 },
+    { kind: "tool-call", call: { id: "call_1", name: "roblox_studio", arguments: { operation: "get_place_info" } } },
+    { kind: "completed", stopReason: "tool-use", usage: { inputTokens: 120, outputTokens: 30, cachedInputTokens: 100 } },
+  ]);
+  assert.equal(sent[0].url, "https://api.openai.com/v1/responses");
+  assert.equal(sent[0].headers.authorization, "Bearer sk-test-1234567890");
+  assert.equal(sent[0].body.instructions, "SYSTEM\n\nDEVELOPER");
+  assert.equal(sent[0].body.store, false);
+  assert.equal(sent[0].body.max_output_tokens, 4_000);
+  assert.deepEqual(sent[0].body.tools, [{ type: "function", name: "roblox_studio", description: "Studio", parameters: { type: "object" }, strict: false }]);
+  assert.deepEqual(responsesInput(sent[0]), [{ type: "message", role: "user", content: [{ type: "input_text", text: "Build a shop" }] }]);
+  assert.equal("reasoning" in sent[0].body, false, "no effort for a model that takes none");
+  assert.equal("include" in sent[0].body, false, "no encrypted reasoning asked of a model without reasoning");
+});
+
+test("a Responses tool result answers its call, and a screenshot follows it as the user's picture", async () => {
+  const { fetch, sent } = endpoint([RESPONSES_FINISHED]);
+  const turns = new OpenAiResponsesTurns({ baseUrl: "https://api.openai.com/v1", apiKey: null, label: "OpenAI", reasoning: false, fetch });
+  await collect(turns.streamTurn({
+    ...REQUEST,
+    messages: [
+      ...PLACE_INFO_TURN.slice(0, 2),
+      { role: "user", content: [
+        { kind: "tool-result", callId: "call_1", content: "Place1", failed: false },
+        { kind: "image", mediaType: "image/png", data: "AAAA" },
+      ] },
+    ],
+  }, new AbortController().signal));
+
+  assert.deepEqual(responsesInput(sent[0]).slice(1), [
+    { type: "function_call", call_id: "call_1", name: "roblox_studio", arguments: "{\"operation\":\"get_place_info\"}" },
+    { type: "function_call_output", call_id: "call_1", output: "Place1" },
+    { type: "message", role: "user", content: [{ type: "input_image", image_url: "data:image/png;base64,AAAA" }] },
+  ]);
+});
+
+test("a Responses model's encrypted reasoning goes back with the turn that produced it, and is never shown", async () => {
+  const { fetch, sent } = endpoint([
+    {
+      frames: [
+        json({ type: "response.output_item.added", output_index: 0, item: { type: "reasoning", id: "rs_1", summary: [] } }),
+        json({ type: "response.reasoning_summary_text.delta", output_index: 0, summary_index: 0, delta: "Find the place" }),
+        json({ type: "response.output_item.done", output_index: 0, item: { type: "reasoning", id: "rs_1", summary: [{ type: "summary_text", text: "Find the place" }], encrypted_content: "opaque-1" } }),
+        ...responsesCall(1, "call_1", "{\"operation\":\"get_place_info\"}"),
+        RESPONSE_DONE,
+      ],
+    },
+    RESPONSES_FINISHED,
+  ]);
+  const turns = new OpenAiResponsesTurns({ baseUrl: "https://api.openai.com/v1", apiKey: null, label: "OpenAI", reasoning: true, fetch });
+  const first = await collect(turns.streamTurn(REQUEST, new AbortController().signal));
+  await collect(turns.streamTurn({ ...REQUEST, messages: PLACE_INFO_TURN }, new AbortController().signal));
+
+  assert.deepEqual(first.slice(0, 2), [{ kind: "reasoning" }, { kind: "reasoning", characters: 14 }]);
+  assert.equal(first.some((event) => event.kind === "delta"), false, "reasoning is progress, not the reply");
+  assert.deepEqual(sent[0].body.reasoning, { effort: "high", summary: "auto" });
+  assert.deepEqual(sent[0].body.include, ["reasoning.encrypted_content"]);
+  assert.deepEqual(responsesInput(sent[1]).slice(1), [
+    { type: "reasoning", summary: [{ type: "summary_text", text: "Find the place" }], encrypted_content: "opaque-1" },
+    { type: "function_call", call_id: "call_1", name: "roblox_studio", arguments: "{\"operation\":\"get_place_info\"}" },
+    { type: "function_call_output", call_id: "call_1", output: "Place1" },
+  ]);
+});
+
+test("a Responses endpoint that refuses summaries or old reasoning gets the turn again without them, for the rest of the run", async () => {
+  const reasoned = {
+    frames: [
+      json({ type: "response.output_item.done", output_index: 0, item: { type: "reasoning", summary: [], encrypted_content: "opaque-1" } }),
+      ...responsesCall(1, "call_1", "{\"operation\":\"get_place_info\"}"),
+      RESPONSE_DONE,
+    ],
+  };
+  const { fetch, sent } = endpoint([
+    { status: 400, body: json({ error: { message: "Your organization must be verified to generate reasoning summaries.", param: "reasoning.summary" } }) },
+    reasoned,
+    { status: 400, body: json({ error: { message: "The encrypted content for item rs_1 could not be verified." } }) },
+    RESPONSES_FINISHED,
+    RESPONSES_FINISHED,
+  ]);
+  const turns = new OpenAiResponsesTurns({ baseUrl: "https://api.openai.com/v1", apiKey: null, label: "OpenAI", reasoning: true, fetch });
+  await collect(turns.streamTurn(REQUEST, new AbortController().signal));
+  assert.deepEqual((await collect(turns.streamTurn({ ...REQUEST, messages: PLACE_INFO_TURN }, new AbortController().signal))).at(-1),
+    { kind: "completed", stopReason: "end", usage: { inputTokens: 120, outputTokens: 30, cachedInputTokens: 100 } });
+  await collect(turns.streamTurn({ ...REQUEST, messages: PLACE_INFO_TURN }, new AbortController().signal));
+
+  assert.equal(sent.length, 5);
+  assert.deepEqual(sent[1].body.reasoning, { effort: "high" }, "no summary once refused");
+  assert.equal(responsesInput(sent[2])[1].type, "reasoning");
+  assert.equal(responsesInput(sent[3])[1].type, "function_call", "the call goes back without the reasoning it could not read");
+  assert.equal(responsesInput(sent[4])[1].type, "function_call", "not offered again, so no second refusal");
+  assert.deepEqual(sent[4].body.include, ["reasoning.encrypted_content"], "new reasoning is still asked for");
+});
+
+test("a Responses refusal of the effort itself is reported, not answered by sending less", async () => {
+  const { fetch, sent } = endpoint([
+    { status: 400, body: json({ error: { message: "Unsupported value: 'reasoning.effort' does not support 'xhigh' with this model." } }) },
+  ]);
+  const turns = new OpenAiResponsesTurns({ baseUrl: "https://api.openai.com/v1", apiKey: null, label: "OpenAI", reasoning: true, fetch });
+  await assert.rejects(() => collect(turns.streamTurn(REQUEST, new AbortController().signal)), /OpenAI returned status 400: Unsupported value/);
+  assert.equal(sent.length, 1);
+});
+
+test("a Responses turn that ran out of room, was filtered, failed, or was cut off is said as that", async () => {
+  const outcome = async (frames: readonly string[]) => {
+    const turns = new OpenAiResponsesTurns({ baseUrl: "https://api.openai.com/v1", apiKey: null, label: "OpenAI", reasoning: false, fetch: endpoint([{ frames }]).fetch });
+    try {
+      return (await collect(turns.streamTurn(REQUEST, new AbortController().signal))).at(-1);
+    } catch (error) {
+      return error;
+    }
+  };
+  const incomplete = (reason: string) => json({ type: "response.incomplete", response: { status: "incomplete", incomplete_details: { reason } } });
+
+  assert.deepEqual(await outcome([json({ type: "response.output_text.delta", output_index: 0, delta: "Half" }), incomplete("max_output_tokens")]),
+    { kind: "completed", stopReason: "max-output" });
+  assert.deepEqual(await outcome([incomplete("content_filter")]), { kind: "completed", stopReason: "refusal" });
+  assert.deepEqual(await outcome([json({ type: "response.refusal.delta", output_index: 0, delta: "I can't help with that." }), RESPONSE_DONE]),
+    { kind: "completed", stopReason: "refusal", usage: { inputTokens: 120, outputTokens: 30, cachedInputTokens: 100 } });
+
+  const cutCall = await outcome([
+    json({ type: "response.output_item.added", output_index: 0, item: { type: "function_call", call_id: "call_1", name: "blender", arguments: "" } }),
+    json({ type: "response.function_call_arguments.delta", output_index: 0, delta: "{\"script\": \"import bpy" }),
+    incomplete("max_output_tokens"),
+  ]);
+  assert.ok(cutCall instanceof UnusableToolCallError);
+  assert.match(cutCall.message, /reached its output limit/);
+
+  const busy = await outcome([json({ type: "response.failed", response: { status: "failed", error: { code: "server_error", message: "The server had an error." } } })]);
+  assert.ok(busy instanceof TransientTurnError);
+  assert.match(busy.message, /OpenAI reported an error during the turn: The server had an error\./);
+  const refused = await outcome([json({ type: "error", code: "invalid_prompt", message: "Invalid prompt." })]);
+  assert.ok(refused instanceof Error && !(refused instanceof TransientTurnError));
+  assert.ok(await outcome([json({ type: "response.output_text.delta", output_index: 0, delta: "Half" })]) instanceof TransientTurnError);
+});
+
+test("a Responses server that sends each item whole, without deltas, still gives the loop its text", async () => {
+  const { fetch } = endpoint([{
+    frames: [
+      json({ type: "response.output_item.done", output_index: 0, item: { type: "message", role: "assistant", content: [{ type: "output_text", text: "All done." }] } }),
+      json({ type: "response.completed", response: { status: "completed" } }),
+    ],
+  }]);
+  const turns = new OpenAiResponsesTurns({ baseUrl: "http://localhost:8000/v1", apiKey: null, label: "vLLM", reasoning: false, fetch });
+  assert.deepEqual(await collect(turns.streamTurn(REQUEST, new AbortController().signal)), [
+    { kind: "delta", text: "All done." },
+    { kind: "completed", stopReason: "end" },
+  ]);
 });

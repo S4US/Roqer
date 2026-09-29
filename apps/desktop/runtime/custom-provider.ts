@@ -18,6 +18,7 @@ import type { TurnTransport } from "./agent-loop";
 import { AnthropicMessagesTurns, ANTHROPIC_VERSION } from "./model-api/anthropic-messages";
 import { endpointUrl, fetchWithin, isRecord, refusalMessage } from "./model-api/http";
 import { OpenAiChatTurns } from "./model-api/openai-chat";
+import { OpenAiResponsesTurns } from "./model-api/openai-responses";
 
 /**
  * The "Custom" provider: models on endpoints the user configured, driven by
@@ -94,7 +95,14 @@ export function createCustomTransport(options: CustomTransportOptions): TurnTran
     ...(options.fetch === undefined ? {} : { fetch: options.fetch }),
     ...(options.requestTimeoutMs === undefined ? {} : { requestTimeoutMs: options.requestTimeoutMs }),
   };
-  return options.connection.format === "anthropic" ? new AnthropicMessagesTurns(shared) : new OpenAiChatTurns(shared);
+  switch (options.connection.format) {
+    case "anthropic":
+      return new AnthropicMessagesTurns(shared);
+    case "openai-responses":
+      return new OpenAiResponsesTurns(shared);
+    case "openai":
+      return new OpenAiChatTurns(shared);
+  }
 }
 
 /**

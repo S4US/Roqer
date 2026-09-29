@@ -113,6 +113,16 @@ DeepSeek's `reasoning_content`, OpenRouter's `reasoning_details`, and Gemini's
 thought signatures, which those endpoints require for a model to keep calling
 tools. A server that rejects one of those fields stops receiving it.
 
+An endpoint can also be set to OpenAI's Responses API, which the OpenAI preset
+uses and which some OpenAI models require. Nothing is stored on the endpoint:
+every request carries the whole conversation with `store: false`. With
+reasoning on, Roqer asks for the model's reasoning in encrypted form and sends
+it back with the turn that produced it, so the model keeps its thinking across
+tool calls. It also asks for reasoning summaries, which only show that the model
+is still working and never reach the reply. If the endpoint refuses summaries,
+encrypted reasoning, or reasoning sent back, Roqer stops sending that part for
+the rest of the run.
+
 Roqer starts its bundled bridge and installs the matching Studio plugin on
 every launch. To run your own bridge instead, start it before Roqer; Roqer
 adopts it rather than replacing it:

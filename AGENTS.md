@@ -73,8 +73,8 @@ there is a real edition-specific reason to separate it.
 - `apps/desktop/runtime/` owns main-process logic that should remain testable
   without importing Electron: MCP access, run execution, planning, and result
   compaction. `agent-loop.ts` is Roqer's own model loop, used by the Custom
-  provider; `model-api/` holds its turn contract and the OpenAI-compatible and
-  Anthropic transports.
+  provider; `model-api/` holds its turn contract and the OpenAI-compatible,
+  OpenAI Responses and Anthropic transports.
 - `apps/desktop/shared/` contains contracts shared by the main process and
   renderer: run events, policy, tool risk, and Studio status.
 - `apps/desktop/src/` owns the React UI and renderer-side state.
