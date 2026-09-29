@@ -7,9 +7,10 @@ import { compilePoseAnimation, type KeyframeSequenceDescription } from '../anima
 import { checkMotion } from '../animation/motion-checks.js';
 import { buildTracks, pointToWorld, poseRig } from '../animation/motion.js';
 import { sheetTimes } from '../animation/contact-sheet.js';
+import { rigFor } from '../animation/rigs.js';
 
 const REFERENCE = 'apps/desktop/agent/skills/roblox-animation-vfx/references/character-animation.md';
-const GAITS = new Set(['Walk', 'Run']);
+const GAITS = new Set(['Walk', 'Run', 'WalkR6']);
 
 function repositoryRoot(): string {
   const cwd = process.cwd();
@@ -34,22 +35,26 @@ function compiled(recipe: unknown): KeyframeSequenceDescription {
 
 /** Where a part's centre is at a time, in the HumanoidRootPart's frame. */
 function at(sequence: KeyframeSequenceDescription, time: number, part: string): number[] {
-  return [...poseRig(buildTracks(sequence), time).parts.get(part)!.p];
+  return [...poseRig(buildTracks(sequence), time, rigFor(sequence.rig)).parts.get(part)!.p];
 }
 
 describe('animation recipes', () => {
   const all = recipes();
 
   it('are all in the reference', () => {
-    expect([...all.keys()].sort()).toEqual(['Idle', 'Jump', 'Run', 'Slash', 'Walk', 'Wave']);
+    expect([...all.keys()].sort()).toEqual(['Idle', 'Jump', 'Run', 'Slash', 'Walk', 'WalkR6', 'Wave', 'WaveR6']);
   });
 
   it.each([...all.keys()])('%s compiles and passes every check that applies', (name) => {
-    const report = checkMotion(compiled(all.get(name)), { locomotion: GAITS.has(name) });
+    const sequence = compiled(all.get(name));
+    const rig = rigFor(sequence.rig);
+    const report = checkMotion(sequence, { locomotion: GAITS.has(name) }, rig);
     const failing = report.checks.filter((check) => check.status === 'fail').map((check) => `${check.id}: ${check.detail}`);
     expect(failing).toEqual([]);
     if (GAITS.has(name)) {
-      expect(report.checks.filter((check) => check.status === 'skipped')).toEqual([]);
+      // Only what the rig cannot be checked on yet is skipped.
+      expect(report.checks.filter((check) => check.status === 'skipped').map((check) => check.id))
+        .toEqual(Object.keys(rig.uncheckedChecks ?? {}));
     }
   });
 
@@ -66,6 +71,24 @@ describe('animation recipes', () => {
     expect(Math.abs(tip(hit.time)[1] - chest[1])).toBeLessThan(1.5);
     // It ends back at the guard it started from.
     tip(slash.duration).forEach((value, axis) => expect(value).toBeCloseTo(tip(0)[axis], 5));
+  });
+
+  it('R6 waves the whole right arm raised out to the side', () => {
+    const wave = compiled(all.get('WaveR6'));
+    for (const time of sheetTimes(wave)) {
+      const arm = poseRig(buildTracks(wave), time, rigFor('R6')).parts.get('Right Arm')!;
+      const hand = pointToWorld(arm, [0, -1, 0]);
+      // The hand is above the shoulder and out past the head's side (x 1).
+      expect(hand[1]).toBeGreaterThan(1.5);
+      expect(hand[0]).toBeGreaterThan(1.3);
+    }
+  });
+
+  it('R6 walks with the legs in opposite phase and each arm against its own leg', () => {
+    const walk = compiled(all.get('WalkR6'));
+    const z = (part: string) => at(walk, 0, part)[2];
+    expect(Math.sign(z('Left Leg'))).toBe(-Math.sign(z('Right Leg')));
+    expect(Math.sign(z('Left Arm'))).toBe(-Math.sign(z('Left Leg')));
   });
 
   it('waves the right hand above the head, out to the side', () => {

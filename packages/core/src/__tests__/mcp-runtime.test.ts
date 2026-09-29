@@ -122,8 +122,9 @@ describe('MCP v2 tool runtime', () => {
   // approval each. Its pose format lives in the tool guide, not here.
   // Publishing, wiring, and playtest verification then joined it as actions
   // (about 470 characters) rather than as three tools of their own.
-  // Keyframe markers then added about 60 characters to `animation`: without
-  // them a combat script's GetMarkerReachedSignal had nothing to fire on.
+  // Keyframe markers and the R6 rig then added about 60 characters to
+  // `animation`: without markers a combat script's GetMarkerReachedSignal had
+  // nothing to fire on, and without R6 an R6 place got no animation at all.
   test('keeps the catalog within the 3.0 token budget', () => {
     const catalog = TOOL_DEFINITIONS.map(publicToolDefinition);
     const names = new Set(catalog.map((tool) => tool.name));

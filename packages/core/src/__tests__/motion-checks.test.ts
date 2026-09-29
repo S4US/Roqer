@@ -8,6 +8,7 @@ import {
   type MotionSequence,
 } from '../animation/motion.js';
 import { checkMotion, type MotionCheckId, type MotionReport } from '../animation/motion-checks.js';
+import { R6_RIG } from '../animation/r6-rig.js';
 
 type Joints = Record<string, { rotation?: [number, number, number]; position?: [number, number, number] }>;
 
@@ -226,5 +227,26 @@ describe('checkMotion', () => {
 
     const limping = check(checkMotion(walk(25, -10), { locomotion: true }), 'gaitSymmetry');
     expect(limping).toMatchObject({ status: 'fail', measured: { amplitudeRatio: 0.4 } });
+  });
+});
+
+describe('R6 motion checks', () => {
+  test('check an R6 gait on its rigid legs, and report foot sliding as not checked', () => {
+    const result = compilePoseAnimation({
+      name: 'March', rig: 'R6', loop: true,
+      keyframes: [
+        { time: 0, joints: { LeftHip: { aim: [0, -1, 0.4] }, RightHip: { aim: [0, -1, -0.4] }, LeftShoulder: { aim: [0, -1, -0.4] }, RightShoulder: { aim: [0, -1, 0.4] } } },
+        { time: 0.5, joints: { LeftHip: { aim: [0, -1, -0.4] }, RightHip: { aim: [0, -1, 0.4] }, LeftShoulder: { aim: [0, -1, 0.4] }, RightShoulder: { aim: [0, -1, -0.4] } } },
+        { time: 1, joints: { LeftHip: { aim: [0, -1, 0.4] }, RightHip: { aim: [0, -1, -0.4] }, LeftShoulder: { aim: [0, -1, -0.4] }, RightShoulder: { aim: [0, -1, 0.4] } } },
+      ],
+    });
+    if (!result.ok) throw new Error(result.errors.join('\n'));
+    const report = checkMotion(result.sequence, { locomotion: true }, R6_RIG);
+    const byId = Object.fromEntries(report.checks.map((check) => [check.id, check]));
+    expect(byId.footSliding).toMatchObject({ status: 'skipped', detail: expect.stringMatching(/^not checked: R6 legs are single blocks/) });
+    expect(byId.groundContact.status).toBe('pass');
+    expect(byId.gaitSymmetry).toMatchObject({ status: 'pass' });
+    expect(byId.gaitSymmetry.measured.amplitudeLeft).toBeCloseTo(21.8, 0);
+    expect(report.passed).toBe(true);
   });
 });

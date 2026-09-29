@@ -8,7 +8,7 @@ and returns a contact sheet, without touching Studio.
 ## Format
 
 ```text
-{ name, rig: "R15", loop?, priority?, easing?, keyframes: [{ time, name?, easing?, joints: { <Joint>: pose } }] }
+{ name, rig: "R15" | "R6", loop?, priority?, easing?, keyframes: [{ time, name?, easing?, joints: { <Joint>: pose }, markers? }] }
 ```
 
 - Joints: `Root`, `Waist`, `Neck`, `LeftShoulder`, `LeftElbow`, `LeftWrist`,
@@ -238,6 +238,53 @@ with `CubicV2 Out`, and the last key returns to the guard.
 - To swing faster, shrink the gap between the wind-up and `Hit`. Below about
   0.08 s the velocity check fails; waive `velocity` when that snap is meant.
 - For a thrust, keep the arm aimed forward and move `Weapon` to `[-90, 0, 0]`.
+
+## R6
+
+Many places, combat games especially, give players R6 characters: six blocks
+with no elbows, wrists, knees, ankles or waist. An R15 animation does not play
+on them, so find which rig the players use before animating:
+
+- In a running playtest, read the character's `Humanoid.RigType` (for example
+  with `eval_client_runtime`). A `StarterCharacter` in `StarterPlayer` decides
+  it too. If a place lets players choose, make one animation for each rig.
+- `verify` refuses when the playtest character's rig is not the animation's.
+
+Set `rig: "R6"`. Its joints are `Root`, `Neck`, `LeftShoulder`,
+`RightShoulder`, `LeftHip`, `RightHip` and `Weapon`, and they take poses in the
+same terms as on R15: `aim` points an arm or leg the same way, and a
+`rotation` turns about the same body axes. There is no `bend`: an R6 arm or
+leg swings as one rigid block. The contact sheet draws the R6 blocks. Foot
+sliding is reported as not checked for R6: its limit was set on R15 feet.
+
+### Walk (R6, loop, `locomotion: true`)
+
+```json
+{ "name": "WalkR6", "rig": "R6", "loop": true, "easing": { "style": "CubicV2", "direction": "InOut" }, "keyframes": [
+  { "time": 0, "joints": { "LeftHip": { "aim": [0, -1, 0.4] }, "RightHip": { "aim": [0, -1, -0.4] }, "LeftShoulder": { "aim": [0, -1, -0.4] }, "RightShoulder": { "aim": [0, -1, 0.4] } } },
+  { "time": 0.4, "joints": { "LeftHip": { "aim": [0, -1, -0.4] }, "RightHip": { "aim": [0, -1, 0.4] }, "LeftShoulder": { "aim": [0, -1, 0.4] }, "RightShoulder": { "aim": [0, -1, -0.4] } } },
+  { "time": 0.8, "joints": { "LeftHip": { "aim": [0, -1, 0.4] }, "RightHip": { "aim": [0, -1, -0.4] }, "LeftShoulder": { "aim": [0, -1, -0.4] }, "RightShoulder": { "aim": [0, -1, 0.4] } } }
+] }
+```
+
+The legs swing as rigid pendulums, about 22° each way, with each arm against
+its own side's leg. To go faster, scale the times down; for a run, widen the
+swing and lean with `Root` `rotation`.
+
+### Wave (R6, loop)
+
+```json
+{ "name": "WaveR6", "rig": "R6", "loop": true, "easing": { "style": "CubicV2", "direction": "InOut" }, "keyframes": [
+  { "time": 0, "joints": { "RightShoulder": { "aim": [1, 0.5, 0.2] } } },
+  { "time": 0.35, "joints": { "RightShoulder": { "aim": [1, 1.4, 0.2] } } },
+  { "time": 0.7, "joints": { "RightShoulder": { "aim": [1, 0.5, 0.2] } } }
+] }
+```
+
+With no elbow, the whole arm waves, raised out to the side and rocking up and
+down. An R6 arm turns about the top of its inner edge, so one raised past the
+shoulder brushes the head's block: keep the hand out to the side, not over
+the head.
 
 ## Reading the result
 

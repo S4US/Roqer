@@ -186,6 +186,50 @@ const passed = await runTest('animation tool', async ({ track }) => {
     }, 120_000);
     assert(flicked.built === true && flicked.playback?.verified === true, `a weapon animation builds and plays as checked on the stand-in grip (${flicked.error ?? `within ${flicked.playback?.maxDegrees}°`})`);
 
+    // R6: the rig table is an R6 dummy's, and an R6 animation plays as checked on one.
+    const r6 = await luau(client, `
+      local rig = game:GetService("Players"):CreateHumanoidModelFromDescription(Instance.new("HumanoidDescription"), Enum.HumanoidRigType.R6)
+      local found = {}
+      for _, motor in rig:GetDescendants() do
+        if motor:IsA("Motor6D") and motor.Part1 then
+          found[motor.Part1.Name] = { c0 = { motor.C0:GetComponents() }, c1 = { motor.C1:GetComponents() } }
+        end
+      end
+      local grip = rig["Right Arm"]:FindFirstChild("RightGripAttachment")
+      found.grip = grip and { grip.CFrame:GetComponents() } or false
+      rig:Destroy()
+      return found
+    `);
+    const TORSO_FRAME = [-1, 0, 0, 0, 0, 1, 0, 1, 0];
+    const RIGHT_FRAME = [0, 0, 1, 0, 1, 0, -1, 0, 0];
+    const LEFT_FRAME = [0, 0, -1, 0, 1, 0, 1, 0, 0];
+    const expectedR6 = {
+      Torso: [[0, 0, 0, ...TORSO_FRAME], [0, 0, 0, ...TORSO_FRAME]],
+      Head: [[0, 1, 0, ...TORSO_FRAME], [0, -0.5, 0, ...TORSO_FRAME]],
+      'Left Arm': [[-1, 0.5, 0, ...LEFT_FRAME], [0.5, 0.5, 0, ...LEFT_FRAME]],
+      'Right Arm': [[1, 0.5, 0, ...RIGHT_FRAME], [-0.5, 0.5, 0, ...RIGHT_FRAME]],
+      'Left Leg': [[-1, -1, 0, ...LEFT_FRAME], [-0.5, 1, 0, ...LEFT_FRAME]],
+      'Right Leg': [[1, -1, 0, ...RIGHT_FRAME], [0.5, 1, 0, ...RIGHT_FRAME]],
+    };
+    const close = (a, b) => Array.isArray(a) && a.length === b.length && a.every((value, index) => Math.abs(value - b[index]) < 0.02);
+    const r6Matches = Object.entries(expectedR6).every(([part, [c0, c1]]) => close(r6[part]?.c0, c0) && close(r6[part]?.c1, c1));
+    assert(r6Matches, `the R6 rig table matches an R6 dummy's Motor6Ds (${JSON.stringify(r6)})`);
+    assert(close(r6.grip, [0, -1, 0, 1, 0, 0, 0, 0, 1, 0, -1, 0]), `the R6 grip matches the Right Arm's RightGripAttachment (${JSON.stringify(r6.grip)})`);
+    const marched = await client.callTool('animation', {
+      action: 'build',
+      animation: {
+        name: 'MarchR6', rig: 'R6', loop: true,
+        keyframes: [
+          { time: 0, joints: { LeftHip: { aim: [0, -1, 0.4] }, RightHip: { aim: [0, -1, -0.4] }, Neck: { rotation: [10, 0, 0] } } },
+          { time: 0.4, joints: { LeftHip: { aim: [0, -1, -0.4] }, RightHip: { aim: [0, -1, 0.4] }, Neck: { rotation: [-10, 0, 0] } } },
+          { time: 0.8, joints: { LeftHip: { aim: [0, -1, 0.4] }, RightHip: { aim: [0, -1, -0.4] }, Neck: { rotation: [10, 0, 0] } } },
+        ],
+      },
+      parent: PARENT,
+      locomotion: true,
+    }, 120_000);
+    assert(marched.built === true && marched.playback?.verified === true, `an R6 animation builds and plays as checked on an R6 dummy (${marched.error ?? `within ${marched.playback?.maxDegrees}°`})`);
+
     // Markers become KeyframeMarkers a script's GetMarkerReachedSignal fires on.
     const marked = await client.callTool('animation', {
       action: 'build',

@@ -50,6 +50,11 @@ export interface Rig {
    * the weapon's blade runs out of the fist rather than through it.
    */
   drawOffsets?: Readonly<Record<string, Vec3>>;
+  /**
+   * Motion checks that cannot judge this rig yet, by check id, with why. They
+   * are reported as skipped, never as passed.
+   */
+  uncheckedChecks?: Readonly<Record<string, string>>;
   /** Part sizes in studs (x, y, z). */
   parts: Readonly<Record<string, Vec3>>;
   /** Joints ordered parent before child. */

@@ -44,14 +44,14 @@ export type ToolSchema = {
 };
 
 /** sha256 of `packages/core/src/tools/definitions.ts` with LF newlines. */
-export const TOOL_DEFINITIONS_DIGEST = "7458c3db0fa595764487c5f71175c5f1c8ae441e35003c0e6dbc1258cb30d4b3";
+export const TOOL_DEFINITIONS_DIGEST = "0dab94f67aaab8f2bc7e43f8c29ee220f60dcdf0a4ad42fe794946b01e9ebd66";
 
 export const TOOL_SCHEMAS: Readonly<Record<string, ToolSchema>> = {
   animation: {
-    description: "Use to check, build, publish, wire, or verify an R15 character animation.",
+    description: "Use to check, build, publish, wire, or verify an R15 or R6 character animation.",
     parameters: [
       { name: "action", type: "string", required: true, enumValues: ["check", "build", "publish", "wire", "verify"], description: "check needs no Studio; verify needs a running playtest and the checked animation." },
-      { name: "animation", type: "object", required: false, description: "Pose description for an R15 rig." },
+      { name: "animation", type: "object", required: false, description: "Pose description for an R15 or R6 rig." },
       { name: "locomotion", type: "boolean", required: false, description: "A gait: adds ground, foot, and symmetry checks." },
       { name: "parent", type: "string", required: false, description: "Build: instance the KeyframeSequence goes in." },
       { name: "expected_revision", type: "string", required: false, description: "Build: revision its last build returned; required to replace it." },

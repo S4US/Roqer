@@ -508,11 +508,10 @@ What was built:
 
 Proposed on 2026-09-28, after the goal above was met; not yet scheduled.
 
-Everything built so far assumes the stock R15 rig: the rig table, the aim and
-bend conventions, the checks, the preview meshes, and wiring to the default
-`Animate` script. The tool refuses any other rig, and a test holds it to that.
-So R6 does not exist yet, and neither does any rig Roqer did not get from
-Roblox.
+When this was proposed, everything assumed the stock R15 rig: the rig table,
+the aim and bend conventions, the checks, the preview meshes, and wiring to
+the default `Animate` script. Step 11 has since added R6 (see below); no rig
+Roqer did not get from Roblox exists yet.
 
 Each new rig must meet the goal's bar:
 
@@ -532,7 +531,28 @@ The steps are ordered so that each rests on the one before:
 As in step 2, every step starts with a live test of what Roblox actually does.
 Nothing is built on an unconfirmed assumption.
 
-### 11. R6 characters — proposed
+### 11. R6 characters — implemented 2026-09-29, live checks pending
+
+Built ahead of its live test, from the Motor6D C0 and C1 values every R6
+character has; the items below marked live are what
+`tests/animation-tool.mjs` now checks against Studio and has not yet run.
+
+- Done: `r6-rig.ts`; `rig: "R6"` in the compiler, with poses converted from
+  body space so `aim` and `rotation` mean the same on both rigs, and a
+  refusal naming the R15 joints R6 lacks; ground contact on the legs' bottom
+  corners; gait symmetry measured in body space; block previews; an R6
+  preview dummy in the plugin; verify refusing a character of the other rig;
+  tested R6 walk and wave recipes.
+- Not calibrated: foot sliding is reported as not checked on R6, never as
+  passed, until Roblox's own R6 walk and run are measured as step 6 did for
+  R15.
+- Live: the rig table against an R6 dummy's Motor6Ds; an R6 build playing as
+  checked on the R6 preview dummy; the R6 `RightGripAttachment`.
+- Not done: reading the place's avatar type (the agent reads the playtest
+  character's `RigType` or the `StarterCharacter`), a loader keeping one ID
+  per rig and slot for places that let players choose, and eval T16.
+
+The original proposal follows.
 
 **Why.** Many places, combat games especially, set their avatar type to R6. An
 R15 animation does not play on an R6 character. Today the agent's best answer

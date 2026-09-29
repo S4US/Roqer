@@ -13,7 +13,8 @@ const Workspace = game.GetService("Workspace");
  *
  * Core compiles and checks the pose description; the plugin only turns the
  * compiled keyframes into instances. `previewAnimation` plays them on a
- * temporary R15 dummy and reports the joints, without leaving anything behind.
+ * temporary R15 or R6 dummy, as the sequence's rig says, and reports the
+ * joints, without leaving anything behind.
  * `buildAnimation` writes the KeyframeSequence as one undo step, replacing a
  * sequence only when it was built here, is unchanged since, and matches the
  * revision the caller expects.
@@ -262,7 +263,8 @@ function previewAnimation(requestData: Data) {
 		folder.Name = PREVIEW_FOLDER;
 		folder.Archivable = false;
 		folder.Parent = Workspace;
-		const rig = Players.CreateHumanoidModelFromDescription(new Instance("HumanoidDescription"), Enum.HumanoidRigType.R15);
+		const rigType = (requestData.sequence as Data).rig === "R6" ? Enum.HumanoidRigType.R6 : Enum.HumanoidRigType.R15;
+		const rig = Players.CreateHumanoidModelFromDescription(new Instance("HumanoidDescription"), rigType);
 		rig.Archivable = false;
 		rig.PivotTo(new CFrame(0, 100000, 0));
 		const root = rig.FindFirstChild("HumanoidRootPart");
@@ -639,7 +641,7 @@ function animationVerify(requestData: Data) {
 	destroyQuietly(animation);
 	destroyQuietly(sequence);
 	if (!ok) return { error: `${tostring(result)}.` };
-	return { ...(result as object), ...(wiredIds ? { wiredIds, playingIds } : {}) };
+	return { ...(result as object), rigType: humanoid.RigType.Name, ...(wiredIds ? { wiredIds, playingIds } : {}) };
 }
 
 /** Roblox's classic head, which ships with Studio; the stock rig's own dynamic head cannot be read. */

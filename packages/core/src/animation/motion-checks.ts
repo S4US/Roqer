@@ -461,6 +461,11 @@ export function checkMotion(sequence: MotionSequence, options: MotionCheckOption
       checks.push(skipped(id, 'only for locomotion'));
     }
   }
+  const unchecked = rig.uncheckedChecks ?? {};
+  for (const [index, check] of checks.entries()) {
+    const why = unchecked[check.id];
+    if (why !== undefined && check.status !== 'skipped') checks[index] = skipped(check.id, `not checked: ${why}`);
+  }
   return {
     passed: checks.every((check) => check.status !== 'fail'),
     duration: sequenceDuration(sequence),

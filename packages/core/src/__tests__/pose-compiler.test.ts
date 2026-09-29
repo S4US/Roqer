@@ -6,6 +6,8 @@ import {
   type KeyframeSequenceDescription,
 } from '../animation/pose-compiler.js';
 import { R15_RIG } from '../animation/r15-rig.js';
+import { R6_RIG } from '../animation/r6-rig.js';
+import { buildTracks, poseRig } from '../animation/motion.js';
 
 function compiled(input: unknown): KeyframeSequenceDescription {
   const result = compilePoseAnimation(input);
@@ -67,6 +69,24 @@ describe('R15 rig', () => {
       reached.add(joint.childPart);
     }
     expect(reached.size).toBe(17);
+  });
+});
+
+describe('R6 rig', () => {
+  test('stands as the classic R6 character does, feet on its ground', () => {
+    const rest = poseRig(new Map(), 0, R6_RIG).parts;
+    const at = (part: string) => rest.get(part)!.p.map((value) => Math.round(value * 1e6) / 1e6 + 0);
+    expect(at('Torso')).toEqual([0, 0, 0]);
+    expect(at('Head')).toEqual([0, 1.5, 0]);
+    expect(at('Right Arm')).toEqual([1.5, 0, 0]);
+    expect(at('Left Arm')).toEqual([-1.5, 0, 0]);
+    expect(at('Right Leg')).toEqual([0.5, -2, 0]);
+    expect(at('Left Leg')).toEqual([-0.5, -2, 0]);
+    // Every part stands upright at rest, and the legs end on the ground.
+    for (const part of Object.keys(R6_RIG.parts).filter((name) => name !== 'BodyAttach')) {
+      rest.get(part)!.r.forEach((value, index) => expect(value).toBeCloseTo([1, 0, 0, 0, 1, 0, 0, 0, 1][index], 6));
+    }
+    expect(at('Left Leg')[1] - R6_RIG.parts['Left Leg'][1] / 2).toBe(R6_RIG.ground);
   });
 });
 
@@ -377,9 +397,35 @@ describe('compilePoseAnimation', () => {
     ]);
   });
 
+  test('poses R6 in the same body-space terms as R15, and says which R15 joints it lacks', () => {
+    const pose = (rig: string) => compiled({
+      name: 'Reach',
+      rig,
+      keyframes: [{ time: 0, joints: { RightShoulder: { aim: [0, 0, 1] }, LeftHip: { aim: [0, -1, 0.5] }, Neck: { rotation: [30, 0, 0] } } }],
+    });
+    const r6 = pose('R6');
+    expect(r6.rig).toBe('R6');
+    expect(outline(r6.keyframes[0].root)).toBe('HumanoidRootPart*(Torso*(Head Right Arm Left Leg))');
+    const r6Parts = poseRig(buildTracks(r6), 0, R6_RIG).parts;
+    const r15Parts = poseRig(buildTracks(pose('R15')), 0, R15_RIG).parts;
+    // The arm points forward (-Z) and the thigh swings forward on both rigs,
+    // and a +X neck turn tips the head back (+Z) on both.
+    const forward = (frame: { r: number[] }) => [frame.r[1], frame.r[4], frame.r[7]].map((value) => -value);
+    for (const [r6Part, r15Part] of [['Right Arm', 'RightUpperArm'], ['Left Leg', 'LeftUpperLeg'], ['Head', 'Head']]) {
+      const down = forward(r6Parts.get(r6Part)!);
+      const r15Down = forward(r15Parts.get(r15Part)!);
+      down.forEach((value, axis) => expect(value).toBeCloseTo(r15Down[axis], 6));
+    }
+
+    expect(errors({ name: 'Bad', rig: 'R6', keyframes: [{ time: 0, joints: { RightElbow: { bend: 30 }, Waist: {} } }] })).toEqual([
+      'keyframes[0].joints.RightElbow: R6 has no RightElbow: its arms and legs are single blocks, and it has no waist; its joints are Root, Neck, LeftShoulder, RightShoulder, LeftHip, RightHip, Weapon',
+      'keyframes[0].joints.Waist: R6 has no Waist: its arms and legs are single blocks, and it has no waist; its joints are Root, Neck, LeftShoulder, RightShoulder, LeftHip, RightHip, Weapon',
+    ]);
+  });
+
   test('refuses rigs it does not know, including inherited object keys', () => {
-    for (const rig of ['R6', 'toString', '__proto__', undefined]) {
-      expect(errors(swing({ rig }))).toEqual(['rig: must be one of R15']);
+    for (const rig of ['R16', 'r6', 'toString', '__proto__', undefined]) {
+      expect(errors(swing({ rig }))).toEqual(['rig: must be one of R15, R6']);
     }
   });
 

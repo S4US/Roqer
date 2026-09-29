@@ -19,7 +19,7 @@ import {
   type PoseEasingStyle,
 } from './easing.js';
 import { slerpRotation, transformFromParent } from './motion.js';
-import type { Rig, RigJoint } from './r15-rig.js';
+import { R15_RIG, type Rig, type RigJoint } from './r15-rig.js';
 import { RIGS } from './rigs.js';
 
 export { POSE_EASING_DIRECTIONS, POSE_EASING_STYLES, type PoseEasingDirection, type PoseEasingStyle };
@@ -410,7 +410,9 @@ function parseJoints(value: unknown, rig: Rig, path: string, issues: Issues, all
       const byPart = rig.joints.find((candidate) => candidate.childPart === name);
       issues.add(jointPath, byPart
         ? `"${name}" is a part; key the joint that moves it, "${byPart.name}"`
-        : `unknown joint; the rig's joints are ${rig.joints.map((candidate) => candidate.name).join(', ')}`);
+        : rig.name === 'R6' && R15_RIG.joints.some((candidate) => candidate.name === name)
+          ? `R6 has no ${name}: its arms and legs are single blocks, and it has no waist; its joints are ${rig.joints.map((candidate) => candidate.name).join(', ')}`
+          : `unknown joint; the rig's joints are ${rig.joints.map((candidate) => candidate.name).join(', ')}`);
       continue;
     }
     const pose = value[name];

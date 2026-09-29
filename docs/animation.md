@@ -1,6 +1,6 @@
 # Character animation
 
-Roqer can make an R15 character animation from a request in plain words. It
+Roqer can make an R15 or R6 character animation from a request in plain words. It
 checks the motion, shows it to you, builds it in your place, publishes it to
 Roblox, wires it to your players' characters, and checks in a playtest that it
 plays. For "Make a running animation and set it up in R15", a finished run
@@ -19,8 +19,11 @@ Roqer can use it too; see [the MCP server guide](mcp-server.md).
 
 ## What you need
 
-- **An R15 character.** Animations are made for the standard R15 body, which
-  is what Roblox gives players by default.
+- **An R15 or R6 character.** Animations are made for the standard R15 body,
+  which is what Roblox gives players by default, or for the classic six-block
+  R6 body that many combat games use. An animation plays only on the rig it
+  was made for, so the agent checks which one your players use, and a
+  playtest verification refuses a mismatch.
 - **To publish:**
   - a Roblox Open Cloud API key with the Assets API's Write access, set under
     **Settings → Roblox → Open Cloud** (see
@@ -66,10 +69,12 @@ tells you that publishing needs a key.
    | Gait symmetry | legs that do not alternate evenly |
 
    The last three run for walks, runs and other gaits. The limits are set so
-   that Roblox's own R15 animations pass every check. A failed check names the
+   that Roblox's own R15 animations pass every check. On R6, foot sliding is
+   reported as not checked: its limit has not been calibrated on R6's block
+   legs. A failed check names the
    joint, the time and the limit. The agent fixes it, or waives it when it is
    meant, such as a jump that leaves the ground.
-3. **You see the motion.** Roqer draws the stock R15 rig at five moments of the
+3. **You see the motion.** Roqer draws the stock rig at five moments of the
    animation in one picture, the contact sheet, which the agent can look at.
    - The top row shows the front three-quarter.
    - The bottom row looks straight at the front. For a gait, it looks from the
@@ -122,8 +127,9 @@ between versions ("Version 3 of 6"), and the newest is shown first.
 
 ## Limits
 
-- R15 only, and only the standard body's joints, plus one held weapon in the
-  right hand. Faces, fingers, clothing and skinned-mesh rigs are not
+- R15 and R6 only, and only the standard bodies' joints, plus one held weapon
+  in the right hand. R6 has no elbows or knees, and the foot-sliding check is
+  not applied to it. Faces, fingers, clothing and skinned-mesh rigs are not
   animated.
 - A weapon is animated through a `Motor6D` the game adds when the weapon is
   equipped, moving a part named `BodyAttach`, because Roblox's own grip weld

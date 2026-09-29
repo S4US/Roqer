@@ -1769,7 +1769,7 @@ export class RobloxStudioTools {
     }
 
     await this._fetchRigMeshes(instance_id);
-    const payload = { name: sequence.name, loop: sequence.loop, priority: sequence.priority, keyframes: sequence.keyframes };
+    const payload = { name: sequence.name, rig: sequence.rig, loop: sequence.loop, priority: sequence.priority, keyframes: sequence.keyframes };
     const preview = await this._callSingle(
       '/api/preview-animation',
       { sequence: payload, sampleTimes: previewSampleTimes(sequence) },
@@ -2002,8 +2002,8 @@ export class RobloxStudioTools {
     }
     if (slot !== undefined && !animationId) throw new Error('animation_id is required with slot: it is the ID the slot should hold');
 
-    const payload = { name: sequence.name, loop: sequence.loop, priority: sequence.priority, keyframes: sequence.keyframes };
-    let response: { error?: string; length?: number; samples?: unknown; wiredIds?: unknown; playingIds?: unknown };
+    const payload = { name: sequence.name, rig: sequence.rig, loop: sequence.loop, priority: sequence.priority, keyframes: sequence.keyframes };
+    let response: { error?: string; length?: number; samples?: unknown; wiredIds?: unknown; playingIds?: unknown; rigType?: unknown };
     try {
       response = await this._callSingle(
         '/api/animation-verify',
@@ -2018,6 +2018,14 @@ export class RobloxStudioTools {
       throw error;
     }
     if (response?.error) return this._textResult({ ...response, error: `${response.error} Nothing was verified.` });
+    // A plugin from before R6 reports no rig type; the joint comparison still fails on a mismatch.
+    if (typeof response.rigType === 'string' && response.rigType !== sequence.rig) {
+      return this._textResult({
+        error: `The playtest character is ${response.rigType}, but the animation is for ${sequence.rig}, so it cannot play on it. Nothing was verified. Make the animation for ${response.rigType}, or set the place's avatar type to ${sequence.rig}.`,
+        errorCode: 'rig_mismatch',
+        characterRig: response.rigType,
+      });
+    }
 
     const playback = verifyLivePlayback(sequence, response.samples);
     const wiring = slot === undefined ? undefined : (() => {
