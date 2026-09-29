@@ -71,6 +71,32 @@ Each pose takes one of these:
 Prefer `aim` and `bend` for arms and legs. Working out a combined Euler rotation
 by hand is where poses go wrong.
 
+## Reaching a point: aimAt
+
+`aimAt: [right, up, forward]` (shoulders and hips) puts the limb's end on a
+point, in studs from the HumanoidRootPart's centre, however the body is posed
+at that moment. Use it wherever a limb must meet something: a foot on the
+ground, a hand on a hilt or on the sheath.
+
+- On R15 the end is the wrist or the ankle, and the elbow or knee bends to
+  reach it: `aimAt` keys the elbow or knee, so leave them out of that
+  keyframe. On a leg it also keys the ankle, laying the foot flat, facing the
+  way the body does.
+- On R6, whose limbs cannot bend, the block points through the point: its end
+  lands on it only when the point is exactly a limb's length away, and passes
+  beyond it when nearer. Check R6 feet with `grounded: true`.
+- `bendToward` turns the elbow or knee, as with `aim`.
+- A point out of reach is refused, saying how far the limb reaches.
+- **Planting.** A limb aimed at the same point in one of its keys and the next
+  is planted there: the compiler solves it again every thirtieth of a second
+  between them, so a foot stays within a few hundredths of a stud of its point
+  while the body lunges, drops or turns over it, and keeps its heading. `animation.inBetweens` counts those keys.
+- To step, give the foot a different point, and lift it on a key between: a
+  foot moved along the ground drags through it.
+- Heights: the ground is 3.19 studs below the HumanoidRootPart's centre on
+  R15 and 3 on R6. An R15 ankle stands 0.26 above the ground, so a planted
+  R15 ankle is at `up` -2.93; an R6 leg's end is its sole, at -3.
+
 ## Recipes
 
 Every recipe below compiles and passes every motion check. A unit test holds
@@ -256,7 +282,30 @@ sheath.Parent = character
   character its sheath) first: without the motor, verify reports that the
   character has nothing for the prop joint to move.
 - For a draw from the sheath, key `Sheath` and `Weapon` together so the blade
-  leaves along the sheath's line.
+  leaves along the sheath's line, and put the right hand on the hilt at the
+  sheath's mouth with `aimAt`; the left hand can hold the sheath the same
+  way.
+
+### Lunge (one shot, with a weapon, `grounded: true`)
+
+```json
+{ "name": "Lunge", "rig": "R15", "priority": "Action", "keyframes": [
+  { "time": 0, "joints": { "Root": { "position": [0, 0, 0] }, "Waist": { "rotation": [0, 0, 0] }, "LeftHip": { "aimAt": [-0.5, -2.93, 0] }, "RightHip": { "aimAt": [0.5, -2.93, 0] }, "RightShoulder": { "aim": [0.2, -0.8, 0.6] }, "RightElbow": { "bend": 50 }, "Weapon": { "rotation": [0, 0, 0] } } },
+  { "time": 0.1, "joints": { "Root": { "position": [0, -0.2, 0.2], "rotation": [0, 12, 0] }, "LeftHip": { "aimAt": [-0.6, -2.6, 0.3] }, "RightHip": { "aimAt": [0.55, -2.6, -0.45] } } },
+  { "time": 0.2, "name": "Coil", "joints": { "Root": { "position": [0, -0.5, 0.4], "rotation": [0, 25, 0] }, "Waist": { "rotation": [0, 15, 0] }, "LeftHip": { "aimAt": [-0.7, -2.93, 0.6] }, "RightHip": { "aimAt": [0.6, -2.93, -0.9] }, "RightShoulder": { "aim": [0.6, -0.3, -0.5] }, "RightElbow": { "bend": 90 }, "Weapon": { "rotation": [-90, 0, 0] } } },
+  { "time": 0.32, "joints": { "Root": { "position": [0, -0.8, -0.6], "rotation": [-10, -10, 0] }, "Waist": { "rotation": [-10, -10, 0] }, "LeftHip": { "aimAt": [-0.7, -2.93, 0.6] }, "RightHip": { "aimAt": [0.6, -2.93, -0.9] }, "RightShoulder": { "aim": [0.1, 0.05, 1] }, "RightElbow": { "bend": 5 }, "Weapon": { "rotation": [-90, 0, 0] } }, "markers": [{ "name": "Hit" }] },
+  { "time": 0.75, "easing": { "style": "CubicV2", "direction": "InOut" }, "joints": { "Root": { "position": [0, -0.35, 0], "rotation": [0, 15, 0] }, "Waist": { "rotation": [0, 0, 0] }, "LeftHip": { "aimAt": [-0.7, -2.93, 0.6] }, "RightHip": { "aimAt": [0.6, -2.93, -0.9] }, "RightShoulder": { "aim": [0.3, -0.6, 0.8] }, "RightElbow": { "bend": 40 }, "Weapon": { "rotation": [-40, 0, 0] } } }
+] }
+```
+
+A thrust from a low stance. The feet step out to a wide stance, lifted on the
+way, and stay planted from `Coil` to the end while the body drops, twists and
+drives forward; `Hit` fires with the arm and blade straight out. The recovery
+rises to a guard over the same planted feet.
+
+- To lunge deeper, lower `Root` further at `Hit`; if a leg cannot reach its
+  point, the error says by how much.
+- Mirror it for the left side by swapping the feet's `right` signs.
 
 ### Slash (one shot, with a weapon)
 

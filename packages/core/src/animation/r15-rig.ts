@@ -51,6 +51,12 @@ export interface Rig {
   /** The part the body's shadow is drawn under. */
   body: string;
   /**
+   * The limbs `aimAt` reaches with, by the joint at their root (a shoulder or
+   * hip): the hinge that bends them, if any, and the point that lands on the
+   * target, in the last part's frame (the hinge's child, or the joint's own).
+   */
+  limbs: Readonly<Record<string, { hinge?: string; end: Vec3; foot?: string }>>;
+  /**
    * Where a drawn stand-in's box sits in its part, when not at its centre:
    * the weapon's blade runs out of the fist rather than through it.
    */
@@ -111,6 +117,14 @@ export const R15_RIG: Rig = {
   feet: ['LeftFoot', 'RightFoot'],
   hips: ['LeftHip', 'RightHip'],
   body: 'LowerTorso',
+  // The wrist and the ankle: an ankle stands 0.26 studs above the ground.
+  limbs: {
+    LeftShoulder: { hinge: 'LeftElbow', end: [0, -0.532, 0] },
+    RightShoulder: { hinge: 'RightElbow', end: [0, -0.532, 0] },
+    // A leg's aimAt also keys its ankle, to lay the foot flat.
+    LeftHip: { hinge: 'LeftKnee', end: [0, -0.596, 0], foot: 'LeftAnkle' },
+    RightHip: { hinge: 'RightKnee', end: [0, -0.596, 0], foot: 'RightAnkle' },
+  },
   drawOffsets: PROP_DRAW_OFFSETS,
   parts: {
     HumanoidRootPart: [2, 2, 1],

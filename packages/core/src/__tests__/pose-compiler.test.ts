@@ -8,7 +8,7 @@ import {
 import { R15_RIG } from '../animation/r15-rig.js';
 import { R6_RIG } from '../animation/r6-rig.js';
 import { drawnParts } from '../animation/box-rig.js';
-import { buildTracks, poseRig } from '../animation/motion.js';
+import { buildTracks, pointToWorld, poseRig } from '../animation/motion.js';
 
 function compiled(input: unknown): KeyframeSequenceDescription {
   const result = compilePoseAnimation(input);
@@ -213,7 +213,7 @@ describe('compilePoseAnimation', () => {
       'priority: must be one of Core, Idle, Movement, Action, Action2, Action3, Action4',
       'keyframes[0].time: the first keyframe must be at time 0',
       'keyframes[0].joints.RightUpperArm: "RightUpperArm" is a part; key the joint that moves it, "RightShoulder"',
-      'keyframes[0].joints.Neck: unknown field "rotaton"; expected rotation, aim, bendToward, bend, position, easing',
+      'keyframes[0].joints.Neck: unknown field "rotaton"; expected rotation, aim, aimAt, bendToward, bend, position, easing',
       'keyframes[1].time: must be later than the previous keyframe (0.1)',
       'keyframes[1].joints.Waist.rotation[1]: must be within ±360 degrees',
       'keyframes[1].joints.Waist.rotation[2]: must be a finite number',
@@ -334,8 +334,8 @@ describe('compilePoseAnimation', () => {
       'keyframes[0].joints.Neck: aim and bendToward work on shoulders and hips; use rotation here',
       'keyframes[0].joints.Waist.bend: works on elbows and knees; use rotation here',
       'keyframes[0].joints.LeftShoulder.aim: must point somewhere: [right, up, forward], not all zero',
-      'keyframes[0].joints.RightShoulder: give one of rotation, aim or bend, not rotation and aim',
-      'keyframes[0].joints.LeftHip.bendToward: goes with aim',
+      'keyframes[0].joints.RightShoulder: give one of rotation, aim, aimAt or bend, not rotation and aim',
+      'keyframes[0].joints.LeftHip.bendToward: goes with aim or aimAt',
     ]);
   });
 
@@ -424,6 +424,86 @@ describe('compilePoseAnimation', () => {
       'keyframes[0].joints.RightElbow: R6 has no RightElbow: its arms and legs are single blocks, and it has no waist; its joints are Root, Neck, LeftShoulder, RightShoulder, LeftHip, RightHip, Weapon, OffHand, Sheath',
       'keyframes[0].joints.Waist: R6 has no Waist: its arms and legs are single blocks, and it has no waist; its joints are Root, Neck, LeftShoulder, RightShoulder, LeftHip, RightHip, Weapon, OffHand, Sheath',
     ]);
+  });
+
+  test('aimAt lands an R15 wrist and ankle on their targets, and keeps a foot planted as the body moves', () => {
+    const foot = [-0.6, -2.7, 0.6];
+    const hand = [0.6, 0.3, 1.2];
+    const lunge = compiled({
+      name: 'Lunge',
+      rig: 'R15',
+      keyframes: [
+        { time: 0, joints: { Root: { position: [0, 0, 0] }, LeftHip: { aimAt: foot }, RightShoulder: { aimAt: hand, bendToward: [0, 1, 0] } } },
+        { time: 0.5, joints: { Root: { position: [0, -0.3, 0], rotation: [0, 20, 0] }, LeftHip: { aimAt: foot }, RightShoulder: { aimAt: hand, bendToward: [0, 1, 0] } } },
+      ],
+    });
+    // aimAt keys the elbow and knee it bends, and the ankle that lays the foot flat.
+    expect(lunge.joints).toEqual(['Root', 'RightShoulder', 'RightElbow', 'LeftHip', 'LeftKnee', 'LeftAnkle']);
+    // Held on one point from one key to the next, the foot is planted: solved
+    // again every thirtieth of a second, so it stays put between the keys too.
+    // The hand is held on its point too: 14 solved keys for each limb over 0.5 s.
+    expect(lunge.inBetweenCount).toBe(28);
+    const tracks = buildTracks(lunge);
+    for (const time of [0, 0.123, 0.25, 0.41, 0.5]) {
+      const parts = poseRig(tracks, time, R15_RIG).parts;
+      pointToWorld(parts.get('LeftLowerLeg')!, [0, -0.596, 0]).forEach((value, axis) => expect(value).toBeCloseTo([-0.6, -2.7, -0.6][axis], 2));
+      // Flat: the foot's up is the world's up, and it keeps its heading.
+      const foot = parts.get('LeftFoot')!.r;
+      expect(foot[4]).toBeCloseTo(1, 3);
+      expect(foot[8]).toBeCloseTo(1, 3);
+    }
+    for (const time of [0, 0.5]) {
+      const parts = poseRig(tracks, time, R15_RIG).parts;
+      // [right, up, forward] in the character's terms; Roblox's forward is -Z.
+      pointToWorld(parts.get('LeftLowerLeg')!, [0, -0.596, 0]).forEach((value, axis) => expect(value).toBeCloseTo([-0.6, -2.7, -0.6][axis], 4));
+      pointToWorld(parts.get('RightLowerArm')!, [0, -0.532, 0]).forEach((value, axis) => expect(value).toBeCloseTo([0.6, 0.3, -1.2][axis], 4));
+    }
+    // The knee folds more as the body drops toward the planted foot.
+    const knee = (index: number) => flatten(lunge.keyframes[index].root).find((pose) => pose.joint === 'LeftKnee')!;
+    // A knee turns about X, so its R11 (component 7) is the cosine of its bend.
+    expect(Math.acos(knee(1).cframe[7])).toBeGreaterThan(Math.acos(knee(0).cframe[7]));
+  });
+
+  test('aimAt points an R6 block through its target, and refuses what a limb cannot reach', () => {
+    const r6 = compiled({ name: 'Point', rig: 'R6', keyframes: [{ time: 0, joints: { RightShoulder: { aimAt: [1.2, 0.5, 1] } } }] });
+    const arm = poseRig(buildTracks(r6), 0, R6_RIG).parts.get('Right Arm')!;
+    const pivot = [1, 0.5, 0];
+    const end = pointToWorld(arm, [0, -1, 0]);
+    const target = [1.2, 0.5, -1];
+    // Pivot, target and the arm's far end in one line, the end beyond the target.
+    const along = [0, 1, 2].map((axis) => end[axis] - pivot[axis]);
+    const toward = [0, 1, 2].map((axis) => target[axis] - pivot[axis]);
+    const cosine = along.reduce((sum, value, axis) => sum + value * toward[axis], 0) / (Math.hypot(...along) * Math.hypot(...toward));
+    expect(cosine).toBeCloseTo(1, 4);
+    expect(Math.hypot(...along)).toBeGreaterThan(Math.hypot(...toward));
+
+    expect(errors({
+      name: 'Bad',
+      rig: 'R15',
+      keyframes: [
+        { time: 0, joints: { RightShoulder: { aimAt: [5, 0.5, 0] }, Neck: { aimAt: [0, 2, 0] } } },
+      ],
+    })).toEqual([
+      'keyframes[0].joints.Neck: aimAt works on shoulders and hips; use rotation here',
+    ]);
+    const one = (joints: Record<string, unknown>) => errors({ name: 'Bad', rig: 'R15', keyframes: [{ time: 0, joints }] });
+    expect(one({ RightShoulder: { aimAt: [5, 0.5, 0] } })).toEqual([
+      expect.stringMatching(/^keyframes\[0\]\.joints\.RightShoulder\.aimAt: is 4\.\d+ studs from RightShoulder; the arm reaches 1\.\d+ at most at 0 s$/),
+    ]);
+    expect(one({ LeftShoulder: { aimAt: [-0.97, 0.3, 0] } })).toEqual([
+      expect.stringMatching(/^keyframes\[0\]\.joints\.LeftShoulder\.aimAt: is 0\.\d+ studs from LeftShoulder; the arm cannot fold nearer than 0\.\d+ at 0 s$/),
+    ]);
+    expect(one({ LeftShoulder: { aimAt: [-1, -0.5, 0.5] }, LeftElbow: { bend: 20 } })).toEqual([
+      'keyframes[0].joints.LeftShoulder.aimAt: sets LeftElbow too; leave LeftElbow out of this keyframe',
+    ]);
+    expect(errors({
+      name: 'Late',
+      rig: 'R15',
+      keyframes: [
+        { time: 0, joints: { RightShoulder: { aim: [0, -1, 0] } } },
+        { time: 0.5, joints: { RightShoulder: { aimAt: [0.6, 0, 1] } } },
+      ],
+    })).toEqual(['keyframes[0].joints: "RightElbow" is bent later by RightShoulder\'s aimAt, so key it, or aim RightShoulder with aimAt, in the first keyframe too']);
   });
 
   test('refuses rigs it does not know, including inherited object keys', () => {

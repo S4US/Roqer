@@ -46,8 +46,13 @@ tells you that publishing needs a key.
    - for an arm or a leg, the direction it points and how far the elbow or
      knee bends.
 
-   It starts from tested recipes for a wave, idle, walk, run and jump, which
-   ship with Roqer's animation skill.
+   - for an arm or a leg, a point its hand or foot should reach: Roqer bends
+     the elbow or knee to reach it, and a foot held on one point stays
+     planted while the body lunges over it.
+
+   It starts from tested recipes, which ship with Roqer's animation skill:
+   for R15 a wave, idle, walk, run, jump, sword slash and lunge, and for R6 a
+   walk and a wave.
 
    For a sword or other weapon, the agent can also move the weapon in the
    hand, so a swing can flick and tilt the blade, and a second item in the

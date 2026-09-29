@@ -251,6 +251,21 @@ const passed = await runTest('animation tool', async ({ track }) => {
     }, 120_000);
     assert(marched.built === true && marched.playback?.verified === true, `an R6 animation builds and plays as checked on an R6 dummy (${marched.error ?? `within ${marched.playback?.maxDegrees}°`})`);
 
+    // aimAt: a planted lunge builds, with its solved keys, and plays as checked.
+    const lunged = await client.callTool('animation', {
+      action: 'build',
+      animation: {
+        name: 'Planted', rig: 'R15',
+        keyframes: [
+          { time: 0, joints: { Root: { position: [0, 0, 0] }, LeftHip: { aimAt: [-0.6, -2.93, 0.4] }, RightHip: { aimAt: [0.6, -2.93, -0.5] } } },
+          { time: 0.4, joints: { Root: { position: [0, -0.5, -0.3], rotation: [0, 15, 0] }, LeftHip: { aimAt: [-0.6, -2.93, 0.4] }, RightHip: { aimAt: [0.6, -2.93, -0.5] } } },
+        ],
+      },
+      parent: PARENT,
+      grounded: true,
+    }, 120_000);
+    assert(lunged.built === true && lunged.animation?.inBetweens > 0 && lunged.playback?.verified === true, `a planted lunge builds and plays as checked (${lunged.error ?? `${lunged.animation?.inBetweens} solved keys, within ${lunged.playback?.maxDegrees}°`})`);
+
     // Markers become KeyframeMarkers a script's GetMarkerReachedSignal fires on.
     const marked = await client.callTool('animation', {
       action: 'build',

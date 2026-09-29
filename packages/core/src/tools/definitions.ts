@@ -182,7 +182,7 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
                   easing: POSE_EASING_SCHEMA,
                   joints: {
                     type: 'object',
-                    description: 'Joint -> {rotation|aim+bendToward?|bend, position?, easing?}; {} with markers.'
+                    description: 'Joint -> {rotation|aim|aimAt+bendToward?|bend, position?, easing?}; {} with markers.'
                   },
                   markers: {
                     type: 'array',

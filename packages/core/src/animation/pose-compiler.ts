@@ -18,7 +18,7 @@ import {
   type PoseEasingDirection,
   type PoseEasingStyle,
 } from './easing.js';
-import { slerpRotation, transformFromParent } from './motion.js';
+import { buildTracks, pointToWorld, poseRig, slerpRotation, transformFromParent, type Frame } from './motion.js';
 import { R15_RIG, type Rig, type RigJoint } from './r15-rig.js';
 import { RIGS } from './rigs.js';
 
@@ -33,6 +33,14 @@ export const POSE_LIMITS = {
   maxNameLength: 100,
   maxRotationDegrees: 360,
   maxRootOffsetStuds: 20,
+  /** How far from the HumanoidRootPart an aimAt target may be, in studs. */
+  maxAimAtStuds: 20,
+  /** How far past a limb's reach an aimAt target may lie and still be reached. */
+  aimAtToleranceStuds: 0.02,
+  /** The widest bend aimAt gives an elbow or knee, in degrees. */
+  maxAimAtBend: 150,
+  /** How often a planted limb is solved again between its keys, in seconds. */
+  plantedStepSeconds: 1 / 30,
   maxMarkersPerKeyframe: 16,
   maxMarkerValueLength: 200,
   /**
@@ -83,6 +91,13 @@ export interface JointPoseSpec {
   bendToward?: [number, number, number];
   /** Elbows and knees: how far the joint flexes, in degrees; 0 is straight. */
   bend?: number;
+  /**
+   * Shoulders and hips: a point, in studs as [right, up, forward] from the
+   * HumanoidRootPart's centre, that the limb's end reaches: the wrist or
+   * ankle on R15, which bends the elbow or knee to reach it, or the far end
+   * of the block on R6. `bendToward` turns the elbow or knee as with `aim`.
+   */
+  aimAt?: [number, number, number];
   /** Studs. Only the Root joint takes one: it offsets the whole body. */
   position?: [number, number, number];
   easing?: PoseEasing;
@@ -174,7 +189,7 @@ export interface KeyframeSequenceDescription {
   keyedPoseCount: number;
   /** Every KeyframeMarker, across all keyframes. */
   markerCount: number;
-  /** Keys the compiler added to split turns over maxTurnPerSegment. */
+  /** Keys the compiler added: to split turns over maxTurnPerSegment, and to keep planted limbs on their points. */
   inBetweenCount: number;
 }
 
@@ -190,6 +205,8 @@ interface ParsedJoint {
   rotation: Matrix3;
   position: readonly [number, number, number];
   easing: { style?: PoseEasingStyle; direction?: PoseEasingDirection };
+  /** An aimAt still to solve, once the body around it is posed; Roblox axes. */
+  aimAt?: { target: Vec; toward?: Vec; path: string };
 }
 
 const IDENTITY_MATRIX: Matrix3 = [1, 0, 0, 0, 1, 0, 0, 0, 1];
@@ -420,18 +437,28 @@ function parseJoints(value: unknown, rig: Rig, path: string, issues: Issues, all
       issues.add(jointPath, 'must be an object with rotation, aim, bend, position and/or easing');
       continue;
     }
-    checkKeys(pose, ['rotation', 'aim', 'bendToward', 'bend', 'position', 'easing'], jointPath, issues);
-    const forms = (['rotation', 'aim', 'bend'] as const).filter((key) => pose[key] !== undefined);
-    if (forms.length > 1) issues.add(jointPath, `give one of rotation, aim or bend, not ${forms.join(' and ')}`);
+    checkKeys(pose, ['rotation', 'aim', 'aimAt', 'bendToward', 'bend', 'position', 'easing'], jointPath, issues);
+    const forms = (['rotation', 'aim', 'aimAt', 'bend'] as const).filter((key) => pose[key] !== undefined);
+    if (forms.length > 1) issues.add(jointPath, `give one of rotation, aim, aimAt or bend, not ${forms.join(' and ')}`);
+    let aimAt: ParsedJoint['aimAt'];
     let rotation: Matrix3 = IDENTITY_MATRIX;
     if (pose.rotation !== undefined) {
       rotation = eulerMatrix(parseVector(pose.rotation, POSE_LIMITS.maxRotationDegrees, 'degrees', `${jointPath}.rotation`, issues));
     }
-    if (pose.aim !== undefined || pose.bendToward !== undefined) {
+    if (pose.aimAt !== undefined) {
+      if (!LIMBS[joint.name] || !rig.limbs[joint.name]) {
+        issues.add(jointPath, 'aimAt works on shoulders and hips; use rotation here');
+      } else {
+        const target = parseVector(pose.aimAt, POSE_LIMITS.maxAimAtStuds, 'studs', `${jointPath}.aimAt`, issues);
+        const toward = pose.bendToward === undefined ? undefined : parseVector(pose.bendToward, 1e6, 'units', `${jointPath}.bendToward`, issues);
+        if (toward !== undefined && length3(toward) < 1e-6) issues.add(`${jointPath}.bendToward`, 'must point somewhere: [right, up, forward], not all zero');
+        else aimAt = { target: robloxDirection(target), ...(toward ? { toward: robloxDirection(toward) } : {}), path: `${jointPath}.aimAt` };
+      }
+    } else if (pose.aim !== undefined || pose.bendToward !== undefined) {
       if (!LIMBS[joint.name]) {
         issues.add(jointPath, 'aim and bendToward work on shoulders and hips; use rotation here');
       } else if (pose.aim === undefined) {
-        issues.add(`${jointPath}.bendToward`, 'goes with aim');
+        issues.add(`${jointPath}.bendToward`, 'goes with aim or aimAt');
       } else {
         const aim = parseVector(pose.aim, 1e6, 'units', `${jointPath}.aim`, issues);
         const toward = pose.bendToward === undefined ? undefined : parseVector(pose.bendToward, 1e6, 'units', `${jointPath}.bendToward`, issues);
@@ -466,6 +493,7 @@ function parseJoints(value: unknown, rig: Rig, path: string, issues: Issues, all
       rotation: transform.r,
       position: transform.p,
       easing: parseEasing(pose.easing, `${jointPath}.easing`, issues),
+      ...(aimAt ? { aimAt } : {}),
     });
   }
   return joints;
@@ -512,17 +540,308 @@ function parseKeyframes(value: unknown, rig: Rig, issues: Issues): ParsedKeyfram
     });
   });
 
-  // A joint's motion must start from a stated pose, not from wherever its
-  // first later key happens to put it.
-  const first = keyframes.length === value.length ? keyframes[0] : undefined;
-  if (first) {
-    const late = rig.joints.filter((joint) => !first.joints.has(joint.childPart)
-      && keyframes.some((keyframe) => keyframe.joints.has(joint.childPart)));
-    for (const joint of late) {
-      issues.add('keyframes[0].joints', `"${joint.name}" is keyed later, so it must be keyed in the first keyframe too`);
+  return keyframes;
+}
+
+// A joint's motion must start from a stated pose, not from wherever its
+// first later key happens to put it.
+function checkFirstKeys(keyframes: ParsedKeyframe[], complete: boolean, rig: Rig, issues: Issues, solvedBy: ReadonlyMap<string, string>): void {
+  const first = complete ? keyframes[0] : undefined;
+  if (!first) return;
+  const late = rig.joints.filter((joint) => !first.joints.has(joint.childPart)
+    && keyframes.some((keyframe) => keyframe.joints.has(joint.childPart)));
+  for (const joint of late) {
+    const by = solvedBy.get(joint.name);
+    issues.add('keyframes[0].joints', by
+      ? `"${joint.name}" is bent later by ${by}'s aimAt, so key it, or aim ${by} with aimAt, in the first keyframe too`
+      : `"${joint.name}" is keyed later, so it must be keyed in the first keyframe too`);
+  }
+}
+
+/** Rx(degrees): the turn a hinge flexes by. */
+function hingeTurn(degrees: number): Vec[] {
+  const radians = (degrees * Math.PI) / 180;
+  const c = Math.cos(radians), s = Math.sin(radians);
+  return [[1, 0, 0], [0, c, -s], [0, s, c]];
+}
+
+function apply(rows: Vec[], v: Vec): Vec {
+  return [dot3(rows[0], v), dot3(rows[1], v), dot3(rows[2], v)];
+}
+
+type Solved = {
+  rotation: Matrix3;
+  hinge?: { joint: RigJoint; rotation: Matrix3 };
+  foot?: { joint: RigJoint; rotation: Matrix3 };
+};
+
+/** The way the body faces at a time, flat on the ground: the forward a foot is laid along. */
+function heading(posed: ReturnType<typeof poseRig>, rig: Rig): Vec {
+  const r = posed.parts.get(rig.body)!.r;
+  const forward: Vec = [-r[2], 0, -r[8]];
+  return length3(forward) > 1e-6 ? scale3(forward, 1 / length3(forward)) : [0, 0, -1];
+}
+
+/** A rotation facing `forward` along the ground, upright: a foot laid flat. */
+function flatFacing(forward: Vec): Matrix3 {
+  const z = scale3(forward, -1);
+  const x = cross3([0, 1, 0], z);
+  return [x[0], 0, z[0], x[1], 1, z[1], x[2], 0, z[2]];
+}
+
+function multiplyRotation(a: readonly number[], b: readonly number[]): Matrix3 {
+  const out = [0, 0, 0, 0, 0, 0, 0, 0, 0];
+  for (let i = 0; i < 3; i += 1) {
+    for (let j = 0; j < 3; j += 1) {
+      for (let k = 0; k < 3; k += 1) out[i * 3 + j] += a[i * 3 + k] * b[k * 3 + j];
     }
   }
-  return keyframes;
+  return out as unknown as Matrix3;
+}
+
+function transposeRotation(a: readonly number[]): Matrix3 {
+  return [a[0], a[3], a[6], a[1], a[4], a[7], a[2], a[5], a[8]];
+}
+
+/**
+ * Turns a shoulder or hip, and bends its elbow or knee on R15, so the limb's
+ * end lands on `target` with the body posed as `posed`. Returns why not when
+ * the target is out of the limb's reach.
+ */
+function solveLimb(
+  joint: RigJoint,
+  rig: Rig,
+  posed: ReturnType<typeof poseRig>,
+  target: Vec,
+  toward: Vec | undefined,
+  time: number,
+  footForward: Vec,
+): Solved | string {
+  const limb = rig.limbs[joint.name];
+  const hinge = limb.hinge ? rig.joints.find((candidate) => candidate.name === limb.hinge)! : undefined;
+  const parent = posed.parts.get(joint.parentPart)!;
+  const pivot = pointToWorld(parent, joint.parentOffset);
+  const away: Vec = [0, 1, 2].map((axis) => target[axis] - pivot[axis]) as Vec;
+  // The target in the parent part's axes, which the pose is written in.
+  const r = parent.r;
+  const reach: Vec = [
+    r[0] * away[0] + r[3] * away[1] + r[6] * away[2],
+    r[1] * away[0] + r[4] * away[1] + r[7] * away[2],
+    r[2] * away[0] + r[5] * away[1] + r[8] * away[2],
+  ];
+  const distance = length3(reach);
+
+  // The limb's end from its pivot, in its own frame, as a bend puts it. Every
+  // limb hangs in its parent's orientation at rest, so its own frame's axes
+  // start as the parent's.
+  const pivotInLimb = joint.childOffset as Vec;
+  const endAt = (bend: number): Vec => {
+    if (!hinge) return [0, 1, 2].map((axis) => limb.end[axis] - pivotInLimb[axis]) as Vec;
+    const upper: Vec = [0, 1, 2].map((axis) => hinge.parentOffset[axis] - pivotInLimb[axis]) as Vec;
+    const lower = apply(hingeTurn(HINGES[hinge.name] * bend), [0, 1, 2].map((axis) => limb.end[axis] - hinge.childOffset[axis]) as Vec);
+    return [0, 1, 2].map((axis) => upper[axis] + lower[axis]) as Vec;
+  };
+  const longest = length3(endAt(0));
+  const shortest = hinge ? length3(endAt(POSE_LIMITS.maxAimAtBend)) : 0;
+  const what = joint.name.endsWith('Hip') ? 'leg' : 'arm';
+  const studs = (value: number) => Math.round(value * 100) / 100;
+  if (distance > longest + POSE_LIMITS.aimAtToleranceStuds) {
+    return `is ${studs(distance)} studs from ${joint.name}; the ${what} reaches ${studs(longest)} at most at ${studs(time)} s`;
+  }
+  if (distance < Math.max(shortest - POSE_LIMITS.aimAtToleranceStuds, 1e-3)) {
+    return `is ${studs(distance)} studs from ${joint.name}; the ${what} cannot fold nearer than ${studs(shortest)} at ${studs(time)} s`;
+  }
+  // The bend whose reach is the distance: reach shrinks as the hinge folds.
+  let bend = 0;
+  if (hinge && distance < longest) {
+    let low = 0;
+    let high: number = POSE_LIMITS.maxAimAtBend;
+    for (let step = 0; step < 60; step += 1) {
+      const middle = (low + high) / 2;
+      if (length3(endAt(middle)) > distance) low = middle;
+      else high = middle;
+    }
+    bend = (low + high) / 2;
+  }
+
+  // Turn the limb so its end points at the target, and its fold toward
+  // bendToward (or the limb's usual fold) as far as the aim allows.
+  const local = endAt(bend);
+  const a = scale3(local, 1 / length3(local));
+  const d = scale3(reach, 1 / distance);
+  const spec = LIMBS[joint.name];
+  const square = (candidate: Vec, axis: Vec): Vec | undefined => {
+    const v: Vec = [0, 1, 2].map((index) => candidate[index] - dot3(candidate, axis) * axis[index]) as Vec;
+    return length3(v) > 1e-3 ? scale3(v, 1 / length3(v)) : undefined;
+  };
+  const p = square(spec.fold, a) ?? square([0, 1, 0], a) ?? square([0, 0, 1], a)!;
+  const f = [toward, robloxDirection(spec.defaultBend), [0, 1, 0] as Vec, [0, 0, 1] as Vec]
+    .filter((candidate): candidate is Vec => candidate !== undefined)
+    .map((candidate) => square(candidate, d))
+    .find((candidate) => candidate !== undefined)!;
+  const localAxes = [a, p, cross3(a, p)];
+  const targetAxes = [d, f, cross3(d, f)];
+  const turn = [0, 0, 0, 0, 0, 0, 0, 0, 0];
+  for (let k = 0; k < 3; k += 1) {
+    for (let i = 0; i < 3; i += 1) {
+      for (let j = 0; j < 3; j += 1) turn[i * 3 + j] += targetAxes[k][i] * localAxes[k][j];
+    }
+  }
+  const rotation = transformFromParent(joint, { p: [0, 0, 0], r: turn as Frame['r'] }).r;
+  const hingeRotation = hinge ? eulerMatrix([HINGES[hinge.name] * bend, 0, 0]) : undefined;
+
+  // Lay the foot flat, facing footForward: the ankle turns the foot from the
+  // shin's orientation to that one. Every R15 leg joint's frame is unturned.
+  let foot: Solved['foot'];
+  if (limb.foot && hinge && hingeRotation) {
+    const ankle = rig.joints.find((candidate) => candidate.name === limb.foot)!;
+    const shin = multiplyRotation(multiplyRotation(parent.r, rotation), hingeRotation);
+    foot = { joint: ankle, rotation: multiplyRotation(transposeRotation(shin), flatFacing(footForward)) };
+  }
+  return {
+    rotation,
+    ...(hinge && hingeRotation ? { hinge: { joint: hinge, rotation: hingeRotation } } : {}),
+    ...(foot ? { foot } : {}),
+  };
+}
+
+/**
+ * Solves every aimAt: turns each shoulder or hip, and bends its elbow or
+ * knee on R15, so the limb's end lands on the target at that keyframe's time.
+ *
+ * The body around the limb (Root, and the Waist on R15) is posed as it plays
+ * at that time, from its own keys. No limb's parent is another limb, so the
+ * order of solving does not matter.
+ *
+ * A limb aimed at the same point in consecutive keys is planted there: the
+ * body moves between the keys, and joints interpolated on their own would let
+ * a planted foot slide or sink, so the limb is solved again every
+ * plantedStepSeconds between them, in keys of its own that run Linear.
+ * Returns the hinges aimAt keyed, by the limb that bends them, and how many
+ * keys planting added.
+ */
+function resolveAimAt(
+  keyframes: ParsedKeyframe[],
+  animationEasing: ParsedJoint['easing'],
+  rig: Rig,
+  issues: Issues,
+): { keyframes: ParsedKeyframe[]; solvedBy: Map<string, string>; planted: number } {
+  const solvedBy = new Map<string, string>();
+  const pending = keyframes.some((keyframe) => [...keyframe.joints.values()].some((pose) => pose.aimAt));
+  if (!pending) return { keyframes, solvedBy, planted: 0 };
+  const tracks = buildTracks({ loop: false, keyframes: keyframes.map((keyframe) => compileKeyframe(keyframe, animationEasing, rig).keyframe) });
+  const poses = new Map<number, ReturnType<typeof poseRig>>();
+  const posedAt = (time: number) => {
+    let posed = poses.get(time);
+    if (!posed) {
+      posed = poseRig(tracks, time, rig);
+      poses.set(time, posed);
+    }
+    return posed;
+  };
+  const LINEAR = { style: 'Linear', direction: 'In' } as const;
+
+  // Every aimAt, by limb, in time order, before any is replaced by its solution.
+  const aims = new Map<string, { keyframe: ParsedKeyframe; target: Vec; toward?: Vec; path: string }[]>();
+  for (const keyframe of keyframes) {
+    for (const joint of rig.joints) {
+      const aim = keyframe.joints.get(joint.childPart)?.aimAt;
+      if (aim) aims.set(joint.name, [...(aims.get(joint.name) ?? []), { keyframe, ...aim }]);
+    }
+  }
+
+  const place = (keyframe: ParsedKeyframe, joint: RigJoint, solved: Solved, easing: ParsedJoint['easing']) => {
+    const pose = keyframe.joints.get(joint.childPart);
+    keyframe.joints.set(joint.childPart, { joint, rotation: solved.rotation, position: [0, 0, 0], easing: pose?.easing ?? easing });
+    for (const extra of [solved.hinge, solved.foot]) {
+      if (!extra) continue;
+      keyframe.joints.set(extra.joint.childPart, { joint: extra.joint, rotation: extra.rotation, position: [0, 0, 0], easing: pose?.easing ?? easing });
+      solvedBy.set(extra.joint.name, joint.name);
+    }
+  };
+
+  // A planted foot keeps the heading it was planted with; any other faces the
+  // way the body does at its key.
+  const headings = new Map<object, Vec>();
+  for (const joint of rig.joints) {
+    const list = aims.get(joint.name);
+    if (!list) continue;
+    const keyed = keyframes.filter((keyframe) => keyframe.joints.has(joint.childPart));
+    list.forEach((aim, index) => {
+      const before = list[index - 1];
+      const planted = before
+        && keyed[keyed.indexOf(before.keyframe) + 1] === aim.keyframe
+        && [0, 1, 2].every((axis) => Math.abs(before.target[axis] - aim.target[axis]) < 1e-6);
+      headings.set(aim, planted ? headings.get(before)! : heading(posedAt(aim.keyframe.time), rig));
+    });
+  }
+
+  for (const joint of rig.joints) {
+    const list = aims.get(joint.name);
+    if (!list) continue;
+    const limb = rig.limbs[joint.name];
+    for (const aim of list) {
+      const taken = [limb.hinge, limb.foot].find((name) => {
+        const other = name ? rig.joints.find((candidate) => candidate.name === name) : undefined;
+        return other !== undefined && aim.keyframe.joints.has(other.childPart);
+      });
+      if (taken) {
+        issues.add(aim.path, `sets ${taken} too; leave ${taken} out of this keyframe`);
+        continue;
+      }
+      const solved = solveLimb(joint, rig, posedAt(aim.keyframe.time), aim.target, aim.toward, aim.keyframe.time, headings.get(aim)!);
+      if (typeof solved === 'string') {
+        issues.add(aim.path, solved);
+        continue;
+      }
+      place(aim.keyframe, joint, solved, {});
+    }
+  }
+  if (issues.count > 0) return { keyframes, solvedBy, planted: 0 };
+
+  // Plant limbs held on one point from one of their keys to the next.
+  const extra: ParsedKeyframe[] = [];
+  const at = (time: number): ParsedKeyframe => {
+    const found = keyframes.find((keyframe) => Math.abs(keyframe.time - time) < 1e-9)
+      ?? extra.find((keyframe) => Math.abs(keyframe.time - time) < 1e-9);
+    if (found) return found;
+    const created: ParsedKeyframe = { time, markers: [], easing: {}, joints: new Map() };
+    extra.push(created);
+    return created;
+  };
+  let planted = 0;
+  for (const joint of rig.joints) {
+    const list = aims.get(joint.name);
+    if (!list) continue;
+    const limb = rig.limbs[joint.name];
+    const keyed = keyframes.filter((keyframe) => keyframe.joints.has(joint.childPart));
+    for (let index = 1; index < list.length; index += 1) {
+      const from = list[index - 1];
+      const to = list[index];
+      const sameKeyNext = keyed[keyed.indexOf(from.keyframe) + 1] === to.keyframe;
+      const same = [0, 1, 2].every((axis) => Math.abs(from.target[axis] - to.target[axis]) < 1e-6);
+      if (!sameKeyNext || !same) continue;
+      const span = to.keyframe.time - from.keyframe.time;
+      const steps = Math.ceil(span / POSE_LIMITS.plantedStepSeconds - 1e-9);
+      for (let step = 1; step < steps; step += 1) {
+        const time = round(from.keyframe.time + (span * step) / steps);
+        const solved = solveLimb(joint, rig, posedAt(time), to.target, to.toward, time, headings.get(to)!);
+        if (typeof solved === 'string') {
+          issues.add(to.path, `holds its point from ${from.keyframe.time} s, but ${solved}`);
+          break;
+        }
+        place(at(time), joint, solved, LINEAR);
+        planted += 1;
+      }
+      // The key before the planted stretch runs straight to its first planted key.
+      for (const name of [joint.name, limb.hinge, limb.foot]) {
+        const part = rig.joints.find((candidate) => candidate.name === name)?.childPart;
+        const start = part ? from.keyframe.joints.get(part) : undefined;
+        if (part && start) from.keyframe.joints.set(part, { ...start, easing: LINEAR });
+      }
+    }
+  }
+  return { keyframes: [...keyframes, ...extra].sort((a, b) => a.time - b.time), solvedBy, planted };
 }
 
 /** The angle in degrees between two rotations, from their CFrame components. */
@@ -744,11 +1063,20 @@ export function compilePoseAnimation(input: unknown): PoseCompileResult {
     : parseEnum(input.priority, ANIMATION_PRIORITIES, 'priority', issues);
   const easing = parseEasing(input.easing, 'easing', issues);
   let keyframes = rig ? parseKeyframes(input.keyframes, rig, issues) : [];
+  const complete = Array.isArray(input.keyframes) && keyframes.length === input.keyframes.length;
+  let solvedBy = new Map<string, string>();
   let inBetweenCount = 0;
+  if (rig && issues.count === 0) {
+    const resolved = resolveAimAt(keyframes, easing, rig, issues);
+    keyframes = resolved.keyframes;
+    solvedBy = resolved.solvedBy;
+    inBetweenCount += resolved.planted;
+  }
+  if (rig) checkFirstKeys(keyframes, complete, rig, issues, solvedBy);
   if (rig && issues.count === 0) {
     const split = splitTurns(keyframes, easing, rig, issues);
     keyframes = split.keyframes;
-    inBetweenCount = split.added;
+    inBetweenCount += split.added;
     // Every turn left over the limit snaps; this only guards the split.
     if (issues.count === 0) checkTurns(keyframes, easing, rig, issues);
   }

@@ -636,6 +636,18 @@ and the compiler takes a pose in the parent part's axes and converts it.
   at a fixed C0 the game sets, since no stock attachment sits there). Core
   now sends the preview the motors to build, so the plugin names no prop.
 
+### Reaching a point — implemented 2026-09-29
+
+Combat animation plants feet and puts hands on hilts, which the direction
+`aim` gives cannot say. `aimAt` gives a shoulder or hip a point, solved at
+compile time against the body as it plays at that key: two-bone IK on R15
+(the elbow or knee bent to reach, a leg's ankle laying the foot flat), and on
+R6 the rigid limb pointed through it. Joints interpolated on their own let a
+planted foot slide or sink between keys, so a limb held on one point from
+one key to the next is solved again every 1/30 s between them; the recipe
+test measures a planted ankle within 0.05 studs. Everything downstream sees
+ordinary keys: the checks, the preview and Studio's playback.
+
 ### 12. Creatures made of rigid parts — proposed
 
 Animals and monsters that Blender models as separate pieces (a body, a head,

@@ -35,6 +35,13 @@ export const R6_RIG: Rig = {
   feet: ['Left Leg', 'Right Leg'],
   hips: ['LeftHip', 'RightHip'],
   body: 'Torso',
+  // The far end of each block: the hand's end of an arm, the sole of a leg.
+  limbs: {
+    LeftShoulder: { end: [0, -1, 0] },
+    RightShoulder: { end: [0, -1, 0] },
+    LeftHip: { end: [0, -1, 0] },
+    RightHip: { end: [0, -1, 0] },
+  },
   drawOffsets: PROP_DRAW_OFFSETS,
   // Rigid legs cannot roll a foot flat, and the foot-sliding limit was
   // calibrated on Roblox's R15 animations only.

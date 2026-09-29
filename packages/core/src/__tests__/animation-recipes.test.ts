@@ -42,7 +42,7 @@ describe('animation recipes', () => {
   const all = recipes();
 
   it('are all in the reference', () => {
-    expect([...all.keys()].sort()).toEqual(['Idle', 'Jump', 'Run', 'Slash', 'Walk', 'WalkR6', 'Wave', 'WaveR6']);
+    expect([...all.keys()].sort()).toEqual(['Idle', 'Jump', 'Lunge', 'Run', 'Slash', 'Walk', 'WalkR6', 'Wave', 'WaveR6']);
   });
 
   it.each([...all.keys()])('%s compiles and passes every check that applies', (name) => {
@@ -57,6 +57,25 @@ describe('animation recipes', () => {
       expect(report.checks.filter((check) => check.status === 'skipped').map((check) => check.id))
         .toEqual(Object.keys(rig.uncheckedChecks ?? {}));
     }
+  });
+
+  it('lunges with the feet planted from the coil to the end, the blade out front at Hit', () => {
+    const lunge = compiled(all.get('Lunge'));
+    const coil = lunge.keyframes.find((keyframe) => keyframe.name === 'Coil')!.time;
+    const hit = lunge.keyframes.find((keyframe) => keyframe.markers?.some((marker) => marker.name === 'Hit'))!.time;
+    const tracks = buildTracks(lunge);
+    const ankles = (time: number) => {
+      const parts = poseRig(tracks, time).parts;
+      return ['LeftLowerLeg', 'RightLowerLeg'].map((part) => pointToWorld(parts.get(part)!, [0, -0.596, 0]));
+    };
+    const planted = ankles(coil);
+    // Solved every thirtieth of a second; between those keys a joint turns on
+    // its own, so a planted ankle wanders a few hundredths of a stud.
+    for (let time = coil; time <= lunge.duration; time += 1 / 60) {
+      ankles(time).forEach((ankle, side) => ankle.forEach((value, axis) => expect(Math.abs(value - planted[side][axis])).toBeLessThan(0.05)));
+    }
+    const tip = pointToWorld(poseRig(tracks, hit).parts.get('BodyAttach')!, [0, 3.6, 0]);
+    expect(tip[2]).toBeLessThan(-5);
   });
 
   it('slashes the blade from behind the back to level in front at the Hit marker', () => {
