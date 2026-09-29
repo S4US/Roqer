@@ -267,6 +267,56 @@ It builds core first, because it imports the checks from
 `tmp/animation-calibration/`, which is not committed; only derived numbers go in
 the plan.
 
+## Creature spike
+
+`tests/creature-spike.mjs` is step 1 of the [creature plan](../docs/creature-plan.md).
+Like the animation spike, it is a research probe in neither runner profile. It
+asks what Roblox does with a rig that is not a character:
+
+1. Does a sequence keyed by part names drive `Motor6D`s made on a model that is
+   not a character, under a `Humanoid` and under an `AnimationController`, in
+   edit mode and in a playtest? Does a client see what the server plays, and
+   can a client play on the model itself?
+2. Under an `AnimationController`, must the top pose be named
+   `HumanoidRootPart`, or does the root part's own name work?
+3. How deep a chain (24, 64 and 128 joints), and how many joints in one
+   keyframe (48, 128 and 256), does a sequence drive?
+4. Does a copy of a model, made as a preview would make it, play as checked?
+   Is a part that cannot be archived left out of the copy?
+5. Does an NPC made with `CreateHumanoidModelFromDescription` carry an
+   `Animate` script, and does it play anything outside a player's character?
+6. Does `Humanoid:MoveTo` walk a four-legged Humanoid rig steadily at 8 and 16
+   studs a second, and does `Running` report its speed?
+7. With the upload on: how does an articulated creature uploaded as one GLB
+   arrive? The spike writes the GLB itself (`tests/lib/creature-glb.mjs`), each
+   piece a node with its origin at its joint, as Blender exports one, and
+   inserts it twice: with no position, and with one, since the kit probe's lost
+   layout may have been `insert_asset`'s doing. It reads the meshes back through
+   `EditableMesh`, and publishes the dog's test animation, so question 1 can
+   see a published animation reach the client.
+8. With `ROQER_SPIKE_GENERATE=1`: does `generate_model`, given
+   `schema_groups`, return a creature's pieces as separate, named parts?
+
+```bash
+npm run test:spike:creature
+
+# Also upload a test model and a test animation to your account (question 7)
+ROQER_SPIKE_UPLOAD=1 ROBLOX_OPEN_CLOUD_API_KEY=... ROBLOX_CREATOR_USER_ID=... \
+  npm run test:spike:creature
+
+# Also try Roblox's model generator (question 8)
+ROQER_SPIKE_GENERATE=1 npm run test:spike:creature
+```
+
+The answers are findings, not assertions: a "no" still exits 0. The spike fails
+when a question could not be asked, because a probe errored, for example, or
+when it cannot clean up. It works in temporary `__RoqerCreatureSpike` folders in
+Workspace and ServerStorage, which it removes on every path together with any
+model it generated, and stops the playtest it starts. The uploads are named
+"Roqer creature spike: model" and "Roqer creature spike: dog hold" and can be
+archived afterwards in the Creator Dashboard. The report and the GLB go to
+`tmp/creature-spike/`.
+
 ## What each test exercises
 
 | File | What it checks |
