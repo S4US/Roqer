@@ -51,6 +51,7 @@ const CHAIN_LENGTHS = [24, 64, 128];
 const STAR_SIZES = [48, 128, 256];
 const MOVE_SPEEDS = [8, 16];
 const GENERATED_GROUPS = ['Body', 'Head', 'FrontLeftLeg', 'FrontRightLeg', 'HindLeftLeg', 'HindRightLeg', 'Tail'];
+const GENERATED_NAME = 'SpikeWolf';
 
 const reportDir = path.join(REPO_ROOT, 'tmp', 'creature-spike');
 const stamp = new Date().toISOString().replace(/[:.]/g, '-');
@@ -591,8 +592,11 @@ end
 return true
 `;
 
-// Everything an insert put in the holder: its children, and each descendant
-// with its parent, and for a part its size, place, pivot and axes.
+// What an insert put in the holder: its children; each part, joint, bone,
+// controller, model and folder with its parent, and for a part its size, place,
+// pivot and axes, for a joint the parts it joins and where; everything else
+// only counted by class and parent, since an importer's pose values alone can
+// fill any list.
 const readImport = (holder) => `${PRELUDE}
 local folder = workspace:FindFirstChild(SPIKE)
 local holder = folder and folder:FindFirstChild(${lua(holder)})
@@ -601,27 +605,60 @@ local top = {}
 for _, child in holder:GetChildren() do
   if #top < 20 then table.insert(top, { class = child.ClassName, name = child.Name }) end
 end
-local items = {}
-for _, descendant in holder:GetDescendants() do
-  if #items >= 60 then break end
-  local parent = descendant.Parent
-  local entry = { class = descendant.ClassName, name = descendant.Name, parent = parent.Name, parentClass = parent.ClassName }
-  if descendant:IsA("BasePart") then
-    entry.size = vec(descendant.Size)
-    entry.position = vec(descendant.Position)
-    entry.pivot = vec(descendant:GetPivot().Position)
-    entry.pivotOffset = vec(descendant.PivotOffset.Position)
-    entry.look = vec(descendant.CFrame.LookVector)
-    entry.up = vec(descendant.CFrame.UpVector)
+local LISTED = { "BasePart", "JointInstance", "WeldConstraint", "AnimationConstraint", "Bone", "Humanoid",
+  "AnimationController", "Animator", "Model", "Folder" }
+local function listed(instance)
+  for _, class in LISTED do
+    if instance:IsA(class) then return true end
   end
-  if descendant:IsA("MeshPart") then
-    entry.meshId = descendant.MeshId
-    entry.meshSize = vec(descendant.MeshSize)
-  end
-  if descendant:IsA("Model") then entry.pivot = vec(descendant:GetPivot().Position) end
-  table.insert(items, entry)
+  return false
 end
-return { top = top, items = items }
+local items, counted, overflow = {}, {}, 0
+for _, descendant in holder:GetDescendants() do
+  local parent = descendant.Parent
+  if not listed(descendant) then
+    local key = descendant.ClassName .. " in " .. parent.Name
+    counted[key] = (counted[key] or 0) + 1
+  elseif #items >= 100 then
+    overflow += 1
+  else
+    local entry = { class = descendant.ClassName, name = descendant.Name, parent = parent.Name, parentClass = parent.ClassName }
+    if descendant:IsA("BasePart") then
+      entry.size = vec(descendant.Size)
+      entry.position = vec(descendant.Position)
+      entry.pivot = vec(descendant:GetPivot().Position)
+      entry.pivotOffset = vec(descendant.PivotOffset.Position)
+      entry.look = vec(descendant.CFrame.LookVector)
+      entry.up = vec(descendant.CFrame.UpVector)
+      entry.anchored = descendant.Anchored
+    end
+    if descendant:IsA("MeshPart") then
+      entry.meshId = descendant.MeshId
+      entry.meshSize = vec(descendant.MeshSize)
+    end
+    if descendant:IsA("Model") then entry.pivot = vec(descendant:GetPivot().Position) end
+    if descendant:IsA("JointInstance") or descendant:IsA("WeldConstraint") or descendant:IsA("AnimationConstraint") then
+      local ok, part0, part1 = pcall(function()
+        if descendant:IsA("AnimationConstraint") then
+          local a0, a1 = descendant.Attachment0, descendant.Attachment1
+          return a0 and a0.Parent, a1 and a1.Parent
+        end
+        return descendant.Part0, descendant.Part1
+      end)
+      if ok then
+        entry.part0 = part0 and part0.Name or nil
+        entry.part1 = part1 and part1.Name or nil
+      end
+      -- Where the joint is: its frame on the first part, which at rest is its frame on the second.
+      if descendant:IsA("JointInstance") and descendant.Part0 then
+        entry.at = vec((descendant.Part0.CFrame * descendant.C0).Position)
+      end
+    end
+    if descendant:IsA("Bone") then entry.at = vec(descendant.WorldPosition) end
+    table.insert(items, entry)
+  end
+end
+return { top = top, items = items, counted = counted, overflow = overflow }
 `;
 
 // Whether the plugin can read the uploaded meshes, as previews of a creature would.
@@ -661,8 +698,16 @@ end
 return results
 `;
 
-const GENERATED_FOLDER_EXISTS = `
-return game:GetService("ServerStorage"):FindFirstChild("__MCPGeneratedModels") ~= nil
+// What generate_model's folder held before the spike asked, so cleanup removes
+// only what the spike made, even a model that lands after its call timed out:
+// the plugin runs each request in its own task, so a generation outlives it.
+const GENERATED_BEFORE = `
+local generated = game:GetService("ServerStorage"):FindFirstChild("__MCPGeneratedModels")
+local names = {}
+if generated then
+  for _, child in generated:GetChildren() do table.insert(names, child.Name) end
+end
+return { exists = generated ~= nil, names = names }
 `;
 
 const readGenerated = (name) => `${PRELUDE}
@@ -899,24 +944,40 @@ dog:Destroy()
 return report
 `;
 
+// Removes the spike's folders, and every model generate_model made under the
+// spike's name that was not there before, including one that landed after its
+// call failed. A generation still running when this runs lands afterwards.
 const cleanup = (generated) => `
 local SPIKE = ${lua(SPIKE_FOLDER)}
 local storage = game:GetService("ServerStorage")
-local generatedName = ${lua(generated?.name)}
-if generatedName then
+local removedGenerated = {}
+local before = ${generated ? luaList(generated.before) : 'nil'}
+if before then
+  local known = {}
+  for _, name in before do known[name] = true end
   local generatedFolder = storage:FindFirstChild("__MCPGeneratedModels")
-  local model = generatedFolder and generatedFolder:FindFirstChild(generatedName)
-  if model then model:Destroy() end
-  -- The folder goes too only if generate_model made it for this spike.
-  if generatedFolder and ${generated?.folderExisted === false ? 'true' : 'false'} and #generatedFolder:GetChildren() == 0 then
-    generatedFolder:Destroy()
+  if generatedFolder then
+    for _, child in generatedFolder:GetChildren() do
+      local ours = child.Name == ${lua(GENERATED_NAME)} or string.match(child.Name, ${lua(`^${GENERATED_NAME}_%d+$`)}) ~= nil
+      if ours and not known[child.Name] then
+        table.insert(removedGenerated, child.Name)
+        child:Destroy()
+      end
+    end
+    -- The folder goes too only if generate_model made it for this spike.
+    if ${generated?.folderExisted === false ? 'true' : 'false'} and #generatedFolder:GetChildren() == 0 then
+      generatedFolder:Destroy()
+    end
   end
 end
 for _, container in { workspace, storage } do
   local folder = container:FindFirstChild(SPIKE)
   if folder then folder:Destroy() end
 end
-return workspace:FindFirstChild(SPIKE) == nil and storage:FindFirstChild(SPIKE) == nil
+return {
+  spikeFoldersRemoved = workspace:FindFirstChild(SPIKE) == nil and storage:FindFirstChild(SPIKE) == nil,
+  generatedRemoved = removedGenerated,
+}
 `;
 
 const notAsked = { answer: 'not asked', evidence: 'the spike stopped before this question' };
@@ -1191,18 +1252,23 @@ const passed = await runTest('creature spike', async ({ track }) => {
     }
 
     if (GENERATE) {
-      const existed = await luau(client, 'looking for generated models', GENERATED_FOLDER_EXISTS);
-      const made = await tool(client, 'generating a creature', 'generate_model', {
-        prompt: 'a low-poly wolf standing on four legs, with a tail',
-        schema_groups: GENERATED_GROUPS,
-        name: 'SpikeWolf',
-        size: { x: 2, y: 3, z: 5 },
-        timeout_ms: 180_000,
-      }, 200_000);
-      const name = typeof made?.modelPath === 'string' ? made.modelPath.split('.').pop() : undefined;
-      generated = { name, folderExisted: existed === true };
-      const readback = name ? await luau(client, 'reading the generated creature', readGenerated(name)) : null;
-      report.questions.generateModelGroups = judgeGenerated(made, readback);
+      const before = await luau(client, 'looking for generated models', GENERATED_BEFORE);
+      if (before?.error) {
+        report.questions.generateModelGroups = couldNotAsk(before);
+      } else {
+        // Known before the call, so cleanup looks for the model even if the call fails.
+        generated = { before: Array.isArray(before?.names) ? before.names : [], folderExisted: before?.exists === true };
+        const made = await tool(client, 'generating a creature', 'generate_model', {
+          prompt: 'a low-poly wolf standing on four legs, with a tail',
+          schema_groups: GENERATED_GROUPS,
+          name: GENERATED_NAME,
+          size: { x: 2, y: 3, z: 5 },
+          timeout_ms: 180_000,
+        }, 200_000);
+        const name = typeof made?.modelPath === 'string' ? made.modelPath.split('.').pop() : undefined;
+        const readback = name ? await luau(client, 'reading the generated creature', readGenerated(name)) : null;
+        report.questions.generateModelGroups = judgeGenerated(made, readback);
+      }
     } else {
       report.questions.generateModelGroups = { answer: 'skipped', evidence: report.generate };
     }
@@ -1252,7 +1318,14 @@ const passed = await runTest('creature spike', async ({ track }) => {
     // error that got us here; it is asserted below once the questions ran.
     cleaned = await luau(client, 'cleaning up', cleanup(generated));
     rmSync(rbxmPath, { force: true });
-    report.cleanup = cleaned === true ? 'spike folders removed' : cleaned;
+    report.cleanup = cleaned?.spikeFoldersRemoved === true
+      ? { spikeFolders: 'removed', generatedModelsRemoved: cleaned.generatedRemoved ?? [] }
+      : cleaned;
+    // A model that arrived although its call failed: the generation outlived the call.
+    const generatedQuestion = report.questions.generateModelGroups;
+    if (generatedQuestion.answer === 'could not be asked' && (cleaned?.generatedRemoved ?? []).length > 0) {
+      generatedQuestion.evidence = { call: generatedQuestion.evidence, landedAfterTheCallFailed: cleaned.generatedRemoved };
+    }
     report.problems = problems;
     report.finishedAt = new Date().toISOString();
     writeFileSync(reportPath, `${JSON.stringify(report, null, 2)}\n`);
@@ -1262,7 +1335,7 @@ const passed = await runTest('creature spike', async ({ track }) => {
     }
     for (const problem of problems) console.error(`  Could not ask (${problem.step}): ${problem.error}`);
   }
-  assert(cleaned === true, 'spike folders removed from the place');
+  assert(cleaned?.spikeFoldersRemoved === true, 'spike folders removed from the place');
   assert(problems.length === 0, 'every question could be asked');
 });
 

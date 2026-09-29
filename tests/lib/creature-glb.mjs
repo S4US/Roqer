@@ -176,6 +176,9 @@ export function articulatedCreatureGlb(pieces = CREATURE_PIECES) {
 /** Studs two positions may differ by and still be the same place. */
 const NEAR = 0.05;
 
+/** Classes that join two parts, or stand for a joint as a bone does. */
+const JOINT_CLASSES = new Set(['Motor6D', 'Motor', 'Weld', 'ManualWeld', 'Snap', 'Glue', 'WeldConstraint', 'AnimationConstraint', 'Bone']);
+
 const difference = (a, b) => a.map((value, axis) => value - b[axis]);
 const distance = (a, b) => Math.hypot(...difference(a, b));
 const isVector = (value) => Array.isArray(value) && value.length === 3 && value.every((entry) => typeof entry === 'number');
@@ -188,11 +191,16 @@ const round = (value) => Math.round(value * 1000) / 1000;
  * origins survived, and how the parts are nested.
  *
  * `readback` is the spike's Luau readout of the folder the insert went into:
- * `top`, its children, and `items`, its descendants, each with class, name and
- * parent, and for a part its size, position, pivot and axes.
+ * `top`, its children; `items`, its parts, joints, bones, controllers, models
+ * and folders, each with class, name and parent, for a part its size,
+ * position, pivot and axes, and for a joint the parts it joins and where it is;
+ * `counted`, every other descendant counted by class and parent; and
+ * `overflow`, how many listable descendants did not fit in `items`.
  */
 export function judgeImport(readback, pieces = CREATURE_PIECES) {
   const items = Array.isArray(readback?.items) ? readback.items : [];
+  const counted = readback?.counted && !Array.isArray(readback.counted) ? readback.counted : {};
+  const overflow = typeof readback?.overflow === 'number' ? readback.overflow : 0;
   const meshParts = items.filter((item) => item?.class === 'MeshPart' && isVector(item.size) && isVector(item.position));
   const matches = pieces.map((piece) => {
     const byNode = meshParts.filter((part) => part.name === piece.name);
@@ -222,6 +230,8 @@ export function judgeImport(readback, pieces = CREATURE_PIECES) {
     // Of the pieces recognised; one that did not arrive shows in `found` instead.
     sizesMatch: found.length > 0 && pieceSummary.filter((entry) => entry.part !== null).every((entry) => entry.sizeMatches),
     pieceSummary,
+    rig: judgeRig(items, counted, found, body, reference),
+    overflow,
   };
   if (!reference || found.length < 2) return { ...finding, layout: 'unknown', origins: 'unknown', hierarchy: 'unknown' };
 
@@ -279,10 +289,59 @@ export function judgeImport(readback, pieces = CREATURE_PIECES) {
   };
 }
 
+/**
+ * What the import made of the node tree as a rig: the joints and controllers
+ * it came with, whether a joint joins each piece to the piece it hangs from,
+ * and whether the joints sit at the node origins, where the pieces turn.
+ */
+function judgeRig(items, counted, found, body, reference) {
+  const joints = items.filter((item) => JOINT_CLASSES.has(item?.class));
+  const summary = {
+    joints: joints.map((joint) => ({ class: joint.class, name: joint.name, part0: joint.part0 ?? null, part1: joint.part1 ?? null })),
+    controllers: items.filter((item) => item?.class === 'Humanoid' || item?.class === 'AnimationController').map((item) => item.class),
+    animators: items.filter((item) => item?.class === 'Animator').length,
+    initialPoseValues: Object.entries(counted)
+      .filter(([key, count]) => key.endsWith(' in InitialPoses') && typeof count === 'number')
+      .reduce((sum, [, count]) => sum + count, 0),
+  };
+  if (joints.length === 0) return { ...summary, tree: 'no joints', jointsAt: 'no joints' };
+
+  // Each modelled pair of a piece and the piece it hangs from, and whether a
+  // joint between two parts joins them. A bone joins no parts, so it is
+  // judged by where it is alone.
+  const partOf = new Map(found.map(({ piece, part }) => [piece.name, part.name]));
+  const links = joints.filter((joint) => joint.class !== 'Bone');
+  const pairs = found.filter(({ piece }) => piece.parent !== null && partOf.has(piece.parent));
+  const joined = pairs.filter(({ piece, part }) => links.some((joint) => {
+    const ends = [joint.part0, joint.part1];
+    return ends.includes(part.name) && ends.includes(partOf.get(piece.parent));
+  }));
+  const tree = links.length === 0 || pairs.length === 0 ? 'unknown'
+    : joined.length === pairs.length ? 'kept'
+      : joined.length > 0 ? `${joined.length} of ${pairs.length} pairs joined`
+        : 'not joined as modelled';
+
+  // A joint belongs where the node origin of the piece it moves is; a bone,
+  // where the origin of the node it is named after is.
+  const pieceOfPart = new Map(found.map(({ piece, part }) => [part.name, piece]));
+  const pieceNamed = new Map(found.map(({ piece }) => [piece.name, piece]));
+  const offsets = !reference ? [] : joints.flatMap((joint) => {
+    const piece = joint.class === 'Bone' ? pieceNamed.get(joint.name) : pieceOfPart.get(joint.part1);
+    if (!piece || !isVector(joint.at)) return [];
+    return [distance(difference(joint.at, reference.position), robloxAxes(difference(piece.origin, body.piece.center)))];
+  });
+  const jointsAt = offsets.length === 0 ? 'unknown'
+    : offsets.every((offset) => offset <= NEAR) ? 'the modelled origins'
+      : 'elsewhere';
+  return { ...summary, tree, jointsAt, ...(offsets.length > 0 ? { worstJointStuds: round(Math.max(...offsets)) } : {}) };
+}
+
 /** One line for the report's answer. */
 export function describeImport(finding) {
   if (!finding || finding.found === 0) return 'no piece recognised';
   const naming = new Set(finding.pieceSummary.filter((entry) => entry.part).map((entry) => entry.namedAfter));
+  const rig = finding.rig;
+  const kinds = [...new Set((rig?.joints ?? []).map((joint) => joint.class))];
   return [
     `${finding.meshParts} MeshParts for ${finding.pieces} pieces${finding.found < finding.pieces ? `, ${finding.found} recognised` : ''}`,
     `named after the ${[...naming].join(' or ')}`,
@@ -290,5 +349,9 @@ export function describeImport(finding) {
     `layout ${finding.layout}`,
     `origins ${finding.origins}`,
     `hierarchy ${finding.hierarchy}`,
+    !rig || rig.joints.length === 0 ? 'no joints'
+      : `${rig.joints.length} joints (${kinds.join(', ')}), tree ${rig.tree}, at ${rig.jointsAt}`
+        + `${rig.controllers.length > 0 ? `, under ${rig.controllers.join(' and ')}` : ', no controller'}`,
+    ...(finding.overflow > 0 ? [`${finding.overflow} parts or joints not listed`] : []),
   ].join('; ');
 }

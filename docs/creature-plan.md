@@ -1,9 +1,11 @@
 # Creature and NPC animation plan
 
-Status as of 2026-09-29: proposed and not yet scheduled; nothing in it is
-built. It details steps 12 to 14 of the [animation plan](animation-plan.md)
-(creatures made of rigid parts, skinned creatures, animating in Blender), adds
-NPCs, and orders the work anew. Update each step's status here as it lands.
+Status as of 2026-09-29: proposed and not yet scheduled. Step 1, the creature
+spike, has run: questions 1 to 6 are answered in [Live results](#live-results),
+and 7 and 8 need a second run. The plan details steps 12 to 14 of the
+[animation plan](animation-plan.md) (creatures made of rigid parts, skinned
+creatures, animating in Blender), adds NPCs, and orders the work anew. Update
+each step's status here as it lands.
 
 ## Goal
 
@@ -130,7 +132,10 @@ rig is read from its model.
   conversion, which relies on the parent part standing upright.
 - **Root and body.** The joint that takes a `position`, and the part that
   heading and the shadow follow. Today these are `rig.joints[0]` and
-  `Rig.body`, and root drift looks for a joint named `Root`.
+  `Rig.body`, and root drift looks for a joint named `Root`. Under an
+  `AnimationController` the top pose may carry the root part's own name as
+  well as `HumanoidRootPart` (spike question 2), so a rig keeps its root's
+  name.
 
 What geometry cannot say is declared:
 
@@ -189,8 +194,9 @@ In one undo step, all or nothing, it:
   the model and reachable from the root; no cycle; part names unique within the
   rig, since a keyframe's poses find their joints by name; a pivot inside or
   touching both parts it joins, since a pivot at the middle of a piece instead
-  of its end is the usual mistake; at most 64 joints, unless the spike finds
-  the engine's limit lower;
+  of its end is the usual mistake; at most 64 joints, a bound of Roqer's for
+  summaries and previews, since the engine drove a 128-joint chain and 256
+  joints in one keyframe (spike question 3);
 - **places the pieces** whose centres were given;
 - **joins them** with one `Motor6D` per joint, whose C0 and C1 line the joint's
   frame up with the root's axes at the pivot, so every rig it builds takes
@@ -202,9 +208,11 @@ In one undo step, all or nothing, it:
   `PrimaryPart`. Without a root it makes one: an invisible box named
   `HumanoidRootPart` around the body;
 - **adds the controller**: a `Humanoid`, with its hip height from the rest pose,
-  for a creature that walks with Humanoid movement and pathfinding, or an
-  `AnimationController` for one that flies, swims, slithers or stays put; each
-  with an `Animator`;
+  for a creature that walks with Humanoid movement and pathfinding, on two legs
+  or four (spike question 6), or an `AnimationController` for one that flies,
+  swims, slithers or stays put; each with an `Animator`. A Humanoid on a body
+  without R15's neck has `RequiresNeck` and `BreakJointsOnDeath` off, as the
+  spike's walking dog had;
 - **writes `RoqerRig`** and stamps the rig's revision;
 - **reads the rig back** and returns a compact summary: joints as parent to
   child, limbs, feet, ground height, hip height and the revision. With it comes
@@ -221,7 +229,9 @@ Two other forms:
   creatures from the Creator Store and rigs the user made.
 - **Stock.** Given `R15` or `R6`, it makes a stock NPC body at the model's path
   from a `HumanoidDescription` (body colours and scale), which the recipes
-  already fit, instead of the agent writing Luau for it.
+  already fit, instead of the agent writing Luau for it. It leaves out the
+  body's `Animate` script, which plays nothing on an NPC (spike question 5),
+  so the loader is the one thing that animates it.
 
 The inspector edition refuses `rig`, which writes. Reading a rig for `check`
 works in both editions.
@@ -299,9 +309,9 @@ Roblox-published animated creatures turn up, they are measured the same way.
   Bounded at 64 joints and 128 parts.
 - **Previewing on the model.** The preview clones the model into the temporary
   Workspace folder, anchors its root far from the place, plays and steps the
-  clip as it does the stock dummy, and destroys everything on every path. A
-  model that cannot be cloned, because a part is not archivable, is refused
-  with the part named.
+  clip as it does the stock dummy, and destroys everything on every path; a
+  copy played as checked (spike question 4). A model that cannot be cloned,
+  because a part is not archivable, is refused with the part named.
 - **Limits follow the rig.** A keyframe's poses and their nesting are bounded
   by the rig's own joint count, up to 64, instead of 32 and 8.
 
@@ -377,7 +387,7 @@ For the dog, steps 1 and 2 become one `build_instances` batch. For the guard,
 Each step ends with something a user can use, and each rests on what a live
 test showed.
 
-### 1. Creature spike — written, not yet run
+### 1. Creature spike — run 2026-09-29; questions 7 and 8 to run again
 
 `tests/creature-spike.mjs`, run with `npm run test:spike:creature`, is a
 research probe like the animation spike: its answers are findings, not
@@ -408,10 +418,11 @@ says how to run it. Its questions:
    Blender is needed. Does each piece arrive as one MeshPart, named after its
    node or its mesh, and at its size? Placed as modelled? Nested as modelled?
    Does each MeshPart's pivot sit at its bounds' centre or at the node's
-   origin? Does `insert_asset` place the pieces the same with a position as
-   without one? Can `EditableMesh` read the meshes back? The dog's test
-   animation is published too, so question 1 sees a published animation
-   played by the server reach a client.
+   origin? Does it come rigged: joints between the pieces, at their node
+   origins, under a controller? Does `insert_asset` place the pieces the same
+   with a position as without one? Can `EditableMesh` read the meshes back?
+   The dog's test animation is published too, so question 1 sees a published
+   animation played by the server reach a client.
 8. With `ROQER_SPIKE_GENERATE=1`: does `generate_model`, with `schema_groups`
    naming a creature's pieces, return them as separate, named parts?
 
@@ -505,7 +516,10 @@ moves.
 - The articulated recipe, and the inspection's origins, parents, pivot flags
   and ready `rig` arguments.
 - The flow: one job, one upload, `insert_asset`, `rig` with the pieces'
-  centres, then the animations.
+  centres, then the animations. If spike question 7 finds that the import
+  arrives joined at its node origins, as its `InitialPoses` folder suggests,
+  `rig` adopts the imported rig instead, and the inspection's arguments only
+  check it.
 - **Eval T17** `creature-blender` gives the wolf prompt, which the animation
   plan reserved T17 for. It needs `--blender` and an Open Cloud key.
 
@@ -568,9 +582,11 @@ Electron smoke for IPC or persistence changes.
 
 ## Risks
 
-- **A Humanoid on four legs** may tip or jitter a body it was not made for. If
-  spike question 6 says so, four-legged creatures default to an
-  `AnimationController` and a simple mover the skill supplies.
+- **A Humanoid on four legs** walked a dog steadily on flat ground at 8 and 16
+  studs a second (spike question 6), so four-legged walkers default to a
+  Humanoid. Slopes, stairs, turns and long or heavy bodies were not tried; if
+  one of them tips or jitters, that body gets an `AnimationController` and a
+  simple mover the skill supplies.
 - **Limits borrowed from R15** are reasoned guesses until reference creature
   animations exist, and their results say so.
 - **Name collisions.** Poses find joints by name. `rig` refuses repeated names,
@@ -593,5 +609,64 @@ Electron smoke for IPC or persistence changes.
 
 ## Live results
 
-None yet. Record each spike and model-driven run here: the date, the Studio
-version, what was run, and the answer to each question.
+Record each spike and model-driven run here: the date, the Studio version,
+what was run, and the answer to each question.
+
+### Creature spike, 2026-09-29
+
+`npm run test:spike:creature` ran three ways on the managed runner's Baseplate
+place, with streaming on, in Studio 0.740.19: with neither the upload nor the
+generator, with the upload, and with both. The run with neither answered:
+
+| Question | Answer |
+| --- | --- |
+| 1. Does a part-keyed sequence drive `Motor6D`s on a model? | Yes, under a `Humanoid` and under an `AnimationController`, in edit mode and on the playtest's server |
+| 1. Does a client see what the server plays? | Yes, for a clip registered in the playtest; see below |
+| 1. Can a client play on the model itself? | Yes |
+| 2. The top pose under an `AnimationController` | Either the root part's own name or `HumanoidRootPart` |
+| 3. How many joints does a sequence drive? | Every size tried: a 128-joint chain, its poses 129 deep, and 256 joints in one keyframe |
+| 4. Does a copy preview as the dummy does? | Yes, and the preview folder was removed |
+| 5. Does a stock NPC's `Animate` run? | It has one, and it played nothing on the server or the client |
+| 6. Does `Humanoid:MoveTo` walk four legs steadily? | Yes: at 8 and 16 studs a second the dog reached its goal, never tilting past 15°, falling, ragdolling or dying |
+
+What changes:
+
+- Questions 1, 2 and 4 hold the design as it stands: a model under either
+  controller is animated and previewed as a character is, and a rig keeps its
+  root's name.
+- Question 3: the engine is not what bounds a rig; `rig` bounds it at 64
+  joints for summaries and previews.
+- Question 5: an NPC stands still until the loader animates it, which step 2
+  builds; `rig`'s stock form leaves the inert `Animate` out.
+- Question 6: four-legged walkers get a `Humanoid`, as the Risks section now
+  says.
+
+Still open:
+
+- **Question 1 on a live server.** The client registered the same clip
+  itself, and in a Studio playtest the client and the server run in one
+  Studio, so the answer says little about a live game, which plays published
+  animations. The upload runs played a published one, and their answer is to
+  be copied here.
+- **Question 4's collar.** Whether the copy left the part that cannot be
+  archived out, as the preview's refusal assumes, is in the reports' evidence,
+  not the answer.
+- **Question 7.** The upload runs answered it, and their answers are to be
+  copied here. One thing is certain from them: the import came with an
+  `InitialPoses` folder of `CFrameValue`s, `<name>_Initial`, `_Original` and
+  `_Composited`, for each node's name and each mesh's name. A folder of that
+  name is where Studio's importer keeps a rig's rest pose, so the importer may
+  have joined the pieces itself. But the readback stopped at its bound of 60
+  descendants partway through those values, before the last piece's, and read
+  no joint's parts or place. The spike now lists parts, joints and bones in
+  full, counts everything else, and judges whether the joints join the pieces
+  as modelled, at their node origins.
+- **Question 8** could not be asked: `generate_model` failed with `Proxy
+  request timeout` after 30 seconds. The spike's client reaches Studio through
+  a proxy-mode MCP server, which forwarded every request with a fixed
+  30-second wait, whatever the tool asked for, and `generate_model` asks for
+  two minutes by default. Core now forwards the tool's wait, and the primary
+  honours it, up to the five minutes a tool may ask for.
+
+Next: run the spike again with `ROQER_SPIKE_UPLOAD=1` and
+`ROQER_SPIKE_GENERATE=1`, and record questions 1, 7 and 8 here.

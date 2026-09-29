@@ -291,7 +291,9 @@ asks what Roblox does with a rig that is not a character:
    arrive? The spike writes the GLB itself (`tests/lib/creature-glb.mjs`), each
    piece a node with its origin at its joint, as Blender exports one, and
    inserts it twice: with no position, and with one, since the kit probe's lost
-   layout may have been `insert_asset`'s doing. It reads the meshes back through
+   layout may have been `insert_asset`'s doing. It lists the joints, bones and
+   controllers the import came with, and whether the joints join the pieces as
+   modelled, at their node origins. It reads the meshes back through
    `EditableMesh`, and publishes the dog's test animation, so question 1 can
    see a published animation reach the client.
 8. With `ROQER_SPIKE_GENERATE=1`: does `generate_model`, given
@@ -308,11 +310,27 @@ ROQER_SPIKE_UPLOAD=1 ROBLOX_OPEN_CLOUD_API_KEY=... ROBLOX_CREATOR_USER_ID=... \
 ROQER_SPIKE_GENERATE=1 npm run test:spike:creature
 ```
 
+Type the key at a prompt rather than on the command line, where the shell's
+history keeps it. In bash:
+
+```bash
+read -rs ROBLOX_OPEN_CLOUD_API_KEY && export ROBLOX_OPEN_CLOUD_API_KEY
+```
+
+In PowerShell:
+
+```powershell
+$env:ROBLOX_OPEN_CLOUD_API_KEY = [Net.NetworkCredential]::new('', (Read-Host -AsSecureString)).Password
+```
+
 The answers are findings, not assertions: a "no" still exits 0. The spike fails
 when a question could not be asked, because a probe errored, for example, or
 when it cannot clean up. It works in temporary `__RoqerCreatureSpike` folders in
-Workspace and ServerStorage, which it removes on every path together with any
-model it generated, and stops the playtest it starts. The uploads are named
+Workspace and ServerStorage, which it removes on every path, and stops the
+playtest it starts. It also removes every model `generate_model` made under the
+spike's name, even one that landed after its call failed, since Studio keeps
+generating after a caller gives up; one still generating when the spike ends
+lands afterwards. The uploads are named
 "Roqer creature spike: model" and "Roqer creature spike: dog hold" and can be
 archived afterwards in the Creator Dashboard. The report and the GLB go to
 `tmp/creature-spike/`.
