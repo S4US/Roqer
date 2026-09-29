@@ -27,6 +27,8 @@ export const POSE_LIMITS = {
   maxNameLength: 100,
   maxRotationDegrees: 360,
   maxRootOffsetStuds: 20,
+  maxMarkersPerKeyframe: 16,
+  maxMarkerValueLength: 200,
   /**
    * Degrees a joint may turn between consecutive keys, unless the earlier key
    * snaps (Constant). Past 90° Studio's playback of Linear keys drifts from a
@@ -73,13 +75,25 @@ export interface JointPoseSpec {
   easing?: PoseEasing;
 }
 
+/**
+ * A named event at a keyframe's time, built as a KeyframeMarker, which
+ * AnimationTrack:GetMarkerReachedSignal(name) fires with the value.
+ */
+export interface PoseMarkerSpec {
+  name: string;
+  /** Passed to the signal's handler; defaults to "". */
+  value?: string;
+}
+
 export interface PoseKeyframeSpec {
   /** Seconds from the start. The first keyframe is at 0, and times increase. */
   time: number;
   /** Optional Keyframe name, which KeyframeReached reports. */
   name?: string;
   easing?: PoseEasing;
+  /** Joints keyed here. May be empty only when the keyframe carries markers. */
   joints: Record<string, JointPoseSpec>;
+  markers?: PoseMarkerSpec[];
 }
 
 export interface PoseAnimationSpec {
@@ -118,9 +132,16 @@ export interface CompiledPose {
   children: CompiledPose[];
 }
 
+export interface CompiledMarker {
+  name: string;
+  value: string;
+}
+
 export interface CompiledKeyframe {
   time: number;
   name?: string;
+  /** KeyframeMarkers at this keyframe's time; absent when there are none. */
+  markers?: CompiledMarker[];
   /** The root part's pose, with the rest nested beneath it. */
   root: CompiledPose;
 }
@@ -138,6 +159,8 @@ export interface KeyframeSequenceDescription {
   /** Every Pose instance, placeholders included. */
   poseCount: number;
   keyedPoseCount: number;
+  /** Every KeyframeMarker, across all keyframes. */
+  markerCount: number;
 }
 
 export type PoseCompileResult =
@@ -235,6 +258,7 @@ export function aimRotation(jointName: string, aim: readonly [number, number, nu
 interface ParsedKeyframe {
   time: number;
   name?: string;
+  markers: CompiledMarker[];
   easing: { style?: PoseEasingStyle; direction?: PoseEasingDirection };
   joints: Map<string, ParsedJoint>;
 }
@@ -322,14 +346,48 @@ function parseVector(value: unknown, limit: number, unit: string, path: string, 
     : [0, 0, 0];
 }
 
-function parseJoints(value: unknown, rig: Rig, path: string, issues: Issues): Map<string, ParsedJoint> {
+function parseMarkers(value: unknown, path: string, issues: Issues): CompiledMarker[] {
+  if (value === undefined) return [];
+  if (!Array.isArray(value)) {
+    issues.add(path, 'must be an array of { name, value? }');
+    return [];
+  }
+  if (value.length > POSE_LIMITS.maxMarkersPerKeyframe) {
+    issues.add(path, `must hold at most ${POSE_LIMITS.maxMarkersPerKeyframe} markers`);
+    return [];
+  }
+  const markers: CompiledMarker[] = [];
+  value.forEach((entry, index) => {
+    const markerPath = `${path}[${index}]`;
+    if (!isRecord(entry)) {
+      issues.add(markerPath, 'must be an object with name and optional value');
+      return;
+    }
+    checkKeys(entry, ['name', 'value'], markerPath, issues);
+    const name = parseName(entry.name, `${markerPath}.name`, issues);
+    let text = '';
+    if (entry.value !== undefined) {
+      if (typeof entry.value !== 'string') {
+        issues.add(`${markerPath}.value`, 'must be a string');
+      } else if (entry.value.length > POSE_LIMITS.maxMarkerValueLength) {
+        issues.add(`${markerPath}.value`, `must be at most ${POSE_LIMITS.maxMarkerValueLength} characters`);
+      } else {
+        text = entry.value;
+      }
+    }
+    if (name !== undefined) markers.push({ name, value: text });
+  });
+  return markers;
+}
+
+function parseJoints(value: unknown, rig: Rig, path: string, issues: Issues, allowEmpty: boolean): Map<string, ParsedJoint> {
   const joints = new Map<string, ParsedJoint>();
   if (!isRecord(value)) {
     issues.add(path, 'must be an object of joint name to pose');
     return joints;
   }
   const names = Object.keys(value);
-  if (names.length === 0) issues.add(path, 'must key at least one joint');
+  if (names.length === 0 && !allowEmpty) issues.add(path, 'must key at least one joint, or carry markers');
   for (const name of names) {
     const jointPath = `${path}.${name}`;
     const joint = rig.joints.find((candidate) => candidate.name === name);
@@ -410,7 +468,7 @@ function parseKeyframes(value: unknown, rig: Rig, issues: Issues): ParsedKeyfram
       issues.add(path, 'must be an object with time and joints');
       return;
     }
-    checkKeys(entry, ['time', 'name', 'easing', 'joints'], path, issues);
+    checkKeys(entry, ['time', 'name', 'easing', 'joints', 'markers'], path, issues);
     const time = entry.time;
     if (typeof time !== 'number' || !Number.isFinite(time) || time < 0) {
       issues.add(`${path}.time`, 'must be a finite number of seconds, 0 or more');
@@ -424,11 +482,13 @@ function parseKeyframes(value: unknown, rig: Rig, issues: Issues): ParsedKeyfram
       }
       previousTime = time;
     }
+    const markers = parseMarkers(entry.markers, `${path}.markers`, issues);
     keyframes.push({
       time: typeof time === 'number' ? time : 0,
       name: entry.name === undefined ? undefined : parseName(entry.name, `${path}.name`, issues),
+      markers,
       easing: parseEasing(entry.easing, `${path}.easing`, issues),
-      joints: parseJoints(entry.joints, rig, `${path}.joints`, issues),
+      joints: parseJoints(entry.joints, rig, `${path}.joints`, issues, markers.length > 0),
     });
   });
 
@@ -542,6 +602,7 @@ function compileKeyframe(
     keyframe: {
       time: keyframe.time,
       ...(keyframe.name !== undefined ? { name: keyframe.name } : {}),
+      ...(keyframe.markers.length > 0 ? { markers: keyframe.markers } : {}),
       root: build(rig.rootPart),
     },
     poses,
@@ -594,6 +655,7 @@ export function compilePoseAnimation(input: unknown): PoseCompileResult {
       keyframes: compiled,
       poseCount,
       keyedPoseCount,
+      markerCount: keyframes.reduce((total, keyframe) => total + keyframe.markers.length, 0),
     },
   };
 }

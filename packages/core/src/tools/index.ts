@@ -1803,8 +1803,11 @@ export class RobloxStudioTools {
       readBack: {
         keyframes: written.keyframes,
         poses: written.poses,
+        markers: written.markers,
         matchesCompiled: written.keyframes === expected.keyframes
           && written.poses === expected.poses
+          // A plugin from before markers reports none, so any it dropped show here.
+          && (written.markers ?? 0) === expected.markers
           && written.stampMatches === true,
       },
       playback,
@@ -1942,7 +1945,7 @@ export class RobloxStudioTools {
       approved: /^approved$/i.test(moderation),
       readBack: readBack?.error
         ? { matches: false, error: readBack.error }
-        : { matches: readBack.matches === true, keyframes: readBack.keyframes, poses: readBack.poses },
+        : { matches: readBack.matches === true, keyframes: readBack.keyframes, poses: readBack.poses, markers: readBack.markers },
     };
     if (/reject/i.test(moderation)) {
       return this._textResult({ published: false, error: `Roblox moderation rejected the animation (${moderation}); it will not play.`, ...result });

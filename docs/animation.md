@@ -45,6 +45,10 @@ tells you that publishing needs a key.
 
    It starts from tested recipes for a wave, idle, walk, run and jump, which
    ship with Roqer's animation skill.
+
+   A keyframe can also carry markers: named events, such as the moment a
+   sword hit lands, that a game script waits for with
+   `GetMarkerReachedSignal`.
 2. **Roqer checks it before Studio sees it.** It compiles the description and
    measures the motion:
 

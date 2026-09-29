@@ -102,6 +102,7 @@ export function describeAnimation(sequence: KeyframeSequenceDescription) {
     loop: sequence.loop,
     priority: sequence.priority,
     joints: sequence.joints,
+    ...(sequence.markerCount > 0 ? { markers: sequence.markerCount } : {}),
   };
 }
 
@@ -287,5 +288,5 @@ export function verifyLivePlayback(sequence: KeyframeSequenceDescription, sample
 
 /** Poses in a compiled sequence, placeholders included: what a read-back must find. */
 export function expectedCounts(sequence: KeyframeSequenceDescription) {
-  return { keyframes: sequence.keyframes.length, poses: sequence.poseCount };
+  return { keyframes: sequence.keyframes.length, poses: sequence.poseCount, markers: sequence.markerCount };
 }

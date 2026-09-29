@@ -24,6 +24,21 @@ and returns a contact sheet, without touching Studio.
   CubicV2, Elastic and Bounce; directions are In, Out and InOut. It can be set
   on a joint, a keyframe or the whole animation, and the nearest one applies.
 
+## Markers
+
+A keyframe's `markers` puts named events at its time, for scripts to time
+gameplay to: the frame a sword hit lands, a footstep, a whoosh.
+
+```text
+{ time: 0.32, joints: {}, markers: [{ name: "Hit", value: "light" }] }
+```
+
+- A script listens with `track:GetMarkerReachedSignal("Hit")`; its handler
+  receives `value` (a string, `""` when left out).
+- A keyframe that only carries markers may key no joints: `joints: {}`.
+- A keyframe's `name` is not a marker. It only fires the older
+  `KeyframeReached` event, so use `markers` for anything a script waits on.
+
 ## Poses
 
 Each pose takes one of these:

@@ -25,6 +25,8 @@ const MAX_KEYFRAMES = 240;
 const MAX_POSES_PER_KEYFRAME = 32;
 const MAX_POSE_DEPTH = 8;
 const MAX_NAME_LENGTH = 100;
+const MAX_MARKERS_PER_KEYFRAME = 16;
+const MAX_MARKER_VALUE_LENGTH = 200;
 const MAX_SAMPLES = 32;
 const TRACK_LOAD_SECONDS = 10;
 
@@ -78,6 +80,26 @@ function buildPose(data: unknown, parent: Instance, depth: number, count: { valu
 	instance.Parent = parent;
 }
 
+/** KeyframeMarkers, which AnimationTrack:GetMarkerReachedSignal fires at their keyframe's time. */
+function buildMarkers(data: unknown, keyframe: Keyframe) {
+	if (data === undefined) return;
+	if (!typeIs(data, "table")) error("a keyframe's markers must be an array");
+	const list = data as unknown[];
+	if (list.size() > MAX_MARKERS_PER_KEYFRAME) error(`a keyframe holds at most ${MAX_MARKERS_PER_KEYFRAME} markers`);
+	for (const entry of list) {
+		if (!typeIs(entry, "table")) error("every marker must be an object");
+		const marker = entry as Data;
+		const value = marker.value;
+		if (!typeIs(value, "string") || value.size() > MAX_MARKER_VALUE_LENGTH) {
+			error(`a marker's value must be a string of at most ${MAX_MARKER_VALUE_LENGTH} characters`);
+		}
+		const instance = new Instance("KeyframeMarker");
+		instance.Name = checkName(marker.name, "a marker's name");
+		instance.Value = value;
+		instance.Parent = keyframe;
+	}
+}
+
 /** A detached KeyframeSequence from the compiled description, or an error. */
 function buildSequence(data: unknown): KeyframeSequence {
 	if (!typeIs(data, "table")) error("sequence must be an object");
@@ -106,6 +128,7 @@ function buildSequence(data: unknown): KeyframeSequence {
 			instance.Time = time;
 			if (keyframe.name !== undefined) instance.Name = checkName(keyframe.name, "a keyframe's name");
 			buildPose(keyframe.root, instance, 1, { value: 0 });
+			buildMarkers(keyframe.markers, instance);
 			instance.Parent = sequence;
 		}
 	});
@@ -144,6 +167,11 @@ function sequenceRevision(sequence: KeyframeSequence): string {
 		const poses = keyframe.GetChildren().filter((child): child is Pose => child.IsA("Pose"));
 		poses.sort((a, b) => a.Name < b.Name);
 		for (const pose of poses) describePose(pose, 1, out);
+		// Only a sequence with markers hashes them, so a revision taken before
+		// markers existed still matches its unchanged sequence.
+		const markers = keyframe.GetChildren().filter((child): child is KeyframeMarker => child.IsA("KeyframeMarker"));
+		markers.sort((a, b) => (a.Name === b.Name ? a.Value < b.Value : a.Name < b.Name));
+		for (const marker of markers) out.push(`m:${marker.Name}:${marker.Value}`);
 	}
 	return `kr1:${sourceRevision(out.join("\n")).sub(5)}`;
 }
@@ -151,11 +179,13 @@ function sequenceRevision(sequence: KeyframeSequence): string {
 function countContent(sequence: KeyframeSequence) {
 	let keyframes = 0;
 	let poses = 0;
+	let markers = 0;
 	for (const descendant of sequence.GetDescendants()) {
 		if (descendant.IsA("Keyframe")) keyframes += 1;
 		else if (descendant.IsA("Pose")) poses += 1;
+		else if (descendant.IsA("KeyframeMarker")) markers += 1;
 	}
-	return { keyframes, poses };
+	return { keyframes, poses, markers };
 }
 
 function componentsOf(cframe: CFrame): number[] {
@@ -333,6 +363,7 @@ function buildAnimation(requestData: Data) {
 		replaced: existing !== undefined,
 		keyframes: readBack.keyframes,
 		poses: readBack.poses,
+		markers: readBack.markers,
 		undoable: recordingId !== undefined,
 	};
 }
@@ -376,7 +407,7 @@ function animationReadBack(requestData: Data) {
 	const revision = sequenceRevision(fetched);
 	const counts = countContent(fetched);
 	fetched.Destroy();
-	return { revision, matches: revision === expected, keyframes: counts.keyframes, poses: counts.poses };
+	return { revision, matches: revision === expected, keyframes: counts.keyframes, poses: counts.poses, markers: counts.markers };
 }
 
 const LOADER_NAME = "RoqerAnimate";

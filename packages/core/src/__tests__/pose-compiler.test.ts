@@ -192,7 +192,7 @@ describe('compilePoseAnimation', () => {
       'keyframes[1].joints.Waist.rotation[2]: must be a finite number',
       'keyframes[2].time: must be later than the previous keyframe (0.1)',
       'keyframes[2].easing.style: must be one of Linear, Constant, Elastic, Cubic, Bounce, CubicV2',
-      'keyframes[2].joints: must key at least one joint',
+      'keyframes[2].joints: must key at least one joint, or carry markers',
       'keyframes[0].joints: "Waist" is keyed later, so it must be keyed in the first keyframe too',
     ]);
   });
@@ -262,6 +262,41 @@ describe('compilePoseAnimation', () => {
       'keyframes[0].joints.LeftShoulder.aim: must point somewhere: [right, up, forward], not all zero',
       'keyframes[0].joints.RightShoulder: give one of rotation, aim or bend, not rotation and aim',
       'keyframes[0].joints.LeftHip.bendToward: goes with aim',
+    ]);
+  });
+
+  test('compiles markers, and lets a keyframe that carries them key no joint', () => {
+    const sequence = compiled({
+      name: 'Slash',
+      rig: 'R15',
+      keyframes: [
+        { time: 0, joints: { RightShoulder: { aim: [0, -1, 0] } } },
+        { time: 0.2, joints: {}, markers: [{ name: 'Hit', value: 'heavy' }, { name: 'Swoosh' }] },
+        { time: 0.4, joints: { RightShoulder: { aim: [0, -1, 0.5] } } },
+      ],
+    });
+    expect(sequence.keyframes[1]).toMatchObject({ time: 0.2, markers: [{ name: 'Hit', value: 'heavy' }, { name: 'Swoosh', value: '' }] });
+    expect(outline(sequence.keyframes[1].root)).toBe('HumanoidRootPart*');
+    expect(sequence.keyframes[0]).not.toHaveProperty('markers');
+    expect(sequence.markerCount).toBe(2);
+
+    expect(errors({
+      name: 'Bad',
+      rig: 'R15',
+      keyframes: [
+        { time: 0, joints: { Neck: {} }, markers: [{ name: '' }, { name: 'Hit', value: 3 }, { name: 'Hit', when: 1 }, 'Hit'] },
+        { time: 0.1, joints: { Neck: {} }, markers: Array.from({ length: POSE_LIMITS.maxMarkersPerKeyframe + 1 }, () => ({ name: 'Hit' })) },
+        { time: 0.2, joints: { Neck: {} }, markers: [{ name: 'Hit', value: 'x'.repeat(POSE_LIMITS.maxMarkerValueLength + 1) }] },
+        { time: 0.3, joints: {}, markers: [] },
+      ],
+    })).toEqual([
+      'keyframes[0].markers[0].name: must be a non-empty string',
+      'keyframes[0].markers[1].value: must be a string',
+      'keyframes[0].markers[2]: unknown field "when"; expected name, value',
+      'keyframes[0].markers[3]: must be an object with name and optional value',
+      `keyframes[1].markers: must hold at most ${POSE_LIMITS.maxMarkersPerKeyframe} markers`,
+      `keyframes[2].markers[0].value: must be at most ${POSE_LIMITS.maxMarkerValueLength} characters`,
+      'keyframes[3].joints: must key at least one joint, or carry markers',
     ]);
   });
 

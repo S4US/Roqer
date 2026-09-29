@@ -149,6 +149,32 @@ const passed = await runTest('animation tool', async ({ track }) => {
     assert(aimed.built === true && aimed.playback?.verified === true, `an aim-posed wave builds and plays as checked (${aimed.error ?? `within ${aimed.playback?.maxDegrees}°`})`);
     assert(/straight at its front/.test(aimed.sheet?.reading ?? ''), 'a wave\'s contact sheet looks at the front below');
 
+    // Markers become KeyframeMarkers a script's GetMarkerReachedSignal fires on.
+    const marked = await client.callTool('animation', {
+      action: 'build',
+      animation: {
+        name: 'Marked', rig: 'R15',
+        keyframes: [
+          { time: 0, joints: { RightShoulder: { aim: [0, -1, 0] } } },
+          { time: 0.2, joints: {}, markers: [{ name: 'Hit', value: 'light' }] },
+          { time: 0.4, joints: { RightShoulder: { aim: [0, -1, 0.6] } } },
+        ],
+      },
+      parent: PARENT,
+    }, 120_000);
+    assert(marked.built === true && marked.readBack?.markers === 1 && marked.readBack?.matchesCompiled === true, `markers are built and read back (${marked.error ?? JSON.stringify(marked.readBack)})`);
+    const markerState = await luau(client, `
+      local marked = game:GetService("ServerStorage")[${JSON.stringify(FOLDER_NAME)}]:FindFirstChild("Marked")
+      local found = {}
+      for _, descendant in marked:GetDescendants() do
+        if descendant:IsA("KeyframeMarker") then
+          table.insert(found, { name = descendant.Name, value = descendant.Value, time = descendant.Parent.Time })
+        end
+      end
+      return found
+    `);
+    assert(markerState.length === 1 && markerState[0].name === 'Hit' && markerState[0].value === 'light' && Math.abs(markerState[0].time - 0.2) < 1e-6, `Studio holds the marker at its keyframe (${JSON.stringify(markerState)})`);
+
     // -- Step 8: publish, wire, verify -------------------------------------
     // The hand-edited sequence stays refused; start it afresh to publish from.
     await luau(client, `game:GetService("ServerStorage")[${JSON.stringify(FOLDER_NAME)}].Wave:Destroy() return true`);

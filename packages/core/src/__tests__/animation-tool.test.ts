@@ -184,6 +184,34 @@ describe('RobloxStudioTools.animation', () => {
     });
   });
 
+  test('build counts markers in the read-back, so a plugin that drops them does not match', async () => {
+    const slash = {
+      ...wave(),
+      name: 'Slash',
+      keyframes: [...wave().keyframes.slice(0, 2), { ...wave().keyframes[2], markers: [{ name: 'Hit', value: 'light' }] }],
+    };
+    const sequence = compiled(slash);
+    expect(sequence.markerCount).toBe(1);
+    const written = (markers?: number) => ({
+      path: 'game.ServerStorage.Slash', instanceRef: 'ref-1', revision: 'kr1:abc', stampMatches: true,
+      replaced: false, keyframes: 3, poses: sequence.poseCount, undoable: true, ...(markers === undefined ? {} : { markers }),
+    });
+    const current = toolsWith({
+      '/api/preview-animation': () => ({ length: 1, samples: faithfulSamples(sequence) }),
+      '/api/build-animation': () => written(1),
+    });
+    const built = body(await current.tools.animation({ action: 'build', animation: slash, parent: 'game.ServerStorage' }));
+    expect((current.calls[1].data.sequence as KeyframeSequenceDescription).keyframes[2].markers).toEqual([{ name: 'Hit', value: 'light' }]);
+    expect(built).toMatchObject({ animation: { markers: 1 }, readBack: { markers: 1, matchesCompiled: true } });
+
+    // A plugin from before markers ignores them and reports no count.
+    const old = toolsWith({
+      '/api/preview-animation': () => ({ length: 1, samples: faithfulSamples(sequence) }),
+      '/api/build-animation': () => written(),
+    });
+    expect(body(await old.tools.animation({ action: 'build', animation: slash, parent: 'game.ServerStorage' })).readBack.matchesCompiled).toBe(false);
+  });
+
   test('build writes nothing when the preview fails or strays', async () => {
     const sequence = compiled(wave());
     const failed = toolsWith({ '/api/preview-animation': () => ({ error: 'the preview track never loaded.' }) });
