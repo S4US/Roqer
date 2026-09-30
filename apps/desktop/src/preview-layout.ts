@@ -1,6 +1,6 @@
 import {
-  ANIMATION_NAME_LABEL, ANIMATION_PREVIEW_TITLE, BLENDER_MODEL_LABEL, BLENDER_PREVIEW_TITLE, SCREENSHOT_VIEW_LABEL, SCREENSHOT_VIEW_PLAYTEST,
-  type RunChange, type RunEvidence,
+  ANIMATION_NAME_LABEL, ANIMATION_PREVIEW_TITLE, ANIMATION_RIG_LABEL, BLENDER_MODEL_LABEL, BLENDER_PREVIEW_TITLE, SCREENSHOT_VIEW_LABEL,
+  SCREENSHOT_VIEW_PLAYTEST, type RunChange, type RunEvidence,
 } from "../shared/run-events";
 
 /**
@@ -115,11 +115,32 @@ export function previewSource(evidence: RunEvidence): PreviewSource {
   return view === SCREENSHOT_VIEW_PLAYTEST ? "playtest" : "studio";
 }
 
+/**
+ * The rig an animation's preview was drawn on, as a label says it: R15, R6, or
+ * the model whose own rig it is, by its name. Undefined for a preview recorded
+ * before the rig was.
+ */
+export function animationRig(evidence: RunEvidence): string | undefined {
+  const rig = evidence.metadata?.find((entry) => entry.label === ANIMATION_RIG_LABEL)?.value;
+  if (rig === undefined || rig === "") return undefined;
+  return rig === "R15" || rig === "R6" ? rig : rig.split(".").pop() || rig;
+}
+
+/** The rig an animation's 3D preview plays on, as its caption says it. */
+export function animationRigCaption(evidence: RunEvidence): string {
+  const rig = animationRig(evidence);
+  if (rig === undefined) return "its rig";
+  return rig === "R15" || rig === "R6" ? `the ${rig} rig` : `${rig}'s own rig`;
+}
+
 /** The short label on a tile. */
 export function previewSourceLabel(evidence: RunEvidence): string {
   switch (previewSource(evidence)) {
     case "blender": return "Blender · before upload";
-    case "animation": return "Animation · R15";
+    case "animation": {
+      const rig = animationRig(evidence);
+      return rig === undefined ? "Animation" : `Animation · ${rig}`;
+    }
     case "playtest": return "Playtest";
     case "studio": return "Studio";
     default: return evidence.title;

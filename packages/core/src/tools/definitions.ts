@@ -2,7 +2,6 @@ import type { ToolAnnotations } from '@modelcontextprotocol/server';
 import { MAX_PNG_BASE64_CHARACTERS } from '../image-decode.js';
 import { ANIMATION_PRIORITIES } from '../animation/pose-compiler.js';
 import { ANIMATE_SLOTS, MOTION_CHECK_IDS } from '../animation/animation-tool.js';
-import { RIG_NAMES } from '../animation/rigs.js';
 
 // Styles and directions are listed in the tool guide and in the compiler's
 // errors; spelling the enums out twice here would cost more than they save.
@@ -153,21 +152,21 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
   {
     name: 'animation',
     category: 'write',
-    description: 'Use to check, build, publish, wire, or verify R15 or R6 animations, or to rig a stock NPC.',
+    description: 'Use to check, build, publish, wire, or verify animations for R15, R6 or a model, or rig an NPC.',
     inputSchema: {
       type: 'object',
       properties: {
         action: {
           type: 'string',
           enum: ['check', 'build', 'publish', 'wire', 'verify', 'rig'],
-          description: 'check needs no Studio; verify needs a running playtest, and the checked animation unless given model.'
+          description: 'check needs Studio only for a model rig; verify needs a running playtest, and the checked animation unless given model.'
         },
         animation: {
           type: 'object',
-          description: 'Pose description for an R15 or R6 rig.',
+          description: 'Pose description for R15, R6, or a rigged model.',
           properties: {
             name: { type: 'string', description: 'KeyframeSequence name.' },
-            rig: { type: 'string', enum: [...RIG_NAMES], description: 'Rig type.' },
+            rig: { type: 'string', description: 'R15, R6, or a rigged model path.' },
             loop: { type: 'boolean', description: 'Default false.' },
             priority: { type: 'string', enum: [...ANIMATION_PRIORITIES], description: 'Default Action.' },
             easing: POSE_EASING_SCHEMA,

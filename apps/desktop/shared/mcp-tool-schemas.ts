@@ -44,17 +44,17 @@ export type ToolSchema = {
 };
 
 /** sha256 of `packages/core/src/tools/definitions.ts` with LF newlines. */
-export const TOOL_DEFINITIONS_DIGEST = "c6ef6ac66088dc21e2fae82f15017e90089e81554c4a1f067b221e99539a044a";
+export const TOOL_DEFINITIONS_DIGEST = "5a1f3051a35a5775982dc5138838b4014a90f2497129018554ebe0ac85c225c1";
 
 /** What a bridge built from these definitions reports as `toolCatalogDigest` on `/health`. */
-export const TOOL_CATALOG_DIGEST = "842eea86512d558bf7927df9cb88c47408b361b5be60065716e5e65c0b8c0b57";
+export const TOOL_CATALOG_DIGEST = "42ba43a7f25cf6dea59f308ea67459384228fde85d34d2f9ede99ed3c45246aa";
 
 export const TOOL_SCHEMAS: Readonly<Record<string, ToolSchema>> = {
   animation: {
-    description: "Use to check, build, publish, wire, or verify R15 or R6 animations, or to rig a stock NPC.",
+    description: "Use to check, build, publish, wire, or verify animations for R15, R6 or a model, or rig an NPC.",
     parameters: [
-      { name: "action", type: "string", required: true, enumValues: ["check", "build", "publish", "wire", "verify", "rig"], description: "check needs no Studio; verify needs a running playtest, and the checked animation unless given model." },
-      { name: "animation", type: "object", required: false, description: "Pose description for an R15 or R6 rig." },
+      { name: "action", type: "string", required: true, enumValues: ["check", "build", "publish", "wire", "verify", "rig"], description: "check needs Studio only for a model rig; verify needs a running playtest, and the checked animation unless given model." },
+      { name: "animation", type: "object", required: false, description: "Pose description for R15, R6, or a rigged model." },
       { name: "locomotion", type: "boolean", required: false, description: "A gait: adds ground, foot, and symmetry checks." },
       { name: "grounded", type: "boolean", required: false, description: "Stands on the ground: checks feet never sink in." },
       { name: "parent", type: "string", required: false, description: "Build: instance the KeyframeSequence goes in." },

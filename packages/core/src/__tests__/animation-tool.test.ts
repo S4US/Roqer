@@ -20,6 +20,8 @@ import {
 import { buildTracks, sampleTrack } from '../animation/motion.js';
 import { compilePoseAnimation, type KeyframeSequenceDescription } from '../animation/pose-compiler.js';
 import { rigFor } from '../animation/rigs.js';
+import { rigFromModel } from '../animation/model-rig.js';
+import { partsDog } from './fixtures/parts-dog.js';
 
 function wave(overrides: Record<string, unknown> = {}) {
   return {
@@ -779,5 +781,154 @@ describe('verifying a model in a playtest', () => {
     await expect(verify({ slot: 'jump', animation_id: '1' })).rejects.toThrow(/with model, slot must be one of idle, walk, run/);
     expect(body(await verify({ animation: { ...wave(), keyframes: [] } }))).toMatchObject({ error: 'The animation is not valid; nothing was verified.' });
     expect(calls).toEqual([]);
+  });
+});
+
+describe('an animation for a model\'s own rig', () => {
+  type Call = { endpoint: string; data: Record<string, unknown>; target: unknown; instance_id?: string };
+  /** A wag of the hand-rigged dog's tail with a nod, written with rotation only. */
+  const wag = (rig = 'Workspace.Dog') => ({
+    name: 'Wag',
+    rig,
+    loop: true,
+    keyframes: [
+      { time: 0, joints: { Neck: { rotation: [0, 0, 0] }, Tail: { rotation: [0, -30, 0] } } },
+      { time: 0.4, joints: { Neck: { rotation: [15, 0, 0] }, Tail: { rotation: [0, 30, 0] } } },
+      { time: 0.8, joints: { Neck: { rotation: [0, 0, 0] }, Tail: { rotation: [0, -30, 0] } } },
+    ],
+  });
+  const dogRig = () => {
+    const read = rigFromModel(partsDog());
+    if (!read.ok) throw new Error(read.errors.join('\n'));
+    return read.rig;
+  };
+  /** Studio answering from `answers`, by endpoint; the dog's rig is read as the fixture has it. */
+  function studio(answers: Record<string, (data: Record<string, unknown>) => unknown> = {}) {
+    const tools = new RobloxStudioTools(new BridgeService());
+    const calls: Call[] = [];
+    (tools as unknown as { _callSingle: unknown })._callSingle = async (endpoint: string, data: Record<string, unknown>, target: unknown, instance_id?: string) => {
+      calls.push({ endpoint, data, target, instance_id });
+      if (endpoint === '/api/animation-read-rig' && !answers[endpoint]) return partsDog();
+      const answer = answers[endpoint];
+      if (!answer) throw new Error(`unexpected call to ${endpoint}`);
+      return answer(data);
+    };
+    return { tools, calls };
+  }
+  /** What a faithful copy of the dog would report: core's own sampler on its rig. */
+  function dogSamples(sequence: KeyframeSequenceDescription, times = previewSampleTimes(sequence)): PreviewSample[] {
+    const tracks = buildTracks(sequence);
+    return times.map((time) => ({
+      time,
+      transforms: Object.fromEntries(dogRig().joints.map((joint) => {
+        const frame = sampleTrack(tracks.get(joint.childPart), time);
+        return [joint.childPart, [...frame.p, ...frame.r]];
+      })),
+    }));
+  }
+
+  test('check reads the rig from Studio, names its joints, and says what it could not check', async () => {
+    const { tools, calls } = studio();
+    const result = body(await tools.animation({ action: 'check', animation: wag() }, 'place-1'));
+    expect(calls).toEqual([{ endpoint: '/api/animation-read-rig', data: { model: 'Workspace.Dog' }, target: undefined, instance_id: 'place-1' }]);
+    expect(result).toMatchObject({
+      valid: true,
+      // Named as Studio names the model.
+      animation: { name: 'Wag', rig: 'game.Workspace.Dog', joints: ['Neck', 'Tail'] },
+      rig: {
+        path: 'game.Workspace.Dog',
+        revision: 'r1',
+        joints: ['Root', 'Neck', 'FrontLeft', 'FrontRight', 'HindLeft', 'HindRight', 'Tail'],
+        position: 'Root',
+        ranged: [],
+      },
+      checks: { passed: true },
+    });
+    expect(result.rig.scale).toMatch(/^0\.66 times R15's distance limits, from its height at rest$/);
+    const limits = result.checks.results.find((check: { id: string }) => check.id === 'jointLimits');
+    expect(limits).toEqual({ id: 'jointLimits', status: 'skipped', detail: 'not checked: Neck and Tail turn with no declared range' });
+    expect(result.sheet.rig).toBe('game.Workspace.Dog\'s own parts, each drawn as its shape, a block, wedge, cylinder or ball, with the parts welded to it');
+    expect(result.sheet.reading).toContain('straight at its front, its right side on the left');
+  });
+
+  test('check names the joints when a pose keys one the rig does not have', async () => {
+    const { tools } = studio();
+    const typo = { ...wag(), keyframes: [{ time: 0, joints: { Tial: { rotation: [0, 10, 0] } } }] };
+    const result = body(await tools.animation({ action: 'check', animation: typo }));
+    expect(result.valid).toBe(false);
+    expect(result.errors[0]).toMatch(/^keyframes\[0\]\.joints\.Tial: /);
+    expect(result.rig.joints).toContain('Tail');
+  });
+
+  test('a rig Studio cannot read, or one core refuses, comes back as the reason, with nothing checked or built', async () => {
+    const missing = studio({ '/api/animation-read-rig': () => ({ error: 'game.Workspace.Cat does not exist.', errorCode: 'model_not_found' }) });
+    expect(body(await missing.tools.animation({ action: 'check', animation: wag('game.Workspace.Cat') }))).toEqual({
+      valid: false,
+      error: 'game.Workspace.Cat\'s rig could not be read: game.Workspace.Cat does not exist.',
+      errorCode: 'model_not_found',
+    });
+    const repeated = studio({ '/api/animation-read-rig': () => ({ ...partsDog(), parts: [...partsDog().parts, { name: 'Head', size: [1, 1, 1] }] }) });
+    const refused = body(await repeated.tools.animation({ action: 'build', animation: wag(), parent: 'game.ServerStorage' }));
+    expect(refused).toMatchObject({
+      error: 'Workspace.Dog\'s rig cannot be animated as it is. Nothing was built.',
+      errorCode: 'invalid_rig',
+      errors: ["parts: a keyframe's poses find their parts by name, so each must be named once; these repeat: Head"],
+    });
+    expect(repeated.calls.map((call) => call.endpoint)).toEqual(['/api/animation-read-rig']);
+  });
+
+  test('build previews on a copy of the model while its rig is as read, compares on its joints, and writes', async () => {
+    const compiledWag = compilePoseAnimation({ ...wag(), rig: 'game.Workspace.Dog' }, dogRig());
+    if (!compiledWag.ok) throw new Error(compiledWag.errors.join('\n'));
+    const sequence = compiledWag.sequence;
+    const { tools, calls } = studio({
+      '/api/preview-animation': (data) => ({ length: 0.8, samples: dogSamples(sequence, data.sampleTimes as number[]) }),
+      '/api/build-animation': () => ({
+        path: 'game.ServerStorage.Wag', instanceRef: 'ref-1', revision: 'kr1:abc', stampMatches: true,
+        replaced: false, keyframes: sequence.keyframes.length, poses: sequence.poseCount, undoable: true,
+      }),
+    });
+    const result = body(await tools.animation({ action: 'build', animation: wag(), parent: 'game.ServerStorage' }, 'place-1'));
+    // No stock meshes are read for a model's rig.
+    expect(calls.map((call) => call.endpoint)).toEqual(['/api/animation-read-rig', '/api/preview-animation', '/api/build-animation']);
+    expect(calls[1].data).toMatchObject({ model: { path: 'game.Workspace.Dog', revision: 'r1' }, sequence: { rig: 'game.Workspace.Dog' } });
+    expect(calls[1].data).not.toHaveProperty('props');
+    expect(result).toMatchObject({
+      built: true,
+      rig: { path: 'game.Workspace.Dog' },
+      playback: { verified: true, samples: 8 },
+      readBack: { matchesCompiled: true },
+    });
+  });
+
+  test('build writes nothing when the rig changed since it was read', async () => {
+    const { tools, calls } = studio({
+      '/api/preview-animation': () => ({ error: 'game.Workspace.Dog\'s rig has changed since the animation was checked against it; check it again.', errorCode: 'stale_rig' }),
+    });
+    const result = body(await tools.animation({ action: 'build', animation: wag(), parent: 'game.ServerStorage' }));
+    expect(result).toEqual({
+      error: 'Studio could not preview the animation: game.Workspace.Dog\'s rig has changed since the animation was checked against it; check it again. Nothing was built.',
+      errorCode: 'stale_rig',
+    });
+    expect(calls.map((call) => call.endpoint)).not.toContain('/api/build-animation');
+  });
+
+  test('verify compares the model\'s playtest with its own rig, and a character is not asked to play it', async () => {
+    const compiledWag = compilePoseAnimation({ ...wag(), rig: 'game.Workspace.Dog' }, dogRig());
+    if (!compiledWag.ok) throw new Error(compiledWag.errors.join('\n'));
+    const sequence = compiledWag.sequence;
+    // The dog's Humanoid reports R15, as a Humanoid does, which says nothing about its own rig.
+    const { tools, calls } = studio({
+      '/api/animation-verify-model': () => ({ rigType: 'R15', loader: false, length: 0.8, samples: dogSamples(sequence, [0.1, 0.3, 0.5]) }),
+    });
+    const result = body(await tools.animation({ action: 'verify', model: 'game.Workspace.Dog', animation: wag() }));
+    expect(calls.map((call) => [call.endpoint, call.target])).toEqual([['/api/animation-read-rig', undefined], ['/api/animation-verify-model', 'server']]);
+    expect(result).toMatchObject({ verified: true, played: { source: 'temporary clip', verified: true, samples: 3 } });
+    const character = studio();
+    expect(body(await character.tools.animation({ action: 'verify', animation: wag() }))).toEqual({
+      error: 'This animation is for Workspace.Dog\'s own rig, not a player\'s character; verify it on that model, with model. Nothing was verified.',
+      errorCode: 'rig_mismatch',
+    });
+    expect(character.calls).toEqual([]);
   });
 });

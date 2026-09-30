@@ -30,6 +30,7 @@ import {
   choosePublisher,
   compactChecks,
   describeAnimation,
+  describeRig,
   expectedCounts,
   judgeMovement,
   normalizeAnimationId,
@@ -45,7 +46,9 @@ import {
 import { compilePoseAnimation, type KeyframeSequenceDescription } from '../animation/pose-compiler.js';
 import { renderContactSheet } from '../animation/contact-sheet.js';
 import { renderRigGlb } from '../animation/rig-glb.js';
-import { rigFor } from '../animation/rigs.js';
+import { rigFromModel } from '../animation/model-rig.js';
+import type { Rig } from '../animation/rig.js';
+import { RIGS, rigFor } from '../animation/rigs.js';
 import { cachedRigMeshes, currentRigMeshes, storeRigMeshes } from '../animation/rig-meshes.js';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -1740,16 +1743,38 @@ export class RobloxStudioTools {
   }
 
   /**
+   * The rig an animation names when it names neither R15 nor R6: the model at
+   * that path, read from Studio and described as R15 and R6 are. The
+   * animation comes back naming the model as Studio does, which is how its
+   * compiled sequence and the rig find each other.
+   */
+  private async _modelRigFor(animation: unknown, instance_id?: string): Promise<
+    { ok: true; animation: unknown; model?: { rig: Rig; notes: string[] } } | { ok: false; refusal: Record<string, unknown> }
+  > {
+    const named = asRecord(animation)?.rig;
+    if (typeof named !== 'string' || named.trim() === '' || RIGS.has(named)) return { ok: true, animation };
+    const reading = await this._callSingle('/api/animation-read-rig', { model: named }, undefined, instance_id);
+    if (typeof reading?.error === 'string') {
+      return { ok: false, refusal: { error: `${named}'s rig could not be read: ${reading.error}`, ...(reading.errorCode ? { errorCode: reading.errorCode } : {}) } };
+    }
+    const read = rigFromModel(reading);
+    if (!read.ok) return { ok: false, refusal: { error: `${named}'s rig cannot be animated as it is.`, errorCode: 'invalid_rig', errors: read.errors } };
+    return { ok: true, animation: { ...(animation as Record<string, unknown>), rig: read.rig.name }, model: { rig: read.rig, notes: read.notes } };
+  }
+
+  /**
    * Check a pose description, or build it as a KeyframeSequence in Studio.
    *
-   * Both compile the description and run the motion checks here, without
-   * Studio. `build` then refuses unless every check passed or was waived, has
-   * the plugin preview the sequence on a temporary dummy, and writes it only if
-   * Studio played it as the checks measured it. The write is one undo step and
-   * is read back; replacing a sequence needs the revision its build returned.
+   * Both compile the description and run the motion checks here; for R15 and
+   * R6 without Studio, and for a model's own rig once it is read from Studio.
+   * `build` then refuses unless every check passed or was waived, has the
+   * plugin preview the sequence on a temporary dummy, or on a copy of the
+   * model while its rig is as it was read, and writes it only if Studio played
+   * it as the checks measured it. The write is one undo step and is read back;
+   * replacing a sequence needs the revision its build returned.
    */
   private async _animationBuild(action: 'check' | 'build', args: Record<string, unknown>, instance_id?: string) {
-    const { animation, parent, expected_revision, waive, locomotion, grounded } = args;
+    const { parent, expected_revision, waive, locomotion, grounded } = args;
     if (action === 'build' && (typeof parent !== 'string' || parent.trim() === '')) {
       throw new Error('parent (the instance the KeyframeSequence goes in) is required to build an animation');
     }
@@ -1757,11 +1782,20 @@ export class RobloxStudioTools {
       throw new Error('expected_revision must be the revision string a previous build returned');
     }
 
-    const prepared = prepareAnimation(animation, { locomotion, grounded, waive });
+    const resolved = await this._modelRigFor(args.animation, instance_id);
+    if (!resolved.ok) {
+      return this._textResult(action === 'check'
+        ? { valid: false, ...resolved.refusal }
+        : { ...resolved.refusal, error: `${resolved.refusal.error} Nothing was built.` });
+    }
+    const { animation, model } = resolved;
+    const prepared = prepareAnimation(animation, { locomotion, grounded, waive }, model?.rig);
     if (!prepared.ok) {
       return this._textResult({
         ...(action === 'check' ? { valid: false } : { error: 'The animation is not valid; nothing was built.' }),
         errors: prepared.errors,
+        // The joints a pose may key, which a model's own rig names.
+        ...(model ? { rig: describeRig(model.rig, model.notes) } : {}),
       });
     }
     const { sequence, report, failing, waived } = prepared.value;
@@ -1773,27 +1807,35 @@ export class RobloxStudioTools {
     // A gait's pace, which wire hands to a model's loader so its feet keep up.
     const groundSpeed = report.groundSpeed === undefined ? {} : { groundSpeed: report.groundSpeed };
     if (action === 'check') {
-      return this._animationResult({ valid: true, animation: describeAnimation(sequence), ...groundSpeed, checks }, sequence, locomotion === true);
+      return this._animationResult({ valid: true, animation: describeAnimation(sequence), ...groundSpeed, checks }, sequence, locomotion === true, model);
     }
     if (failing.length > 0) {
       return this._animationResult({
         error: `${failing.length === 1 ? 'A motion check' : `${failing.length} motion checks`} failed (${failing.join(', ')}); nothing was built. Fix the motion, or waive a failure you intend.`,
         checks,
-      }, sequence, locomotion === true);
+      }, sequence, locomotion === true, model);
     }
 
-    await this._fetchRigMeshes(instance_id);
+    if (!model) await this._fetchRigMeshes(instance_id);
     const payload = { name: sequence.name, rig: sequence.rig, loop: sequence.loop, priority: sequence.priority, keyframes: sequence.keyframes };
     const preview = await this._callSingle(
       '/api/preview-animation',
-      { sequence: payload, sampleTimes: previewSampleTimes(sequence), props: previewProps(sequence) },
+      {
+        sequence: payload,
+        sampleTimes: previewSampleTimes(sequence),
+        // A model's rig is previewed on a copy of it, only while it is the rig the checks used.
+        ...(model ? { model: { path: model.rig.name, revision: model.rig.revision } } : { props: previewProps(sequence) }),
+      },
       undefined,
       instance_id,
     );
     if (preview?.error) {
-      return this._textResult({ error: `Studio could not preview the animation: ${preview.error} Nothing was built.` });
+      return this._textResult({
+        error: `Studio could not preview the animation: ${preview.error} Nothing was built.`,
+        ...(preview.errorCode ? { errorCode: preview.errorCode } : {}),
+      });
     }
-    const playback = verifyPlayback(sequence, preview?.samples);
+    const playback = verifyPlayback(sequence, preview?.samples, model?.rig ?? rigFor(sequence.rig));
     if (!playback.verified) {
       return this._textResult({ error: `The preview did not play as checked: ${playback.reason}. Nothing was built.`, playback });
     }
@@ -1828,7 +1870,7 @@ export class RobloxStudioTools {
       },
       playback,
       checks,
-    }, sequence, locomotion === true);
+    }, sequence, locomotion === true, model);
   }
 
   /**
@@ -1855,8 +1897,13 @@ export class RobloxStudioTools {
     }
   }
 
-  private _animationResult(body: Record<string, unknown>, sequence: KeyframeSequenceDescription, locomotion: boolean) {
-    const rig = rigFor(sequence.rig);
+  private _animationResult(
+    body: Record<string, unknown>,
+    sequence: KeyframeSequenceDescription,
+    locomotion: boolean,
+    model?: { rig: Rig; notes: string[] },
+  ) {
+    const rig = model?.rig ?? rigFor(sequence.rig);
     const meshes = currentRigMeshes(rig);
     const sheet = renderContactSheet(sequence, meshes, { locomotion, rig });
     const preview = renderRigGlb(sequence, sequence.name, meshes, rig);
@@ -1866,17 +1913,20 @@ export class RobloxStudioTools {
           type: 'text',
           text: JSON.stringify({
             ...body,
+            ...(model ? { rig: describeRig(model.rig, model.notes) } : {}),
             sheet: {
               times: sheet.times.map((time) => Math.round(time * 1000) / 1000),
               // What each column is, beside the even steps: its keyframe name, marker, or the fastest instant.
               ...(sheet.labels.some((label) => label !== '') ? { shows: sheet.labels } : {}),
-              rig: rig.name === 'R6'
-                ? 'the R6 rig, whose parts are blocks'
-                : meshes.source === 'studio' ? 'the stock R15 rig' : 'a stand-in block rig, until a build reads the stock rig from Studio',
-              ...(previewProps(sequence).length > 0
+              rig: model
+                ? `${rig.name}'s own parts, each drawn as its shape, a block, wedge, cylinder or ball, with the parts welded to it`
+                : rig.name === 'R6'
+                  ? 'the R6 rig, whose parts are blocks'
+                  : meshes.source === 'studio' ? 'the stock R15 rig' : 'a stand-in block rig, until a build reads the stock rig from Studio',
+              ...(previewProps(sequence, rig).length > 0
                 ? { props: 'stand-ins: a 4-stud blade along each hand prop\'s +Y, a 3.8-stud sheath along SheathAttach\'s +Y' }
                 : {}),
-              reading: `One column per time, the key moments named in shows. Top row from the front three-quarter, bottom row ${locomotion ? 'from its right side facing right' : 'straight at its front, its right hand on the left'}; the shadow marks the ground under the body.`,
+              reading: `One column per time, the key moments named in shows. Top row from the front three-quarter, bottom row ${locomotion ? 'from its right side facing right' : `straight at its front, its right ${model ? 'side' : 'hand'} on the left`}; the shadow marks the ground under the body.`,
             },
           }),
         },
@@ -2090,6 +2140,10 @@ export class RobloxStudioTools {
     if (args.animation === undefined) {
       return this._textResult({ error: 'verify compares the playtest with the checked motion: pass the same animation you checked and built, not only its path. Nothing was verified.' });
     }
+    const named = asRecord(args.animation)?.rig;
+    if (typeof named === 'string' && named.trim() !== '' && !RIGS.has(named)) {
+      return this._textResult({ error: `This animation is for ${named}'s own rig, not a player's character; verify it on that model, with model. Nothing was verified.`, errorCode: 'rig_mismatch' });
+    }
     const compiled = compilePoseAnimation(args.animation);
     if (!compiled.ok) return this._textResult({ error: 'The animation is not valid; nothing was verified.', errors: compiled.errors });
     const sequence = compiled.sequence;
@@ -2158,8 +2212,13 @@ export class RobloxStudioTools {
     const model = args.model;
     if (typeof model !== 'string' || model.trim() === '') throw new Error('model must be the path of the NPC or creature Model to verify');
     let sequence: KeyframeSequenceDescription | undefined;
+    let ownRig: Rig | undefined;
     if (args.animation !== undefined) {
-      const compiled = compilePoseAnimation(args.animation);
+      // An animation for a model's own rig is compared with that rig, read from Studio.
+      const resolved = await this._modelRigFor(args.animation, instance_id);
+      if (!resolved.ok) return this._textResult({ ...resolved.refusal, error: `${resolved.refusal.error} Nothing was verified.` });
+      ownRig = resolved.model?.rig;
+      const compiled = compilePoseAnimation(resolved.animation, ownRig);
       if (!compiled.ok) return this._textResult({ error: 'The animation is not valid; nothing was verified.', errors: compiled.errors });
       sequence = compiled.sequence;
     }
@@ -2200,7 +2259,7 @@ export class RobloxStudioTools {
       throw error;
     }
     if (typeof response?.error === 'string') return this._textResult({ ...response, error: `${response.error} Nothing was verified.` });
-    if (sequence && typeof response.rigType === 'string' && response.rigType !== sequence.rig) {
+    if (sequence && !ownRig && typeof response.rigType === 'string' && response.rigType !== sequence.rig) {
       return this._textResult({
         error: `${model} is ${response.rigType}, but the animation is for ${sequence.rig}, so it cannot play on it. Nothing was verified.`,
         errorCode: 'rig_mismatch',
@@ -2209,7 +2268,7 @@ export class RobloxStudioTools {
     }
 
     const loader = typeof response.loader === 'object' && response.loader !== null ? response.loader as LoaderStates : undefined;
-    const playback = sequence ? verifyLivePlayback(sequence, response.samples) : undefined;
+    const playback = sequence ? verifyLivePlayback(sequence, response.samples, ownRig ?? rigFor(sequence.rig)) : undefined;
     const held = slot === undefined ? undefined : loader?.ids?.[slot as ModelState];
     const wiring = slot === undefined ? undefined : { slot, animationId: held ?? false, matches: held !== undefined && normalizeAnimationId(held) === animationId };
     const movement = observe ? judgeMovement(response.observation, loader) : undefined;

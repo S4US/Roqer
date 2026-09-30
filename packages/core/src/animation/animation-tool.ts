@@ -2,13 +2,18 @@
 //
 // A pose description is compiled and its motion checked here, before anything
 // reaches the plugin. `check` stops there. `build` then has the plugin preview
-// the compiled sequence on a temporary dummy, and `verifyPlayback` compares the
-// joints Studio produced with the model the checks measured; only a sequence
-// that plays as checked is written.
+// the compiled sequence on a temporary dummy, or on a copy of the model whose
+// rig it was written for, and `verifyPlayback` compares the joints Studio
+// produced with the model the checks measured; only a sequence that plays as
+// checked is written.
+//
+// R15 and R6 are built in; a model's rig is read from Studio first
+// (model-rig.ts) and handed to each step here.
 
 import { compilePoseAnimation, type KeyframeSequenceDescription } from './pose-compiler.js';
 import { buildTracks, degreesBetween, frameFromComponents, jointParentFrame, sampleTrack } from './motion.js';
 import { checkMotion, type MotionCheckId, type MotionCheckResult, type MotionReport } from './motion-checks.js';
+import type { Rig } from './rig.js';
 import { rigFor } from './rigs.js';
 
 export const MOTION_CHECK_IDS: readonly MotionCheckId[] = [
@@ -49,8 +54,16 @@ export interface CheckedAnimation {
 
 export type PrepareResult = { ok: true; value: CheckedAnimation } | { ok: false; errors: string[] };
 
-/** Validates the tool's own arguments, compiles the animation and checks its motion. */
-export function prepareAnimation(animation: unknown, options: { locomotion?: unknown; grounded?: unknown; waive?: unknown }): PrepareResult {
+/**
+ * Validates the tool's own arguments, compiles the animation and checks its
+ * motion, on R15 or R6 as the animation names, or on `model`, a rig read from
+ * the model the animation names.
+ */
+export function prepareAnimation(
+  animation: unknown,
+  options: { locomotion?: unknown; grounded?: unknown; waive?: unknown },
+  model?: Rig,
+): PrepareResult {
   const errors: string[] = [];
   if (options.locomotion !== undefined && typeof options.locomotion !== 'boolean') {
     errors.push('locomotion: must be true or false');
@@ -69,14 +82,14 @@ export function prepareAnimation(animation: unknown, options: { locomotion?: unk
       waive = options.waive.filter((id): id is MotionCheckId => MOTION_CHECK_IDS.includes(id as MotionCheckId));
     }
   }
-  const compiled = compilePoseAnimation(animation);
+  const compiled = compilePoseAnimation(animation, model);
   if (!compiled.ok) errors.push(...compiled.errors);
   if (errors.length > 0 || !compiled.ok) return { ok: false, errors };
 
   const report = checkMotion(
     compiled.sequence,
     { locomotion: options.locomotion === true, grounded: options.grounded === true },
-    rigFor(compiled.sequence.rig),
+    model ?? rigFor(compiled.sequence.rig),
   );
   const failed = report.checks.filter((check) => check.status === 'fail').map((check) => check.id);
   return {
@@ -104,6 +117,7 @@ export function compactChecks(report: MotionReport): CompactCheck[] {
 export function describeAnimation(sequence: KeyframeSequenceDescription) {
   return {
     name: sequence.name,
+    rig: sequence.rig,
     duration: sequence.duration,
     keyframes: sequence.keyframes.length,
     loop: sequence.loop,
@@ -145,12 +159,12 @@ function round(value: number, places: number): number {
 }
 
 /** Compares the joints Studio produced with the model the checks measured. */
-export function verifyPlayback(sequence: KeyframeSequenceDescription, samples: unknown): PlaybackCheck {
+export function verifyPlayback(sequence: KeyframeSequenceDescription, samples: unknown, rig: Rig = rigFor(sequence.rig)): PlaybackCheck {
   const fail = (reason: string): PlaybackCheck => ({ verified: false, samples: 0, maxDegrees: 0, maxStuds: 0, reason });
   if (!Array.isArray(samples) || samples.length === 0) return fail('Studio returned no preview samples');
   const tracks = buildTracks(sequence);
   // A weapon grip is compared only when the animation moves it.
-  const joints = rigFor(sequence.rig).joints.filter((joint) => !joint.optional || sequence.joints.includes(joint.name));
+  const joints = rig.joints.filter((joint) => !joint.optional || sequence.joints.includes(joint.name));
   let maxDegrees = 0;
   let maxStuds = 0;
   let worst: PlaybackCheck['worst'];
@@ -452,11 +466,11 @@ export function choosePublisher(place: PlaceOwner, config: { userId?: string; gr
 export const LIVE_PLAYBACK_TOLERANCE = { degrees: 2, studs: 0.05 } as const;
 
 /** Compares a live playtest's keyed joints with the checked model. */
-export function verifyLivePlayback(sequence: KeyframeSequenceDescription, samples: unknown): PlaybackCheck {
+export function verifyLivePlayback(sequence: KeyframeSequenceDescription, samples: unknown, rig: Rig = rigFor(sequence.rig)): PlaybackCheck {
   const fail = (reason: string): PlaybackCheck => ({ verified: false, samples: 0, maxDegrees: 0, maxStuds: 0, reason });
   if (!Array.isArray(samples) || samples.length === 0) return fail('the playtest returned no samples');
   const tracks = buildTracks(sequence);
-  const keyed = rigFor(sequence.rig).joints.filter((joint) => sequence.joints.includes(joint.name));
+  const keyed = rig.joints.filter((joint) => sequence.joints.includes(joint.name));
   let maxDegrees = 0;
   let maxStuds = 0;
   let worst: PlaybackCheck['worst'];
@@ -508,8 +522,8 @@ export interface PreviewProp {
  * The prop motors a preview dummy needs: one for each held or worn prop the
  * animation moves, built as the game builds it.
  */
-export function previewProps(sequence: KeyframeSequenceDescription): PreviewProp[] {
-  return rigFor(sequence.rig).joints
+export function previewProps(sequence: KeyframeSequenceDescription, rig: Rig = rigFor(sequence.rig)): PreviewProp[] {
+  return rig.joints
     .filter((joint) => joint.optional && sequence.joints.includes(joint.name))
     .map((joint) => {
       const c0 = jointParentFrame(joint);
@@ -520,6 +534,27 @@ export function previewProps(sequence: KeyframeSequenceDescription): PreviewProp
         ...(joint.attachment ? { attachment: joint.attachment } : {}),
       };
     });
+}
+
+/**
+ * What a result says about a rig read from a model: the joints a pose may key,
+ * parents first; the one that takes a position; what its declarations named;
+ * how its distance limits were scaled; and what the reading noted.
+ */
+export function describeRig(rig: Rig, notes: readonly string[] = []) {
+  const named = (record: Readonly<Record<string, unknown>>) => Object.keys(record);
+  return {
+    path: rig.name,
+    ...(rig.revision ? { revision: rig.revision } : {}),
+    joints: rig.joints.map((joint) => joint.name),
+    position: rig.rootJoint ?? false,
+    ...(rig.feet.length > 0 ? { feet: rig.feet } : {}),
+    ...(named(rig.limbs).length > 0 ? { limbs: named(rig.limbs) } : {}),
+    ...(named(rig.hinges).length > 0 ? { hinges: named(rig.hinges) } : {}),
+    ranged: rig.joints.filter((joint) => rig.limits[joint.name] !== undefined && rig.limits[joint.name] !== 'free').map((joint) => joint.name),
+    ...(rig.scale ? { scale: `${round(rig.scale.factor, 2)} times R15's distance limits, from ${rig.scale.basis}` } : {}),
+    ...(notes.length > 0 ? { notes } : {}),
+  };
 }
 
 /** Poses in a compiled sequence, placeholders included: what a read-back must find. */

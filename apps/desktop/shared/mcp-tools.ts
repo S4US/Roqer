@@ -131,7 +131,8 @@ export function riskForTool(tool: string, args?: Record<string, unknown>): ToolR
   // upload action remains irreversible and keeps its normal confirmation.
   if (tool === "upload_asset" && args?.action === "status") return "read";
   if (tool === "animation") {
-    // Checking compiles and measures on the MCP host. Verifying plays a track on
+    // Checking compiles and measures on the MCP host, reading a model's rig
+    // from Studio when the animation is for one. Verifying plays a track on
     // the playtest character, or walks an NPC in the playtest, and changes
     // nothing that outlasts the playtest. Rigging makes a model: a mutation.
     if (args?.action === "check" || args?.action === "verify") return "read";
@@ -279,6 +280,8 @@ function summarizeAnimation(args: Record<string, unknown>): string {
     ? args.animation as Record<string, unknown>
     : {};
   const name = typeof animation.name === "string" && animation.name !== "" ? truncate(animation.name, 40) : "an animation";
+  // R15 goes unsaid; R6 and a model's own rig are named.
+  const rig = typeof animation.rig === "string" && animation.rig !== "" && animation.rig !== "R15" ? ` for ${truncate(animation.rig, 60)}` : "";
   if (action === "verify" && typeof args.model === "string" && args.model !== "") {
     const position = Array.isArray(args.position) && args.position.length === 3 && args.position.every((value) => typeof value === "number")
       ? `, walking it to [${args.position.map((value) => Math.round(Number(value) * 10) / 10).join(", ")}]`
@@ -313,7 +316,7 @@ function summarizeAnimation(args: Record<string, unknown>): string {
   const waived = Array.isArray(args.waive) && args.waive.length > 0
     ? `, accepting failed ${args.waive.filter((id) => typeof id === "string").join(", ")}`
     : "";
-  return `animation · ${action} ${name}${where}: ${facts.join(", ")}${replaces}${waived}`;
+  return `animation · ${action} ${name}${rig}${where}: ${facts.join(", ")}${replaces}${waived}`;
 }
 
 /** One-line human summary of a proposed call, shown in the activity timeline. */

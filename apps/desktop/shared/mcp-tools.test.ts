@@ -172,6 +172,12 @@ test("mcp-tools - an animation call is summarised in words, not as its pose JSON
     "animation · build Run in game.ServerStorage.Animations: 2 keyframes, 0.3 s, loops, moves 3 joints, replacing its last build, accepting failed rootDrift",
   );
   assert.strictEqual(summarizeToolCall("animation", { action: "check", animation }), "animation · check Run: 2 keyframes, 0.3 s, loops, moves 3 joints");
+  // A rig other than R15 is named: R6, or the model whose own rig it is.
+  assert.strictEqual(
+    summarizeToolCall("animation", { action: "check", animation: { ...animation, rig: "game.Workspace.Dog" } }),
+    "animation · check Run for game.Workspace.Dog: 2 keyframes, 0.3 s, loops, moves 3 joints",
+  );
+  assert.strictEqual(riskForTool("animation", { action: "check", animation: { ...animation, rig: "game.Workspace.Dog" } }), "read");
   // Whatever the model sent, the summary never throws and never shows raw JSON.
   assert.strictEqual(summarizeToolCall("animation", { action: "build", animation: "not an object" }), "animation · build an animation: 0 keyframes");
 });

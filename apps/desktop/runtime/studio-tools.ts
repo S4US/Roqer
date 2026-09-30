@@ -13,7 +13,7 @@ import {
 import { boundedCode, diffDeletedRange, diffText, normalizeNewlines } from "../shared/text-diff";
 import {
   ANIMATION_ALL_CHECKS_PASSED, ANIMATION_CHECKED_AS_GAIT, ANIMATION_GAIT_CHECKS_LABEL, ANIMATION_MOTION_CHECKS_LABEL,
-  ANIMATION_NAME_LABEL, ANIMATION_PLAYED_FROM_LABEL, ANIMATION_PLAYED_PUBLISHED, ANIMATION_PREVIEW_TITLE, animationSlotLabel,
+  ANIMATION_NAME_LABEL, ANIMATION_PLAYED_FROM_LABEL, ANIMATION_PLAYED_PUBLISHED, ANIMATION_PREVIEW_TITLE, ANIMATION_RIG_LABEL, animationSlotLabel,
   BLENDER_MODEL_LABEL, BLENDER_PREVIEW_TITLE, MAX_EVIDENCE_SUBJECT_CHARS, MODEL_MOVED_BY_GAME, MODEL_MOVED_BY_LABEL,
   MODEL_MOVED_BY_VERIFY, MODEL_WHILE_MOVING_LABEL, MODEL_WHILE_STANDING_LABEL, SCREENSHOT_VIEW_LABEL, SCREENSHOT_VIEW_PLAYTEST,
   type RunChange, type RunEvidence, type RunMetadata,
@@ -178,7 +178,7 @@ export function studioToolDescription(): string {
     // text over button edges and a row past the end of its scroll.
     "After creating or changing interface (anything under StarterGui), start a playtest and call inspect_ui {mode: 'audit'} on the client. Roqer does not verify the run until an audit after the last interface change reports no problems: fix what it names (text_obscured, text_straddles_edge, content_beyond_scroll, text_overflow) and audit again.",
     "To aim a screenshot, call selection {action: 'view', path, from, angleY, padding} before capture_screenshot (from: azimuth degrees, 0 = +X, 90 = +Z; angleY: elevation, -89 to 89; padding: distance scale, above 0, at most 10); it is a read needing no approval. Do not move the camera with execute_luau. For comparable before and after views, frame the same stable container (the zone or build root, not the part being changed, whose bounds move) with the same from, angleY and padding.",
-    "Animate characters with animation, never a KeyframeSequence in execute_luau; first load_skill {name: 'roblox-animation-vfx', resource: 'references/character-animation.md'} and adapt its tested recipes. animation: {name, rig: 'R15', loop?, priority?, easing?, keyframes: [{time, easing?, joints}]}, first at time 0; joints maps Root, Waist, Neck, Left/Right Shoulder, Elbow, Wrist, Hip, Knee, Ankle to one of aim: [right, up, forward] + bendToward? (shoulders, hips), bend: degrees (elbows, knees), rotation: [x, y, z] degrees about the parent part; position? (Root, studs). Key moved joints at time 0; a joint turns at most 90° between keys. Flow: check {animation, locomotion?: true for gaits, grounded?} (free; fix what fails) → build {animation, parent} → publish {path, display_name?} (asks first; place owner only) → wire {slot, animation_id} (expected_id to replace) → playtest → verify {animation, animation_id?, slot?}. An NPC's or creature's Model plays its own: rig {model, stock: R15|R6, position?} makes a stock NPC whose loader holds Roblox's defaults; wire {model, slot: idle|walk|run, animation_id, expected_id?, ground_speed: the gait's check groundSpeed}; in a playtest, verify {model} watches its script move it, and position walks it there. With no Open Cloud key, verify with just animation and say publishing needs a key. Rebuild with expected_revision; waive only intended failures.",
+    "Animate characters with animation, never a KeyframeSequence in execute_luau; first load_skill {name: 'roblox-animation-vfx', resource: 'references/character-animation.md'} and adapt its tested recipes. animation: {name, rig: 'R15' or a Model's path, loop?, priority?, easing?, keyframes: [{time, easing?, joints}]}, first at time 0; joints maps Root, Waist, Neck, Left/Right Shoulder, Elbow, Wrist, Hip, Knee, Ankle to one of aim: [right, up, forward] + bendToward? (shoulders, hips), bend: degrees (elbows, knees), rotation: [x, y, z] degrees about the parent part; position? (Root, studs). Key moved joints at time 0; a joint turns at most 90° between keys. Flow: check {animation, locomotion?: true for gaits, grounded?} (free; fix what fails) → build {animation, parent} → publish {path, display_name?} (asks first; place owner only) → wire {slot, animation_id} (expected_id to replace) → playtest → verify {animation, animation_id?, slot?}. An NPC's or creature's Model plays its own: rig {model, stock: R15|R6, position?} makes a stock NPC whose loader holds Roblox's defaults; wire {model, slot: idle|walk|run, animation_id, expected_id?, ground_speed: the gait's check groundSpeed}; in a playtest, verify {model} watches its script move it, and position walks it there. With no Open Cloud key, verify with just animation and say publishing needs a key. Rebuild with expected_revision; waive only intended failures.",
     "For seeded bulk placement, build_instances accepts one sole step {op:'scatter', name, zone:{min:[x,z],max:[x,z]}, density:countPer10000SquareStuds, seed, templates:[{source,weight,kit?}], ground:[path], raycast:{top,bottom}, rotation?:[minYaw,maxYaw], scale?:[min,max], spacing?, avoid?:[{tag,distance}], maxSlope?, replace?, parent?, tags?, attributes?, id?}. Ground and templates must already exist. The named scatter group is replaced only with replace:true and matching ownership; the entire replacement is undoable. Requested count is floor(area*density/10000), limited to 1-1000. Footprints stay inside the rectangle and clear of tagged bounds. Inspect returned scatter.requested/placed/attempts: blocked ground can produce fewer placements. Same seed reproduces only with unchanged inputs and scene. Load roblox-building references/scatter.md for details.",
   ].join("\n");
 }
@@ -1105,6 +1105,7 @@ async function recordAnimationPreview(context: PlannerContext, outcome: McpToolO
   const animation = isRecord(data.animation) ? data.animation : {};
   const checks = isRecord(data.checks) ? data.checks : {};
   const name = stringField(animation, "name") ?? "The animation";
+  const rig = stringField(animation, "rig");
   const duration = numberField(animation, "duration");
   const keyframes = numberField(animation, "keyframes");
   context.recordEvidence({
@@ -1116,6 +1117,7 @@ async function recordAnimationPreview(context: PlannerContext, outcome: McpToolO
     ...(isModelPreviewId(modelPreviewId) ? { modelPreviewId } : {}),
     metadata: [
       { label: ANIMATION_NAME_LABEL, value: name },
+      ...(rig === undefined ? [] : [{ label: ANIMATION_RIG_LABEL, value: rig }]),
       ...(keyframes === undefined ? [] : [{ label: "Keyframes", value: String(keyframes) }]),
       ...(duration === undefined ? [] : [{ label: "Length", value: `${duration} s${animation.loop === true ? ", looping" : ""}` }]),
     ],

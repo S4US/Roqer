@@ -458,6 +458,13 @@ export const ANIMATION_PREVIEW_TITLE = "Animation preview";
 export const ANIMATION_NAME_LABEL = "Animation";
 
 /**
+ * Metadata on an animation's preview: the rig it was drawn on, "R15", "R6" or
+ * the path of the model whose own rig it is. Previews recorded before it
+ * existed have none.
+ */
+export const ANIMATION_RIG_LABEL = "Rig";
+
+/**
  * Metadata on a Blender preview: the file the pictured model was written to,
  * or "scene.blend" when the job exported nothing and its scene was pictured.
  * Which previews are versions of one model is the evidence's `subject`; runs

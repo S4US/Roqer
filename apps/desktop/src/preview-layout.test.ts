@@ -1,11 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
-  ANIMATION_NAME_LABEL, ANIMATION_PREVIEW_TITLE, BLENDER_MODEL_LABEL, BLENDER_PREVIEW_TITLE, SCREENSHOT_VIEW_LABEL, SCREENSHOT_VIEW_PLAYTEST,
-  type RunChange, type RunEvidence,
+  ANIMATION_NAME_LABEL, ANIMATION_PREVIEW_TITLE, ANIMATION_RIG_LABEL, BLENDER_MODEL_LABEL, BLENDER_PREVIEW_TITLE, SCREENSHOT_VIEW_LABEL,
+  SCREENSHOT_VIEW_PLAYTEST, type RunChange, type RunEvidence,
 } from "../shared/run-events";
 import {
-  hasModelPreview, keptPreviewIds, previewCaption, previewLayout, previewSource, previewSourceLabel, previewSubject, previewTileLabel,
+  animationRigCaption, hasModelPreview, keptPreviewIds, previewCaption, previewLayout, previewSource, previewSourceLabel, previewSubject, previewTileLabel,
   previewVersions, shortTarget,
 } from "./preview-layout";
 
@@ -59,10 +59,17 @@ test("a picture is labelled by where the host says it came from", () => {
   ]);
 });
 
-test("an animation's contact sheet is labelled as an R15 animation, and opens in 3D when its model was kept", () => {
+test("an animation's contact sheet is labelled with its rig, and opens in 3D when its model was kept", () => {
   const sheet: RunEvidence = { id: "a", kind: "inspection", title: ANIMATION_PREVIEW_TITLE, imageDataUrl: image };
+  const on = (rig: string): RunEvidence => ({ ...sheet, metadata: [{ label: ANIMATION_RIG_LABEL, value: rig }] });
   assert.equal(previewSource(sheet), "animation");
-  assert.equal(previewSourceLabel(sheet), "Animation · R15");
+  // A preview recorded before its rig was is labelled without one.
+  assert.equal(previewSourceLabel(sheet), "Animation");
+  assert.equal(previewSourceLabel(on("R15")), "Animation · R15");
+  assert.equal(previewSourceLabel(on("R6")), "Animation · R6");
+  // A model's own rig by the model's name.
+  assert.equal(previewSourceLabel(on("game.Workspace.Dog")), "Animation · Dog");
+  assert.deepEqual([sheet, on("R6"), on("game.Workspace.Dog")].map(animationRigCaption), ["its rig", "the R6 rig", "Dog's own rig"]);
   assert.equal(hasModelPreview(sheet), false);
   assert.equal(hasModelPreview({ ...sheet, modelPreviewId: "a1b2c3d4-0" }), true);
 });

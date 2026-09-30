@@ -4,7 +4,7 @@ import { Box, Camera, ChevronLeft, ChevronRight, Gamepad2, ImageIcon, Maximize2,
 import { MAX_RECORDED_EVIDENCE_IMAGES, type RunChange, type RunEvidence } from "../shared/run-events";
 import { ModelViewer } from "./model-viewer";
 import {
-  hasModelPreview, previewCaption, previewLayout, previewSource, previewSourceLabel, previewTileLabel, previewVersions,
+  animationRigCaption, hasModelPreview, previewCaption, previewLayout, previewSource, previewSourceLabel, previewTileLabel, previewVersions,
   type PreviewTile,
 } from "./preview-layout";
 import { evidenceImages, previewsNotShown } from "./run-view";
@@ -263,8 +263,8 @@ function PreviewViewer({ images, changes, choice, index, onIndex, onClose }: {
         <strong><SourceIcon evidence={current} size={15} />{current.title}</strong>
         <span>{caption ?? (previewSource(current) === "animation"
           ? inModel
-            ? "The animation on the R15 rig, as checked"
-            : "Five moments of the animation, from two views"
+            ? `The animation on ${animationRigCaption(current)}, as checked`
+            : "Moments of the animation, from two views"
           : previewSource(current) !== "blender"
             ? previewSourceLabel(current)
             : inModel
