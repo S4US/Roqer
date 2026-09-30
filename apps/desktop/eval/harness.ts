@@ -18,10 +18,11 @@ import { appendFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 import { blenderVersion, detectBlender, isBlenderExecutablePath } from "../runtime/blender-settings";
-import type { McpToolCaller, McpToolImage } from "../runtime/mcp-types";
+import type { McpHealth, McpToolCaller, McpToolImage } from "../runtime/mcp-types";
 import { storeModelPreview } from "../runtime/model-preview";
 import { RunSession, type Planner, type PlannerImage } from "../runtime/run-engine";
 import type { ApprovalMode } from "../shared/policy";
+import { TOOL_CATALOG_DIGEST } from "../shared/mcp-tool-schemas";
 import { isKnownTool, TOOL_RISK } from "../shared/mcp-tools";
 import type { ProviderId, ReasoningEffort } from "../shared/provider";
 import type { RunEvent } from "../shared/run-events";
@@ -465,6 +466,28 @@ export async function requireUploads(caller: McpToolCaller, instanceId: string |
       + "start it, or start it with ROBLOX_OPEN_CLOUD_API_KEY and ROBLOX_CREATOR_USER_ID (or _GROUP_ID) set.",
     );
   }
+}
+
+/**
+ * Refuse a bridge built from other tool definitions than this checkout's.
+ *
+ * A run shows the model this checkout's tools and scores this checkout's
+ * agent, while the tools themselves run in whatever bridge is listening. One
+ * built from other definitions, most often the installed Roqer app's own,
+ * which it starts on the default port, has the model call operations it does
+ * not have or treats their arguments the old way. The first T18 run did that:
+ * it published real animations for a score that measured nothing here.
+ */
+export function requireMatchingBridge(health: McpHealth): void {
+  if (health.toolCatalogDigest === TOOL_CATALOG_DIGEST) return;
+  const bridge = `The bridge at ${health.endpoint}${health.serverVersion === undefined ? "" : ` (v${health.serverVersion})`}`;
+  throw new Error(
+    `${bridge} was built from other tool definitions than this checkout${health.toolCatalogDigest === undefined ? ", or before bridges said which" : ""}, `
+    + "so a run would not measure this code. Close Roqer if it is running, since it starts a bridge of its own. "
+    + "Then, from this checkout, run npm run build:plugin:artifact and npm run build, start the checkout's bridge "
+    + "(npm run dev -w apps/desktop, or node packages/robloxstudio-mcp/dist/index.js --auto-install-plugin), "
+    + "and restart Studio so it loads the matching plugin.",
+  );
 }
 
 /** The Blender to run jobs with, checked the way Settings checks one before it can be turned on. */

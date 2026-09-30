@@ -46,6 +46,9 @@ export type ToolSchema = {
 /** sha256 of `packages/core/src/tools/definitions.ts` with LF newlines. */
 export const TOOL_DEFINITIONS_DIGEST = "c6ef6ac66088dc21e2fae82f15017e90089e81554c4a1f067b221e99539a044a";
 
+/** What a bridge built from these definitions reports as `toolCatalogDigest` on `/health`. */
+export const TOOL_CATALOG_DIGEST = "842eea86512d558bf7927df9cb88c47408b361b5be60065716e5e65c0b8c0b57";
+
 export const TOOL_SCHEMAS: Readonly<Record<string, ToolSchema>> = {
   animation: {
     description: "Use to check, build, publish, wire, or verify R15 or R6 animations, or to rig a stock NPC.",

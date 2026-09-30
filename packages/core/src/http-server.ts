@@ -6,6 +6,7 @@ import { RobloxStudioTools } from './tools/index.js';
 import { BridgeService, MAX_REQUEST_TIMEOUT_MS, RoutingFailure, toPublic } from './bridge-service.js';
 import type { RegisterInstanceResult } from './bridge-service.js';
 import type { ToolDefinition } from './tools/definitions.js';
+import { TOOL_CATALOG_DIGEST } from './tools/catalog-digest.js';
 import { createToolHttpHandler, normalizeToolResult, publicToolErrorBody } from './mcp-runtime.js';
 import { tokensMatch } from './auth.js';
 import { StudioLaunchPreDispatchError } from './studio-instance-manager.js';
@@ -416,6 +417,7 @@ export function createHttpServer(tools: RobloxStudioTools, bridge: BridgeService
       serverName: serverConfig?.name ?? 'robloxstudio-mcp',
       version: serverConfig?.version,
       serverVersion: serverConfig?.version,
+      toolCatalogDigest: TOOL_CATALOG_DIGEST,
       capabilities: studioLifecycleCallable ? {
         studioLifecycle: {
           protocolVersion: 3,

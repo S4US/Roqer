@@ -434,12 +434,14 @@ export class McpClient implements McpToolCaller {
     const instances = rawInstances.filter(isValidInstance);
     const instanceCount = typeof body.instanceCount === "number" ? body.instanceCount : instances.length;
     const serverVersion = typeof body.serverVersion === "string" ? body.serverVersion : undefined;
+    const toolCatalogDigest = typeof body.toolCatalogDigest === "string" ? body.toolCatalogDigest : undefined;
 
     return {
       reachable: true,
       pluginConnected,
       endpoint: this.endpoint,
       serverVersion,
+      ...(toolCatalogDigest === undefined ? {} : { toolCatalogDigest }),
       instanceCount,
       instances,
       message: pluginConnected ? "Connected" : "MCP is running, Studio plugin not connected",

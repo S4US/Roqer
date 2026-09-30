@@ -1,6 +1,7 @@
 import request from 'supertest';
 import { TOOL_HANDLERS, createHttpServer, type RobloxStudioHttpApp } from '../http-server.js';
 import { RobloxStudioTools } from '../tools/index.js';
+import { TOOL_CATALOG_DIGEST } from '../tools/catalog-digest.js';
 import { BridgeService, DEFAULT_REQUEST_TIMEOUT_MS, MAX_REQUEST_TIMEOUT_MS, REQUEST_TIMEOUT } from '../bridge-service.js';
 import { StudioInstanceManager } from '../studio-instance-manager.js';
 import { detectStudioPlatform } from '../studio-platform.js';
@@ -64,6 +65,12 @@ describe('HTTP Server', () => {
         mcpServerActive: false,
         activeEventStreams: 0,
       });
+    });
+
+    test('says which tool definitions it was built from, so a client built from others can tell', async () => {
+      const response = await request(app).get('/health').expect(200);
+      expect(response.body.toolCatalogDigest).toBe(TOOL_CATALOG_DIGEST);
+      expect(TOOL_CATALOG_DIGEST).toMatch(/^[0-9a-f]{64}$/);
     });
 
     test('advertises Studio lifecycle only when manage_instance is callable', async () => {

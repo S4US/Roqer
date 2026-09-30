@@ -433,6 +433,7 @@ test("health parses connected instances", async () => {
       pluginConnected: true,
       instanceCount: 2,
       serverVersion: "1.2.3",
+      toolCatalogDigest: "abc123",
       instances: [
         { instanceId: "a", role: "server", placeId: 1, isRunning: true },
         { instanceId: "b", role: "client", placeId: 1, isRunning: false, placeName: "Test" },
@@ -448,6 +449,7 @@ test("health parses connected instances", async () => {
     assert.equal(health.reachable, true);
     assert.equal(health.pluginConnected, true);
     assert.equal(health.serverVersion, "1.2.3");
+    assert.equal(health.toolCatalogDigest, "abc123");
     assert.equal(health.instances.length, 2);
     assert.equal(health.instances[1].placeName, "Test");
   } finally {

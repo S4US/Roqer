@@ -41,7 +41,7 @@ import { McpClient } from "../runtime/mcp-client";
 import { BLENDER_OPERATION } from "../shared/blender";
 import { CUSTOM_API_FORMATS, DEFAULT_CUSTOM_REASONING_EFFORTS, type CustomApiFormat, type CustomConnection } from "../shared/custom-providers";
 import { isReasoningEffort, type ReasoningEffort } from "../shared/provider";
-import { formatEvalResult, requireUploads, resolveBlender, runEvalTask, type EvalResult } from "./harness";
+import { formatEvalResult, requireMatchingBridge, requireUploads, resolveBlender, runEvalTask, type EvalResult } from "./harness";
 import { probePlace, resetPlace } from "./reset";
 import { EVAL_TASKS, findEvalTask, needsUploadKey, type EvalTask } from "./tasks";
 import { createEvalTelemetryCollector } from "./telemetry";
@@ -145,6 +145,10 @@ async function main(): Promise<void> {
     }
     return;
   }
+
+  // Before anything is spent: a run measures this checkout's agent, which
+  // only means something against a bridge built from the same tools.
+  requireMatchingBridge(health);
 
   // The same worker and routing the app uses when Blender is turned on, so a
   // modeling task measures the shipped path rather than a stand-in.

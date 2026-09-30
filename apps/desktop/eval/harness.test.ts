@@ -14,11 +14,12 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
-import type { McpToolCaller, McpToolOutcome } from "../runtime/mcp-types";
+import type { McpHealth, McpToolCaller, McpToolOutcome } from "../runtime/mcp-types";
 import type { Planner, PlannerContext } from "../runtime/run-engine";
 import { createStudioToolRunner } from "../runtime/studio-tools";
+import { TOOL_CATALOG_DIGEST } from "../shared/mcp-tool-schemas";
 import { ANIMATION_PREVIEW_TITLE, type RunEvidence } from "../shared/run-events";
-import { formatEvalResult, requireUploads, runEvalTask } from "./harness";
+import { formatEvalResult, requireMatchingBridge, requireUploads, runEvalTask } from "./harness";
 import { EVAL_TASKS, type EvalTask } from "./tasks";
 import type { EvalPlannerMetrics } from "./telemetry";
 
@@ -727,6 +728,21 @@ test("the realistic meadow must add real Terrain and be screenshotted", () => {
   assert.match(parts.detail, /not built with Terrain/);
   assert.equal(task.oracle({ ...common, probe: { terrainAdded: 120, rootFound: true }, toolCalls: screenshot }).passed, false);
   assert.equal(task.oracle({ ...common, probe: { terrainAdded: 40_000, rootFound: true }, toolCalls: [] }).passed, false);
+});
+
+test("a run refuses a bridge built from other tool definitions before any model is spent", () => {
+  const health = (toolCatalogDigest?: string): McpHealth => ({
+    reachable: true, pluginConnected: true, endpoint: "http://127.0.0.1:58741", serverVersion: "3.0.3",
+    ...(toolCatalogDigest === undefined ? {} : { toolCatalogDigest }), instanceCount: 1, instances: [], message: "Connected",
+  });
+  requireMatchingBridge(health(TOOL_CATALOG_DIGEST));
+  // The installed app's own bridge, built from the definitions of its release.
+  assert.throws(
+    () => requireMatchingBridge(health("0".repeat(64))),
+    /^Error: The bridge at http:\/\/127\.0\.0\.1:58741 \(v3\.0\.3\) was built from other tool definitions than this checkout, so a run would not measure this code\. Close Roqer if it is running/,
+  );
+  // A bridge from before bridges said which: as unusable, and said so.
+  assert.throws(() => requireMatchingBridge(health()), /other tool definitions than this checkout, or before bridges said which,/);
 });
 
 test("a modeling run refuses a bridge with no Open Cloud key before any model is spent", async () => {

@@ -13,8 +13,18 @@ harness that reimplemented the run loop would be measuring itself.
 
 ## Running it
 
-Requires a live MCP bridge with Roblox Studio connected. Two providers can
-drive it:
+Requires a live MCP bridge with Roblox Studio connected, built from this
+checkout. A run shows the model this checkout's tools and scores this
+checkout's agent, so it stops before spending anything when the bridge's
+`/health` reports other tool definitions (`toolCatalogDigest`, against
+`TOOL_CATALOG_DIGEST` in `shared/mcp-tool-schemas.ts`). The usual cause is the
+installed Roqer app, which starts its own bridge on the default port: close it,
+run `npm run build:plugin:artifact` and `npm run build`, start this checkout's
+bridge (`npm run dev -w apps/desktop`, or
+`node packages/robloxstudio-mcp/dist/index.js --auto-install-plugin`), and
+restart Studio, which keeps the plugin it loaded until it restarts. A plugin
+older than the bridge answers an endpoint it lacks with a `plugin_outdated`
+error. Two providers can drive it:
 
 - `claude` (the default) runs Claude Code on your own Claude subscription. It
   needs a signed-in Claude Code CLI.
