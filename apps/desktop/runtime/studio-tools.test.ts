@@ -1178,19 +1178,28 @@ test("rigging an NPC records the model it made, and what Studio read back", asyn
   const { context, changes, evidence } = contextWith([
     ok(made),
     ok({ ...made, model: "game.Workspace.Guard2", states: { idle: "rbxassetid://1" }, missingStates: ["walk", "run"], readBackMatches: false }),
+    ok({ ...made, model: "game.Workspace.Guard3", readBackMatches: false, mismatches: ["its feet stand at [4, -0.19, -2], 0.19 studs from where they were asked"] }),
   ]);
   const run = createStudioToolRunner(context);
 
   await run("animation", { action: "rig", model: "game.Workspace.Guard", stock: "R15", position: [4, 0, -2] });
   await run("animation", { action: "rig", model: "game.Workspace.Guard2", stock: "R15", position: [4, 0, -2] });
+  await run("animation", { action: "rig", model: "game.Workspace.Guard3", stock: "R15", position: [4, 0, -2] });
 
-  assert.deepEqual(changes.map((change) => [change.kind, change.target, change.summary]), [
-    ["instance", "game.Workspace.Guard", "Made a stock R15 NPC at game.Workspace.Guard, its feet at [4, 0, -2], with the animation loader in place of its Animate script, in one undoable step."],
-    ["instance", "game.Workspace.Guard2", "Made a stock R15 NPC at game.Workspace.Guard2, its feet at [4, 0, -2], with the animation loader in place of its Animate script, in one undoable step."],
+  assert.deepEqual(changes.map((change) => [change.kind, change.target]), [
+    ["instance", "game.Workspace.Guard"],
+    ["instance", "game.Workspace.Guard2"],
+    ["instance", "game.Workspace.Guard3"],
   ]);
+  assert.equal(
+    changes[0].summary,
+    "Made a stock R15 NPC at game.Workspace.Guard, its feet at [4, 0, -2], with the animation loader in place of its Animate script, in one undoable step.",
+  );
   assert.deepEqual(evidence.map((item) => [item.kind, item.title, item.passed, item.detail]), [
     ["verification", "game.Workspace.Guard", true, "Studio read the NPC back: an R15 body of 16 parts and 15 joints, 5.23 studs tall, its feet at [4, 0, -2], whose loader plays Roblox's default idle, walk and run."],
     ["verification", "game.Workspace.Guard2", false, "Studio read the NPC back, and it is not what was made: its rig, its place, its loader or the loader's states differ."],
+    // Studio names what differs, and the card says it rather than guessing.
+    ["verification", "game.Workspace.Guard3", false, "Studio read the NPC back, and it is not what was made: its feet stand at [4, -0.19, -2], 0.19 studs from where they were asked."],
   ]);
   assert.deepEqual(evidence[0].metadata, [
     { label: "Undo", value: "One Studio undo step" },

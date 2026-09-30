@@ -1270,6 +1270,7 @@ function recordAnimationRig(context: PlannerContext, outcome: McpToolOutcome): v
     summary: `Made a stock ${rigType} NPC at ${model}${feet ? `, its feet at ${feet}` : ""}, with the animation loader in place of its Animate script, in one undoable step.`,
   });
   const matches = data.readBackMatches === true;
+  const mismatches = Array.isArray(data.mismatches) ? data.mismatches.filter((reason): reason is string => typeof reason === "string") : [];
   const body = [
     parts === undefined ? undefined : `${parts} parts`,
     joints === undefined ? undefined : `${joints} joints`,
@@ -1280,7 +1281,7 @@ function recordAnimationRig(context: PlannerContext, outcome: McpToolOutcome): v
     title: model,
     passed: matches,
     detail: !matches
-      ? "Studio read the NPC back, and it is not what was made: its rig, its place, its loader or the loader's states differ."
+      ? `Studio read the NPC back, and it is not what was made: ${mismatches.length > 0 ? mismatches.join("; ") : "its rig, its place, its loader or the loader's states differ"}.`
       : `Studio read the NPC back: ${rigType === "R15" || rigType === "R6" ? `an ${rigType}` : "a stock"} body${body.length > 0 ? ` of ${inWords(body)}` : ""}${height === undefined ? "" : `, ${height} studs tall`}${feet ? `, its feet at ${feet}` : ""}, `
         + (states.length > 0 ? `whose loader plays Roblox's default ${inWords(states)}.` : "whose loader holds no animation yet."),
     metadata: [

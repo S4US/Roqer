@@ -539,6 +539,13 @@ describe('animating a model', () => {
     expect(calls[1].data).toEqual({ model: 'game.Workspace.Guard2', stock: 'R6' });
   });
 
+  test('a read-back that differs says how, and the NPC it made is still reported', async () => {
+    const mismatches = ['its feet stand at [0, -0.19, 0], 0.19 studs from where they were asked'];
+    const { tools } = toolsAnswering(() => ({ model: 'game.Workspace.Guard', rigType: 'R15', states: { idle: 'rbxassetid://1' }, readBackMatches: false, mismatches }));
+    const result = body(await tools.animation({ action: 'rig', model: 'game.Workspace.Guard', stock: 'R15' }));
+    expect(result).toMatchObject({ rigged: true, readBackMatches: false, mismatches });
+  });
+
   test('rig says so when the body carried no default animations', async () => {
     const { tools } = toolsAnswering(() => ({ model: 'game.Workspace.Guard', rigType: 'R6', states: {}, missingStates: ['idle', 'walk', 'run'], readBackMatches: true }));
     const result = body(await tools.animation({ action: 'rig', model: 'game.Workspace.Guard', stock: 'R6' }));

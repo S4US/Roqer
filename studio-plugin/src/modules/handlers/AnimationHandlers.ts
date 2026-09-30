@@ -195,6 +195,24 @@ function componentsOf(cframe: CFrame): number[] {
 	return out;
 }
 
+/**
+ * A rig's animated joints, by the name of the part each moves: a Motor6D, or
+ * an AnimationConstraint, which Roblox's avatar joint upgrade builds stock
+ * bodies with instead.
+ */
+function animatedJoints(rig: Instance): Map<string, Instance> {
+	const joints = new Map<string, Instance>();
+	for (const descendant of rig.GetDescendants()) {
+		if (descendant.IsA("AnimationConstraint")) {
+			const attachment = descendant.Attachment1;
+			if (attachment && attachment.Parent) joints.set(attachment.Parent.Name, descendant);
+		} else if (descendant.IsA("Motor6D") && descendant.Part1) {
+			joints.set(descendant.Part1.Name, descendant);
+		}
+	}
+	return joints;
+}
+
 function destroyQuietly(instance: Instance | undefined) {
 	if (instance) pcall(() => instance.Destroy());
 }
@@ -290,15 +308,7 @@ function previewAnimation(requestData: Data) {
 		rig.Parent = folder;
 		addProps(rig, requestData.props);
 
-		const joints = new Map<string, Instance>();
-		for (const descendant of rig.GetDescendants()) {
-			if (descendant.IsA("AnimationConstraint")) {
-				const attachment = descendant.Attachment1;
-				if (attachment && attachment.Parent) joints.set(attachment.Parent.Name, descendant);
-			} else if (descendant.IsA("Motor6D") && descendant.Part1) {
-				joints.set(descendant.Part1.Name, descendant);
-			}
-		}
+		const joints = animatedJoints(rig);
 		const humanoid = rig.FindFirstChildOfClass("Humanoid");
 		if (!humanoid) error("the preview dummy has no Humanoid");
 		let animator = humanoid.FindFirstChildOfClass("Animator");
@@ -633,15 +643,7 @@ function playAndSample(rig: Instance, animator: Animator, requestData: Data, wha
 			const provider = game.GetService("AnimationClipProvider" as keyof Services) as unknown as ClipProvider;
 			id = tostring(provider.RegisterAnimationClip(sequence));
 		}
-		const joints = new Map<string, Instance>();
-		for (const descendant of rig.GetDescendants()) {
-			if (descendant.IsA("AnimationConstraint")) {
-				const attachment = descendant.Attachment1;
-				if (attachment && attachment.Parent) joints.set(attachment.Parent.Name, descendant);
-			} else if (descendant.IsA("Motor6D") && descendant.Part1) {
-				joints.set(descendant.Part1.Name, descendant);
-			}
-		}
+		const joints = animatedJoints(rig);
 		animation = new Instance("Animation");
 		animation.AnimationId = id as string;
 		track = animator.LoadAnimation(animation);
@@ -1077,6 +1079,17 @@ function animationVerifyModel(requestData: Data) {
 
 /** The rig types rig makes a stock NPC body of. */
 const STOCK_RIGS = ["R15", "R6"];
+/** Frames a new body gets to settle in the place; it has once two frames running move it less than this. */
+const SETTLE_FRAMES = 10;
+const SETTLED_STUDS = 0.001;
+/** How far from where they were asked the read-back may find the feet. */
+const FEET_TOLERANCE = 0.05;
+
+/** A model's lowest point, under the middle of its bounding box. */
+function footing(model: Model): Vector3 {
+	const [box, size] = model.GetBoundingBox();
+	return box.Position.sub(new Vector3(0, size.Y / 2, 0));
+}
 
 /** An asset ID as the model loader holds it, from either form an Animate script's Animation carries. */
 function loaderAssetId(value: string): string | undefined {
@@ -1115,7 +1128,8 @@ function stockAnimation(animate: Instance, state: string): string | undefined {
  * holding the idle, walk and run the body's own Animate script carries.
  * Animate is left out: it is a LocalScript, which runs only under a player,
  * so on an NPC it plays nothing. The body is made outside the place, so a
- * failure leaves nothing behind, and goes in as one undo step, read back.
+ * failure leaves nothing behind, and goes in as one undo step, read back:
+ * each way the read-back differs from what was made is named.
  */
 function animationRig(requestData: Data) {
 	const path = requestData.model;
@@ -1174,10 +1188,20 @@ function animationRig(requestData: Data) {
 		// An NPC walks: its root is never anchored.
 		const root = body.FindFirstChild("HumanoidRootPart");
 		if (root && root.IsA("BasePart")) root.Anchored = false;
-		const [box, size] = body.GetBoundingBox();
-		const bottom = box.Position.sub(new Vector3(0, size.Y / 2, 0));
-		body.PivotTo(body.GetPivot().add(feet.sub(bottom)));
+		body.PivotTo(body.GetPivot().add(feet.sub(footing(body))));
 		body.Parent = parent;
+		// A stock body settles as it enters the place, its joints fitting its
+		// limbs to its root, which moves its feet; so it is stood again once
+		// it has stopped moving.
+		let settled = footing(body);
+		let still = 0;
+		for (let frame = 0; frame < SETTLE_FRAMES && still < 2; frame++) {
+			task.wait();
+			const now = footing(body);
+			still = now.sub(settled).Magnitude < SETTLED_STUDS ? still + 1 : 0;
+			settled = now;
+		}
+		body.PivotTo(body.GetPivot().add(feet.sub(settled)));
 	});
 	if (!applied) {
 		pcall(() => body.Destroy());
@@ -1189,37 +1213,42 @@ function animationRig(requestData: Data) {
 	const humanoid = body.FindFirstChildOfClass("Humanoid");
 	const states = loaderStates(body);
 	let parts = 0;
-	let joints = 0;
 	for (const descendant of body.GetDescendants()) {
 		if (descendant.IsA("BasePart")) parts += 1;
-		else if (descendant.IsA("Motor6D")) joints += 1;
 	}
-	const [box, size] = body.GetBoundingBox();
-	const standing = box.Position.sub(new Vector3(0, size.Y / 2, 0));
-	let held = states !== undefined;
-	for (const state of MODEL_STATES) {
-		if (states && states.ids[state] !== ids[state]) held = false;
+	const joints = animatedJoints(body).size();
+	const [, size] = body.GetBoundingBox();
+	const standing = footing(body);
+	const feetAt = [round2(standing.X), round2(standing.Y), round2(standing.Z)];
+	const mismatches: string[] = [];
+	if (body.Parent !== parent) mismatches.push(`it is not in ${getInstancePath(parent)}`);
+	if (!humanoid) mismatches.push("it has no Humanoid");
+	else if (humanoid.RigType !== rigType) mismatches.push(`its Humanoid is ${humanoid.RigType.Name}, not ${stock}`);
+	if (joints === 0) mismatches.push("it has no Motor6D or AnimationConstraint joints to animate");
+	if (!states) mismatches.push("it has no loader");
+	else {
+		if (!states.unchanged) mismatches.push("its loader's code is not the loader's");
+		for (const state of MODEL_STATES) {
+			if (states.ids[state] !== ids[state]) mismatches.push(`its loader's ${state} is not the one Animate carried`);
+		}
 	}
+	if (body.FindFirstChild("Animate")) mismatches.push("its Animate script is still in it");
+	const off = standing.sub(feet).Magnitude;
+	if (off > FEET_TOLERANCE) mismatches.push(`its feet stand at [${feetAt.join(", ")}], ${round2(off)} studs from where they were asked`);
 	return {
 		model: getInstancePath(body),
 		rigType: humanoid ? humanoid.RigType.Name : false,
 		parts,
 		joints,
 		height: round2(size.Y),
-		feet: [round2(standing.X), round2(standing.Y), round2(standing.Z)],
+		feet: feetAt,
 		walkSpeed: humanoid ? humanoid.WalkSpeed : false,
 		loader: getInstancePath(loader as unknown as Script),
 		states: states ? states.ids : {},
 		...(missing.size() > 0 ? { missingStates: missing } : {}),
 		animateRemoved: animate !== undefined,
-		readBackMatches: body.Parent === parent
-			&& humanoid !== undefined
-			&& humanoid.RigType === rigType
-			&& states !== undefined
-			&& states.unchanged
-			&& held
-			&& body.FindFirstChild("Animate") === undefined
-			&& standing.sub(feet).Magnitude < 0.01,
+		readBackMatches: mismatches.size() === 0,
+		...(mismatches.size() > 0 ? { mismatches } : {}),
 		undoable: recordingId !== undefined,
 		loaderSource: MODEL_LOADER_SOURCE,
 	};
