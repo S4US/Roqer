@@ -13,8 +13,9 @@ const Workspace = game.GetService("Workspace");
  *
  * Core compiles and checks the pose description; the plugin only turns the
  * compiled keyframes into instances. `previewAnimation` plays them on a
- * temporary R15 or R6 dummy, as the sequence's rig says, and reports the
- * joints, without leaving anything behind.
+ * temporary R15 or R6 dummy, as the sequence's rig says, or on a temporary
+ * copy of the model whose rig it was written for, and reports the joints,
+ * without leaving anything behind.
  * `buildAnimation` writes the KeyframeSequence as one undo step, replacing a
  * sequence only when it was built here, is unchanged since, and matches the
  * revision the caller expects.
@@ -23,8 +24,9 @@ const Workspace = game.GetService("Workspace");
 const REVISION_ATTRIBUTE = "RoqerAnimationRevision";
 const PREVIEW_FOLDER = "__RoqerAnimationPreview";
 const MAX_KEYFRAMES = 240;
-const MAX_POSES_PER_KEYFRAME = 32;
-const MAX_POSE_DEPTH = 8;
+/** A keyframe's poses and their nesting: a rig's joints, at most 64, and its root. */
+const MAX_POSES_PER_KEYFRAME = 65;
+const MAX_POSE_DEPTH = 65;
 const MAX_NAME_LENGTH = 100;
 const MAX_MARKERS_PER_KEYFRAME = 16;
 const MAX_MARKER_VALUE_LENGTH = 200;
@@ -280,6 +282,24 @@ function previewAnimation(requestData: Data) {
 		last = time;
 	}
 
+	// A model's own rig is previewed on a copy of the model, and only while its
+	// rig is as it was when the animation was checked.
+	let model: AnimatedModel | undefined;
+	if (requestData.model !== undefined) {
+		const request = requestData.model;
+		if (!typeIs(request, "table")) return { error: "model must be {path, revision}.", errorCode: "invalid_arguments" };
+		const found = animatedModel((request as Data).path);
+		if ("error" in found) return found;
+		const reading = readModelRig(found);
+		if ("error" in reading) return reading;
+		if (reading.revision !== (request as Data).revision) {
+			return { error: `${reading.path}'s rig has changed since the animation was checked against it; check it again.`, errorCode: "stale_rig" };
+		}
+		const refusal = copyRefusal(found.model);
+		if (refusal !== undefined) return { error: `${refusal}.`, errorCode: "model_not_copyable" };
+		model = found;
+	}
+
 	const [built, sequenceOrError] = pcall(() => buildSequence(requestData.sequence));
 	if (!built) return { error: tostring(sequenceOrError) };
 	const sequence = sequenceOrError as KeyframeSequence;
@@ -299,22 +319,37 @@ function previewAnimation(requestData: Data) {
 		folder.Name = PREVIEW_FOLDER;
 		folder.Archivable = false;
 		folder.Parent = Workspace;
-		const rigType = (requestData.sequence as Data).rig === "R6" ? Enum.HumanoidRigType.R6 : Enum.HumanoidRigType.R15;
-		const rig = Players.CreateHumanoidModelFromDescription(new Instance("HumanoidDescription"), rigType);
+		let rig: Model;
+		let root: Instance | undefined;
+		if (model) {
+			rig = model.model.Clone();
+			// Nothing in the copy runs: it is only posed.
+			for (const descendant of rig.GetDescendants()) {
+				if (descendant.IsA("BaseScript")) descendant.Enabled = false;
+			}
+			const controller = rig.FindFirstChildOfClass("Humanoid") ?? rig.FindFirstChildOfClass("AnimationController");
+			if (!controller) error("the copy of the model has no Humanoid or AnimationController");
+			const found = rigRoot(rig, controller, modelJoints(rig));
+			if (typeIs(found, "string")) error(found);
+			root = found;
+		} else {
+			const rigType = (requestData.sequence as Data).rig === "R6" ? Enum.HumanoidRigType.R6 : Enum.HumanoidRigType.R15;
+			rig = Players.CreateHumanoidModelFromDescription(new Instance("HumanoidDescription"), rigType);
+			root = rig.FindFirstChild("HumanoidRootPart");
+		}
 		rig.Archivable = false;
 		rig.PivotTo(new CFrame(0, 100000, 0));
-		const root = rig.FindFirstChild("HumanoidRootPart");
 		if (root && root.IsA("BasePart")) root.Anchored = true;
 		rig.Parent = folder;
-		addProps(rig, requestData.props);
+		if (!model) addProps(rig, requestData.props);
 
 		const joints = animatedJoints(rig);
-		const humanoid = rig.FindFirstChildOfClass("Humanoid");
-		if (!humanoid) error("the preview dummy has no Humanoid");
-		let animator = humanoid.FindFirstChildOfClass("Animator");
+		const controller = rig.FindFirstChildOfClass("Humanoid") ?? rig.FindFirstChildOfClass("AnimationController");
+		if (!controller) error("the preview dummy has no Humanoid");
+		let animator = controller.FindFirstChildOfClass("Animator");
 		if (!animator) {
 			animator = new Instance("Animator");
-			animator.Parent = humanoid;
+			animator.Parent = controller;
 		}
 		const stepper = animator as AnimatorWithStep;
 		animation = new Instance("Animation");
@@ -1335,8 +1370,274 @@ function animationRigMeshes() {
 	return { parts, head: "classic" };
 }
 
+// -- Rigs read from models ------------------------------------------------------
+
+/** The RoqerRig attribute: what a model's geometry cannot say about its rig. */
+const RIG_ATTRIBUTE = "RoqerRig";
+/** Roqer's bounds on a rig it reads, for summaries and previews; not the engine's. */
+const MAX_RIG_JOINTS = 64;
+const MAX_RIG_PARTS = 128;
+const MAX_WELDED_PARTS = 256;
+/** A part at least this transparent is not drawn, as a HumanoidRootPart is not. */
+const HIDDEN_TRANSPARENCY = 0.95;
+
+type RigJointReading = { name: string; part0: BasePart; part1: BasePart; c0: CFrame; c1: CFrame };
+type WeldedReading = { name: string; to: string; offset: number[]; size: number[]; shape: string };
+type RigReading = {
+	path: string;
+	revision: string;
+	rootPart: string;
+	controller: "Humanoid" | "AnimationController";
+	hipHeight?: number;
+	parts: { name: string; size: number[]; shape: string; hidden?: boolean }[];
+	joints: { name: string; part0: string; part1: string; c0: number[]; c1: number[] }[];
+	declarations?: string;
+	welded?: WeldedReading[];
+	weldedLeftOut?: number;
+};
+
+/** How the previews draw a part: Roblox's own shape, or its box for anything else. */
+function partShape(part: BasePart): string {
+	if (part.IsA("WedgePart")) return "Wedge";
+	if (part.IsA("Part")) {
+		if (part.Shape === Enum.PartType.Ball) return "Ball";
+		if (part.Shape === Enum.PartType.Cylinder) return "Cylinder";
+		if (part.Shape === Enum.PartType.Wedge) return "Wedge";
+	}
+	return "Block";
+}
+
+function sizeOf(part: BasePart): number[] {
+	return [part.Size.X, part.Size.Y, part.Size.Z].map((value) => math.round(value * 1e6) / 1e6);
+}
+
+/**
+ * The joints the Animator drives in a model: its Motor6Ds, and its
+ * AnimationConstraints, whose frames are their attachments'. Only joints
+ * between two of the model's own parts are the model's rig.
+ */
+function modelJoints(model: Model): RigJointReading[] {
+	const joints: RigJointReading[] = [];
+	for (const descendant of model.GetDescendants()) {
+		if (descendant.IsA("Motor6D")) {
+			const [part0, part1] = [descendant.Part0, descendant.Part1];
+			if (!part0 || !part1 || !part0.IsDescendantOf(model) || !part1.IsDescendantOf(model)) continue;
+			joints.push({ name: descendant.Name, part0, part1, c0: descendant.C0, c1: descendant.C1 });
+		} else if (descendant.IsA("AnimationConstraint")) {
+			const [a0, a1] = [descendant.Attachment0, descendant.Attachment1];
+			const part0 = a0?.Parent;
+			const part1 = a1?.Parent;
+			if (!a0 || !a1 || !part0 || !part1 || !part0.IsA("BasePart") || !part1.IsA("BasePart")) continue;
+			if (!part0.IsDescendantOf(model) || !part1.IsDescendantOf(model)) continue;
+			joints.push({ name: descendant.Name, part0, part1, c0: a0.CFrame, c1: a1.CFrame });
+		}
+	}
+	return joints;
+}
+
+/**
+ * The part a model's joints hang from: a Humanoid's root part; under an
+ * AnimationController, the one part joints hang from that none moves,
+ * preferring the model's PrimaryPart.
+ */
+function rigRoot(model: Model, controller: Humanoid | AnimationController, joints: RigJointReading[]): BasePart | string {
+	if (controller.IsA("Humanoid")) {
+		return controller.RootPart ?? `${getInstancePath(model)}'s Humanoid has no root part; give it a HumanoidRootPart`;
+	}
+	const moved = new Set<BasePart>();
+	for (const joint of joints) moved.add(joint.part1);
+	const roots: BasePart[] = [];
+	for (const joint of joints) {
+		if (!moved.has(joint.part0) && !roots.includes(joint.part0)) roots.push(joint.part0);
+	}
+	const primary = model.PrimaryPart;
+	if (primary && roots.includes(primary)) return primary;
+	if (roots.size() === 1) return roots[0];
+	if (roots.size() === 0) return `${getInstancePath(model)}'s joints hang from no part that none of them moves`;
+	const names = roots.map((root) => root.Name).join(", ");
+	return `${getInstancePath(model)}'s joints hang from ${roots.size()} parts that nothing moves (${names}); set its PrimaryPart to the one the rig hangs from`;
+}
+
+/** The two parts a weld holds together, when it is one: a Weld, ManualWeld, Snap, Glue, WeldConstraint or RigidConstraint. */
+function weldedPair(instance: Instance): [BasePart, BasePart] | undefined {
+	let pair: [Instance | undefined, Instance | undefined] | undefined;
+	if (instance.IsA("Weld") || instance.IsA("ManualWeld") || instance.IsA("Snap") || instance.IsA("Glue")) {
+		pair = [instance.Part0, instance.Part1];
+	} else if (instance.IsA("WeldConstraint")) {
+		pair = [instance.Part0, instance.Part1];
+	} else if (instance.IsA("RigidConstraint")) {
+		pair = [instance.Attachment0?.Parent, instance.Attachment1?.Parent];
+	}
+	if (!pair) return undefined;
+	const [a, b] = pair;
+	return a && b && a.IsA("BasePart") && b.IsA("BasePart") ? [a, b] : undefined;
+}
+
+/**
+ * The visible parts welded to the rig's parts, directly or through each other,
+ * each by the rig part it moves with and where it sits on it; the largest
+ * MAX_WELDED_PARTS of them.
+ */
+function weldedParts(model: Model, rigParts: Set<BasePart>): { welded: WeldedReading[]; leftOut: number } {
+	const neighbours = new Map<BasePart, BasePart[]>();
+	const link = (a: BasePart, b: BasePart) => {
+		const list = neighbours.get(a) ?? [];
+		list.push(b);
+		neighbours.set(a, list);
+	};
+	for (const descendant of model.GetDescendants()) {
+		const pair = weldedPair(descendant);
+		if (!pair || !pair[0].IsDescendantOf(model) || !pair[1].IsDescendantOf(model)) continue;
+		link(pair[0], pair[1]);
+		link(pair[1], pair[0]);
+	}
+	const host = new Map<BasePart, BasePart>();
+	const queue: BasePart[] = [];
+	for (const part of rigParts) queue.push(part);
+	for (let index = 0; index < queue.size(); index++) {
+		const part = queue[index];
+		const reached = rigParts.has(part) ? part : host.get(part)!;
+		for (const neighbour of neighbours.get(part) ?? []) {
+			if (rigParts.has(neighbour) || host.has(neighbour)) continue;
+			host.set(neighbour, reached);
+			queue.push(neighbour);
+		}
+	}
+	const visible: BasePart[] = [];
+	for (const [part] of host) {
+		if (part.Transparency < HIDDEN_TRANSPARENCY) visible.push(part);
+	}
+	const volume = (part: BasePart) => part.Size.X * part.Size.Y * part.Size.Z;
+	visible.sort((a, b) => (volume(a) === volume(b) ? getInstancePath(a) < getInstancePath(b) : volume(a) > volume(b)));
+	const welded: WeldedReading[] = [];
+	for (let index = 0; index < math.min(visible.size(), MAX_WELDED_PARTS); index++) {
+		const part = visible[index];
+		const to = host.get(part)!;
+		welded.push({ name: part.Name, to: to.Name, offset: componentsOf(to.CFrame.ToObjectSpace(part.CFrame)), size: sizeOf(part), shape: partShape(part) });
+	}
+	return { welded, leftOut: visible.size() - welded.size() };
+}
+
+function formatComponents(values: number[]): string {
+	return values.map((value) => formatNumber(value)).join(",");
+}
+
+/**
+ * A revision of the rig as read: everything the compiler, the checks and the
+ * previews take from it. A build compares it with the one its checks used.
+ */
+function rigRevision(reading: Omit<RigReading, "revision">): string {
+	const out: string[] = [`c:${reading.controller}:${reading.rootPart}:${formatNumber(reading.hipHeight ?? 0)}`];
+	for (const part of reading.parts) out.push(`p:${part.name}:${formatComponents(part.size)}:${part.shape}:${tostring(part.hidden === true)}`);
+	for (const joint of reading.joints) out.push(`j:${joint.name}:${joint.part0}:${joint.part1}:${formatComponents(joint.c0)}:${formatComponents(joint.c1)}`);
+	for (const piece of reading.welded ?? []) out.push(`w:${piece.name}:${piece.to}:${formatComponents(piece.offset)}:${formatComponents(piece.size)}:${piece.shape}`);
+	out.push(`d:${reading.declarations ?? ""}`);
+	return `rr1:${sourceRevision(out.join("\n")).sub(5)}`;
+}
+
+/**
+ * Read a model's rig as the Animator will drive it: its joints, the parts they
+ * join with their sizes and shapes, what is welded to them, its controller and
+ * root, and its RoqerRig declarations; bounded, and read-only.
+ */
+function readModelRig(target: AnimatedModel): RigReading | Refusal {
+	const { model, controller } = target;
+	const path = getInstancePath(model);
+	const joints = modelJoints(model);
+	if (joints.size() === 0) {
+		return { error: `${path} has no Motor6D or AnimationConstraint joints between its parts to animate.`, errorCode: "model_not_rigged" };
+	}
+	if (joints.size() > MAX_RIG_JOINTS) {
+		return { error: `${path} has ${joints.size()} joints; Roqer animates a rig of at most ${MAX_RIG_JOINTS}.`, errorCode: "rig_too_large" };
+	}
+	const root = rigRoot(model, controller, joints);
+	if (typeIs(root, "string")) return { error: `${root}.`, errorCode: "rig_root" };
+	const rigParts = new Set<BasePart>([root]);
+	for (const joint of joints) {
+		rigParts.add(joint.part0);
+		rigParts.add(joint.part1);
+	}
+	if (rigParts.size() > MAX_RIG_PARTS) {
+		return { error: `${path}'s joints join ${rigParts.size()} parts; Roqer animates a rig of at most ${MAX_RIG_PARTS}.`, errorCode: "rig_too_large" };
+	}
+	const declared = model.GetAttribute(RIG_ATTRIBUTE);
+	if (declared !== undefined && !typeIs(declared, "string")) {
+		return { error: `${path}'s ${RIG_ATTRIBUTE} attribute is a ${typeOf(declared)}; it must be the declarations' JSON text.`, errorCode: "invalid_declarations" };
+	}
+	const parts: RigReading["parts"] = [];
+	for (const part of rigParts) {
+		parts.push({ name: part.Name, size: sizeOf(part), shape: partShape(part), ...(part.Transparency >= HIDDEN_TRANSPARENCY ? { hidden: true } : {}) });
+	}
+	parts.sort((a, b) => a.name < b.name);
+	const { welded, leftOut } = weldedParts(model, rigParts);
+	const reading: Omit<RigReading, "revision"> = {
+		path,
+		rootPart: root.Name,
+		controller: controller.IsA("Humanoid") ? "Humanoid" : "AnimationController",
+		...(controller.IsA("Humanoid") ? { hipHeight: math.round(controller.HipHeight * 1e6) / 1e6 } : {}),
+		parts,
+		joints: joints.map((joint) => ({
+			name: joint.name,
+			part0: joint.part0.Name,
+			part1: joint.part1.Name,
+			c0: componentsOf(joint.c0),
+			c1: componentsOf(joint.c1),
+		})),
+		...(declared !== undefined ? { declarations: declared } : {}),
+		...(welded.size() > 0 ? { welded } : {}),
+		...(leftOut > 0 ? { weldedLeftOut: leftOut } : {}),
+	};
+	return { ...reading, revision: rigRevision(reading) };
+}
+
+/** Read the rig of the model at requestData.model: read-only, for check and build. */
+function animationReadRig(requestData: Data) {
+	const target = animatedModel(requestData.model);
+	if ("error" in target) return target;
+	return readModelRig(target);
+}
+
+/** Whether an instance, or anything in it, is what a copy of a rig needs: a part, a joint, a weld, an attachment or its controller. */
+function holdsRig(instance: Instance): boolean {
+	const needed = (candidate: Instance) =>
+		candidate.IsA("BasePart") || candidate.IsA("JointInstance") || candidate.IsA("WeldConstraint") || candidate.IsA("Constraint")
+		|| candidate.IsA("Attachment") || candidate.IsA("Humanoid") || candidate.IsA("AnimationController") || candidate.IsA("Animator");
+	if (needed(instance)) return true;
+	for (const descendant of instance.GetDescendants()) if (needed(descendant)) return true;
+	return false;
+}
+
+/**
+ * Why a copy of the model would not preview it faithfully, if it would not: a
+ * copy leaves out what cannot be archived, and a joint or weld in the copy
+ * that held it, or held a part outside the model, still holds the original's
+ * part, which moving the copy would move.
+ */
+function copyRefusal(model: Model): string | undefined {
+	const path = getInstancePath(model);
+	if (!model.Archivable) return `${path} cannot be archived, so it cannot be copied to preview on`;
+	for (const descendant of model.GetDescendants()) {
+		if (!descendant.Archivable && holdsRig(descendant)) {
+			return `${getInstancePath(descendant)} cannot be archived, so a copy of ${path} would leave it out; make it archivable to preview on the model`;
+		}
+		let held: (Instance | undefined)[] = [];
+		if (descendant.IsA("JointInstance") || descendant.IsA("WeldConstraint") || descendant.IsA("NoCollisionConstraint")) {
+			held = [descendant.Part0, descendant.Part1];
+		} else if (descendant.IsA("Constraint")) {
+			held = [descendant.Attachment0?.Parent, descendant.Attachment1?.Parent];
+		}
+		for (const part of held) {
+			if (part && !part.IsDescendantOf(model)) {
+				return `${getInstancePath(descendant)} holds ${getInstancePath(part)}, outside ${path}, which a copy's ${descendant.ClassName} would still hold`;
+			}
+		}
+	}
+	return undefined;
+}
+
 export = {
 	previewAnimation,
+	animationReadRig,
 	buildAnimation,
 	animationRigMeshes,
 	animationPublishInfo,
