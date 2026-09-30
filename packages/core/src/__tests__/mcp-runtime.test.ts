@@ -131,6 +131,9 @@ describe('MCP v2 tool runtime', () => {
   // creature could be animated only by hand-written Luau, and nothing paced
   // its walk to how fast it moves, so its feet slid. `position` then added
   // about 100: verify walks the model there to see its walk and idle play.
+  // The `rig` action and `stock` then added about 110: without them an agent
+  // made an NPC's body in hand-written Luau, and kept its Animate script,
+  // which plays nothing outside a player's character.
   test('keeps the catalog within the 3.0 token budget', () => {
     const catalog = TOOL_DEFINITIONS.map(publicToolDefinition);
     const names = new Set(catalog.map((tool) => tool.name));
@@ -146,7 +149,7 @@ describe('MCP v2 tool runtime', () => {
     // The action branches on solo_playtest added about 200: a recorded run
     // started a playtest without mode because it looked optional, and each
     // miss cost a round trip to learn the rule.
-    expect(serialized.length).toBeLessThanOrEqual(49_800);
+    expect(serialized.length).toBeLessThanOrEqual(49_900);
     expect(catalog.filter((tool) => tool.outputSchema)).toHaveLength(51);
     expect(catalog.every((tool) => tool.description.length <= 120)).toBe(true);
     expect(inspectorCatalog).toHaveLength(25);

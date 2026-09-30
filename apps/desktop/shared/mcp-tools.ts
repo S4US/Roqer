@@ -132,7 +132,8 @@ export function riskForTool(tool: string, args?: Record<string, unknown>): ToolR
   if (tool === "upload_asset" && args?.action === "status") return "read";
   if (tool === "animation") {
     // Checking compiles and measures on the MCP host. Verifying plays a track on
-    // the playtest character and leaves nothing behind.
+    // the playtest character, or walks an NPC in the playtest, and changes
+    // nothing that outlasts the playtest. Rigging makes a model: a mutation.
     if (args?.action === "check" || args?.action === "verify") return "read";
     // Uploads to the user's Roblox account, which Studio's undo cannot reverse.
     if (args?.action === "publish") return "irreversible";
@@ -252,6 +253,14 @@ function summarizeAnimation(args: Record<string, unknown>): string {
   if (args.action === "publish") {
     const path = typeof args.path === "string" && args.path !== "" ? truncate(args.path, 80) : "an animation";
     return `animation · publish ${path} to Roblox`;
+  }
+  if (args.action === "rig") {
+    const body = args.stock === "R15" || args.stock === "R6" ? `a stock ${args.stock} NPC` : "an NPC";
+    const model = typeof args.model === "string" && args.model !== "" ? truncate(args.model, 60) : "a new path";
+    const feet = Array.isArray(args.position) && args.position.length === 3 && args.position.every((value) => typeof value === "number")
+      ? `[${args.position.map((value) => Math.round(Number(value) * 10) / 10).join(", ")}]`
+      : "the origin";
+    return `animation · rig ${body} at ${model}, its feet at ${feet}, animated by a loader script`;
   }
   if (args.action === "wire") {
     const slot = typeof args.slot === "string" ? truncate(args.slot, 20) : "a slot";

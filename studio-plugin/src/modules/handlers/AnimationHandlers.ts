@@ -2,7 +2,7 @@ import Utils from "../Utils";
 import Recording from "../Recording";
 import { sourceRevision } from "../SourceRevision";
 
-const { getInstancePath, resolveInstance, getInstanceReference, readScriptSource } = Utils;
+const { getInstancePath, resolveInstance, resolveParentAndName, getInstanceReference, readScriptSource } = Utils;
 const { beginRecording, finishRecording } = Recording;
 
 const Players = game.GetService("Players");
@@ -1073,6 +1073,158 @@ function animationVerifyModel(requestData: Data) {
 	return result;
 }
 
+// -- Stock NPC bodies -----------------------------------------------------------
+
+/** The rig types rig makes a stock NPC body of. */
+const STOCK_RIGS = ["R15", "R6"];
+
+/** An asset ID as the model loader holds it, from either form an Animate script's Animation carries. */
+function loaderAssetId(value: string): string | undefined {
+	const [plain] = value.match("^rbxassetid://(%d+)$");
+	if (typeIs(plain, "string")) return `rbxassetid://${plain}`;
+	const [linked] = value.match("^https?://www%.roblox%.com/[Aa]sset/%?[Ii][Dd]=(%d+)$");
+	return typeIs(linked, "string") ? `rbxassetid://${linked}` : undefined;
+}
+
+/**
+ * The animation a stock body's Animate script plays for a state: of the
+ * Animations in the state's slot, the one with the most weight, which is the
+ * one Animate mostly plays.
+ */
+function stockAnimation(animate: Instance, state: string): string | undefined {
+	const slot = animate.FindFirstChild(state);
+	if (!slot) return undefined;
+	let best: string | undefined;
+	let bestWeight = -math.huge;
+	for (const child of slot.GetChildren()) {
+		if (!child.IsA("Animation")) continue;
+		const id = loaderAssetId(child.AnimationId);
+		const weight = child.FindFirstChild("Weight");
+		const value = weight && weight.IsA("NumberValue") ? weight.Value : 1;
+		if (id !== undefined && value > bestWeight) {
+			best = id;
+			bestWeight = value;
+		}
+	}
+	return best;
+}
+
+/**
+ * Make a stock R15 or R6 NPC body at a path that names nothing yet: Roblox's
+ * default body, with its feet at a position, animated by the model loader
+ * holding the idle, walk and run the body's own Animate script carries.
+ * Animate is left out: it is a LocalScript, which runs only under a player,
+ * so on an NPC it plays nothing. The body is made outside the place, so a
+ * failure leaves nothing behind, and goes in as one undo step, read back.
+ */
+function animationRig(requestData: Data) {
+	const path = requestData.model;
+	const stock = requestData.stock;
+	if (!typeIs(path, "string") || path === "") return { error: "model is required.", errorCode: "invalid_arguments" };
+	if (!typeIs(stock, "string") || !STOCK_RIGS.includes(stock)) return { error: "stock must be R15 or R6.", errorCode: "invalid_arguments" };
+	let feet = new Vector3(0, 0, 0);
+	if (requestData.position !== undefined) {
+		const point = requestData.position;
+		if (!typeIs(point, "table") || (point as unknown[]).size() !== 3) return { error: "position must be [x, y, z].", errorCode: "invalid_arguments" };
+		const [x, y, z] = point as number[];
+		for (const value of [x, y, z]) {
+			if (!typeIs(value, "number") || value !== value || math.abs(value) === math.huge) {
+				return { error: "position must be three finite numbers.", errorCode: "invalid_arguments" };
+			}
+		}
+		feet = new Vector3(x, y, z);
+	}
+
+	const { parent, name } = resolveParentAndName(path);
+	if (!parent || name === undefined) {
+		return { error: `${path} names no place for a model: its parent does not exist. Nothing was made.`, errorCode: "parent_not_found" };
+	}
+	const starterPlayer = game.GetService("StarterPlayer");
+	if (parent === starterPlayer || parent.IsDescendantOf(starterPlayer)) {
+		return { error: `${path} is under StarterPlayer, where a model is a player's character; rig makes an NPC. Nothing was made.`, errorCode: "player_character" };
+	}
+	if (parent.FindFirstChild(name)) {
+		return { error: `${path} already exists; rig makes a new NPC at a path that names nothing. Nothing was made.`, errorCode: "target_exists" };
+	}
+
+	const rigType = stock === "R6" ? Enum.HumanoidRigType.R6 : Enum.HumanoidRigType.R15;
+	const [made, bodyOrError] = pcall(() => Players.CreateHumanoidModelFromDescription(new Instance("HumanoidDescription"), rigType));
+	if (!made) return { error: `Studio could not make the body: ${tostring(bodyOrError)}. Nothing was made.` };
+	const body = bodyOrError as Model;
+	const animate = body.FindFirstChild("Animate");
+	const ids: Record<string, string> = {};
+	const missing: string[] = [];
+	for (const state of MODEL_STATES) {
+		const id = animate ? stockAnimation(animate, state) : undefined;
+		if (id !== undefined) ids[state] = id;
+		else missing.push(state);
+	}
+
+	const recordingId = beginRecording(`Make NPC ${name}`);
+	let loader: Script | undefined;
+	const [applied, applyError] = pcall(() => {
+		body.Name = name;
+		if (animate) animate.Destroy();
+		const created = new Instance("Script");
+		created.Name = MODEL_LOADER_NAME;
+		created.Source = MODEL_LOADER_SOURCE;
+		for (const [state, id] of pairs(ids)) created.SetAttribute(state, id);
+		created.Parent = body;
+		loader = created;
+		// An NPC walks: its root is never anchored.
+		const root = body.FindFirstChild("HumanoidRootPart");
+		if (root && root.IsA("BasePart")) root.Anchored = false;
+		const [box, size] = body.GetBoundingBox();
+		const bottom = box.Position.sub(new Vector3(0, size.Y / 2, 0));
+		body.PivotTo(body.GetPivot().add(feet.sub(bottom)));
+		body.Parent = parent;
+	});
+	if (!applied) {
+		pcall(() => body.Destroy());
+		finishRecording(recordingId, false);
+		return { error: `Making the NPC failed: ${tostring(applyError)}. Nothing was made.` };
+	}
+	finishRecording(recordingId, true);
+
+	const humanoid = body.FindFirstChildOfClass("Humanoid");
+	const states = loaderStates(body);
+	let parts = 0;
+	let joints = 0;
+	for (const descendant of body.GetDescendants()) {
+		if (descendant.IsA("BasePart")) parts += 1;
+		else if (descendant.IsA("Motor6D")) joints += 1;
+	}
+	const [box, size] = body.GetBoundingBox();
+	const standing = box.Position.sub(new Vector3(0, size.Y / 2, 0));
+	let held = states !== undefined;
+	for (const state of MODEL_STATES) {
+		if (states && states.ids[state] !== ids[state]) held = false;
+	}
+	return {
+		model: getInstancePath(body),
+		rigType: humanoid ? humanoid.RigType.Name : false,
+		parts,
+		joints,
+		height: round2(size.Y),
+		feet: [round2(standing.X), round2(standing.Y), round2(standing.Z)],
+		walkSpeed: humanoid ? humanoid.WalkSpeed : false,
+		loader: getInstancePath(loader as unknown as Script),
+		states: states ? states.ids : {},
+		...(missing.size() > 0 ? { missingStates: missing } : {}),
+		animateRemoved: animate !== undefined,
+		readBackMatches: body.Parent === parent
+			&& humanoid !== undefined
+			&& humanoid.RigType === rigType
+			&& states !== undefined
+			&& states.unchanged
+			&& held
+			&& body.FindFirstChild("Animate") === undefined
+			&& standing.sub(feet).Magnitude < 0.01,
+		undoable: recordingId !== undefined,
+		loaderSource: MODEL_LOADER_SOURCE,
+	};
+}
+
 /** Roblox's classic head, which ships with Studio; the stock rig's own dynamic head cannot be read. */
 const CLASSIC_HEAD = "rbxasset://avatar/heads/head.mesh";
 const MAX_RIG_FACES = 4000;
@@ -1145,4 +1297,5 @@ export = {
 	animationVerify,
 	animationWireModel,
 	animationVerifyModel,
+	animationRig,
 };

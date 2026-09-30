@@ -286,7 +286,7 @@ describe('RobloxStudioTools.animation', () => {
 
   test('rejects malformed arguments outright', async () => {
     const { tools } = toolsWith({});
-    await expect(tools.animation({ action: 'play', animation: wave() })).rejects.toThrow('animation action must be check, build, publish, wire or verify');
+    await expect(tools.animation({ action: 'play', animation: wave() })).rejects.toThrow('animation action must be check, build, publish, wire, verify or rig');
     await expect(tools.animation({ action: 'build', animation: wave(), parent: '' })).rejects.toThrow(/parent .* is required/);
     await expect(tools.animation({ action: 'build', animation: wave(), parent: 'game.ServerStorage', expected_revision: 7 })).rejects.toThrow('expected_revision must be');
     await expect(tools.animation({ action: 'wire', slot: 'dance', animation_id: 'rbxassetid://1' })).rejects.toThrow(/slot must be one of idle, walk, run/);
@@ -508,6 +508,60 @@ describe('animating a model', () => {
     const { tools } = toolsAnswering(() => refusal);
     const result = body(await tools.animation({ action: 'wire', model: 'game.Workspace.Guard', slot: 'walk', animation_id: '5', ground_speed: 3 }));
     expect(result).toEqual(refusal);
+  });
+
+  test('rig makes a stock body at the path, its feet where asked, and says its states are the defaults', async () => {
+    const { tools, calls } = toolsAnswering(() => ({
+      model: 'game.Workspace.Guard',
+      rigType: 'R15',
+      parts: 16,
+      joints: 15,
+      height: 5.2,
+      feet: [4, 0, -2],
+      walkSpeed: 16,
+      loader: 'game.Workspace.Guard.RoqerModelAnimate',
+      states: { idle: 'rbxassetid://1', walk: 'rbxassetid://2', run: 'rbxassetid://3' },
+      animateRemoved: true,
+      readBackMatches: true,
+      undoable: true,
+    }));
+    const result = body(await tools.animation({ action: 'rig', model: 'game.Workspace.Guard', stock: 'R15', position: [4, 0, -2] }, 'place:1'));
+    expect(calls).toEqual([{
+      endpoint: '/api/animation-rig',
+      data: { model: 'game.Workspace.Guard', stock: 'R15', position: [4, 0, -2] },
+      target: undefined,
+      instance_id: 'place:1',
+    }]);
+    expect(result).toMatchObject({ rigged: true, rigType: 'R15', feet: [4, 0, -2], readBackMatches: true });
+    expect(result.note).toMatch(/^states holds Roblox's default idle, walk, run\. Their ground speed is unknown/);
+    // Without a position, the plugin stands it at the origin.
+    await tools.animation({ action: 'rig', model: 'game.Workspace.Guard2', stock: 'R6' });
+    expect(calls[1].data).toEqual({ model: 'game.Workspace.Guard2', stock: 'R6' });
+  });
+
+  test('rig says so when the body carried no default animations', async () => {
+    const { tools } = toolsAnswering(() => ({ model: 'game.Workspace.Guard', rigType: 'R6', states: {}, missingStates: ['idle', 'walk', 'run'], readBackMatches: true }));
+    const result = body(await tools.animation({ action: 'rig', model: 'game.Workspace.Guard', stock: 'R6' }));
+    expect(result).toMatchObject({ rigged: true, missingStates: ['idle', 'walk', 'run'] });
+    expect(result.note).toBe('Its body carried no default animations, so its loader holds none yet: wire its idle, walk and run with model.');
+  });
+
+  test('rig refuses what it cannot make before Studio sees it', async () => {
+    const { tools, calls } = toolsAnswering(() => ({}));
+    const rig = (args: Record<string, unknown>) => tools.animation({ action: 'rig', model: 'game.Workspace.Guard', stock: 'R15', ...args });
+    await expect(rig({ model: ' ' })).rejects.toThrow(/model must be the path of the NPC to make/);
+    await expect(rig({ stock: undefined })).rejects.toThrow(/^stock is required: rig makes a stock R15 or R6 NPC body/);
+    await expect(rig({ stock: 'R16' })).rejects.toThrow('stock must be R15 or R6');
+    for (const position of [[1, 2], [1, 2, '3'], [1, Number.NaN, 3], 'origin']) {
+      await expect(rig({ position })).rejects.toThrow(/^position must be \[x, y, z\]: where the NPC's feet stand/);
+    }
+    expect(calls).toEqual([]);
+  });
+
+  test('a path that already names something is refused by Studio, with nothing made', async () => {
+    const refusal = { error: 'game.Workspace.Guard already exists; rig makes a new NPC at a path that names nothing. Nothing was made.', errorCode: 'target_exists' };
+    const { tools } = toolsAnswering(() => refusal);
+    expect(body(await tools.animation({ action: 'rig', model: 'game.Workspace.Guard', stock: 'R15' }))).toEqual(refusal);
   });
 });
 

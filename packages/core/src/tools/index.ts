@@ -235,6 +235,11 @@ function asRecord(value: unknown): Record<string, unknown> | undefined {
     : undefined;
 }
 
+/** A point as [x, y, z]: three finite numbers. */
+function isPoint(value: unknown): value is [number, number, number] {
+  return Array.isArray(value) && value.length === 3 && value.every((item) => typeof item === 'number' && Number.isFinite(item));
+}
+
 function asRows(value: unknown): Record<string, unknown>[] {
   return Array.isArray(value)
     ? value.map(asRecord).filter((row): row is Record<string, unknown> => row !== undefined)
@@ -1730,7 +1735,8 @@ export class RobloxStudioTools {
     if (action === 'publish') return this._animationPublish(args, instance_id);
     if (action === 'wire') return this._animationWire(args, instance_id);
     if (action === 'verify') return this._animationVerify(args, instance_id);
-    throw new Error('animation action must be check, build, publish, wire or verify');
+    if (action === 'rig') return this._animationRig(args, instance_id);
+    throw new Error('animation action must be check, build, publish, wire, verify or rig');
   }
 
   /**
@@ -2038,6 +2044,41 @@ export class RobloxStudioTools {
   }
 
   /**
+   * Make a stock R15 or R6 NPC body at a path that names nothing yet, with its
+   * feet at position (the origin by default). The model loader stands in for
+   * the body's Animate script, which runs only under a player, and plays the
+   * idle, walk and run Animate carried. One undo step, read back.
+   */
+  private async _animationRig(args: Record<string, unknown>, instance_id?: string) {
+    const model = args.model;
+    if (typeof model !== 'string' || model.trim() === '') throw new Error('model must be the path of the NPC to make, such as game.Workspace.Guard');
+    const stock = args.stock;
+    if (stock === undefined) {
+      throw new Error('stock is required: rig makes a stock R15 or R6 NPC body, and rigging a model\'s own pieces is not available yet');
+    }
+    if (stock !== 'R15' && stock !== 'R6') throw new Error('stock must be R15 or R6');
+    const position = args.position;
+    if (position !== undefined && !isPoint(position)) throw new Error('position must be [x, y, z]: where the NPC\'s feet stand');
+    const response = await this._callSingle(
+      '/api/animation-rig',
+      { model, stock, ...(position !== undefined ? { position } : {}) },
+      undefined,
+      instance_id,
+    );
+    if (response?.error) return this._textResult(response);
+    const states = asRecord(response?.states) ?? {};
+    const held = MODEL_STATES.filter((state) => typeof states[state] === 'string');
+    return this._textResult({
+      rigged: true,
+      ...response,
+      note: held.length > 0
+        ? `states holds Roblox's default ${held.join(', ')}. Their ground speed is unknown, so the loader plays a gait at its own pace and the feet may slide. `
+          + 'For its own, check each (a gait with locomotion), build and publish it, then wire it with model, expected_id the default it replaces and, for a gait, ground_speed.'
+        : 'Its body carried no default animations, so its loader holds none yet: wire its idle, walk and run with model.',
+    });
+  }
+
+  /**
    * Play the animation on the character in a running playtest, as the player
    * sees it, and compare its joints with the checked model. Given a slot, also
    * confirm the wired ID reached the character's Animate script.
@@ -2129,9 +2170,7 @@ export class RobloxStudioTools {
     }
     if (slot !== undefined && !animationId) throw new Error('animation_id is required with slot: it is the ID the model\'s state should hold');
     const position = args.position;
-    if (position !== undefined && !(Array.isArray(position) && position.length === 3 && position.every((value) => typeof value === 'number' && Number.isFinite(value)))) {
-      throw new Error('position must be [x, y, z]: where to walk the model');
-    }
+    if (position !== undefined && !isPoint(position)) throw new Error('position must be [x, y, z]: where to walk the model');
     // The animation or a slot alone asks only for joints or wiring; otherwise the model is walked, or watched.
     const observe = position !== undefined ? 'walk' : sequence === undefined && slot === undefined ? 'watch' : undefined;
 

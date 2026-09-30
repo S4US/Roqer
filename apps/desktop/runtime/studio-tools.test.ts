@@ -1169,6 +1169,36 @@ test("wiring a model's state records the loader inside the model, and says every
   ]);
 });
 
+test("rigging an NPC records the model it made, and what Studio read back", async () => {
+  const made = {
+    rigged: true, model: "game.Workspace.Guard", rigType: "R15", parts: 16, joints: 15, height: 5.23, feet: [4, 0, -2], walkSpeed: 16,
+    loader: "game.Workspace.Guard.RoqerModelAnimate", states: { idle: "rbxassetid://1", walk: "rbxassetid://2", run: "rbxassetid://3" },
+    animateRemoved: true, readBackMatches: true, undoable: true,
+  };
+  const { context, changes, evidence } = contextWith([
+    ok(made),
+    ok({ ...made, model: "game.Workspace.Guard2", states: { idle: "rbxassetid://1" }, missingStates: ["walk", "run"], readBackMatches: false }),
+  ]);
+  const run = createStudioToolRunner(context);
+
+  await run("animation", { action: "rig", model: "game.Workspace.Guard", stock: "R15", position: [4, 0, -2] });
+  await run("animation", { action: "rig", model: "game.Workspace.Guard2", stock: "R15", position: [4, 0, -2] });
+
+  assert.deepEqual(changes.map((change) => [change.kind, change.target, change.summary]), [
+    ["instance", "game.Workspace.Guard", "Made a stock R15 NPC at game.Workspace.Guard, its feet at [4, 0, -2], with the animation loader in place of its Animate script, in one undoable step."],
+    ["instance", "game.Workspace.Guard2", "Made a stock R15 NPC at game.Workspace.Guard2, its feet at [4, 0, -2], with the animation loader in place of its Animate script, in one undoable step."],
+  ]);
+  assert.deepEqual(evidence.map((item) => [item.kind, item.title, item.passed, item.detail]), [
+    ["verification", "game.Workspace.Guard", true, "Studio read the NPC back: an R15 body of 16 parts and 15 joints, 5.23 studs tall, its feet at [4, 0, -2], whose loader plays Roblox's default idle, walk and run."],
+    ["verification", "game.Workspace.Guard2", false, "Studio read the NPC back, and it is not what was made: its rig, its place, its loader or the loader's states differ."],
+  ]);
+  assert.deepEqual(evidence[0].metadata, [
+    { label: "Undo", value: "One Studio undo step" },
+    { label: "WalkSpeed", value: "16 studs a second" },
+  ]);
+  assert.deepEqual(evidence[1].metadata?.at(-1), { label: "No default", value: "walk and run" });
+});
+
 test("verifying a model records what its loader played while it moved and stood, and why it failed", async () => {
   const movement = (extra: Record<string, unknown>) => ({
     verified: true, mode: "walked", reached: true,

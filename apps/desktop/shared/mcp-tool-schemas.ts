@@ -44,13 +44,13 @@ export type ToolSchema = {
 };
 
 /** sha256 of `packages/core/src/tools/definitions.ts` with LF newlines. */
-export const TOOL_DEFINITIONS_DIGEST = "85e3afa5fa08c44fd608c6bf8ff42d64c1d09ed95878cfa9da690fc742ccd71a";
+export const TOOL_DEFINITIONS_DIGEST = "c6ef6ac66088dc21e2fae82f15017e90089e81554c4a1f067b221e99539a044a";
 
 export const TOOL_SCHEMAS: Readonly<Record<string, ToolSchema>> = {
   animation: {
-    description: "Use to check, build, publish, wire, or verify an R15 or R6 character animation.",
+    description: "Use to check, build, publish, wire, or verify R15 or R6 animations, or to rig a stock NPC.",
     parameters: [
-      { name: "action", type: "string", required: true, enumValues: ["check", "build", "publish", "wire", "verify"], description: "check needs no Studio; verify needs a running playtest, and the checked animation unless given model." },
+      { name: "action", type: "string", required: true, enumValues: ["check", "build", "publish", "wire", "verify", "rig"], description: "check needs no Studio; verify needs a running playtest, and the checked animation unless given model." },
       { name: "animation", type: "object", required: false, description: "Pose description for an R15 or R6 rig." },
       { name: "locomotion", type: "boolean", required: false, description: "A gait: adds ground, foot, and symmetry checks." },
       { name: "grounded", type: "boolean", required: false, description: "Stands on the ground: checks feet never sink in." },
@@ -62,9 +62,10 @@ export const TOOL_SCHEMAS: Readonly<Record<string, ToolSchema>> = {
       { name: "slot", type: "string", required: false, enumValues: ["idle", "walk", "run", "jump", "fall", "climb", "swim", "swimidle", "sit"], description: "Wire/verify: Animate slot, or with model its state." },
       { name: "animation_id", type: "string", required: false, description: "Wire/verify: published ID, rbxassetid://N; verify with slot needs it." },
       { name: "expected_id", type: "string", required: false, description: "Wire: ID the slot holds now; required to replace it." },
-      { name: "model", type: "string", required: false, description: "Wire/verify: an NPC or creature Model, not a character." },
+      { name: "model", type: "string", required: false, description: "Rig/wire/verify: an NPC or creature Model, not a character." },
       { name: "ground_speed", type: "number", required: false, description: "Wire walk/run: the groundSpeed its check reported." },
-      { name: "position", type: "number[]", required: false, description: "Verify with model: walk its Humanoid to [x, y, z]." },
+      { name: "stock", type: "string", required: false, enumValues: ["R15", "R6"], description: "Rig: make a stock NPC body of this rig type at model." },
+      { name: "position", type: "number[]", required: false, description: "[x, y, z]. Rig: where its feet stand; verify: walk it there." },
       { name: "instance_id", type: "string", required: false, description: "Connected place ID; required with multiple places." },
     ],
   },

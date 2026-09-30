@@ -177,7 +177,7 @@ export function studioToolDescription(): string {
     // text over button edges and a row past the end of its scroll.
     "After creating or changing interface (anything under StarterGui), start a playtest and call inspect_ui {mode: 'audit'} on the client. Roqer does not verify the run until an audit after the last interface change reports no problems: fix what it names (text_obscured, text_straddles_edge, content_beyond_scroll, text_overflow) and audit again.",
     "To aim a screenshot, call selection {action: 'view', path, from, angleY, padding} before capture_screenshot (from: azimuth degrees, 0 = +X, 90 = +Z; angleY: elevation, -89 to 89; padding: distance scale, above 0, at most 10); it is a read needing no approval. Do not move the camera with execute_luau. For comparable before and after views, frame the same stable container (the zone or build root, not the part being changed, whose bounds move) with the same from, angleY and padding.",
-    "Animate characters with animation, never a KeyframeSequence in execute_luau; first load_skill {name: 'roblox-animation-vfx', resource: 'references/character-animation.md'} and adapt its tested recipes. animation: {name, rig: 'R15', loop?, priority?, easing?, keyframes: [{time, easing?, joints}]}, first at time 0; joints maps Root, Waist, Neck, Left/Right Shoulder, Elbow, Wrist, Hip, Knee, Ankle to one of aim: [right, up, forward] + bendToward? (shoulders, hips), bend: degrees (elbows, knees), rotation: [x, y, z] degrees about the parent part; position? (Root, studs). Key moved joints at time 0; a joint turns at most 90° between keys. easing: {style: Linear|Constant|CubicV2|Bounce|Elastic, direction: In|Out|InOut}. Flow: check {animation, locomotion?: true for gaits, grounded?} (free; fix what fails) → build {animation, parent} → publish {path, display_name?} (asks first; place owner only) → wire {slot, animation_id} (expected_id to replace) → playtest → verify {animation, animation_id?, slot?}. An NPC's or creature's Model plays its own: wire {model, slot: idle|walk|run, animation_id, ground_speed: the gait's check groundSpeed} puts a loader in it; in a playtest, verify {model, position?} walks it there. With no Open Cloud key, verify with just animation and say publishing needs a key. Rebuild with expected_revision; waive only intended failures.",
+    "Animate characters with animation, never a KeyframeSequence in execute_luau; first load_skill {name: 'roblox-animation-vfx', resource: 'references/character-animation.md'} and adapt its tested recipes. animation: {name, rig: 'R15', loop?, priority?, easing?, keyframes: [{time, easing?, joints}]}, first at time 0; joints maps Root, Waist, Neck, Left/Right Shoulder, Elbow, Wrist, Hip, Knee, Ankle to one of aim: [right, up, forward] + bendToward? (shoulders, hips), bend: degrees (elbows, knees), rotation: [x, y, z] degrees about the parent part; position? (Root, studs). Key moved joints at time 0; a joint turns at most 90° between keys. Flow: check {animation, locomotion?: true for gaits, grounded?} (free; fix what fails) → build {animation, parent} → publish {path, display_name?} (asks first; place owner only) → wire {slot, animation_id} (expected_id to replace) → playtest → verify {animation, animation_id?, slot?}. An NPC's or creature's Model plays its own: rig {model, stock: R15|R6, position?} makes a stock NPC whose loader holds Roblox's defaults; wire {model, slot: idle|walk|run, animation_id, expected_id?, ground_speed: the gait's check groundSpeed}; in a playtest, verify {model, position?} walks it there. With no Open Cloud key, verify with just animation and say publishing needs a key. Rebuild with expected_revision; waive only intended failures.",
     "For seeded bulk placement, build_instances accepts one sole step {op:'scatter', name, zone:{min:[x,z],max:[x,z]}, density:countPer10000SquareStuds, seed, templates:[{source,weight,kit?}], ground:[path], raycast:{top,bottom}, rotation?:[minYaw,maxYaw], scale?:[min,max], spacing?, avoid?:[{tag,distance}], maxSlope?, replace?, parent?, tags?, attributes?, id?}. Ground and templates must already exist. The named scatter group is replaced only with replace:true and matching ownership; the entire replacement is undoable. Requested count is floor(area*density/10000), limited to 1-1000. Footprints stay inside the rectangle and clear of tagged bounds. Inspect returned scatter.requested/placed/attempts: blocked ground can produce fewer placements. Same seed reproduces only with unchanged inputs and scene. Load roblox-building references/scatter.md for details.",
   ].join("\n");
 }
@@ -1242,6 +1242,54 @@ function recordAnimationWire(context: PlannerContext, outcome: McpToolOutcome): 
   });
 }
 
+/** Items in words: "idle", "idle and walk", "idle, walk and run". */
+function inWords(items: string[]): string {
+  return items.length <= 1 ? items.join("") : `${items.slice(0, -1).join(", ")} and ${items[items.length - 1]}`;
+}
+
+/** A stock NPC made by rig, as a change to the place and the read-back that confirms it. */
+function recordAnimationRig(context: PlannerContext, outcome: McpToolOutcome): void {
+  const data = isRecord(outcome.data) ? outcome.data : {};
+  const model = stringField(data, "model");
+  if (data.rigged !== true || !model) return;
+  const rigType = stringField(data, "rigType") ?? "stock";
+  const feet = Array.isArray(data.feet) && data.feet.length === 3 && data.feet.every((value) => typeof value === "number")
+    ? `[${data.feet.join(", ")}]`
+    : undefined;
+  const states = isRecord(data.states) ? Object.keys(data.states).filter((state) => typeof (data.states as JsonRecord)[state] === "string") : [];
+  const missing = Array.isArray(data.missingStates) ? data.missingStates.filter((state): state is string => typeof state === "string") : [];
+  const parts = numberField(data, "parts");
+  const joints = numberField(data, "joints");
+  const height = numberField(data, "height");
+  const walkSpeed = numberField(data, "walkSpeed");
+  context.recordChange({
+    kind: "instance",
+    target: model,
+    instanceId: context.instanceId ?? undefined,
+    summary: `Made a stock ${rigType} NPC at ${model}${feet ? `, its feet at ${feet}` : ""}, with the animation loader in place of its Animate script, in one undoable step.`,
+  });
+  const matches = data.readBackMatches === true;
+  const body = [
+    parts === undefined ? undefined : `${parts} parts`,
+    joints === undefined ? undefined : `${joints} joints`,
+  ].filter((fact): fact is string => fact !== undefined);
+  context.recordEvidence({
+    kind: "verification",
+    changeKind: "instance",
+    title: model,
+    passed: matches,
+    detail: !matches
+      ? "Studio read the NPC back, and it is not what was made: its rig, its place, its loader or the loader's states differ."
+      : `Studio read the NPC back: ${rigType === "R15" || rigType === "R6" ? `an ${rigType}` : "a stock"} body${body.length > 0 ? ` of ${inWords(body)}` : ""}${height === undefined ? "" : `, ${height} studs tall`}${feet ? `, its feet at ${feet}` : ""}, `
+        + (states.length > 0 ? `whose loader plays Roblox's default ${inWords(states)}.` : "whose loader holds no animation yet."),
+    metadata: [
+      { label: "Undo", value: data.undoable !== false ? "One Studio undo step" : "Not recorded in Studio's undo history" },
+      ...(walkSpeed === undefined ? [] : [{ label: "WalkSpeed", value: `${walkSpeed} studs a second` }]),
+      ...(missing.length > 0 ? [{ label: "No default", value: inWords(missing) }] : []),
+    ],
+  });
+}
+
 /** How many of a phase's judging samples played which of the loader's states. */
 function playedTally(played: unknown): string {
   if (!isRecord(played)) return "Nothing sampled";
@@ -1642,6 +1690,7 @@ export function createStudioToolRunner(context: PlannerContext): StudioToolRunne
       else if (args.action === "publish") recordAnimationPublish(context, outcome);
       else if (args.action === "wire") recordAnimationWire(context, outcome);
       else if (args.action === "verify") recordAnimationVerify(context, args, outcome);
+      else if (args.action === "rig") recordAnimationRig(context, outcome);
     }
 
     if (operation === "upload_asset") {

@@ -125,6 +125,18 @@ test("mcp-tools - publishing and wiring are summarised by what they change", () 
   assert.strictEqual(riskForTool("animation", { action: "wire", model: "game.Workspace.Guard", slot: "walk", animation_id: "rbxassetid://1" }), "mutation");
 });
 
+test("mcp-tools - rigging an NPC says what it makes and where, and is a mutation", () => {
+  assert.strictEqual(
+    summarizeToolCall("animation", { action: "rig", model: "game.Workspace.Guard", stock: "R15", position: [4.04, 0, -2] }),
+    "animation · rig a stock R15 NPC at game.Workspace.Guard, its feet at [4, 0, -2], animated by a loader script",
+  );
+  assert.strictEqual(
+    summarizeToolCall("animation", { action: "rig", model: "game.Workspace.Guard", stock: "R6" }),
+    "animation · rig a stock R6 NPC at game.Workspace.Guard, its feet at the origin, animated by a loader script",
+  );
+  assert.strictEqual(riskForTool("animation", { action: "rig", model: "game.Workspace.Guard", stock: "R15" }), "mutation");
+});
+
 test("mcp-tools - verifying a model says what it will do to it, and is a read", () => {
   assert.strictEqual(
     summarizeToolCall("animation", { action: "verify", model: "game.Workspace.Guard", position: [10.04, 0, -3] }),

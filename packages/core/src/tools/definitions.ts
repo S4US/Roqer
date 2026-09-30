@@ -153,13 +153,13 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
   {
     name: 'animation',
     category: 'write',
-    description: 'Use to check, build, publish, wire, or verify an R15 or R6 character animation.',
+    description: 'Use to check, build, publish, wire, or verify R15 or R6 animations, or to rig a stock NPC.',
     inputSchema: {
       type: 'object',
       properties: {
         action: {
           type: 'string',
-          enum: ['check', 'build', 'publish', 'wire', 'verify'],
+          enum: ['check', 'build', 'publish', 'wire', 'verify', 'rig'],
           description: 'check needs no Studio; verify needs a running playtest, and the checked animation unless given model.'
         },
         animation: {
@@ -240,16 +240,21 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
         },
         model: {
           type: 'string',
-          description: 'Wire/verify: an NPC or creature Model, not a character.'
+          description: 'Rig/wire/verify: an NPC or creature Model, not a character.'
         },
         ground_speed: {
           type: 'number',
           description: 'Wire walk/run: the groundSpeed its check reported.'
         },
+        stock: {
+          type: 'string',
+          enum: ['R15', 'R6'],
+          description: 'Rig: make a stock NPC body of this rig type at model.'
+        },
         position: {
           type: 'array',
           items: { type: 'number' },
-          description: "Verify with model: walk its Humanoid to [x, y, z]."
+          description: '[x, y, z]. Rig: where its feet stand; verify: walk it there.'
         },
         instance_id: {
           type: 'string',
