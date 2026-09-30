@@ -609,6 +609,20 @@ function animationVerify(requestData: Data) {
 		}
 	}
 
+	const played = playAndSample(character, animator, requestData, "the character");
+	if ("error" in played) return played;
+	return { ...played, rigType: humanoid.RigType.Name, ...(wiredIds ? { wiredIds, playingIds } : {}) };
+}
+
+type PlayedSamples = { length: number; samples: { time: number; transforms: Record<string, number[]> }[] };
+
+/**
+ * Play an animation on a rig's Animator as a game would, above whatever else
+ * it plays, and sample the rig's joints on the Animator's own clock; then stop
+ * it, leaving nothing behind. The animation is the published animationId, or
+ * a temporary clip built from the compiled sequence.
+ */
+function playAndSample(rig: Instance, animator: Animator, requestData: Data, what: string): PlayedSamples | { error: string } {
 	let sequence: KeyframeSequence | undefined;
 	let animation: Animation | undefined;
 	let track: AnimationTrack | undefined;
@@ -620,7 +634,7 @@ function animationVerify(requestData: Data) {
 			id = tostring(provider.RegisterAnimationClip(sequence));
 		}
 		const joints = new Map<string, Instance>();
-		for (const descendant of character!.GetDescendants()) {
+		for (const descendant of rig.GetDescendants()) {
 			if (descendant.IsA("AnimationConstraint")) {
 				const attachment = descendant.Attachment1;
 				if (attachment && attachment.Parent) joints.set(attachment.Parent.Name, descendant);
@@ -635,7 +649,7 @@ function animationVerify(requestData: Data) {
 		track.Play(0);
 		const loadDeadline = os.clock() + TRACK_LOAD_SECONDS;
 		while (track.Length === 0 && os.clock() < loadDeadline) task.wait(0.05);
-		if (track.Length === 0) error("the animation never loaded on the character");
+		if (track.Length === 0) error(`the animation never loaded on ${what}`);
 		const count = 10;
 		const gap = math.max(track.Length, 0.2) / (count + 1);
 		const samples: { time: number; transforms: Record<string, number[]> }[] = [];
@@ -659,7 +673,7 @@ function animationVerify(requestData: Data) {
 	destroyQuietly(animation);
 	destroyQuietly(sequence);
 	if (!ok) return { error: `${tostring(result)}.` };
-	return { ...(result as object), rigType: humanoid.RigType.Name, ...(wiredIds ? { wiredIds, playingIds } : {}) };
+	return result as PlayedSamples;
 }
 
 // -- Models: NPCs and creatures -------------------------------------------------
@@ -925,6 +939,140 @@ function animationWireModel(requestData: Data) {
 	};
 }
 
+/** Seconds a watch lasts, for a model something else moves. */
+const WATCH_SECONDS = 8;
+/** Seconds a walk to a position may take: Humanoid:MoveTo gives up after 8. */
+const WALK_SECONDS = 9;
+/** Samples taken a tenth of a second apart once a walk ends, while the model stands. */
+const STANDING_SAMPLES = 15;
+
+type LoaderStates = { unchanged: boolean; ids: Record<string, string>; speeds: Record<string, number> };
+
+/** What the model's loader holds, to tell which of its states is playing. */
+function loaderStates(model: Model): LoaderStates | undefined {
+	const loader = model.FindFirstChild(MODEL_LOADER_NAME);
+	if (!loader || !loader.IsA("Script")) return undefined;
+	const ids: Record<string, string> = {};
+	const speeds: Record<string, number> = {};
+	for (const state of MODEL_STATES) {
+		const id = loader.GetAttribute(state);
+		if (typeIs(id, "string")) ids[state] = id;
+		const speed = loader.GetAttribute(`${state}Speed`);
+		if (typeIs(speed, "number")) speeds[state] = speed;
+	}
+	return { unchanged: readScriptSource(loader) === MODEL_LOADER_SOURCE, ids, speeds };
+}
+
+function horizontal(vector: Vector3): number {
+	return new Vector3(vector.X, 0, vector.Z).Magnitude;
+}
+
+function round2(value: number): number {
+	return math.round(value * 100) / 100;
+}
+
+type MovementSample = { t: number; phase: string; speed: number; playing: string | false; pace?: number };
+
+/**
+ * Sample, a tenth of a second apart, how fast the model moves, which of the
+ * loader's tracks carries the most weight, and at what pace it plays: while
+ * the model walks to the target and then stands, or, with no target, while
+ * whatever moves it does.
+ */
+function observeModel(model: Model, humanoid: Humanoid | undefined, animator: Animator, ids: Set<string>, target: Vector3 | undefined) {
+	const root = humanoid?.RootPart ?? model.PrimaryPart;
+	if (!root) return { error: `${getInstancePath(model)} has no root part to follow; set its PrimaryPart.` };
+	if (target && !humanoid) return { error: "position walks a model's Humanoid; move a model without one some other way, and verify it without position." };
+	if (target && root.Anchored) return { error: `${getInstancePath(model)}'s root part is anchored, so it cannot walk.` };
+	const samples: MovementSample[] = [];
+	const started = os.clock();
+	let last = root.Position;
+	const sample = (phase: string) => {
+		const elapsed = task.wait(0.1);
+		const position = root.Position;
+		const speed = humanoid ? horizontal(root.AssemblyLinearVelocity) : horizontal(position.sub(last)) / math.max(elapsed, 0.001);
+		last = position;
+		let best: AnimationTrack | undefined;
+		for (const track of animator.GetPlayingAnimationTracks()) {
+			const id = track.Animation ? track.Animation.AnimationId : "";
+			if (ids.has(id) && (!best || track.WeightCurrent > best.WeightCurrent)) best = track;
+		}
+		samples.push({
+			t: round2(os.clock() - started),
+			phase,
+			speed: round2(speed),
+			playing: best && best.Animation ? best.Animation.AnimationId : false,
+			...(best ? { pace: round2(best.Speed) } : {}),
+		});
+	};
+	if (!target) {
+		while (os.clock() - started < WATCH_SECONDS) sample("watching");
+		return { mode: "watched", samples };
+	}
+	const walker = humanoid as Humanoid;
+	let reached: boolean | undefined;
+	const connection = walker.MoveToFinished.Connect((value) => {
+		reached = value;
+	});
+	walker.MoveTo(target);
+	while (reached === undefined && os.clock() - started < WALK_SECONDS) sample("moving");
+	connection.Disconnect();
+	for (let index = 0; index < STANDING_SAMPLES; index++) sample("standing");
+	return { mode: "walked", reached: reached === true, samples };
+}
+
+/**
+ * On the playtest's server, where a model's loader runs: play the checked
+ * animation on the model and sample its joints, and watch which of the
+ * loader's states plays as the model moves and stands, walking it to a
+ * target first when one is given.
+ */
+function animationVerifyModel(requestData: Data) {
+	const found = animatedModel(requestData.model);
+	if ("error" in found) return found;
+	const { model, controller } = found;
+	const humanoid = controller.IsA("Humanoid") ? controller : undefined;
+	// A model's loader makes its Animator when it has none; give it a moment.
+	let animator = controller.FindFirstChildOfClass("Animator");
+	const deadline = os.clock() + 3;
+	while (!animator && os.clock() < deadline) {
+		task.wait(0.1);
+		animator = controller.FindFirstChildOfClass("Animator");
+	}
+	if (!animator) return { error: `${getInstancePath(model)} has no Animator in the playtest, and no loader made one.` };
+
+	const loader = loaderStates(model);
+	const result: Data = { ...(humanoid ? { rigType: humanoid.RigType.Name } : {}), loader: loader ?? false };
+	if (requestData.animationId !== undefined || requestData.sequence !== undefined) {
+		const played = playAndSample(model, animator, requestData, getInstancePath(model));
+		if ("error" in played) return played;
+		result.length = played.length;
+		result.samples = played.samples;
+	}
+	const observe = requestData.observe;
+	if (observe === "walk" || observe === "watch") {
+		let target: Vector3 | undefined;
+		if (observe === "walk") {
+			const point = requestData.target;
+			if (!typeIs(point, "table") || (point as unknown[]).size() !== 3) return { error: "target must be [x, y, z]." };
+			const [x, y, z] = point as number[];
+			for (const value of [x, y, z]) {
+				if (!typeIs(value, "number") || value !== value || math.abs(value) === math.huge) return { error: "target must be three finite numbers." };
+			}
+			target = new Vector3(x, y, z);
+		}
+		const ids = new Set<string>();
+		for (const state of MODEL_STATES) {
+			const id = loader?.ids[state];
+			if (id !== undefined) ids.add(id);
+		}
+		const observation = observeModel(model, humanoid, animator, ids, target);
+		if ("error" in observation) return observation;
+		result.observation = observation;
+	}
+	return result;
+}
+
 /** Roblox's classic head, which ships with Studio; the stock rig's own dynamic head cannot be read. */
 const CLASSIC_HEAD = "rbxasset://avatar/heads/head.mesh";
 const MAX_RIG_FACES = 4000;
@@ -996,4 +1144,5 @@ export = {
 	animationWire,
 	animationVerify,
 	animationWireModel,
+	animationVerifyModel,
 };

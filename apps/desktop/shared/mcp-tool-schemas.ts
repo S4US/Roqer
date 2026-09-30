@@ -44,13 +44,13 @@ export type ToolSchema = {
 };
 
 /** sha256 of `packages/core/src/tools/definitions.ts` with LF newlines. */
-export const TOOL_DEFINITIONS_DIGEST = "5d7258eda0be3c4a242cdfb0b49cb1a3a72d2059829221d6d41be5adc369c47f";
+export const TOOL_DEFINITIONS_DIGEST = "85e3afa5fa08c44fd608c6bf8ff42d64c1d09ed95878cfa9da690fc742ccd71a";
 
 export const TOOL_SCHEMAS: Readonly<Record<string, ToolSchema>> = {
   animation: {
     description: "Use to check, build, publish, wire, or verify an R15 or R6 character animation.",
     parameters: [
-      { name: "action", type: "string", required: true, enumValues: ["check", "build", "publish", "wire", "verify"], description: "check needs no Studio; verify needs a running playtest and the checked animation." },
+      { name: "action", type: "string", required: true, enumValues: ["check", "build", "publish", "wire", "verify"], description: "check needs no Studio; verify needs a running playtest, and the checked animation unless given model." },
       { name: "animation", type: "object", required: false, description: "Pose description for an R15 or R6 rig." },
       { name: "locomotion", type: "boolean", required: false, description: "A gait: adds ground, foot, and symmetry checks." },
       { name: "grounded", type: "boolean", required: false, description: "Stands on the ground: checks feet never sink in." },
@@ -64,6 +64,7 @@ export const TOOL_SCHEMAS: Readonly<Record<string, ToolSchema>> = {
       { name: "expected_id", type: "string", required: false, description: "Wire: ID the slot holds now; required to replace it." },
       { name: "model", type: "string", required: false, description: "Wire/verify: an NPC or creature Model, not a character." },
       { name: "ground_speed", type: "number", required: false, description: "Wire walk/run: the groundSpeed its check reported." },
+      { name: "position", type: "number[]", required: false, description: "Verify with model: walk its Humanoid to [x, y, z]." },
       { name: "instance_id", type: "string", required: false, description: "Connected place ID; required with multiple places." },
     ],
   },

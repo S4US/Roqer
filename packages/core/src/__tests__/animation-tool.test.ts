@@ -1,7 +1,7 @@
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { BridgeService } from '../bridge-service.js';
+import { BridgeService, RoutingFailure } from '../bridge-service.js';
 
 // A cache of real rig meshes on this machine must not change what the tests draw.
 process.env.ROBLOXSTUDIO_MCP_CACHE_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'roqer-rig-cache-'));
@@ -9,6 +9,7 @@ import { RobloxStudioTools } from '../tools/index.js';
 import {
   PREVIEW_SAMPLES,
   choosePublisher,
+  judgeMovement,
   normalizeAnimationId,
   prepareAnimation,
   previewSampleTimes,
@@ -507,5 +508,215 @@ describe('animating a model', () => {
     const { tools } = toolsAnswering(() => refusal);
     const result = body(await tools.animation({ action: 'wire', model: 'game.Workspace.Guard', slot: 'walk', animation_id: '5', ground_speed: 3 }));
     expect(result).toEqual(refusal);
+  });
+});
+
+describe('judging a model as it moves', () => {
+  const IDLE = 'rbxassetid://1';
+  const WALK = 'rbxassetid://2';
+  const RUN = 'rbxassetid://3';
+  const LOADER = { unchanged: true, ids: { idle: IDLE, walk: WALK }, speeds: { walk: 2.2 } };
+
+  /**
+   * A walk to a position as the plugin samples it: three seconds moving, the
+   * loader still fading from the idle over the first two samples, then a
+   * second and a half standing, fading back to the idle.
+   */
+  function walked(options: { speed?: number; pace?: number; moving?: string | false; standing?: string | false; phase?: string } = {}) {
+    const { speed = 4.4, pace = 2, moving = WALK, standing = IDLE, phase } = options;
+    const samples: Record<string, unknown>[] = [];
+    let t = 0;
+    for (let index = 0; index < 30; index += 1) {
+      t = Math.round((t + 0.1) * 100) / 100;
+      samples.push({ t, phase: phase ?? 'moving', speed: index < 2 ? (speed * index) / 2 : speed, playing: index < 2 ? IDLE : moving, pace: index < 2 ? 1 : pace });
+    }
+    for (let index = 0; index < 15; index += 1) {
+      t = Math.round((t + 0.1) * 100) / 100;
+      samples.push({ t, phase: phase ?? 'standing', speed: index < 1 ? 1.5 : 0, playing: index < 2 ? moving : standing, pace: 1 });
+    }
+    return { mode: phase === 'watching' ? 'watched' : 'walked', ...(phase === 'watching' ? {} : { reached: true }), samples };
+  }
+
+  test('the walk while it moves, the idle while it stands, at the model\'s pace', () => {
+    const check = judgeMovement(walked(), LOADER);
+    expect(check).toMatchObject({
+      verified: true,
+      mode: 'walked',
+      reached: true,
+      // Moving from 0.2 s and standing from 3.2 s, the 0.4 s settling after each is
+      // left out: 0.6 to 3 s judge moving, 3.6 to 4.5 s standing.
+      moving: { samples: 25, averageSpeed: 4.4, played: { walk: 25 } },
+      standing: { samples: 10, played: { idle: 10 } },
+      pace: { state: 'walk', groundSpeed: 2.2, averageSpeed: 4.4, needed: 2, played: 2, kept: true },
+    });
+    expect(check.reason).toBeUndefined();
+  });
+
+  test('a gait the loader cannot pace says how to fix it', () => {
+    const tooFast = judgeMovement(walked({ speed: 16, pace: 2 }), LOADER);
+    expect(tooFast).toMatchObject({ verified: false, pace: { needed: 7.27, kept: false } });
+    expect(tooFast.reason).toBe('it moved at 16 studs a second, but its walk is written for 2.2, and the loader plays a gait at most twice as fast, so its feet slide: make a faster walk, or move it at most 4.4 studs a second (a Humanoid moves at its WalkSpeed)');
+    const tooSlow = judgeMovement(walked({ speed: 1, pace: 0.5 }), { ...LOADER, speeds: { walk: 8 } });
+    expect(tooSlow.reason).toMatch(/at least half as fast, so its feet slide: make a slower walk, or move it at least 4 studs a second \(a Humanoid moves at its WalkSpeed\)$/);
+    const lagging = judgeMovement(walked({ pace: 1 }), LOADER);
+    expect(lagging.reason).toBe('the loader played its walk at 1 times its speed where the model\'s pace needed 2');
+  });
+
+  test('a state that did not play is named, with how long it played', () => {
+    const noWalk = judgeMovement(walked({ moving: IDLE }), LOADER);
+    expect(noWalk).toMatchObject({ verified: false, moving: { played: { idle: 25 } } });
+    expect(noWalk.reason).toBe('its walk played for 0% of the time it moved; it needs 80%');
+    const noIdle = judgeMovement(walked({ standing: WALK }), LOADER);
+    expect(noIdle.reason).toMatch(/^its idle played for 0% of the time it stood; it needs 80%/);
+    const other = judgeMovement(walked({ moving: 'rbxassetid://99' }), LOADER);
+    expect(other.moving.played).toEqual({ 'something else': 25 });
+  });
+
+  test('with no idle wired it stands still, and a run counts as moving', () => {
+    const loader = { unchanged: true, ids: { run: RUN }, speeds: { run: 4.4 } };
+    const check = judgeMovement(walked({ moving: RUN, standing: false, pace: 1 }), loader);
+    expect(check).toMatchObject({ verified: true, standing: { played: { nothing: 10 } }, pace: { state: 'run', needed: 1, kept: true } });
+    expect(check.notes).toEqual(['no idle is wired, so it stands in its rest pose']);
+  });
+
+  test('a model that walked and ran is paced by the gait it played most, not their mix', () => {
+    const loader = { unchanged: true, ids: { idle: IDLE, walk: WALK, run: RUN }, speeds: { walk: 2.2, run: 4.4 } };
+    const observation = walked({ moving: RUN, speed: 4.4, pace: 1 });
+    // Its first judged second is a walk at half the speed, at the walk's own pace.
+    for (const sample of observation.samples.slice(5, 15)) Object.assign(sample, { playing: WALK, speed: 2.2, pace: 1 });
+    const check = judgeMovement(observation, loader);
+    expect(check).toMatchObject({ verified: true, moving: { played: { walk: 10, run: 15 } }, pace: { state: 'run', groundSpeed: 4.4, averageSpeed: 4.4, needed: 1, kept: true } });
+  });
+
+  test('a gait with no ground speed is not paced, and says its feet may slide', () => {
+    const check = judgeMovement(walked({ pace: 1 }), { ...LOADER, speeds: {} });
+    expect(check.verified).toBe(true);
+    expect(check.pace).toBeUndefined();
+    expect(check.notes).toEqual(['its walk has no ground speed, so the loader plays it at its own pace and its feet may slide']);
+  });
+
+  test('without a loader, or without moving, nothing is verified', () => {
+    expect(judgeMovement(walked(), false)).toMatchObject({ verified: false, reason: 'the model has no RoqerModelAnimate loader: wire its idle, walk or run first' });
+    const stuck = judgeMovement({ ...walked({ speed: 0.3 }), reached: false }, LOADER);
+    expect(stuck).toMatchObject({ verified: false, reached: false });
+    expect(stuck.reason).toMatch(/^it hardly moved: MoveTo found no way to the position, or something held it/);
+    const unwired = judgeMovement(walked(), { unchanged: true, ids: { idle: IDLE }, speeds: {} });
+    expect(unwired.reason).toBe('no walk or run is wired, so nothing played while it moved');
+    expect(judgeMovement({ mode: 'walked', samples: [{ t: 0, speed: 'fast' }] }, LOADER).reason).toBe('the playtest returned a malformed sample');
+  });
+
+  test('watching a model something else moves sorts its samples by speed', () => {
+    const check = judgeMovement(walked({ phase: 'watching' }), LOADER);
+    // Unlike a walk, a watch has no phases: the first sample after the stop, still
+    // at 1.5 studs a second, counts as moving.
+    expect(check).toMatchObject({ verified: true, mode: 'watched', moving: { samples: 26 }, standing: { samples: 10 } });
+    expect(check).not.toHaveProperty('reached');
+    const still = judgeMovement(walked({ phase: 'watching', speed: 0 }), LOADER);
+    expect(still.reason).toMatch(/^it did not move while it was watched; walk it with position/);
+  });
+});
+
+describe('verifying a model in a playtest', () => {
+  type Call = { endpoint: string; data: Record<string, unknown>; target: unknown; instance_id?: string; timeoutMs?: number };
+  const IDLE = 'rbxassetid://1';
+  const WALK = 'rbxassetid://2';
+  function toolsAnswering(answer: (data: Record<string, unknown>) => unknown) {
+    const tools = new RobloxStudioTools(new BridgeService());
+    const calls: Call[] = [];
+    (tools as unknown as { _callSingle: unknown })._callSingle = async (endpoint: string, data: Record<string, unknown>, target: unknown, instance_id?: string, timeoutMs?: number) => {
+      calls.push({ endpoint, data, target, instance_id, timeoutMs });
+      return answer(data);
+    };
+    return { tools, calls };
+  }
+  function walkedSamples() {
+    const samples: Record<string, unknown>[] = [];
+    for (let index = 1; index <= 30; index += 1) samples.push({ t: index / 10, phase: 'moving', speed: 4, playing: WALK, pace: 1 });
+    for (let index = 31; index <= 45; index += 1) samples.push({ t: index / 10, phase: 'standing', speed: 0, playing: IDLE, pace: 1 });
+    return samples;
+  }
+  const LOADER = { unchanged: true, ids: { idle: IDLE, walk: WALK }, speeds: { walk: 4 } };
+
+  test('walks the model on the playtest server and judges its loader, with the checked animation played on it', async () => {
+    const sequence = compiled(wave());
+    const { tools, calls } = toolsAnswering(() => ({
+      rigType: 'R15',
+      loader: LOADER,
+      length: 1,
+      samples: faithfulSamples(sequence),
+      observation: { mode: 'walked', reached: true, samples: walkedSamples() },
+    }));
+    const result = body(await tools.animation(
+      { action: 'verify', model: 'game.Workspace.Guard', animation: wave(), animation_id: '2', slot: 'walk', position: [10, 0, 0] },
+      'place:1',
+    ));
+    expect(calls).toEqual([{
+      endpoint: '/api/animation-verify-model',
+      data: { model: 'game.Workspace.Guard', animationId: 'rbxassetid://2', observe: 'walk', target: [10, 0, 0] },
+      target: 'server',
+      instance_id: 'place:1',
+      timeoutMs: 60_000,
+    }]);
+    expect(result).toMatchObject({
+      verified: true,
+      model: 'game.Workspace.Guard',
+      loader: { unchanged: true, states: { idle: IDLE, walk: WALK }, groundSpeeds: { walk: 4 } },
+      played: { source: 'published', verified: true },
+      wiring: { slot: 'walk', animationId: WALK, matches: true },
+      movement: { verified: true, mode: 'walked', pace: { kept: true } },
+    });
+    expect(JSON.stringify(result)).not.toContain('"samples":[');
+  });
+
+  test('the animation or a slot alone checks only joints or wiring; with nothing else, the model is watched', async () => {
+    const sequence = compiled(wave());
+    const { tools, calls } = toolsAnswering((data) => (data.observe
+      ? { loader: LOADER, observation: { mode: 'watched', samples: walkedSamples().map((sample) => ({ ...sample, phase: 'watching' })) } }
+      : { rigType: 'R15', loader: LOADER, length: 1, samples: faithfulSamples(sequence) }));
+    const played = body(await tools.animation({ action: 'verify', model: 'game.Workspace.Guard', animation: wave() }));
+    expect(calls[0].data).toEqual({ model: 'game.Workspace.Guard', sequence: expect.objectContaining({ name: 'Wave', rig: 'R15' }) });
+    expect(played).toMatchObject({ verified: true, played: { source: 'temporary clip' } });
+    expect(played).not.toHaveProperty('movement');
+    const watched = body(await tools.animation({ action: 'verify', model: 'game.Workspace.Guard' }));
+    expect(calls[1].data).toEqual({ model: 'game.Workspace.Guard', observe: 'watch' });
+    expect(watched).toMatchObject({ verified: true, movement: { mode: 'watched' } });
+    // A slot alone reads the wiring, so a model that stands still is not failed for standing.
+    const wired = body(await tools.animation({ action: 'verify', model: 'game.Workspace.Guard', slot: 'walk', animation_id: WALK }));
+    expect(calls[2].data).toEqual({ model: 'game.Workspace.Guard' });
+    expect(wired).toEqual({
+      verified: true,
+      model: 'game.Workspace.Guard',
+      loader: { unchanged: true, states: LOADER.ids, groundSpeeds: LOADER.speeds },
+      wiring: { slot: 'walk', animationId: WALK, matches: true },
+    });
+  });
+
+  test('a state holding another ID, or a model of the other rig, is not verified', async () => {
+    const { tools } = toolsAnswering(() => ({ loader: LOADER, observation: { mode: 'walked', reached: true, samples: walkedSamples() } }));
+    const wrong = body(await tools.animation({ action: 'verify', model: 'game.Workspace.Guard', animation_id: '7', slot: 'walk', position: [1, 2, 3] }));
+    expect(wrong).toMatchObject({ verified: false, wiring: { slot: 'walk', animationId: WALK, matches: false }, movement: { verified: true } });
+    const r6 = toolsAnswering(() => ({ rigType: 'R6', loader: false, length: 1, samples: [] }));
+    const mismatch = body(await r6.tools.animation({ action: 'verify', model: 'game.Workspace.Guard', animation: wave() }));
+    expect(mismatch).toMatchObject({ errorCode: 'rig_mismatch', modelRig: 'R6' });
+    expect(mismatch.error).toBe('game.Workspace.Guard is R6, but the animation is for R15, so it cannot play on it. Nothing was verified.');
+  });
+
+  test('says to start a playtest when there is no server to verify on', async () => {
+    const tools = new RobloxStudioTools(new BridgeService());
+    (tools as unknown as { _callSingle: unknown })._callSingle = async () => {
+      throw new RoutingFailure({ code: 'target_role_not_present_on_instance', message: 'no server', data: { instances: [], count: 0 } });
+    };
+    expect(body(await tools.animation({ action: 'verify', model: 'game.Workspace.Guard' }))).toMatchObject({ errorCode: 'no_playtest' });
+  });
+
+  test('refuses what it cannot verify before Studio sees it', async () => {
+    const { tools, calls } = toolsAnswering(() => ({}));
+    const verify = (args: Record<string, unknown>) => tools.animation({ action: 'verify', model: 'game.Workspace.Guard', ...args });
+    await expect(verify({ position: [1, 2] })).rejects.toThrow('position must be [x, y, z]: where to walk the model');
+    await expect(verify({ position: [1, 2, Number.NaN] })).rejects.toThrow('position must be [x, y, z]');
+    await expect(verify({ slot: 'walk' })).rejects.toThrow(/animation_id is required with slot/);
+    await expect(verify({ slot: 'jump', animation_id: '1' })).rejects.toThrow(/with model, slot must be one of idle, walk, run/);
+    expect(body(await verify({ animation: { ...wave(), keyframes: [] } }))).toMatchObject({ error: 'The animation is not valid; nothing was verified.' });
+    expect(calls).toEqual([]);
   });
 });

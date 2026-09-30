@@ -203,6 +203,190 @@ export type ModelState = (typeof MODEL_STATES)[number];
 /** The fastest ground speed a gait may be wired with, in studs a second. */
 export const MAX_GROUND_SPEED = 200;
 
+/**
+ * How far a model's loader slows or speeds a gait to keep pace with the
+ * model: the loader's own SLOWEST and FASTEST, in the plugin's
+ * MODEL_LOADER_SOURCE.
+ */
+export const LOADER_PACE = { slowest: 0.5, fastest: 2 } as const;
+
+/** One tenth-of-a-second sample of a model in a playtest, as the plugin takes it. */
+export interface MovementSample {
+  t: number;
+  /** moving and standing while the plugin walks it; watching while something else moves it. */
+  phase: string;
+  /** Horizontal studs a second. */
+  speed: number;
+  /** The loader's track with the most weight, by animation ID, or false. */
+  playing: string | false;
+  /** That track's playback speed. */
+  pace?: number;
+}
+
+/** What a model's loader holds: an animation ID and a ground speed per state. */
+export interface LoaderStates {
+  unchanged: boolean;
+  ids: Partial<Record<ModelState, string>>;
+  speeds: Partial<Record<ModelState, number>>;
+}
+
+export interface MovementCheck {
+  verified: boolean;
+  mode: 'walked' | 'watched';
+  reached?: boolean;
+  /** Counts of what the loader played, over the samples that judge each. */
+  moving: { samples: number; averageSpeed?: number; played: Record<string, number> };
+  standing: { samples: number; played: Record<string, number> };
+  /** How the gait kept pace, when its ground speed is known. */
+  pace?: { state: ModelState; groundSpeed: number; averageSpeed: number; needed: number; played: number; kept: boolean };
+  notes?: string[];
+  reason?: string;
+}
+
+/** Studs a second at or above which a model is moving, and at or below which it stands. */
+const MOVING_SPEED = 1;
+const STANDING_SPEED = 0.2;
+/** A cross-fade and a Humanoid's start or stop: samples this soon after a change do not judge. */
+const SETTLING_SECONDS = 0.4;
+/** Share of the judging samples that must show the state expected. */
+const MAJORITY = 0.8;
+/** How far the played pace may be from the one needed. */
+const PACE_TOLERANCE = 0.25;
+/** Room for floating point, so 0.6 - 0.2 is 0.4 and 4.4 / 2.2 is 2. */
+const EPSILON = 1e-9;
+
+function roundTo(value: number, places: number): number {
+  const factor = 10 ** places;
+  return Math.round(value * factor) / factor;
+}
+
+/**
+ * Whether a model's loader played the right state as it moved and stood: its
+ * walk or run while it moved, its idle while it stood, and a gait at the
+ * model's pace over the ground speed it was written for. Samples soon after
+ * the model starts or stops are left out, since the loader cross-fades.
+ */
+export function judgeMovement(observation: unknown, loader: unknown): MovementCheck {
+  const record = typeof observation === 'object' && observation !== null ? observation as Record<string, unknown> : {};
+  const mode = record.mode === 'watched' ? 'watched' : 'walked';
+  const reached = typeof record.reached === 'boolean' ? record.reached : undefined;
+  const empty = (): MovementCheck['moving'] => ({ samples: 0, played: {} });
+  const fail = (reason: string, partial: Partial<MovementCheck> = {}): MovementCheck => ({
+    verified: false, mode, ...(reached === undefined ? {} : { reached }), moving: empty(), standing: { samples: 0, played: {} }, ...partial, reason,
+  });
+  const states = typeof loader === 'object' && loader !== null ? loader as LoaderStates : undefined;
+  if (!states || typeof states.ids !== 'object' || states.ids === null) {
+    return fail('the model has no RoqerModelAnimate loader: wire its idle, walk or run first');
+  }
+  const samples = Array.isArray(record.samples) ? record.samples as MovementSample[] : [];
+  if (samples.some((sample) => typeof sample?.t !== 'number' || typeof sample.speed !== 'number' || !Number.isFinite(sample.speed))) {
+    return fail('the playtest returned a malformed sample');
+  }
+  const stateOf = new Map<string, ModelState>();
+  for (const state of MODEL_STATES) {
+    const id = states.ids[state];
+    if (typeof id === 'string' && !stateOf.has(id)) stateOf.set(id, state);
+  }
+  const played = (sample: MovementSample) => (sample.playing === false ? 'nothing' : stateOf.get(sample.playing) ?? 'something else');
+
+  // Which samples judge moving and which standing, leaving out the settling after each change.
+  const moving: MovementSample[] = [];
+  const standing: MovementSample[] = [];
+  let current: 'moving' | 'standing' | undefined;
+  let since = 0;
+  for (const sample of samples) {
+    const kind = sample.speed >= MOVING_SPEED && sample.phase !== 'standing' ? 'moving'
+      : sample.speed <= STANDING_SPEED && sample.phase !== 'moving' ? 'standing'
+        : undefined;
+    if (kind === undefined) continue;
+    if (kind !== current) {
+      current = kind;
+      since = sample.t;
+    }
+    if (sample.t - since < SETTLING_SECONDS - EPSILON) continue;
+    (kind === 'moving' ? moving : standing).push(sample);
+  }
+  const counts = (list: MovementSample[]) => {
+    const tally: Record<string, number> = {};
+    for (const sample of list) tally[played(sample)] = (tally[played(sample)] ?? 0) + 1;
+    return tally;
+  };
+  const averageSpeed = moving.length === 0 ? undefined : roundTo(moving.reduce((sum, sample) => sum + sample.speed, 0) / moving.length, 2);
+  const result: MovementCheck = {
+    verified: true,
+    mode,
+    ...(reached === undefined ? {} : { reached }),
+    moving: { samples: moving.length, ...(averageSpeed === undefined ? {} : { averageSpeed }), played: counts(moving) },
+    standing: { samples: standing.length, played: counts(standing) },
+  };
+  const notes: string[] = [];
+  const reasons: string[] = [];
+
+  const gaits = (['walk', 'run'] as const).filter((state) => typeof states.ids[state] === 'string');
+  if (moving.length < 3) {
+    reasons.push(mode === 'walked'
+      ? 'it hardly moved: MoveTo found no way to the position, or something held it'
+      : 'it did not move while it was watched; walk it with position');
+  } else if (gaits.length === 0) {
+    reasons.push('no walk or run is wired, so nothing played while it moved');
+  } else {
+    const gaitShare = moving.filter((sample) => gaits.includes(played(sample) as 'walk' | 'run')).length / moving.length;
+    if (gaitShare < MAJORITY) {
+      reasons.push(`its ${gaits.join(' or ')} played for ${Math.round(gaitShare * 100)}% of the time it moved; it needs ${Math.round(MAJORITY * 100)}%`);
+    }
+  }
+
+  if (standing.length < 3) {
+    reasons.push(mode === 'walked' ? 'it never stood still after the walk' : 'it never stood still while it was watched');
+  } else if (typeof states.ids.idle === 'string') {
+    const idleShare = standing.filter((sample) => played(sample) === 'idle').length / standing.length;
+    if (idleShare < MAJORITY) {
+      reasons.push(`its idle played for ${Math.round(idleShare * 100)}% of the time it stood; it needs ${Math.round(MAJORITY * 100)}%`);
+    }
+  } else {
+    notes.push('no idle is wired, so it stands in its rest pose');
+    const stillGaits = standing.filter((sample) => gaits.includes(played(sample) as 'walk' | 'run')).length / standing.length;
+    if (stillGaits > 1 - MAJORITY) reasons.push('a gait kept playing while it stood');
+  }
+
+  for (const gait of gaits) {
+    if (typeof states.speeds[gait] !== 'number' && moving.some((sample) => played(sample) === gait)) {
+      notes.push(`its ${gait} has no ground speed, so the loader plays it at its own pace and its feet may slide`);
+    }
+  }
+  // The pace of the gait that played most while it moved, when its ground speed is
+  // known: a model that both walked and ran is paced by one of them, not their mix.
+  const [pacedGait] = gaits
+    .filter((gait) => typeof states.speeds[gait] === 'number')
+    .map((gait) => ({ gait, samples: moving.filter((sample) => played(sample) === gait && typeof sample.pace === 'number') }))
+    .sort((a, b) => b.samples.length - a.samples.length);
+  if (pacedGait && pacedGait.samples.length >= 3) {
+    const { gait: state, samples: paced } = pacedGait;
+    const groundSpeed = states.speeds[state] as number;
+    const speed = paced.reduce((sum, sample) => sum + sample.speed, 0) / paced.length;
+    const needed = speed / groundSpeed;
+    const expected = Math.min(LOADER_PACE.fastest, Math.max(LOADER_PACE.slowest, needed));
+    const playedPace = paced.reduce((sum, sample) => sum + (sample.pace as number), 0) / paced.length;
+    const tooFast = needed > LOADER_PACE.fastest + EPSILON;
+    const tooSlow = needed < LOADER_PACE.slowest - EPSILON;
+    const kept = !tooFast && !tooSlow && Math.abs(playedPace - expected) <= PACE_TOLERANCE + EPSILON;
+    result.pace = { state, groundSpeed, averageSpeed: roundTo(speed, 2), needed: roundTo(needed, 2), played: roundTo(playedPace, 2), kept };
+    if (tooFast || tooSlow) {
+      const limit = (tooFast ? LOADER_PACE.fastest : LOADER_PACE.slowest) * groundSpeed;
+      reasons.push(`it moved at ${roundTo(speed, 1)} studs a second, but its ${state} is written for ${groundSpeed}, and the loader plays a gait ${tooFast ? 'at most twice' : 'at least half'} as fast, so its feet slide: make a ${tooFast ? 'faster' : 'slower'} ${state}, or move it ${tooFast ? 'at most' : 'at least'} ${roundTo(limit, 1)} studs a second (a Humanoid moves at its WalkSpeed)`);
+    } else if (!kept) {
+      reasons.push(`the loader played its ${state} at ${roundTo(playedPace, 2)} times its speed where the model's pace needed ${roundTo(needed, 2)}`);
+    }
+  }
+
+  if (notes.length > 0) result.notes = notes;
+  if (reasons.length > 0) {
+    result.verified = false;
+    result.reason = reasons.join('; ');
+  }
+  return result;
+}
+
 /** An asset ID in any of the forms Roblox accepts, as rbxassetid://N; undefined otherwise. */
 export function normalizeAnimationId(value: unknown): string | undefined {
   if (typeof value === 'number' && Number.isSafeInteger(value) && value > 0) return `rbxassetid://${value}`;

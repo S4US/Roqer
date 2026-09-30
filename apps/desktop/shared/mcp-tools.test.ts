@@ -125,6 +125,26 @@ test("mcp-tools - publishing and wiring are summarised by what they change", () 
   assert.strictEqual(riskForTool("animation", { action: "wire", model: "game.Workspace.Guard", slot: "walk", animation_id: "rbxassetid://1" }), "mutation");
 });
 
+test("mcp-tools - verifying a model says what it will do to it, and is a read", () => {
+  assert.strictEqual(
+    summarizeToolCall("animation", { action: "verify", model: "game.Workspace.Guard", position: [10.04, 0, -3] }),
+    "animation · verify game.Workspace.Guard in the playtest, walking it to [10, 0, -3]",
+  );
+  assert.strictEqual(
+    summarizeToolCall("animation", { action: "verify", model: "game.Workspace.Guard", animation: { name: "Walk" } }),
+    "animation · verify game.Workspace.Guard in the playtest, playing Walk on it",
+  );
+  assert.strictEqual(
+    summarizeToolCall("animation", { action: "verify", model: "game.Workspace.Guard" }),
+    "animation · verify game.Workspace.Guard in the playtest, watching it move",
+  );
+  assert.strictEqual(
+    summarizeToolCall("animation", { action: "verify", model: "game.Workspace.Guard", slot: "walk", animation_id: "rbxassetid://2" }),
+    "animation · verify game.Workspace.Guard in the playtest, checking its walk",
+  );
+  assert.strictEqual(riskForTool("animation", { action: "verify", model: "game.Workspace.Guard", position: [1, 2, 3] }), "read");
+});
+
 test("mcp-tools - an animation call is summarised in words, not as its pose JSON", () => {
   const animation = {
     name: "Run",

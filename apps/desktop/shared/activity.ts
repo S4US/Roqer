@@ -291,6 +291,10 @@ export function activityLabel(tool: string, target: string | null, past: boolean
     if (target?.startsWith("build ")) return past ? "Built an animation" : "Building an animation";
     if (target?.startsWith("publish ")) return past ? "Published an animation" : "Publishing an animation";
     if (target?.startsWith("wire ")) return past ? "Wired an animation" : "Wiring an animation";
+    // A model's verify summary names the model "in the playtest"; a character's names its animation.
+    if (target?.startsWith("verify ") && target.includes(" in the playtest")) {
+      return past ? "Verified a model in the playtest" : "Verifying a model in the playtest";
+    }
     if (target?.startsWith("verify ")) return past ? "Verified an animation in the playtest" : "Verifying an animation in the playtest";
     return past ? "Checked an animation" : "Checking an animation";
   }

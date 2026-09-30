@@ -160,7 +160,7 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
         action: {
           type: 'string',
           enum: ['check', 'build', 'publish', 'wire', 'verify'],
-          description: 'check needs no Studio; verify needs a running playtest and the checked animation.'
+          description: 'check needs no Studio; verify needs a running playtest, and the checked animation unless given model.'
         },
         animation: {
           type: 'object',
@@ -245,6 +245,11 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
         ground_speed: {
           type: 'number',
           description: 'Wire walk/run: the groundSpeed its check reported.'
+        },
+        position: {
+          type: 'array',
+          items: { type: 'number' },
+          description: "Verify with model: walk its Humanoid to [x, y, z]."
         },
         instance_id: {
           type: 'string',

@@ -270,6 +270,16 @@ function summarizeAnimation(args: Record<string, unknown>): string {
     ? args.animation as Record<string, unknown>
     : {};
   const name = typeof animation.name === "string" && animation.name !== "" ? truncate(animation.name, 40) : "an animation";
+  if (action === "verify" && typeof args.model === "string" && args.model !== "") {
+    const position = Array.isArray(args.position) && args.position.length === 3 && args.position.every((value) => typeof value === "number")
+      ? `, walking it to [${args.position.map((value) => Math.round(Number(value) * 10) / 10).join(", ")}]`
+      : "";
+    const played = args.animation !== undefined ? `, playing ${name} on it` : "";
+    const slot = typeof args.slot === "string" && args.slot !== "" ? `, checking its ${truncate(args.slot, 20)}` : "";
+    // As the tool decides: walked to a position, else watched unless an animation or a slot was asked about.
+    const watched = position === "" && args.animation === undefined && args.slot === undefined ? ", watching it move" : "";
+    return `animation · verify ${truncate(args.model, 60)} in the playtest${played}${slot}${position}${watched}`;
+  }
   const keyframes = Array.isArray(animation.keyframes) ? animation.keyframes : [];
   const times = keyframes
     .map((keyframe) => (typeof keyframe === "object" && keyframe !== null ? (keyframe as Record<string, unknown>).time : undefined))

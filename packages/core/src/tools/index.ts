@@ -31,6 +31,7 @@ import {
   compactChecks,
   describeAnimation,
   expectedCounts,
+  judgeMovement,
   normalizeAnimationId,
   prepareAnimation,
   previewProps,
@@ -38,6 +39,7 @@ import {
   verifyLivePlayback,
   verifyPlayback,
   type AnimateSlot,
+  type LoaderStates,
   type ModelState,
 } from '../animation/animation-tool.js';
 import { compilePoseAnimation, type KeyframeSequenceDescription } from '../animation/pose-compiler.js';
@@ -2041,6 +2043,7 @@ export class RobloxStudioTools {
    * confirm the wired ID reached the character's Animate script.
    */
   private async _animationVerify(args: Record<string, unknown>, instance_id?: string) {
+    if (args.model !== undefined) return this._animationVerifyModel(args, instance_id);
     // The comparison is against the checked motion, so a built sequence's path
     // alone gives nothing to compare with; say so rather than "must be an object".
     if (args.animation === undefined) {
@@ -2097,6 +2100,86 @@ export class RobloxStudioTools {
       verified: playback.verified && (wiring === undefined || wiring.matches),
       played: { source: animationId ? 'published' : 'temporary clip', length: response.length, ...playback },
       ...(wiring ? { wiring } : {}),
+    });
+  }
+
+  /**
+   * Check an NPC or creature in a running playtest, on the server, where its
+   * loader runs. Given the checked animation, play it on the model and compare
+   * its joints with the checked motion; given a slot, read the ID its loader
+   * holds there. Given a position, walk the model's Humanoid there; given none
+   * of these, watch the model for eight seconds. Walked or watched, judge
+   * whether the loader played the walk while it moved, the idle while it
+   * stood, and the gait at the model's pace.
+   */
+  private async _animationVerifyModel(args: Record<string, unknown>, instance_id?: string) {
+    const model = args.model;
+    if (typeof model !== 'string' || model.trim() === '') throw new Error('model must be the path of the NPC or creature Model to verify');
+    let sequence: KeyframeSequenceDescription | undefined;
+    if (args.animation !== undefined) {
+      const compiled = compilePoseAnimation(args.animation);
+      if (!compiled.ok) return this._textResult({ error: 'The animation is not valid; nothing was verified.', errors: compiled.errors });
+      sequence = compiled.sequence;
+    }
+    const animationId = args.animation_id === undefined ? undefined : normalizeAnimationId(args.animation_id);
+    if (args.animation_id !== undefined && !animationId) throw new Error('animation_id must be a published asset ID, such as rbxassetid://123');
+    const slot = args.slot;
+    if (slot !== undefined && (typeof slot !== 'string' || !MODEL_STATES.includes(slot as ModelState))) {
+      throw new Error(`with model, slot must be one of ${MODEL_STATES.join(', ')}: the states its loader plays by how fast it moves`);
+    }
+    if (slot !== undefined && !animationId) throw new Error('animation_id is required with slot: it is the ID the model\'s state should hold');
+    const position = args.position;
+    if (position !== undefined && !(Array.isArray(position) && position.length === 3 && position.every((value) => typeof value === 'number' && Number.isFinite(value)))) {
+      throw new Error('position must be [x, y, z]: where to walk the model');
+    }
+    // The animation or a slot alone asks only for joints or wiring; otherwise the model is walked, or watched.
+    const observe = position !== undefined ? 'walk' : sequence === undefined && slot === undefined ? 'watch' : undefined;
+
+    let response: Record<string, unknown>;
+    try {
+      response = await this._callSingle(
+        '/api/animation-verify-model',
+        {
+          model,
+          ...(sequence
+            ? animationId
+              ? { animationId }
+              : { sequence: { name: sequence.name, rig: sequence.rig, loop: sequence.loop, priority: sequence.priority, keyframes: sequence.keyframes } }
+            : {}),
+          ...(observe ? { observe } : {}),
+          ...(position !== undefined ? { target: position } : {}),
+        },
+        'server',
+        instance_id,
+        60_000,
+      );
+    } catch (error) {
+      if (error instanceof RoutingFailure) {
+        return this._textResult({ error: 'No playtest server is running; start one with solo_playtest {action: "start", mode: "play"} first. Nothing was verified.', errorCode: 'no_playtest' });
+      }
+      throw error;
+    }
+    if (typeof response?.error === 'string') return this._textResult({ ...response, error: `${response.error} Nothing was verified.` });
+    if (sequence && typeof response.rigType === 'string' && response.rigType !== sequence.rig) {
+      return this._textResult({
+        error: `${model} is ${response.rigType}, but the animation is for ${sequence.rig}, so it cannot play on it. Nothing was verified.`,
+        errorCode: 'rig_mismatch',
+        modelRig: response.rigType,
+      });
+    }
+
+    const loader = typeof response.loader === 'object' && response.loader !== null ? response.loader as LoaderStates : undefined;
+    const playback = sequence ? verifyLivePlayback(sequence, response.samples) : undefined;
+    const held = slot === undefined ? undefined : loader?.ids?.[slot as ModelState];
+    const wiring = slot === undefined ? undefined : { slot, animationId: held ?? false, matches: held !== undefined && normalizeAnimationId(held) === animationId };
+    const movement = observe ? judgeMovement(response.observation, loader) : undefined;
+    return this._textResult({
+      verified: (playback?.verified ?? true) && (wiring?.matches ?? true) && (movement?.verified ?? true),
+      model,
+      loader: loader ? { unchanged: loader.unchanged === true, states: loader.ids ?? {}, groundSpeeds: loader.speeds ?? {} } : false,
+      ...(playback ? { played: { source: animationId ? 'published' : 'temporary clip', length: response.length, ...playback } } : {}),
+      ...(wiring ? { wiring } : {}),
+      ...(movement ? { movement } : {}),
     });
   }
 

@@ -177,7 +177,7 @@ export function studioToolDescription(): string {
     // text over button edges and a row past the end of its scroll.
     "After creating or changing interface (anything under StarterGui), start a playtest and call inspect_ui {mode: 'audit'} on the client. Roqer does not verify the run until an audit after the last interface change reports no problems: fix what it names (text_obscured, text_straddles_edge, content_beyond_scroll, text_overflow) and audit again.",
     "To aim a screenshot, call selection {action: 'view', path, from, angleY, padding} before capture_screenshot (from: azimuth degrees, 0 = +X, 90 = +Z; angleY: elevation, -89 to 89; padding: distance scale, above 0, at most 10); it is a read needing no approval. Do not move the camera with execute_luau. For comparable before and after views, frame the same stable container (the zone or build root, not the part being changed, whose bounds move) with the same from, angleY and padding.",
-    "Animate characters with animation, never a KeyframeSequence in execute_luau; first load_skill {name: 'roblox-animation-vfx', resource: 'references/character-animation.md'} and adapt its tested recipes. animation: {name, rig: 'R15', loop?, priority?, easing?, keyframes: [{time, easing?, joints}]}, first at time 0; joints maps Root, Waist, Neck, Left/Right Shoulder, Elbow, Wrist, Hip, Knee, Ankle to one of aim: [right, up, forward] + bendToward? (shoulders, hips), bend: degrees (elbows, knees), rotation: [x, y, z] degrees about the parent part; position? (Root, studs). Key moved joints at time 0; a joint turns at most 90° between keys. easing: {style: Linear|Constant|CubicV2|Bounce|Elastic, direction: In|Out|InOut}. Flow: check {animation, locomotion?: true for gaits, grounded?} (free; fix what fails) → build {animation, parent} → publish {path, display_name?} (asks first; place owner only) → wire {slot, animation_id} (expected_id to replace) → playtest → verify {animation, animation_id?, slot?}. An NPC's or creature's Model plays its own: wire {model, slot: idle|walk|run, animation_id, ground_speed: the gait's check groundSpeed} puts a loader in it. With no Open Cloud key, verify with just animation and say publishing needs a key. Rebuild with expected_revision; waive only intended failures.",
+    "Animate characters with animation, never a KeyframeSequence in execute_luau; first load_skill {name: 'roblox-animation-vfx', resource: 'references/character-animation.md'} and adapt its tested recipes. animation: {name, rig: 'R15', loop?, priority?, easing?, keyframes: [{time, easing?, joints}]}, first at time 0; joints maps Root, Waist, Neck, Left/Right Shoulder, Elbow, Wrist, Hip, Knee, Ankle to one of aim: [right, up, forward] + bendToward? (shoulders, hips), bend: degrees (elbows, knees), rotation: [x, y, z] degrees about the parent part; position? (Root, studs). Key moved joints at time 0; a joint turns at most 90° between keys. easing: {style: Linear|Constant|CubicV2|Bounce|Elastic, direction: In|Out|InOut}. Flow: check {animation, locomotion?: true for gaits, grounded?} (free; fix what fails) → build {animation, parent} → publish {path, display_name?} (asks first; place owner only) → wire {slot, animation_id} (expected_id to replace) → playtest → verify {animation, animation_id?, slot?}. An NPC's or creature's Model plays its own: wire {model, slot: idle|walk|run, animation_id, ground_speed: the gait's check groundSpeed} puts a loader in it; in a playtest, verify {model, position?} walks it there. With no Open Cloud key, verify with just animation and say publishing needs a key. Rebuild with expected_revision; waive only intended failures.",
     "For seeded bulk placement, build_instances accepts one sole step {op:'scatter', name, zone:{min:[x,z],max:[x,z]}, density:countPer10000SquareStuds, seed, templates:[{source,weight,kit?}], ground:[path], raycast:{top,bottom}, rotation?:[minYaw,maxYaw], scale?:[min,max], spacing?, avoid?:[{tag,distance}], maxSlope?, replace?, parent?, tags?, attributes?, id?}. Ground and templates must already exist. The named scatter group is replaced only with replace:true and matching ownership; the entire replacement is undoable. Requested count is floor(area*density/10000), limited to 1-1000. Footprints stay inside the rectangle and clear of tagged bounds. Inspect returned scatter.requested/placed/attempts: blocked ground can produce fewer placements. Same seed reproduces only with unchanged inputs and scene. Load roblox-building references/scatter.md for details.",
   ].join("\n");
 }
@@ -1242,10 +1242,73 @@ function recordAnimationWire(context: PlannerContext, outcome: McpToolOutcome): 
   });
 }
 
+/** How many of a phase's judging samples played which of the loader's states. */
+function playedTally(played: unknown): string {
+  if (!isRecord(played)) return "Nothing sampled";
+  const entries = Object.entries(played).filter((entry): entry is [string, number] => typeof entry[1] === "number");
+  const total = entries.reduce((sum, [, count]) => sum + count, 0);
+  if (total === 0) return "Nothing sampled";
+  return entries.sort((a, b) => b[1] - a[1]).map(([state, count]) => `${state} ${Math.round((count / total) * 100)}%`).join(", ");
+}
+
+/**
+ * A model's playtest verification as evidence: what its loader played while it
+ * moved and while it stood, at what pace, and how a checked animation played on it.
+ */
+function recordModelVerify(context: PlannerContext, args: JsonRecord, data: JsonRecord): void {
+  const model = stringField(data, "model") ?? String(args.model);
+  const played = isRecord(data.played) ? data.played : undefined;
+  const wiring = isRecord(data.wiring) ? data.wiring : undefined;
+  const movement = isRecord(data.movement) ? data.movement : undefined;
+  const pace = movement && isRecord(movement.pace) ? movement.pace : undefined;
+  const name = isRecord(args.animation) && typeof args.animation.name === "string" ? args.animation.name : undefined;
+  const reasons = [
+    ...(played && played.verified !== true ? [stringField(played, "reason") ?? "the animation did not play as checked"] : []),
+    ...(wiring && wiring.matches !== true ? [`its ${String(wiring.slot)} does not hold the wired ID`] : []),
+    ...(movement && movement.verified !== true ? [stringField(movement, "reason") ?? "its loader did not play as it moved and stood"] : []),
+  ];
+  // What most of each phase's samples played, as the judge counted them.
+  const mostPlayed = (phase: unknown) => {
+    const tally = isRecord(phase) && isRecord(phase.played) ? Object.entries(phase.played) : [];
+    const [top] = tally.filter((entry): entry is [string, number] => typeof entry[1] === "number").sort((a, b) => b[1] - a[1]);
+    return top?.[0];
+  };
+  const moving = movement ? mostPlayed(movement.moving) : undefined;
+  const standing = movement ? mostPlayed(movement.standing) : undefined;
+  const facts = [
+    ...(movement && moving
+      ? [`its loader played its ${moving} while it moved, and ${standing === undefined || standing === "nothing" ? "nothing while it stood, leaving its rest pose" : `its ${standing} while it stood`}`]
+      : []),
+    ...(played ? [`${name ?? "the animation"} played on it as checked`] : []),
+  ];
+  context.recordEvidence({
+    kind: "playtest",
+    title: `${model} in the playtest`,
+    passed: data.verified === true,
+    detail: data.verified === true
+      ? `On the playtest server, ${facts.join(", and ")}.`
+      : `Not verified: ${reasons.join("; ") || "the playtest did not show what was asked"}.`,
+    metadata: [
+      ...(movement && isRecord(movement.moving) ? [{ label: "While moving", value: playedTally(movement.moving.played) }] : []),
+      ...(movement && isRecord(movement.standing) ? [{ label: "While standing", value: playedTally(movement.standing.played) }] : []),
+      ...(pace ? [{
+        label: "Pace",
+        value: `${String(pace.state)} at ${String(pace.played)}× for ${String(pace.averageSpeed)} studs a second; written for ${String(pace.groundSpeed)}`,
+      }] : []),
+      ...(played ? [{ label: ANIMATION_PLAYED_FROM_LABEL, value: played.source === "published" ? ANIMATION_PLAYED_PUBLISHED : "A temporary clip" }] : []),
+      ...(wiring ? [{ label: `${String(wiring.slot)} state`, value: wiring.matches === true ? "Wired" : "Not wired" }] : []),
+    ],
+  });
+}
+
 /** A playtest verification as evidence: the animation played on the character as checked. */
 function recordAnimationVerify(context: PlannerContext, args: JsonRecord, outcome: McpToolOutcome): void {
   const data = isRecord(outcome.data) ? outcome.data : {};
   if (typeof data.verified !== "boolean") return;
+  if (typeof args.model === "string" && args.model !== "") {
+    recordModelVerify(context, args, data);
+    return;
+  }
   const played = isRecord(data.played) ? data.played : {};
   const wiring = isRecord(data.wiring) ? data.wiring : undefined;
   const name = isRecord(args.animation) && typeof args.animation.name === "string" ? args.animation.name : "The animation";

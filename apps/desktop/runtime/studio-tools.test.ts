@@ -1169,6 +1169,37 @@ test("wiring a model's state records the loader inside the model, and says every
   ]);
 });
 
+test("verifying a model records what its loader played while it moved and stood, and why it failed", async () => {
+  const movement = (extra: Record<string, unknown>) => ({
+    verified: true, mode: "walked", reached: true,
+    moving: { samples: 25, averageSpeed: 4.4, played: { walk: 25 } },
+    standing: { samples: 10, played: { idle: 9, walk: 1 } },
+    pace: { state: "walk", groundSpeed: 2.2, averageSpeed: 4.4, needed: 2, played: 2, kept: true },
+    ...extra,
+  });
+  const { context, evidence } = contextWith([
+    ok({ verified: true, model: "game.Workspace.Guard", loader: {}, movement: movement({}) }),
+    ok({
+      verified: false, model: "game.Workspace.Guard", loader: {},
+      movement: movement({ verified: false, standing: { samples: 10, played: { nothing: 10 } }, reason: "it moved at 16 studs a second, but its walk is written for 2.2" }),
+    }),
+  ]);
+  const run = createStudioToolRunner(context);
+
+  await run("animation", { action: "verify", model: "game.Workspace.Guard", position: [10, 0, 0] });
+  await run("animation", { action: "verify", model: "game.Workspace.Guard", position: [10, 0, 0] });
+
+  assert.deepEqual(evidence.map((item) => [item.kind, item.title, item.passed, item.detail]), [
+    ["playtest", "game.Workspace.Guard in the playtest", true, "On the playtest server, its loader played its walk while it moved, and its idle while it stood."],
+    ["playtest", "game.Workspace.Guard in the playtest", false, "Not verified: it moved at 16 studs a second, but its walk is written for 2.2."],
+  ]);
+  assert.deepEqual(evidence[0].metadata, [
+    { label: "While moving", value: "walk 100%" },
+    { label: "While standing", value: "idle 90%, walk 10%" },
+    { label: "Pace", value: "walk at 2× for 4.4 studs a second; written for 2.2" },
+  ]);
+});
+
 test("the Studio tool description stays inside a model turn's tool limit", () => {
   // turn-contract refuses a tool description over 8,192 characters.
   assert.ok(studioToolDescription().length <= 8_192, `${studioToolDescription().length} characters`);
