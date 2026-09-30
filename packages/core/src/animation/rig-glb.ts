@@ -1,6 +1,7 @@
 // The block rig with an animation baked in, as one self-contained GLB the
-// desktop viewer can play: every part a rounded box, every joint a node whose
-// rotation and translation are sampled from core's own sampler.
+// desktop viewer can play: every part a rounded box, or its own shape on a
+// model's rig, every joint a node whose rotation and translation are sampled
+// from core's own sampler.
 //
 // Node layout, per part: a frame node, holding the part's mesh and its child
 // joints; each joint node carries the joint's
@@ -13,7 +14,7 @@
 // glTF models half a turn onto Roblox's axes, so the figure ends up facing -Z,
 // as it does in Studio.
 
-import { drawnParts, heldParts, RIG_COLOR } from './box-rig.js';
+import { heldParts, meshParts, RIG_COLOR } from './box-rig.js';
 import { generatedRigMeshes, type RigMeshes } from './rig-meshes.js';
 import {
   buildTracks,
@@ -32,6 +33,7 @@ export const GLB_SAMPLE_RATE = 30;
 
 const FLOAT = 5126;
 const UNSIGNED_SHORT = 5123;
+const UNSIGNED_INT = 5125;
 const ARRAY_BUFFER = 34962;
 const ELEMENT_ARRAY_BUFFER = 34963;
 
@@ -73,10 +75,12 @@ class BinaryBuilder {
     return this.accessors.length - 1;
   }
 
+  /** Triangle corners, two bytes each unless a mesh has more vertices than two bytes count. */
   indices(values: number[]): number {
-    const bytes = Buffer.alloc(values.length * 2);
-    values.forEach((value, index) => bytes.writeUInt16LE(value, index * 2));
-    this.accessors.push({ bufferView: this.view(bytes, ELEMENT_ARRAY_BUFFER), componentType: UNSIGNED_SHORT, count: values.length, type: 'SCALAR' });
+    const wide = values.some((value) => value > 0xffff);
+    const bytes = Buffer.alloc(values.length * (wide ? 4 : 2));
+    values.forEach((value, index) => (wide ? bytes.writeUInt32LE(value, index * 4) : bytes.writeUInt16LE(value, index * 2)));
+    this.accessors.push({ bufferView: this.view(bytes, ELEMENT_ARRAY_BUFFER), componentType: wide ? UNSIGNED_INT : UNSIGNED_SHORT, count: values.length, type: 'SCALAR' });
     return this.accessors.length - 1;
   }
 
@@ -149,7 +153,7 @@ export function renderRigGlb(
 
   const nodes: Record<string, unknown>[] = [];
   const jointNodes = new Map<string, number>();
-  const drawn = new Set([...drawnParts(rig), ...heldParts(rig).filter((part) => tracks.has(part))]);
+  const drawn = new Set([...meshParts(rig), ...heldParts(rig).filter((part) => tracks.has(part))]);
   const addNode = (node: Record<string, unknown>): number => {
     nodes.push(node);
     return nodes.length - 1;

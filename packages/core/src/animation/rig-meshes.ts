@@ -9,7 +9,7 @@
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { drawnParts, heldParts, partMesh, type PartMesh } from './box-rig.js';
+import { drawnParts, heldParts, meshParts, partMesh, type PartMesh } from './box-rig.js';
 import { R15_RIG } from './r15-rig.js';
 import type { Rig } from './rig.js';
 import { RIGS } from './rigs.js';
@@ -32,13 +32,14 @@ let loaded: RigMeshes | undefined;
 
 /**
  * The block rig: every body part, and a held weapon's stand-in, as rounded
- * boxes. R15's and R6's are kept; a model's rig may change between calls.
+ * boxes, or on a model's rig as each part's shape with what is welded to it.
+ * R15's and R6's are kept; a model's rig may change between calls.
  */
 export function generatedRigMeshes(rig: Rig = R15_RIG): RigMeshes {
   const builtIn = RIGS.get(rig.name) === rig;
   let meshes = builtIn ? generated.get(rig.name) : undefined;
   if (!meshes) {
-    const parts = [...drawnParts(rig), ...heldParts(rig)];
+    const parts = [...meshParts(rig), ...heldParts(rig)];
     meshes = { source: 'generated', parts: new Map(parts.map((part) => [part, partMesh(part, rig)])) };
     if (builtIn) generated.set(rig.name, meshes);
   }

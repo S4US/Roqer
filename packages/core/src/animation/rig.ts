@@ -81,6 +81,18 @@ export interface RigLimb {
   fold: Vec3;
 }
 
+/** How a part is drawn: Roblox's shapes; anything else is drawn as its box. */
+export type PartShape = 'Block' | 'Wedge' | 'Cylinder' | 'Ball';
+
+/** A part no joint moves, welded to one that is: drawn wherever that part goes. */
+export interface RigAttachment {
+  part: string;
+  /** Its CFrame in the part it is welded to, as CFrame components. */
+  offset: readonly number[];
+  size: Vec3;
+  shape: PartShape;
+}
+
 /**
  * How far a joint may turn. `free` joints turn any way: the root, which turns
  * the whole body, and a held prop. A range is a hinge's, signed about its axis.
@@ -130,6 +142,10 @@ export interface Rig {
   scale?: { factor: number; basis: string };
   /** Parts not drawn, such as an invisible root; absent, every part but the root part is drawn. */
   hidden?: readonly string[];
+  /** Each part's shape, on a rig read from a model; absent, parts are drawn as rounded boxes. */
+  shapes?: Readonly<Record<string, PartShape>>;
+  /** Parts welded to each jointed part, by the part they move with. */
+  attached?: Readonly<Record<string, readonly RigAttachment[]>>;
   /** Part sizes in studs (x, y, z). */
   parts: Readonly<Record<string, Vec3>>;
   /** Joints ordered parent before child. */

@@ -10,22 +10,39 @@
 // `rotation`, and each check that needs them says it could not run.
 
 import { drawnParts } from './box-rig.js';
-import { multiply, poseRig, pointToWorld, type Frame } from './motion.js';
+import { frameFromComponents, multiply, poseRig, pointToWorld, type Frame } from './motion.js';
 import { R15_RIG } from './r15-rig.js';
 import { declareRig } from './rig-declarations.js';
-import type { Rig, RigJoint, RigJointLimit, Rotation, Vec3 } from './rig.js';
+import type { PartShape, Rig, RigAttachment, RigJoint, RigJointLimit, Rotation, Vec3 } from './rig.js';
 
 /** The most joints a rig may have: a bound of Roqer's for summaries and previews, not the engine's. */
 export const MAX_RIG_JOINTS = 64;
 /** The most parts a rig reading may list. */
 export const MAX_RIG_PARTS = 128;
+/** The most welded parts a reading may list for the previews to draw. */
+export const MAX_WELDED_PARTS = 256;
+
+const SHAPES: readonly PartShape[] = ['Block', 'Wedge', 'Cylinder', 'Ball'];
 
 export interface ModelRigPart {
   name: string;
   /** Studs, x, y and z. */
   size: [number, number, number];
+  /** How it is drawn; a block when absent. */
+  shape?: PartShape;
   /** Not drawn: fully transparent, as a HumanoidRootPart is. */
   hidden?: boolean;
+}
+
+/** A visible part no joint moves, welded to one that is, directly or through other welded parts. */
+export interface ModelRigWeldedPart {
+  name: string;
+  /** The rig part it moves with. */
+  to: string;
+  /** Its CFrame in that part's frame, as CFrame components. */
+  offset: number[];
+  size: [number, number, number];
+  shape?: PartShape;
 }
 
 export interface ModelRigJoint {
@@ -57,6 +74,10 @@ export interface ModelRigReading {
   joints: ModelRigJoint[];
   /** The model's RoqerRig attribute, as its JSON text, when it has one. */
   declarations?: string;
+  /** The visible parts welded to the rig's parts, which the previews draw with them. */
+  welded?: ModelRigWeldedPart[];
+  /** How many more welded parts there were than a reading lists, the smallest left out. */
+  weldedLeftOut?: number;
 }
 
 export type ModelRigResult = { ok: true; rig: Rig; notes: string[] } | { ok: false; errors: string[] };
@@ -85,15 +106,22 @@ function isIdentity(r: readonly number[]): boolean {
   return r.every((value, index) => Math.abs(value - (index % 4 === 0 ? 1 : 0)) < 1e-9);
 }
 
-/** The lowest and highest point of some parts' boxes at rest, in the root part's frame. */
+/**
+ * The lowest and highest point at rest, in the root part's frame, of some
+ * parts' boxes and of the boxes of the parts welded to them.
+ */
 function restBounds(rig: Rig, parts: readonly string[]): { low: number; high: number } {
   const posed = poseRig(new Map(), 0, rig).parts;
+  const boxes: { frame: Frame; size: Vec3 }[] = [];
+  const drawn = new Set(parts);
+  for (const [part, frame] of posed) {
+    if (drawn.has(part)) boxes.push({ frame, size: rig.parts[part] });
+    for (const piece of rig.attached?.[part] ?? []) boxes.push({ frame: multiply(frame, frameFromComponents(piece.offset)), size: piece.size });
+  }
   let low = Infinity;
   let high = -Infinity;
-  for (const part of parts) {
-    const frame = posed.get(part);
-    if (!frame) continue;
-    const [x, y, z] = rig.parts[part].map((size) => size / 2);
+  for (const { frame, size } of boxes) {
+    const [x, y, z] = size.map((value) => value / 2);
     for (const sx of [-1, 1]) for (const sy of [-1, 1]) for (const sz of [-1, 1]) {
       const point = pointToWorld(frame, [sx * x, sy * y, sz * z]);
       low = Math.min(low, point[1]);
@@ -132,6 +160,7 @@ export function rigFromModel(input: unknown): ModelRigResult {
 
   // Parts, each named once.
   const sizes = new Map<string, Vec3>();
+  const shapes = new Map<string, PartShape>();
   const hidden: string[] = [];
   const partList = Array.isArray(reading.parts) ? reading.parts : [];
   if (!Array.isArray(reading.parts)) errors.push('parts: must be a list');
@@ -143,8 +172,12 @@ export function rigFromModel(input: unknown): ModelRigResult {
       errors.push(`parts: ${isRecord(part) && isName(part.name) ? part.name : 'an entry'} must have a name and a positive size`);
       continue;
     }
+    if (part.shape !== undefined && !SHAPES.includes(part.shape as PartShape)) {
+      errors.push(`parts: ${part.name}'s shape must be one of ${SHAPES.join(', ')}`);
+    }
     if (sizes.has(part.name)) repeatedParts.add(part.name);
     sizes.set(part.name, [size[0], size[1], size[2]]);
+    shapes.set(part.name, SHAPES.includes(part.shape as PartShape) ? part.shape as PartShape : 'Block');
     if (part.hidden === true) hidden.push(part.name);
   }
   if (repeatedParts.size > 0) {
@@ -195,6 +228,7 @@ export function rigFromModel(input: unknown): ModelRigResult {
       ...(isIdentity(c1.slice(3)) ? {} : { childRotation: c1.slice(3) as unknown as Rotation }),
     });
   }
+  const attached = weldedParts(reading, sizes, errors);
   if (errors.length > 0 || !isName(root)) return { ok: false, errors };
 
   // Name each joint once: a joint whose name another shares, as hand-made
@@ -233,6 +267,12 @@ export function rigFromModel(input: unknown): ModelRigResult {
   }
   const unjointed = [...sizes.keys()].filter((part) => !reached.has(part));
   if (unjointed.length > 0) notes.push(`${unjointed.join(', ')} ${unjointed.length === 1 ? 'is' : 'are'} not moved by any joint and not drawn`);
+  const loose = [...attached.keys()].filter((part) => !reached.has(part));
+  if (loose.length > 0) {
+    return { ok: false, errors: [`welded: parts are welded to ${loose.join(', ')}, which no joint moves; a welded part must move with a part of the rig`] };
+  }
+  const leftOut = typeof reading.weldedLeftOut === 'number' && reading.weldedLeftOut > 0 ? Math.floor(reading.weldedLeftOut) : 0;
+  if (leftOut > 0) notes.push(`${leftOut} more welded part${leftOut === 1 ? ' is' : 's are'} not drawn: a preview draws the ${MAX_WELDED_PARTS} largest`);
 
   // The joint that moves the whole body: the root part's only joint.
   const fromRoot = ordered.filter((joint) => joint.parentPart === root);
@@ -252,6 +292,8 @@ export function rigFromModel(input: unknown): ModelRigResult {
     hinges: {},
     limits,
     hidden: hidden.filter((part) => reached.has(part)),
+    shapes: Object.fromEntries(Object.keys(parts).map((part) => [part, shapes.get(part)!])),
+    ...(attached.size > 0 ? { attached: Object.fromEntries(attached) } : {}),
     parts,
     joints: ordered,
   };
@@ -277,6 +319,41 @@ export function rigFromModel(input: unknown): ModelRigResult {
   const { low, high } = restBounds(rig, drawn.length > 0 ? drawn : Object.keys(parts));
   rig = { ...rig, ground: low };
   return { ok: true, rig: { ...rig, scale: bodyScale(rig, high - low) }, notes };
+}
+
+/** The welded parts a reading lists, by the rig part each moves with. */
+function weldedParts(reading: Partial<ModelRigReading>, sizes: ReadonlyMap<string, Vec3>, errors: string[]): Map<string, RigAttachment[]> {
+  const attached = new Map<string, RigAttachment[]>();
+  if (reading.welded === undefined) return attached;
+  if (!Array.isArray(reading.welded)) {
+    errors.push('welded: must be a list');
+    return attached;
+  }
+  if (reading.welded.length > MAX_WELDED_PARTS) {
+    errors.push(`welded: a reading lists at most ${MAX_WELDED_PARTS} welded parts; this one lists ${reading.welded.length}`);
+    return attached;
+  }
+  for (const entry of reading.welded) {
+    const name = isRecord(entry) && isName(entry.name) ? entry.name : 'an entry';
+    const offset = isRecord(entry) ? numbers(entry.offset, 12) : undefined;
+    const size = isRecord(entry) ? numbers(entry.size, 3) : undefined;
+    if (!isRecord(entry) || !isName(entry.name) || !isName(entry.to) || !offset || !orthonormal(offset.slice(3)) || !size || size.some((value) => value <= 0)) {
+      errors.push(`welded: ${name} must name itself and the part it moves with, with its offset as a CFrame's 12 components and a positive size`);
+      continue;
+    }
+    if (entry.shape !== undefined && !SHAPES.includes(entry.shape as PartShape)) {
+      errors.push(`welded: ${name}'s shape must be one of ${SHAPES.join(', ')}`);
+      continue;
+    }
+    if (!sizes.has(entry.to)) {
+      errors.push(`welded: ${name} is welded to ${entry.to}, which is not one of the rig's parts`);
+      continue;
+    }
+    const pieces = attached.get(entry.to) ?? [];
+    pieces.push({ part: entry.name, offset, size: [size[0], size[1], size[2]], shape: (entry.shape as PartShape | undefined) ?? 'Block' });
+    attached.set(entry.to, pieces);
+  }
+  return attached;
 }
 
 /**
