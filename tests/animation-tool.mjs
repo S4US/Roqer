@@ -22,6 +22,14 @@
 // MoveTo and sees the loader play the walk, paced, and then the idle. Then
 // the NPC's own Patrol script walks it back and forth, pausing at each end,
 // and verify, given only the model, watches that patrol and passes it.
+//
+// And a model's own rig (docs/creature-plan.md step 3): a Parts dog rigged by
+// hand with Motor6Ds and no declarations, as the creature spike built one.
+// check reads its rig from Studio and says which checks it could not run;
+// build previews the animation on a copy of the dog, which plays it as
+// checked and leaves the dog where it was; a weld to a part outside the dog is
+// refused before anything is copied; and in the playtest, verify plays it on
+// the dog on the server as checked.
 
 import { McpClient, assert, runTest, safeStopPlaytest, startPlaytestAndWait } from './lib/mcp-client.mjs';
 
@@ -60,6 +68,115 @@ end
 patrol.Parent = guard
 return true
 `;
+const DOG_NAME = '__RoqerAnimationTestDog';
+const DOG = `game.Workspace.${DOG_NAME}`;
+const OUTSIDE_NAME = '__RoqerAnimationTestPost';
+// The creature spike's dog, under a Humanoid that neither needs a neck nor
+// breaks its joints, its root anchored: a hidden root, a body, a head, four
+// legs and a tail, each on a Motor6D at its pivot, and wedge ears and a ball
+// nose welded to its head. A MeshPart collar is welded to its body when Studio
+// can make one from its own classic head mesh.
+const BUILD_DOG = `
+local existing = workspace:FindFirstChild(${JSON.stringify(DOG_NAME)})
+if existing then existing:Destroy() end
+local dog = Instance.new("Model")
+dog.Name = ${JSON.stringify(DOG_NAME)}
+local frame = CFrame.new(-60, 2.2, 60)
+local function newPart(name, size, cframe, props, class)
+  local part = Instance.new(class or "Part")
+  part.Name = name
+  part.Size = size
+  part.CFrame = cframe
+  part.CanCollide = false
+  part.Massless = true
+  for key, value in props or {} do part[key] = value end
+  part.Parent = dog
+  return part
+end
+local function newMotor(name, part0, part1, pivot)
+  local motor = Instance.new("Motor6D")
+  motor.Name = name
+  motor.C0 = part0.CFrame:Inverse() * CFrame.new(pivot)
+  motor.C1 = part1.CFrame:Inverse() * CFrame.new(pivot)
+  motor.Part0 = part0
+  motor.Part1 = part1
+  motor.Parent = part0
+end
+local function weld(part0, part1)
+  local joint = Instance.new("WeldConstraint")
+  joint.Part0 = part0
+  joint.Part1 = part1
+  joint.Parent = part1
+end
+local root = newPart("HumanoidRootPart", Vector3.new(2, 1.2, 4), frame, { Transparency = 1, Anchored = true, Massless = false })
+local body = newPart("Body", Vector3.new(2, 1.2, 4), frame)
+newMotor("Root", root, body, frame.Position)
+local head = newPart("Head", Vector3.new(1.2, 1.2, 1.4), frame * CFrame.new(0, 0.8, -2.6))
+newMotor("Neck", body, head, (frame * CFrame.new(0, 0.4, -2)).Position)
+for name, offset in { FrontLeft = Vector3.new(-0.7, -1.4, -1.4), FrontRight = Vector3.new(0.7, -1.4, -1.4), HindLeft = Vector3.new(-0.7, -1.4, 1.4), HindRight = Vector3.new(0.7, -1.4, 1.4) } do
+  local leg = newPart(name, Vector3.new(0.5, 1.6, 0.5), frame * CFrame.new(offset))
+  newMotor(name, body, leg, (frame * CFrame.new(offset.X, -0.6, offset.Z)).Position)
+end
+local tail = newPart("Tail", Vector3.new(0.3, 0.3, 1.6), frame * CFrame.new(0, 0.3, 2.7))
+newMotor("Tail", body, tail, (frame * CFrame.new(0, 0.3, 1.9)).Position)
+for side, x in { LeftEar = -0.4, RightEar = 0.4 } do
+  weld(head, newPart(side, Vector3.new(0.3, 0.5, 0.3), head.CFrame * CFrame.new(x, 0.85, 0.2), nil, "WedgePart"))
+end
+weld(head, newPart("Nose", Vector3.new(0.4, 0.4, 0.4), head.CFrame * CFrame.new(0, -0.1, -0.8), { Shape = Enum.PartType.Ball }))
+local made, collar = pcall(function()
+  return game:GetService("AssetService"):CreateMeshPartAsync(Content.fromUri("rbxasset://avatar/heads/head.mesh"))
+end)
+if made then
+  collar.Name = "Collar"
+  collar.Size = Vector3.new(1.4, 0.5, 0.5)
+  collar.CFrame = body.CFrame * CFrame.new(0, 0.3, -1.9)
+  collar.CanCollide = false
+  collar.Massless = true
+  collar.Parent = dog
+  weld(body, collar)
+end
+local humanoid = Instance.new("Humanoid")
+humanoid.HipHeight = 1.6
+humanoid.RequiresNeck = false
+humanoid.BreakJointsOnDeath = false
+humanoid.Parent = dog
+Instance.new("Animator").Parent = humanoid
+dog.PrimaryPart = root
+dog.Parent = workspace
+return { collar = made, collarError = made and "" or tostring(collar) }
+`;
+const INSPECT_DOG = `
+local dog = workspace:FindFirstChild(${JSON.stringify(DOG_NAME)})
+local body = dog and dog:FindFirstChild("Body")
+local post = workspace:FindFirstChild(${JSON.stringify(OUTSIDE_NAME)})
+return {
+  body = body and { body.Position.X, body.Position.Y, body.Position.Z } or false,
+  post = post and { post.Position.X, post.Position.Y, post.Position.Z } or false,
+  previewLeft = workspace:FindFirstChild("__RoqerAnimationPreview") ~= nil,
+}
+`;
+const REMOVE_DOG = `
+for _, name in { ${JSON.stringify(DOG_NAME)}, ${JSON.stringify(OUTSIDE_NAME)} } do
+  local found = workspace:FindFirstChild(name)
+  if found then found:Destroy() end
+end
+return true
+`;
+
+/** The dog's head nodding and tail wagging, written with rotation only: no declarations needed. */
+function wag() {
+  return {
+    name: 'DogWag',
+    rig: DOG,
+    loop: true,
+    keyframes: [
+      { time: 0, joints: { Neck: { rotation: [0, 0, 0] }, Tail: { rotation: [0, -30, 0] } } },
+      { time: 0.4, joints: { Neck: { rotation: [15, 0, 0] }, Tail: { rotation: [0, 30, 0] } } },
+      { time: 0.8, joints: { Neck: { rotation: [0, 0, 0] }, Tail: { rotation: [0, -30, 0] } } },
+    ],
+  };
+}
+
 const REMOVE_LOADER = `
 local loader = game:GetService("ServerScriptService"):FindFirstChild("RoqerAnimate")
 if loader then loader:Destroy() end
@@ -345,6 +462,49 @@ const passed = await runTest('animation tool', async ({ track }) => {
     `);
     assert(markerState.length === 1 && markerState[0].name === 'Hit' && markerState[0].value === 'light' && Math.abs(markerState[0].time - 0.2) < 1e-6, `Studio holds the marker at its keyframe (${JSON.stringify(markerState)})`);
 
+    // -- A model's own rig, read from Studio --------------------------------
+    const dogMade = await luau(client, BUILD_DOG);
+    console.log(`  (the dog's MeshPart collar: ${dogMade.collar ? 'made' : `not made, ${dogMade.collarError}`})`);
+    const dogChecked = await client.callTool('animation', { action: 'check', animation: wag() }, 120_000);
+    const dogRig = dogChecked.rig ?? {};
+    assert(dogChecked.valid === true && dogRig.path === DOG && dogRig.position === 'Root', `check reads the dog's rig from Studio (${dogChecked.error ?? JSON.stringify(dogChecked.errors ?? dogRig)})`);
+    assert(['Root', 'Neck', 'FrontLeft', 'FrontRight', 'HindLeft', 'HindRight', 'Tail'].every((joint) => dogRig.joints?.includes(joint)), `the result names the dog's joints (${JSON.stringify(dogRig.joints)})`);
+    const unranged = dogChecked.checks?.results?.find((check) => check.id === 'jointLimits');
+    assert(unranged?.status === 'skipped' && /^not checked: /.test(unranged.detail), `a check it has no declarations for says it was not checked (${JSON.stringify(unranged)})`);
+    assert(dogChecked.checks?.passed === true && dogChecked.checks.results.every((check) => check.status !== 'fail'), 'nothing fails, and nothing passes that could not be judged');
+    if (dogMade.collar) {
+      // Studio reads its own classic head mesh, as it does for the stock rig.
+      assert(dogChecked.sheet?.boxes === undefined, `the collar is drawn from its mesh (${dogChecked.sheet?.boxes ?? 'ok'})`);
+    }
+    const dogBefore = await luau(client, INSPECT_DOG);
+    const dogBuilt = await client.callTool('animation', { action: 'build', animation: wag(), parent: PARENT }, 120_000);
+    assert(dogBuilt.built === true && dogBuilt.readBack?.matchesCompiled === true, `build writes the dog's animation (${dogBuilt.error ?? 'ok'})`);
+    assert(dogBuilt.playback?.verified === true, `a copy of the dog played it as checked (within ${dogBuilt.playback?.maxDegrees}°; ${dogBuilt.playback?.reason ?? 'ok'})`);
+    const dogAfter = await luau(client, INSPECT_DOG);
+    assert(JSON.stringify(dogAfter.body) === JSON.stringify(dogBefore.body) && dogAfter.previewLeft === false, `the dog stayed where it was, and the copy left nothing (${JSON.stringify(dogAfter)})`);
+
+    // A weld to a part outside the dog would still hold that part in a copy,
+    // which moving the copy would move: the build is refused before a copy.
+    await luau(client, `
+      local post = Instance.new("Part")
+      post.Name = ${JSON.stringify(OUTSIDE_NAME)}
+      post.Anchored = true
+      post.Position = Vector3.new(-60, 2, 70)
+      post.Parent = workspace
+      local leash = Instance.new("WeldConstraint")
+      leash.Name = "Leash"
+      leash.Part0 = workspace[${JSON.stringify(DOG_NAME)}].Tail
+      leash.Part1 = post
+      leash.Parent = workspace[${JSON.stringify(DOG_NAME)}].Tail
+      return true
+    `);
+    const postBefore = await luau(client, INSPECT_DOG);
+    const leashed = await client.callTool('animation', { action: 'build', animation: wag(), parent: PARENT, expected_revision: dogBuilt.revision }, 120_000);
+    assert(leashed.errorCode === 'model_not_copyable' && /Leash/.test(leashed.error ?? ''), `a weld reaching outside the dog is refused, naming it (${leashed.errorCode}: ${leashed.error})`);
+    const postAfter = await luau(client, INSPECT_DOG);
+    assert(JSON.stringify(postAfter.post) === JSON.stringify(postBefore.post), 'the part outside the dog did not move');
+    await luau(client, `workspace[${JSON.stringify(DOG_NAME)}].Tail.Leash:Destroy() workspace[${JSON.stringify(OUTSIDE_NAME)}]:Destroy() return true`);
+
     // -- Step 8: publish, wire, verify -------------------------------------
     // The hand-edited sequence stays refused; start it afresh to publish from.
     await luau(client, `game:GetService("ServerStorage")[${JSON.stringify(FOLDER_NAME)}].Wave:Destroy() return true`);
@@ -435,6 +595,10 @@ const passed = await runTest('animation tool', async ({ track }) => {
       const seen = watched.movement ?? {};
       assert(seen.mode === 'watched' && seen.moving?.played?.walk > 0 && seen.standing?.played?.idle > 0, `verify watched the patrol walk and then pause (${watched.error ?? JSON.stringify({ moving: seen.moving, standing: seen.standing })})`);
       assert(watched.verified === true && seen.pace?.kept === true, `verify passes the NPC's own patrol, its walk paced to it (${watched.error ?? seen.reason ?? JSON.stringify(seen.pace)})`);
+
+      // The dog's own animation, played on the dog on the playtest server and compared on its own rig.
+      const dogPlayed = await client.callTool('animation', { action: 'verify', model: DOG, animation: wag() }, 90_000);
+      assert(dogPlayed.verified === true && dogPlayed.played?.source === 'temporary clip', `verify plays the dog's animation on the dog as checked (${dogPlayed.error ?? `within ${dogPlayed.played?.maxDegrees}°; ${dogPlayed.played?.reason ?? 'ok'}`})`);
     } finally {
       if (playtestStarted) await safeStopPlaytest(client);
     }
@@ -448,6 +612,7 @@ const passed = await runTest('animation tool', async ({ track }) => {
     const modified = await client.callTool('animation', { action: 'wire', slot: 'run', animation_id: ROBLOX_WAVE });
     assert(modified.errorCode === 'loader_modified', `an edited loader is left alone (${modified.errorCode})`);
   } finally {
+    await luau(client, REMOVE_DOG).catch((error) => console.error(`  dog cleanup failed: ${error.message}`));
     await luau(client, REMOVE_GUARD).catch((error) => console.error(`  NPC cleanup failed: ${error.message}`));
     await luau(client, REMOVE_LOADER).catch((error) => console.error(`  loader cleanup failed: ${error.message}`));
     await luau(client, `

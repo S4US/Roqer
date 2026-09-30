@@ -1,9 +1,12 @@
 # Character animation with the `animation` tool
 
 Use this to author an R15 animation with the `animation` tool (check, build,
-publish, wire, verify), and to animate an NPC (see [NPCs](#npcs)). Start from the recipe closest to the request and change
+publish, wire, verify), to animate an NPC (see [NPCs](#npcs)), and to animate
+a creature or other model on its own rig (see [A model's own rig](#a-models-own-rig)).
+Start from the recipe closest to the request and change
 it. Run `check` before `build`: it validates the format, runs the motion checks
-and returns a contact sheet, without touching Studio. Pass `locomotion: true`
+and returns a contact sheet, without touching Studio (for a model's own rig it
+reads the rig from Studio, and changes nothing). Pass `locomotion: true`
 for a walk or run, and `grounded: true` for anything else done standing on
 the ground, such as an attack or an idle: it fails when a foot sinks into the
 floor, which a crouch or lunge easily does.
@@ -458,6 +461,103 @@ spawner that clones the NPC needs nothing else.
 
 R6 reports no ground speed, since its feet are not checked for sliding, so the
 loader plays an R6 gait at its own pace.
+
+## A model's own rig
+
+A creature or other model rigged by hand, with `Motor6D`s or
+`AnimationConstraint`s between its own parts under a `Humanoid` or an
+`AnimationController`, is animated on its own rig: give the model's path as
+`rig`, for example `rig: "game.Workspace.Dog"`.
+
+- **Read the rig first.** `check` reads it from Studio and returns `rig`:
+  `joints`, the names a pose may key, parents first; `position`, the one joint
+  that takes a `position` (false when no one joint moves the whole body);
+  what its declarations name (`feet`, `limbs`, `hinges`, and `ranged` for the
+  joints with a declared range); `scale`; and `notes`, such as joints renamed
+  after the parts they move because several shared a name. A pose keying a
+  joint the rig lacks is refused with the rig's joints listed, so a first
+  check keying one joint you expect, such as `Neck`, tells you what to key
+  either way.
+- **Pose with rotation.** `rotation: [x, y, z]` turns a joint by degrees about
+  the body's own axes at rest, right (+X), up (+Y) and back (+Z), whichever
+  way the model's joint frames point. A head nods with X (+X lifts the nose),
+  turns with Y; a tail wags with Y. `position` moves the whole body on the
+  joint `rig.position` names. `aim`, `aimAt` and `bend` need declarations
+  (below); without them use `rotation`.
+- **Checks say what they cannot judge.** A check the rig gives nothing to
+  judge by is `skipped`, its detail beginning `not checked:` and saying what
+  it lacks: the joint-range check for joints with no declared range, the
+  ground and foot checks for a body with no declared feet, gait symmetry
+  without declared hips. A skipped check never counts as passed and needs no
+  waiver. Distance limits are R15's scaled to the body's size, and a result
+  measured against them says so.
+- **Build plays it on a copy.** `build` plays the animation on a copy of the
+  model in a temporary folder, compares it with the checked motion on the
+  model's own joints, and writes it only if they match. It is refused when
+  the rig changed since the check (check again), or when a copy would not be
+  faithful: a part, joint or weld that cannot be archived, or a joint or weld
+  holding a part outside the model. The error names it; move that weld or
+  make the part archivable.
+- **The preview is the model.** The contact sheet draws its parts as Roblox
+  shapes them (blocks, wedges, cylinders, balls), welded parts with the part
+  they move with, and MeshParts with their own meshes. `sheet.boxes` names
+  any MeshPart drawn as its box instead, and why. A long body gets wider
+  frames. Pass `locomotion: true` for a gait to see it from the side.
+- `wire {model, slot, ...}` and `verify {model, animation}` work as for an NPC,
+  and `verify` compares the model's joints on its own rig.
+- A rig has at most 64 joints and 128 parts.
+
+### Declarations: RoqerRig
+
+The model's `RoqerRig` attribute, a string of JSON, says what its joints
+cannot: which parts stand on the ground, which joints are limbs and hinges,
+and how far each may turn. Set it as a string attribute on the model, for
+example with a `build_instances` set step's `attributes`. Only version 1 is
+read, and a declaration with any error refuses the whole rig, saying what is
+wrong. A dog whose legs bend at the knee, the front knees folding back and
+the hind forward:
+
+```text
+{
+  "version": 1,
+  "feet": ["FrontLeftLower", "FrontRightLower", "HindLeftLower", "HindRightLower"],
+  "hinges": {
+    "FrontLeftKnee": { "axis": "X", "flex": -1 }, "FrontRightKnee": { "axis": "X", "flex": -1 },
+    "HindLeftKnee": { "axis": "X", "flex": 1 }, "HindRightKnee": { "axis": "X", "flex": 1 }
+  },
+  "limbs": {
+    "FrontLeft": { "hinge": "FrontLeftKnee" }, "FrontRight": { "hinge": "FrontRightKnee" },
+    "HindLeft": { "hinge": "HindLeftKnee" }, "HindRight": { "hinge": "HindRightKnee" }
+  },
+  "limits": {
+    "FrontLeft": { "turn": 120 }, "FrontLeftKnee": { "min": -150, "max": 10 },
+    "HindLeft": { "turn": 120 }, "HindLeftKnee": { "min": -10, "max": 150 },
+    "Tail": "free"
+  }
+}
+```
+
+- `feet`: the parts that stand on the ground, or a map from each to the 1 to
+  8 points in its own frame (studs) where it meets the ground.
+- `hips`: a biped's two hip joints, left then right, whose swing the gait
+  symmetry check compares.
+- `hinges`: a joint that bends about one body axis at rest, `"X"`, `"Y"` or
+  `"Z"`, with `flex` the sign of the turn that folds it: R15's elbows are +1
+  about X and its knees -1.
+- `limbs`, by the joint at the limb's root (a hip or shoulder): `hinge` names
+  the hinge that bends it. `end`, in studs in the last part's frame, is the
+  point that reaches; it defaults to the far end of that part from its joint,
+  such as the middle of a leg's sole. `axis`, the way the limb runs at rest,
+  and `fold`, the way its lower half swings as it bends, are worked out when
+  left out. `foot` names a joint below the hinge that `aimAt` lays flat.
+- `limits`: `{ turn: degrees }` for any joint, `{ min, max, offAxis? }` for a
+  hinge (degrees signed about its axis, `offAxis` defaulting to 35), or
+  `"free"`.
+
+With limbs declared, `aim: [right, up, forward]` points a limb, `bendToward`
+chooses where its hinge folds, `bend: degrees` folds it, and
+`aimAt: [right, up, forward]` puts its end on a point in studs from the root
+part's centre, as on R15.
 
 ## Reading the result
 

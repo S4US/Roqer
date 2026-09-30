@@ -3,8 +3,10 @@
 Roqer can make an R15 or R6 character animation from a request in plain words. It
 checks the motion, shows it to you, builds it in your place, publishes it to
 Roblox, wires it to your players' characters, and checks in a playtest that it
-plays. For "Make a running animation and set it up in R15", a finished run
-leaves:
+plays. It can also animate an NPC, and a creature or other model you rigged
+yourself (see [A model's own rig](#a-models-own-rig)).
+
+For "Make a running animation and set it up in R15", a finished run leaves:
 
 - a published animation owned by whoever owns the place;
 - the animation set as every character's run animation;
@@ -151,8 +153,50 @@ back and forth between two posts".
   the WalkSpeed.
 
 An attack or other one-shot is played by your game's script on the NPC's
-`Animator`; the animation skill shows how. Creatures with bodies of their own,
-such as a four-legged wolf, are planned in [the creature plan](creature-plan.md).
+`Animator`; the animation skill shows how. A creature with a body of its own,
+such as a four-legged dog, is animated on its own rig, as the next section
+describes.
+
+## A model's own rig
+
+Roqer can animate a model that is already rigged, such as a dog built from
+Parts and joined with `Motor6D`s, for "Make my dog wag its tail". The agent
+gives the model's path as the animation's rig.
+
+- **The rig is read from Studio.** Roqer reads the model's `Motor6D`s and
+  `AnimationConstraint`s between its own parts, under its `Humanoid` or
+  `AnimationController`, with each part's size and shape, the parts welded to
+  them, and each MeshPart's mesh. Reading changes nothing in the model. The
+  result lists the joints an animation can move.
+- **Poses are turns about the body's own axes.** Each keyframe turns joints by
+  degrees about the body's right, up and back at rest, whichever way the
+  model's joint frames point. A position moves the whole body, on the one
+  joint everything hangs from.
+- **Declarations add what the joints cannot say.** The model can carry a
+  `RoqerRig` attribute, JSON naming its feet, its limbs and the hinges that
+  bend them, and how far each joint may turn. With it, the agent can point a
+  leg, bend a knee and plant a foot on a point, and the checks can judge ranges,
+  feet and gait. The animation skill shows the format.
+- **Checks say what they could not judge.** A check that needs a declaration
+  the model lacks is reported as not checked, never as passed: the joint-range
+  check for a joint with no declared range, the foot checks for a body with no
+  declared feet. Distance limits are R15's, scaled to the body's size, and a
+  result measured against them says so.
+- **The preview is the model.** The contact sheet and the 3D preview draw the
+  model's own parts: blocks, wedges, cylinders and balls as Roblox shapes them,
+  welded parts with the part they move with, and MeshParts with their own
+  meshes, read from Studio. A mesh Studio will not hand over is drawn as its
+  box, and the result names it. A long body gets wider frames.
+- **Build plays it on a copy of the model.** A copy in a temporary folder plays
+  the animation, is compared with what was checked on the model's own joints,
+  and is removed. The model must be rigged as it was when checked. A model is
+  refused, with the cause named, when a copy would not be faithful: a part,
+  joint or weld that cannot be archived, or a joint or weld holding a part
+  outside the model, which the copy would still hold.
+- **A playtest proves it.** `verify` plays the animation on the model on the
+  playtest's server and compares it with what was checked.
+
+The model's loader plays its idle, walk and run as an NPC's does.
 
 ## In the chat
 
@@ -172,13 +216,20 @@ between versions ("Version 3 of 6"), and the newest is shown first.
   reads them from Studio and caches them under `~/.robloxstudio-mcp/cache`.
   Until then, previews use a stand-in made of rounded blocks, and the result
   says which one it drew.
+- **A model's meshes.** The meshes of a model's MeshParts are read from Studio
+  the first time a check or build needs them, and cached in the same folder by
+  mesh ID, up to 256 of them.
 
 ## Limits
 
-- R15 and R6 only, and only the standard bodies' joints, plus three props: a
+- R15 and R6, with only the standard bodies' joints plus three props: a
   held item in each hand and a sheath at the hip. R6 has no elbows or knees, and the foot-sliding check is
   not applied to it. Faces, fingers, clothing and skinned-mesh rigs are not
   animated.
+- A model's own rig, which must be rigged already: Roqer does not make its
+  joints yet. It has at most 64 joints and 128 parts, and its `Bone`s are not
+  read. A preview draws at most 256 welded parts and 40,000 triangles of
+  meshes, each mesh at most 3,000; a part past these is drawn as its box.
 - A prop is animated through a `Motor6D` the game adds when the weapon is
   equipped (or, for a sheath, when the character spawns), because Roblox's
   own grip weld cannot be animated. The animation skill has the scripts.

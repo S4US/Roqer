@@ -1,9 +1,10 @@
 # Creature and NPC animation plan
 
-Status as of 2026-09-30: steps 1 and 2 are done. Step 1, the creature spike,
-answered its questions in [Live results](#live-results), and the design below
-follows them. Step 2 made NPCs on stock rigs, and eval T18 passes. Steps 3 to
-8 are proposed and not yet scheduled. The plan details steps 12 to 14 of the
+Status as of 2026-09-30: steps 1 and 2 are done, and step 3 is built and waits
+on its live run. Step 1, the creature spike, answered its questions in
+[Live results](#live-results), and the design below follows them. Step 2 made
+NPCs on stock rigs, and eval T18 passes. Step 3 reads a rig from any rigged
+model. Steps 4 to 8 are proposed and not yet scheduled. The plan details steps 12 to 14 of the
 [animation plan](animation-plan.md) (creatures made of rigid parts, skinned
 creatures, animating in Blender), adds NPCs, and orders the work anew. Update
 each step's status here as it lands.
@@ -551,7 +552,7 @@ section (`npm run test:studio:animation`); both runs are in
   owner. The server also names a plugin older than itself
   (`plugin_outdated`) instead of passing on "Unknown endpoint".
 
-### 3. Rigs read from Studio — proposed
+### 3. Rigs read from Studio — built 2026-09-30, live run pending
 
 Everything that reads a rig learns to read one from a model, and R15 and R6
 move onto the same description.
@@ -573,6 +574,68 @@ move onto the same description.
 
 **Done when** a model rigged by hand, with no declarations, can be animated
 with `rotation`, and every check it cannot run says so.
+
+**Status, 2026-09-30.** Built; done once the live animation suite's dog
+section passes (`npm run test:studio:animation`). The unit tests show the
+done criterion on the Parts dog: it compiles from `rotation` alone, the checks
+it has no declarations for report `not checked: ...` and nothing passes by
+default, and its contact sheet and GLB draw it. What was built:
+
+- **One description for every rig.** `Rig` describes R15, R6 and any model
+  alike: its root joint (if one joint moves the whole body), any number of
+  feet, limbs and hinges, per-joint ranges, and each joint frame's
+  orientation at rest, so a `rotation` means the same on every rig. The
+  compiler, the checks and both previews read only the description.
+- **R15 and R6 are unchanged.** Before the change, a guard recorded a digest
+  of every skill recipe's and test fixture's compiled sequence, check report,
+  contact-sheet pixels and GLB bytes
+  (`rig-regression.test.ts`). Every one still matches.
+- **Reading a rig.** A read-only plugin endpoint reads a Model's `Motor6D`s
+  and `AnimationConstraint`s between its own parts, its root, each part's
+  size, shape and visibility, the visible parts welded to them, each
+  MeshPart's mesh, `RoqerRig`, and a revision of all of it: at most 64 joints,
+  128 parts and 256 welded parts. Core refuses, with every problem at once,
+  a reading that is not one tree of uniquely named parts from its root, and
+  names a joint that shares its name with another after the part it moves.
+- **`RoqerRig` version 1**: feet (optionally the points they stand on), a
+  biped's hips, limbs with their hinge, end, foot, axis and fold, hinges with
+  their axis and flex, and ranges. Any error refuses the whole rig.
+- **Checks for any body.** Distance limits are R15's scaled by the body's
+  size: its hips' height at rest over R15's 2.19 studs when it has declared
+  legs, else its height over R15's; each result measured against one says so.
+  A joint that moves with no declared range, a body with no feet or no hips,
+  and a rig with no root joint are each reported as not checked.
+- **Previews for any body.** A model's contact sheet is framed by its own
+  size at rest, in cells up to twice R15's width for a long body, with a
+  shadow that follows its footprint. Parts are drawn as Roblox shapes them,
+  welded parts with the part they move with, and MeshParts from their own
+  meshes, read through `EditableMesh` and cached by mesh ID: at most 3,000
+  triangles a mesh and 40,000 a preview, a part past either drawn as its box
+  and named in the result.
+- **Building on the model.** `build` previews on a copy of the model while its
+  rig's revision is the one the checks used, and refuses a model a copy would
+  not preview faithfully (spike question 4). A keyframe's poses and nesting
+  are bounded by 64 joints and the root rather than 32 and 8.
+- **Every layer.** `animation.rig` takes a model's path; `check`, `build` and
+  `verify` read the rig from Studio and answer with a summary of it; the
+  desktop names the rig in approvals and on the preview; the skill and
+  [the animation guide](animation.md#a-models-own-rig) say how.
+
+What changed from the proposal, and why:
+
+- **Body plans moved to step 4.** A body plan fills declarations in from the
+  part names `rig` gives the pieces it joins, so it belongs with `rig`'s build
+  and adopt forms. A model rigged by hand has no plan's names, so step 3 reads
+  what it declares, and nothing is guessed from names.
+- **A limb bends at one hinge.** Legs of three segments, such as a dog's hind
+  leg with its hock, are posed with `rotation` on the extra joint for now;
+  coupling several hinges waits for the gaits of step 5, which need them.
+- **A skipped check needs no waiver.** A check that could not run is
+  `skipped`, never `fail`, so a creature without declarations can still be
+  built; its result says, check by check, what was not judged.
+- **MeshPart meshes are read on demand**, by a second endpoint, rather than
+  with the rig: the reading stays small, and a mesh read once serves every
+  later call and every part that shows it.
 
 ### 4. Building rigs — proposed
 
