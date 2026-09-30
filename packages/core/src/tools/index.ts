@@ -2149,7 +2149,8 @@ export class RobloxStudioTools {
    * loader runs. Given the checked animation, play it on the model and compare
    * its joints with the checked motion; given a slot, read the ID its loader
    * holds there. Given a position, walk the model's Humanoid there; given none
-   * of these, watch the model for eight seconds. Walked or watched, judge
+   * of these, watch the model while the game moves it, until it has been seen
+   * moving and standing or for twenty seconds at most. Walked or watched, judge
    * whether the loader played the walk while it moved, the idle while it
    * stood, and the gait at the model's pace.
    */

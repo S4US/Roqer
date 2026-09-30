@@ -143,8 +143,9 @@ back and forth between two posts".
   do not slide. Outside that range they still do, so the agent sets the NPC's
   `WalkSpeed` to suit its walk, or makes a faster walk. Roblox's defaults have
   no known ground speed, so the loader plays them at their own pace.
-- **A playtest proves it.** On the playtest's server, Roqer walks the NPC to a
-  point, or watches your game's own scripts move it. It records which
+- **A playtest proves it.** On the playtest's server, Roqer watches your
+  game's own scripts move the NPC until it has seen it walk and stand, or
+  walks it to a point itself. It records which
   animation the loader played: the walk while the NPC moved and the idle while
   it stood, at the pace its speed needs. A failure says what to change, such as
   the WalkSpeed.

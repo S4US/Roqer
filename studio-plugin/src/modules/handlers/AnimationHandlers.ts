@@ -941,8 +941,13 @@ function animationWireModel(requestData: Data) {
 	};
 }
 
-/** Seconds a watch lasts, for a model something else moves. */
-const WATCH_SECONDS = 8;
+/** The longest a watch lasts, for a model something else moves. */
+const WATCH_SECONDS = 20;
+/** A watch ends sooner once it has seen the model move, and stand, each for this long without a break. */
+const WATCH_STRETCH_SECONDS = 2;
+/** Studs a second at or above which a model moves, and at or below which it stands, as verify's judge counts them. */
+const MOVING_SPEED = 1;
+const STANDING_SPEED = 0.2;
 /** Seconds a walk to a position may take: Humanoid:MoveTo gives up after 8. */
 const WALK_SECONDS = 9;
 /** Samples taken a tenth of a second apart once a walk ends, while the model stands. */
@@ -979,7 +984,7 @@ type MovementSample = { t: number; phase: string; speed: number; playing: string
  * Sample, a tenth of a second apart, how fast the model moves, which of the
  * loader's tracks carries the most weight, and at what pace it plays: while
  * the model walks to the target and then stands, or, with no target, while
- * whatever moves it does.
+ * whatever moves it does, until it has been seen moving and standing.
  */
 function observeModel(model: Model, humanoid: Humanoid | undefined, animator: Animator, ids: Set<string>, target: Vector3 | undefined) {
 	const root = humanoid?.RootPart ?? model.PrimaryPart;
@@ -989,7 +994,8 @@ function observeModel(model: Model, humanoid: Humanoid | undefined, animator: An
 	const samples: MovementSample[] = [];
 	const started = os.clock();
 	let last = root.Position;
-	const sample = (phase: string) => {
+	/** Takes one sample, and returns the speed it measured and the seconds since the last. */
+	const sample = (phase: string): [number, number] => {
 		const elapsed = task.wait(0.1);
 		const position = root.Position;
 		const speed = humanoid ? horizontal(root.AssemblyLinearVelocity) : horizontal(position.sub(last)) / math.max(elapsed, 0.001);
@@ -1006,9 +1012,22 @@ function observeModel(model: Model, humanoid: Humanoid | undefined, animator: An
 			playing: best && best.Animation ? best.Animation.AnimationId : false,
 			...(best ? { pace: round2(best.Speed) } : {}),
 		});
+		return [speed, elapsed];
 	};
 	if (!target) {
-		while (os.clock() - started < WATCH_SECONDS) sample("watching");
+		// A patrol walks a leg and pauses at its end, so the watch lasts until
+		// it has seen a stretch of each, not a fixed time a long leg outlasts.
+		let moving = 0;
+		let standing = 0;
+		let sawMoving = false;
+		let sawStanding = false;
+		while (os.clock() - started < WATCH_SECONDS && !(sawMoving && sawStanding)) {
+			const [speed, elapsed] = sample("watching");
+			moving = speed >= MOVING_SPEED ? moving + elapsed : 0;
+			standing = speed <= STANDING_SPEED ? standing + elapsed : 0;
+			if (moving >= WATCH_STRETCH_SECONDS) sawMoving = true;
+			if (standing >= WATCH_STRETCH_SECONDS) sawStanding = true;
+		}
 		return { mode: "watched", samples };
 	}
 	const walker = humanoid as Humanoid;

@@ -243,9 +243,12 @@ export interface MovementCheck {
   reason?: string;
 }
 
-/** Studs a second at or above which a model is moving, and at or below which it stands. */
-const MOVING_SPEED = 1;
-const STANDING_SPEED = 0.2;
+/**
+ * Studs a second at or above which a model is moving, and at or below which it
+ * stands. The plugin's watch ends by the same speeds.
+ */
+export const MOVING_SPEED = 1;
+export const STANDING_SPEED = 0.2;
 /** A cross-fade and a Humanoid's start or stop: samples this soon after a change do not judge. */
 const SETTLING_SECONDS = 0.4;
 /** Share of the judging samples that must show the state expected. */

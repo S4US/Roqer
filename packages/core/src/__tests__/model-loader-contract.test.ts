@@ -1,6 +1,6 @@
 import * as fs from 'fs';
 import * as path from 'path';
-import { LOADER_PACE, MAX_GROUND_SPEED, MODEL_STATES } from '../animation/animation-tool.js';
+import { LOADER_PACE, MAX_GROUND_SPEED, MODEL_STATES, MOVING_SPEED, STANDING_SPEED } from '../animation/animation-tool.js';
 
 /**
  * The model loader's code lives in the plugin (MODEL_LOADER_SOURCE in
@@ -9,7 +9,8 @@ import { LOADER_PACE, MAX_GROUND_SPEED, MODEL_STATES } from '../animation/animat
  * constants. The repository runs no Luau, so its behaviour is the live
  * animation suite's to check; this keeps the two sides of the contract in
  * step: the pace verify expects is the loader's own, the loader plays the
- * states wire sets, and the plugin caps a ground speed where core does.
+ * states wire sets, the plugin caps a ground speed where core does, and its
+ * watch ends by the speeds verify's judge counts moving and standing by.
  */
 
 function repositoryRoot(): string {
@@ -34,6 +35,11 @@ test('the loader plays the states wire sets, and no others', () => {
   const states = [...priorities.matchAll(/^\s*(\w+) = Enum\.AnimationPriority\.\w+,$/gm)].map((match) => match[1]);
   expect(states).toEqual([...MODEL_STATES]);
   expect(HANDLERS).toContain(`const MODEL_STATES = [${MODEL_STATES.map((state) => `"${state}"`).join(', ')}];`);
+});
+
+test('the plugin watches a model by the speeds verify judges it by', () => {
+  expect(HANDLERS).toContain(`\nconst MOVING_SPEED = ${MOVING_SPEED};\n`);
+  expect(HANDLERS).toContain(`\nconst STANDING_SPEED = ${STANDING_SPEED};\n`);
 });
 
 test('the plugin caps a ground speed where core does', () => {

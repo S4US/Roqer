@@ -443,15 +443,18 @@ spawner that clones the NPC needs nothing else.
    ```
 
 6. **Verify it in a playtest.** Start one with
-   `solo_playtest {action: "start", mode: "play"}`. Then
-   `verify {model: "game.Workspace.Guard", position: [x, y, z]}` walks the
-   Humanoid there on the server and watches it stand. It passes when the walk
-   played for most of the time it moved, the idle for most of the time it
-   stood, and the walk at the pace its speed needs. A failure says what to
-   change, such as the WalkSpeed to set. Without `position`, it watches the
-   NPC for eight seconds while the game's own script moves it. With
-   `animation` it plays that animation on the NPC, and compares its joints as
-   `verify` does on a character.
+   `solo_playtest {action: "start", mode: "play"}`. When the game's own script
+   moves the NPC, as a patrol does, `verify {model: "game.Workspace.Guard"}`
+   watches it on the server until it has seen it walk and stand for two
+   seconds each, or for twenty seconds at most, so a patrol needs a pause at
+   each end. For an NPC nothing moves yet,
+   `verify {model, position: [x, y, z]}` walks its Humanoid there and watches
+   it stand; do not use `position` while a script moves it, since the two
+   fight over its Humanoid. Either way it passes when the walk played for most
+   of the time the NPC moved, the idle for most of the time it stood, and the
+   walk at the pace its speed needs. A failure says what to change, such as
+   the WalkSpeed to set. With `animation` it plays that animation on the NPC,
+   and compares its joints as `verify` does on a character.
 
 R6 reports no ground speed, since its feet are not checked for sliding, so the
 loader plays an R6 gait at its own pace.

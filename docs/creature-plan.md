@@ -359,8 +359,9 @@ Roblox-published animated creatures turn up, they are measured the same way.
   the checked model, as it does on a character; with a slot, it reads the ID
   that state holds. With `position` it walks the model's Humanoid there with
   `Humanoid:MoveTo`, for up to nine seconds, since `MoveTo` gives up after
-  eight, then samples it standing; with nothing else it watches the model for
-  eight seconds while the game moves it. A model under an
+  eight, then samples it standing; with nothing else it watches the model
+  while the game moves it, until it has seen it move and stand for two seconds
+  each, or for twenty seconds at most. A model under an
   `AnimationController` is watched, never moved: its speed is timed from its
   root's motion. Walked or watched, it records a tenth of a second apart which
   track the loader played at which speed, and passes when the walk played for
