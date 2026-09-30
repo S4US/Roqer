@@ -1,8 +1,9 @@
 # Creature and NPC animation plan
 
-Status as of 2026-09-30: step 1, the creature spike, is done, and its answers
-are in [Live results](#live-results); the design below follows them. Steps 2
-to 8 are proposed and not yet scheduled. The plan details steps 12 to 14 of the
+Status as of 2026-09-30: steps 1 and 2 are done. Step 1, the creature spike,
+answered its questions in [Live results](#live-results), and the design below
+follows them. Step 2 made NPCs on stock rigs, and eval T18 passes. Steps 3 to
+8 are proposed and not yet scheduled. The plan details steps 12 to 14 of the
 [animation plan](animation-plan.md) (creatures made of rigid parts, skinned
 creatures, animating in Blender), adds NPCs, and orders the work anew. Update
 each step's status here as it lands.
@@ -469,7 +470,7 @@ says how to run it. Its questions:
 A "no" changes the steps that rest on it before any code is written. The
 answers, and what they changed, are in [Live results](#live-results).
 
-### 2. NPCs on stock rigs — built, awaiting its live run
+### 2. NPCs on stock rigs — done 2026-09-30
 
 The smallest step that animates something other than the player's character.
 It builds what every creature needs anyway: a way to make a body, a loader on
@@ -499,10 +500,9 @@ R15 and R6, whose recipes already pass.
 
 **Done when** T18 passes.
 
-**Status, 2026-09-30.** Everything above is built, with its unit tests and
-every repository check passing. The live suite's NPC section
-(`npm run test:studio:animation`) and T18 have not run against Studio yet, so
-this step is not done. What changed from the proposal, and why:
+**Status, 2026-09-30.** Done. T18 passed, and so did the live suite's NPC
+section (`npm run test:studio:animation`); both runs are in
+[Live results](#npcs-on-stock-rigs). What changed from the proposal, and why:
 
 - `wire` and `verify` name a model's state with `slot`, as for a character,
   rather than a new `state` argument: one argument fewer in the catalog.
@@ -530,6 +530,26 @@ this step is not done. What changed from the proposal, and why:
   and where the sequences go, so the reset owns them. Its oracle wants the
   playtest to have watched the guard's own patrol, after the last wiring,
   rather than `verify` walking it.
+- A stock R15 body is jointed by `AnimationConstraint`s, not `Motor6D`s, as
+  Roblox now makes avatar joints. `rig` counts either kind, as the preview and
+  `verify` already did. Before it did, the live suite read a new NPC back with
+  no joints.
+- A new body drops after it is parented. `rig` waits until it stops, for two
+  still frames in a row and ten frames at most, then stands it at `position`
+  again, and lists whatever in its read-back differs.
+- `verify` with no `position` watches until it has seen the model move and
+  stand for two seconds each, or for twenty seconds at most, rather than for a
+  fixed eight: at a pace a walk can keep, one leg of a patrol can take longer
+  than eight seconds.
+- T18's first two runs failed on the harness, not the agent. The first found
+  no loader on the guard, most likely because the installed Roqer app's
+  bridge, older than the checkout, answered the eval. The second built a guard
+  that patrolled, playing its walk and idle, in a place with no owner: an
+  unpublished place, or one opened from a file, reports its `CreatorId` as 0,
+  which no animation's owner matches. The eval now refuses both before a run:
+  a bridge whose tool catalog differs from the checkout's, and a place with no
+  owner. The server also names a plugin older than itself
+  (`plugin_outdated`) instead of passing on "Unknown endpoint".
 
 ### 3. Rigs read from Studio — proposed
 
@@ -745,3 +765,18 @@ Still open: whether the `InitialPoses` values keep the modelled pivots. This
 run counted them without reading them; the spike now reads where each puts its
 frame. If the node values sit at the node origins, `rig` can take pivots from
 any import, a generated body's included, instead of from its boxes.
+
+### NPCs on stock rigs
+
+On 2026-09-30 the live animation suite (`npm run test:studio:animation`, on
+the managed runner) passed its NPC section. T18 passed too
+(`npm run eval -- --task T18-npc-patrol`, with the Claude provider), in a
+published place owned by the Open Cloud key's creator. Neither run printed
+Studio's version.
+
+| Run | Result |
+| --- | --- |
+| `rig` makes a stock R15 NPC | 16 parts and 15 joints, its feet where asked. Its loader held the idle, walk and run its `Animate` carried, and `Animate` was gone. `rig` refused a path already taken, and one undo removed the NPC |
+| `verify` walks it to a position | At the Humanoid's default WalkSpeed of 16, it played its walk in all 12 samples while it moved and its idle in all 11 while it stood. The walk, Roblox's default wired with a ground speed of 10 declared for the test, played at 1.59 times its own pace, where 1.6 was needed |
+| `verify` watches its own patrol | A patrol script walked it between two points at 8 studs a second, pausing at each. It played its walk in all 27 samples while it moved and its idle in all 14 while it paused, at 0.79 times its pace, where 0.8 was needed |
+| T18 | In 25 tool calls and two minutes, the agent made the guard, gave it an idle and a walk of its own, and published and wired both, the walk with its ground speed. A playtest after the last wiring watched its patrol. The oracle found both animations owned by the place's owner, a 3D preview, and every motion check passed |

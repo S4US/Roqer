@@ -1,10 +1,10 @@
 # Animation and 3D preview plan
 
-Status as of 2026-09-29. Steps 1 to 10 are the adopted plan, and all of them
+Status as of 2026-09-30. Steps 1 to 10 are the adopted plan, and all of them
 have landed. Step 11, R6, has landed too, apart from what it lists as not done.
 Steps 12 to 14 are planned in more detail, with NPCs added, in the [creature
-plan](creature-plan.md), which is proposed and not yet scheduled. Update each
-step's status here as it lands.
+plan](creature-plan.md), whose first two steps, a spike and NPCs on stock rigs,
+are done. Update each step's status here as it lands.
 
 ## Goal
 
