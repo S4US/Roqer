@@ -45,6 +45,12 @@ export interface MotionReport {
   duration: number;
   sampleRate: number;
   checks: MotionCheckResult[];
+  /**
+   * For a gait, the ground speed it was written for, in studs a second: how
+   * fast its planted feet travel backward under the body. Absent when no foot
+   * stays planted, or on a rig whose planted feet are not checked.
+   */
+  groundSpeed?: number;
 }
 
 export interface MotionCheckOptions {
@@ -421,6 +427,42 @@ function checkFootSliding(data: Sampled, rate: number, rig: Rig): MotionCheckRes
   return result('footSliding', false, planted ? `planted feet wander at most ${round(worst.studs)} studs` : 'no foot stays planted', measured);
 }
 
+/**
+ * How fast the ground passes under an in-place gait: the median speed at which
+ * its planted foot corners travel backward (+Z). A body moving at this speed
+ * keeps its feet from sliding, so a loader plays the gait at the body's speed
+ * over this one. The median, rather than a stretch's whole travel, leaves out
+ * a foot's first and last moments in the contact band, when it is still
+ * swinging forward onto the ground or already swinging off it.
+ */
+function measureGroundSpeed(data: Sampled, rate: number, rig: Rig): number | undefined {
+  const points = footPoints(data, rig);
+  const minimum = Math.ceil(MOTION_LIMITS.plantedSeconds * rate);
+  const speeds: number[] = [];
+  for (const foot of rig.feet) {
+    const series = points.get(foot)!;
+    for (let corner = 0; corner < series[0].length; corner += 1) {
+      let start = -1;
+      for (let index = 0; index <= series.length; index += 1) {
+        const down = index < series.length && series[index][corner][1] <= MOTION_LIMITS.contactTolerance;
+        if (down && start < 0) start = index;
+        if (down || start < 0) continue;
+        if (index - start >= minimum) {
+          // Central differences inside the stretch, index - 1 being its last sample.
+          for (let k = start + 1; k < index - 1; k += 1) {
+            speeds.push((series[k + 1][corner][2] - series[k - 1][corner][2]) / (data.times[k + 1] - data.times[k - 1]));
+          }
+        }
+        start = -1;
+      }
+    }
+  }
+  if (speeds.length === 0) return undefined;
+  speeds.sort((a, b) => a - b);
+  const middle = Math.floor(speeds.length / 2);
+  return speeds.length % 2 === 1 ? speeds[middle] : (speeds[middle - 1] + speeds[middle]) / 2;
+}
+
 function checkGaitSymmetry(sequence: MotionSequence, data: Sampled, rig: Rig): MotionCheckResult {
   if (!sequence.loop) return skipped('gaitSymmetry', 'a gait loops; this animation does not');
   // One cycle, without the last sample, which repeats the first.
@@ -484,10 +526,15 @@ export function checkMotion(sequence: MotionSequence, options: MotionCheckOption
     const why = unchecked[check.id];
     if (why !== undefined && check.status !== 'skipped') checks[index] = skipped(check.id, `not checked: ${why}`);
   }
+  // Measured from planted feet, so only where planted feet are checked.
+  const groundSpeed = options.locomotion && unchecked.footSliding === undefined
+    ? measureGroundSpeed(data, rate, rig)
+    : undefined;
   return {
     passed: checks.every((check) => check.status !== 'fail'),
     duration: sequenceDuration(sequence),
     sampleRate: rate,
     checks,
+    ...(groundSpeed === undefined ? {} : { groundSpeed: round(groundSpeed) }),
   };
 }

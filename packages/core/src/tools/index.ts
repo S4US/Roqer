@@ -1759,8 +1759,10 @@ export class RobloxStudioTools {
       results: compactChecks(report),
       ...(waived.length > 0 ? { waived } : {}),
     };
+    // A gait's pace, which wire hands to a model's loader so its feet keep up.
+    const groundSpeed = report.groundSpeed === undefined ? {} : { groundSpeed: report.groundSpeed };
     if (action === 'check') {
-      return this._animationResult({ valid: true, animation: describeAnimation(sequence), checks }, sequence, locomotion === true);
+      return this._animationResult({ valid: true, animation: describeAnimation(sequence), ...groundSpeed, checks }, sequence, locomotion === true);
     }
     if (failing.length > 0) {
       return this._animationResult({
@@ -1802,6 +1804,7 @@ export class RobloxStudioTools {
       replaced: written.replaced === true,
       undoable: written.undoable !== false,
       animation: describeAnimation(sequence),
+      ...groundSpeed,
       readBack: {
         keyframes: written.keyframes,
         poses: written.poses,

@@ -134,6 +134,22 @@ describe('RobloxStudioTools.animation', () => {
       .toEqual({ valid: false, errors: ['keyframes: must be a non-empty array'] });
   });
 
+  test('check gives a gait the ground speed it was written for, and gives nothing else one', async () => {
+    const reference = path.resolve(__dirname, '../../../../apps/desktop/agent/skills/roblox-animation-vfx/references/character-animation.md');
+    const walk = [...fs.readFileSync(reference, 'utf8').matchAll(/```json\r?\n([\s\S]*?)```/g)]
+      .map((match) => JSON.parse(match[1]) as { name: string })
+      .find((recipe) => recipe.name === 'Walk');
+    const { tools, calls } = toolsWith({});
+    const gait = body(await tools.animation({ action: 'check', animation: walk, locomotion: true }));
+    expect(gait.checks.passed).toBe(true);
+    expect(gait.groundSpeed).toBeGreaterThan(2);
+    expect(body(await tools.animation({ action: 'check', animation: walk })).groundSpeed).toBeUndefined();
+    // A wave checked as a gait keeps its feet planted where they stand: written for standing still.
+    const standing = body(await tools.animation({ action: 'check', animation: wave(), locomotion: true }));
+    expect([standing.groundSpeed, standing.checks.passed]).toEqual([0, false]);
+    expect(calls).toEqual([]);
+  });
+
   test('check shows the motion: a contact sheet for the model and a GLB for the viewer', async () => {
     const { tools } = toolsWith({});
     const result = await tools.animation({ action: 'check', animation: wave() });

@@ -134,6 +134,23 @@ describe('animation recipes', () => {
     expect(at(gait, half, 'RightFoot')[2]).toBeLessThan(at(gait, half, 'LeftFoot')[2] - 0.8);
   });
 
+  it('reports the ground speed a gait was written for, from its planted feet', () => {
+    const report = (sequence: KeyframeSequenceDescription) => checkMotion(sequence, { locomotion: true }, rigFor(sequence.rig));
+    const walk = compiled(all.get('Walk'));
+    // From one contact to the next, the planted left foot travels back under the body at the ground's pace.
+    const half = walk.keyframes[2].time;
+    const travelled = (at(walk, half, 'LeftFoot')[2] - at(walk, 0, 'LeftFoot')[2]) / half;
+    expect(report(walk).groundSpeed).toBeCloseTo(travelled, 1);
+    // Scaling every time down, as the reference says to go faster, speeds the ground up alike.
+    const recipe = all.get('Walk') as { keyframes: { time: number }[] };
+    const brisk = compiled({ ...recipe, keyframes: recipe.keyframes.map((keyframe) => ({ ...keyframe, time: keyframe.time / 2 })) });
+    expect(report(brisk).groundSpeed).toBeCloseTo(2 * report(walk).groundSpeed!, 1);
+    expect(report(compiled(all.get('Run'))).groundSpeed).toBeGreaterThan(report(walk).groundSpeed!);
+    // Not for a gesture, nor on R6, whose planted feet are not checked.
+    expect(checkMotion(compiled(all.get('Wave')), {}, rigFor('R15')).groundSpeed).toBeUndefined();
+    expect(report(compiled(all.get('WalkR6'))).groundSpeed).toBeUndefined();
+  });
+
   it('throws both arms up for the jump', () => {
     const jump = compiled(all.get('Jump'));
     const end = jump.keyframes[jump.keyframes.length - 1].time;
