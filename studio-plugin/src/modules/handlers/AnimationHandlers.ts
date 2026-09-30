@@ -327,11 +327,11 @@ function previewAnimation(requestData: Data) {
 			for (const descendant of rig.GetDescendants()) {
 				if (descendant.IsA("BaseScript")) descendant.Enabled = false;
 			}
-			const controller = rig.FindFirstChildOfClass("Humanoid") ?? rig.FindFirstChildOfClass("AnimationController");
-			if (!controller) error("the copy of the model has no Humanoid or AnimationController");
-			const found = rigRoot(rig, controller, modelJoints(rig));
-			if (typeIs(found, "string")) error(found);
-			root = found;
+			// Its root is the one part its joints hang from, as its reading found:
+			// a copy's Humanoid does not know its root part until it is placed.
+			const roots = jointRoots(modelJoints(rig));
+			if (roots.size() !== 1) error("the copy of the model does not hang from one root");
+			root = roots[0];
 		} else {
 			const rigType = (requestData.sequence as Data).rig === "R6" ? Enum.HumanoidRigType.R6 : Enum.HumanoidRigType.R15;
 			rig = Players.CreateHumanoidModelFromDescription(new Instance("HumanoidDescription"), rigType);
@@ -1440,6 +1440,17 @@ function modelJoints(model: Model): RigJointReading[] {
 	return joints;
 }
 
+/** The parts joints hang from that no joint moves: one, on a rig that is one tree. */
+function jointRoots(joints: RigJointReading[]): BasePart[] {
+	const moved = new Set<BasePart>();
+	for (const joint of joints) moved.add(joint.part1);
+	const roots: BasePart[] = [];
+	for (const joint of joints) {
+		if (!moved.has(joint.part0) && !roots.includes(joint.part0)) roots.push(joint.part0);
+	}
+	return roots;
+}
+
 /**
  * The part a model's joints hang from: a Humanoid's root part; under an
  * AnimationController, the one part joints hang from that none moves,
@@ -1449,12 +1460,7 @@ function rigRoot(model: Model, controller: Humanoid | AnimationController, joint
 	if (controller.IsA("Humanoid")) {
 		return controller.RootPart ?? `${getInstancePath(model)}'s Humanoid has no root part; give it a HumanoidRootPart`;
 	}
-	const moved = new Set<BasePart>();
-	for (const joint of joints) moved.add(joint.part1);
-	const roots: BasePart[] = [];
-	for (const joint of joints) {
-		if (!moved.has(joint.part0) && !roots.includes(joint.part0)) roots.push(joint.part0);
-	}
+	const roots = jointRoots(joints);
 	const primary = model.PrimaryPart;
 	if (primary && roots.includes(primary)) return primary;
 	if (roots.size() === 1) return roots[0];
