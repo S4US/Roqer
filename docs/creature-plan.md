@@ -1,13 +1,13 @@
 # Creature and NPC animation plan
 
-Status as of 2026-09-30: steps 1 and 2 are done, and step 3 is built and waits
-on its live run. Step 1, the creature spike, answered its questions in
-[Live results](#live-results), and the design below follows them. Step 2 made
-NPCs on stock rigs, and eval T18 passes. Step 3 reads a rig from any rigged
-model. Steps 4 to 8 are proposed and not yet scheduled. The plan details steps 12 to 14 of the
-[animation plan](animation-plan.md) (creatures made of rigid parts, skinned
-creatures, animating in Blender), adds NPCs, and orders the work anew. Update
-each step's status here as it lands.
+Status as of 2026-09-30: steps 1 to 3 are done. Step 1, the creature spike,
+answered its questions in [Live results](#live-results), and the design below
+follows them. Step 2 made NPCs on stock rigs, and eval T18 passes. Step 3
+reads a rig from any rigged model, and a dog rigged by hand in Studio plays
+its animation as checked. Steps 4 to 8 are proposed and not yet scheduled. The
+plan details steps 12 to 14 of the [animation plan](animation-plan.md)
+(creatures made of rigid parts, skinned creatures, animating in Blender), adds
+NPCs, and orders the work anew. Update each step's status here as it lands.
 
 ## Goal
 
@@ -43,34 +43,26 @@ publishing and wiring need a key.
 
 ## Where things stand
 
-Most of the animation pipeline already reads a rig table (`Rig` in
-`packages/core/src/animation/r15-rig.ts`) rather than R15 itself: the pose
-compiler, the motion model with turned joint frames (C0 and C1), optional
-joints, per-rig skipped checks, and the contact sheet and GLB writers, which
-draw whatever parts and meshes they are given. R6 was added as a second table.
-What still assumes a two-legged character, or a player's character:
+Since step 3, everything that reads a rig reads one description (`Rig` in
+`packages/core/src/animation/rig.ts`): the pose compiler, the motion model and
+its checks, and the contact sheet and GLB writers. R15 and R6 are built in,
+and any other rig is read from its model in Studio, with what its geometry
+cannot say declared in its `RoqerRig` attribute. `animation` checks, builds
+and verifies an animation for a model's own rig, and previews it on a copy of
+the model. What still stands between a creature and a walk:
 
-- **The rig is a name.** `rig` is `R15` or `R6` in the schema and in `RIGS`,
-  and `Rig.name` is typed to those two.
-- **Limbs are R15's.** `aim`, `bend` and `aimAt` look their joints up in the
-  compiler's own `LIMBS` and `HINGES` tables by R15 joint names, and `grip` is
-  written for `LeftShoulder`.
-- **Two feet.** `Rig.feet` and `Rig.hips` are pairs, and gait symmetry compares
-  two hips' swing about X.
-- **Silent passes.** The joint limits are tables keyed by R15 names, and a
-  joint in neither is skipped without a word. A custom rig would read "every
-  joint stays within its range" with nothing checked.
-- **An R15-sized body.** Root drift looks for a joint named `Root`, every
-  distance limit is in studs calibrated on the R15 body, and the contact sheet
-  frames a cell 7.4 studs tall.
-- **A stock dummy.** The Studio preview builds its dummy with
-  `CreateHumanoidModelFromDescription` and caps a keyframe at 32 poses nested 8
-  deep. A spider's legs pass the first, a snake's spine the second.
-- **A character or a stock NPC.** Since step 2, `wire` and `verify` also take
-  a model, whose loader plays its idle, walk and run, and `rig` makes a stock
-  R15 or R6 NPC. A model of any other shape can be wired and verified, but no
-  animation can yet be written for it: everything above reads R15's or R6's
-  table.
+- **Declarations by hand.** A model's feet, limbs, hinges and ranges are known
+  only when its `RoqerRig` declares them. Without them, `aim`, `bend` and
+  `aimAt` are refused, and each check that needs them reports what it did not
+  judge, so a creature without declarations is posed with `rotation` alone.
+- **One hinge a limb.** A declared limb bends at one hinge; a leg of three
+  segments is posed with `rotation` on the extra joint. `grip` needs a
+  `LeftShoulder` and a `Weapon` joint, as R15 and R6 have.
+- **Walks are a biped's.** The skill's walk and run recipes are R15's and
+  R6's, and gait symmetry compares a biped's two hips. A walk on four legs is
+  written joint by joint, and nothing checks its pattern.
+- **Stock NPCs only.** `rig` makes a stock R15 or R6 NPC. It cannot yet join a
+  model's parts into a rig, or replace the rig an import arrives with.
 
 On the modeling side:
 
@@ -552,7 +544,7 @@ section (`npm run test:studio:animation`); both runs are in
   owner. The server also names a plugin older than itself
   (`plugin_outdated`) instead of passing on "Unknown endpoint".
 
-### 3. Rigs read from Studio — built 2026-09-30, live run pending
+### 3. Rigs read from Studio — done 2026-09-30
 
 Everything that reads a rig learns to read one from a model, and R15 and R6
 move onto the same description.
@@ -575,11 +567,13 @@ move onto the same description.
 **Done when** a model rigged by hand, with no declarations, can be animated
 with `rotation`, and every check it cannot run says so.
 
-**Status, 2026-09-30.** Built; done once the live animation suite's dog
-section passes (`npm run test:studio:animation`). The unit tests show the
-done criterion on the Parts dog: it compiles from `rotation` alone, the checks
-it has no declarations for report `not checked: ...` and nothing passes by
-default, and its contact sheet and GLB draw it. What was built:
+**Status, 2026-09-30.** Done. The live animation suite's dog section passed
+(`npm run test:studio:animation`), and so did `npm run test:e2e`; both runs
+are in [Live results](#a-dog-rigged-by-hand). A Parts dog rigged by hand in
+Studio, with no declarations, was animated with `rotation`: `check` read its
+rig and said which checks it could not run, and the animation played as
+checked on a copy of the dog and on the dog itself in a playtest. What was
+built:
 
 - **One description for every rig.** `Rig` describes R15, R6 and any model
   alike: its root joint (if one joint moves the whole body), any number of
@@ -843,3 +837,20 @@ Studio's version.
 | `verify` walks it to a position | At the Humanoid's default WalkSpeed of 16, it played its walk in all 12 samples while it moved and its idle in all 11 while it stood. The walk, Roblox's default wired with a ground speed of 10 declared for the test, played at 1.59 times its own pace, where 1.6 was needed |
 | `verify` watches its own patrol | A patrol script walked it between two points at 8 studs a second, pausing at each. It played its walk in all 27 samples while it moved and its idle in all 14 while it paused, at 0.79 times its pace, where 0.8 was needed |
 | T18 | In 25 tool calls and two minutes, the agent made the guard, gave it an idle and a walk of its own, and published and wired both, the walk with its ground speed. A playtest after the last wiring watched its patrol. The oracle found both animations owned by the place's owner, a 3D preview, and every motion check passed |
+
+### A dog rigged by hand
+
+On 2026-09-30 the live animation suite (`npm run test:studio:animation`, on
+the managed runner) passed, its dog section with every R15, R6 and NPC
+section, and so did `npm run test:e2e`. Neither run printed Studio's version.
+The dog is the spike's: Parts joined by `Motor6D`s under a `Humanoid`, with
+wedge ears and a ball nose welded to its head, a MeshPart collar welded to its
+body, and no `RoqerRig`. Its animation wags the head and the tail.
+
+| Run | Result |
+| --- | --- |
+| `check` reads the rig | Its seven joints, `Root` taking the pose's `position`, and distance limits 0.75 times R15's, from its height at rest. Nothing failed; the joint limits reported `not checked: Neck and Tail turn with no declared range`, and nothing that could not be judged passed |
+| The preview draws it | The collar was drawn from its own mesh, read from Studio, not as its box |
+| `build` previews on a copy | The copy played the animation within 0.23° of the poses it was checked with. The dog stayed where it was, and the copy left nothing in Workspace |
+| A weld reaching outside | A `WeldConstraint` from the tail to a post outside the dog was refused before anything was built (`model_not_copyable`), naming the weld and the post, and the post did not move |
+| `verify` in a playtest | The animation played on the dog itself within 0.27° of the poses it was checked with |
