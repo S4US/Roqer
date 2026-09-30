@@ -579,7 +579,7 @@ describe('compilePoseAnimation', () => {
 
   test('refuses rigs it does not know, including inherited object keys', () => {
     for (const rig of ['R16', 'r6', 'toString', '__proto__', undefined]) {
-      expect(errors(swing({ rig }))).toEqual(['rig: must be one of R15, R6']);
+      expect(errors(swing({ rig }))).toEqual(['rig: must be R15 or R6, or the path of a rigged Model in Studio']);
     }
   });
 

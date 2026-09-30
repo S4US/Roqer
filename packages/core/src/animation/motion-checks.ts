@@ -6,17 +6,24 @@
 // The limits let Roblox's own R15 animations pass, with a margin. The live
 // calibration run (tests/animation-calibration.mjs) measured the 26 animations
 // of the default Animate script; each limit below notes Roblox's worst case,
-// and the plan's "Live results" records the run.
+// and the plan's "Live results" records the run. Each joint's own range is the
+// rig's (R15_JOINT_LIMITS for R15).
+//
+// A rig read from a model is judged the same way, as far as it can be: its
+// distance limits are R15's scaled to its size, and a check it lacks what to
+// judge by for, such as feet or a joint's range, says so rather than passing.
 
-import { R15_RIG, type Rig, type Vec3 } from './r15-rig.js';
+import { R15_RIG } from './r15-rig.js';
+import type { Rig, RigHinge, Vec3 } from './rig.js';
 import {
   buildTracks,
   degreesBetween,
   pointToWorld,
   poseRig,
+  restPose,
   rotationDegrees,
   sequenceDuration,
-  transformInParent,
+  transformInBody,
   type Frame,
   type MotionSequence,
   type RigPose,
@@ -66,45 +73,7 @@ export interface MotionCheckOptions {
   sampleRate?: number;
 }
 
-/** Joints that bend about their X axis only. */
-interface HingeLimit {
-  /** Signed bend about X, in degrees. */
-  min: number;
-  max: number;
-  /** How far the hinge axis itself may turn, in degrees. */
-  offAxis: number;
-}
-
 export const MOTION_LIMITS = {
-  /**
-   * Largest turn from rest, in degrees, for joints that turn freely. Root is
-   * unlimited: it turns the whole body. Anatomical; Roblox's worst: shoulder
-   * 160 (climb), hip 111 (laugh), wrist 64 and ankle 39 (swim), neck 56 (idle),
-   * waist 45 (laugh).
-   */
-  turn: {
-    Waist: 90,
-    Neck: 90,
-    LeftShoulder: 180,
-    RightShoulder: 180,
-    LeftWrist: 100,
-    RightWrist: 100,
-    LeftHip: 150,
-    RightHip: 150,
-    LeftAnkle: 80,
-    RightAnkle: 80,
-  } as Record<string, number>,
-  /**
-   * An elbow bends the forearm forward (+X); a knee bends the shin back (-X).
-   * Roblox's worst: knees -143 to 4.3 (run, cheer), elbows -6.7 to 123 (jump,
-   * swim), 17° off axis (dance3).
-   */
-  hinge: {
-    LeftElbow: { min: -15, max: 160, offAxis: 35 },
-    RightElbow: { min: -15, max: 160, offAxis: 35 },
-    LeftKnee: { min: -160, max: 10, offAxis: 35 },
-    RightKnee: { min: -160, max: 10, offAxis: 35 },
-  } as Record<string, HingeLimit>,
   /** Degrees per second, any body joint. Roblox's worst: 2098 (jump, knee). */
   angularSpeed: 2500,
   /**
@@ -149,9 +118,9 @@ export const MOTION_LIMITS = {
   gaitMinSwing: 5,
   gaitAmplitudeRatio: 0.6,
   gaitPhase: { min: 0.4, max: 0.6 },
+  /** Degrees a joint with no declared range may turn and still count as still, so it needs no range. */
+  stillDegrees: 0.1,
 };
-
-const ROOT_JOINT = 'Root';
 
 function round(value: number, places = 2): number {
   const factor = 10 ** places;
@@ -163,14 +132,40 @@ function seconds(time: number): string {
   return `${round(time)} s`;
 }
 
-/** Signed rotation about X, in degrees, for a rotation that is mostly about X. */
-function bendDegrees(r: Frame['r']): number {
+/** Signed rotation about an axis, in degrees, for a rotation that is mostly about it. */
+function bendDegrees(r: Frame['r'], axis: RigHinge['axis'] = 'X'): number {
+  if (axis === 'Y') return (Math.atan2(r[2], r[0]) * 180) / Math.PI;
+  if (axis === 'Z') return (Math.atan2(r[3], r[0]) * 180) / Math.PI;
   return (Math.atan2(r[7], r[8]) * 180) / Math.PI;
 }
 
-/** How far the X axis has turned, in degrees. */
-function offAxisDegrees(r: Frame['r']): number {
-  return (Math.acos(Math.min(1, Math.max(-1, r[0]))) * 180) / Math.PI;
+/** How far the axis itself has turned, in degrees. */
+function offAxisDegrees(r: Frame['r'], axis: RigHinge['axis'] = 'X'): number {
+  const along = axis === 'Y' ? r[4] : axis === 'Z' ? r[8] : r[0];
+  return (Math.acos(Math.min(1, Math.max(-1, along))) * 180) / Math.PI;
+}
+
+/** A list of names as prose: "Tail", "Head and Tail", "Head, Neck and Tail". */
+function listed(names: readonly string[]): string {
+  return names.length <= 1 ? names.join('') : `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`;
+}
+
+/**
+ * A distance limit for this rig: its own on R15 and R6, and R15's scaled to
+ * the body on any other, whose results say so.
+ */
+function scaled(rig: Rig, limit: number): number {
+  return rig.scale ? limit * rig.scale.factor : limit;
+}
+
+/** How a distance limit reads in a result. */
+function scaledText(rig: Rig, limit: number): string {
+  return rig.scale ? `${round(limit * rig.scale.factor)}` : `${limit}`;
+}
+
+/** What a result that judged distances adds on a rig whose limits were scaled. */
+function scaledNote(rig: Rig): string {
+  return rig.scale ? `; its limits are R15's scaled by ${round(rig.scale.factor)} for ${rig.scale.basis}` : '';
 }
 
 interface Sampled {
@@ -197,28 +192,41 @@ function skipped(id: MotionCheckId, detail: string): MotionCheckResult {
 function checkJointLimits(data: Sampled, rig: Rig): MotionCheckResult {
   const measured: Record<string, number> = {};
   const failures: { excess: number; text: string }[] = [];
+  // Joints that turned with no range to judge them by.
+  const unranged: string[] = [];
+  let ranged = 0;
   for (const joint of rig.joints) {
-    const hinge = MOTION_LIMITS.hinge[joint.name];
-    const turn = MOTION_LIMITS.turn[joint.name];
-    if (!hinge && turn === undefined) continue;
+    const limit = rig.limits[joint.name];
+    if (limit === 'free') continue;
+    const hinge = limit !== undefined && 'min' in limit ? limit : undefined;
+    const turn = limit !== undefined && 'turn' in limit ? limit.turn : undefined;
+    const bendAxis = rig.hinges[joint.name]?.axis ?? 'X';
     let low = { value: Infinity, time: 0 };
     let high = { value: -Infinity, time: 0 };
     let off = { value: 0, time: 0 };
     let most = { value: 0, time: 0 };
     data.poses.forEach((pose, index) => {
-      const r = transformInParent(joint, pose.transforms.get(joint.name)!).r;
+      const r = transformInBody(joint, pose.transforms.get(joint.name)!).r;
       const time = data.times[index];
       if (hinge) {
-        const bend = bendDegrees(r);
+        const bend = bendDegrees(r, bendAxis);
         if (bend < low.value) low = { value: bend, time };
         if (bend > high.value) high = { value: bend, time };
-        const axis = offAxisDegrees(r);
+        const axis = offAxisDegrees(r, bendAxis);
         if (axis > off.value) off = { value: axis, time };
       } else {
         const angle = rotationDegrees(r);
         if (angle > most.value) most = { value: angle, time };
       }
     });
+    if (turn === undefined && !hinge) {
+      if (most.value > MOTION_LIMITS.stillDegrees) {
+        measured[joint.name] = round(most.value, 1);
+        unranged.push(joint.name);
+      }
+      continue;
+    }
+    ranged += 1;
     if (hinge) {
       measured[`${joint.name}.bendMin`] = round(low.value, 1);
       measured[`${joint.name}.bendMax`] = round(high.value, 1);
@@ -232,7 +240,7 @@ function checkJointLimits(data: Sampled, rig: Rig): MotionCheckResult {
       if (off.value > hinge.offAxis) {
         failures.push({ excess: off.value - hinge.offAxis, text: `${joint.name} twists its hinge ${round(off.value, 1)}° off axis at ${seconds(off.time)}; limit ${hinge.offAxis}°` });
       }
-    } else {
+    } else if (turn !== undefined) {
       measured[joint.name] = round(most.value, 1);
       if (most.value > turn) {
         failures.push({ excess: most.value - turn, text: `${joint.name} turns ${round(most.value, 1)}° at ${seconds(most.time)}; limit ${turn}°` });
@@ -240,10 +248,17 @@ function checkJointLimits(data: Sampled, rig: Rig): MotionCheckResult {
     }
   }
   failures.sort((a, b) => b.excess - a.excess);
-  const detail = failures.length === 0
-    ? 'every joint stays within its range'
-    : failures.length === 1 ? failures[0].text : `${failures[0].text}, and ${failures.length - 1} more`;
-  return result('jointLimits', failures.length > 0, detail, measured);
+  const unchecked = unranged.length === 0
+    ? ''
+    : `${listed(unranged)} ${unranged.length === 1 ? 'turns' : 'turn'} with no declared range`;
+  if (failures.length > 0) {
+    const worst = failures.length === 1 ? failures[0].text : `${failures[0].text}, and ${failures.length - 1} more`;
+    return result('jointLimits', true, unchecked ? `${worst}; not checked: ${unchecked}` : worst, measured);
+  }
+  if (unchecked) {
+    return { id: 'jointLimits', status: 'skipped', detail: `not checked: ${unchecked}${ranged > 0 ? '; every other joint stays within its range' : ''}`, measured };
+  }
+  return result('jointLimits', false, 'every joint stays within its range', measured);
 }
 
 function checkVelocity(data: Sampled, rig: Rig): MotionCheckResult {
@@ -275,36 +290,33 @@ function checkVelocity(data: Sampled, rig: Rig): MotionCheckResult {
   );
 }
 
-function rootPosition(pose: RigPose, rig: Rig): [number, number, number] {
-  const root = rig.joints.find((joint) => joint.name === ROOT_JOINT)!;
-  return pose.parts.get(root.childPart)!.p;
+/** The part the root joint moves, whose position is the body's. */
+function rootBody(rig: Rig): string | undefined {
+  return rig.joints.find((joint) => joint.name === rig.rootJoint)?.childPart;
 }
 
 function checkRootDrift(data: Sampled, rig: Rig): MotionCheckResult {
-  const root = rig.joints.find((joint) => joint.name === ROOT_JOINT)!;
+  const body = rootBody(rig);
+  if (!body) return skipped('rootDrift', `not checked: no one joint moves the whole body; its ${rig.rootPart} holds each piece by its own joint`);
   // Where the root joint's child sits at rest.
-  const rest = [
-    root.parentOffset[0] - root.childOffset[0],
-    root.parentOffset[1] - root.childOffset[1],
-    root.parentOffset[2] - root.childOffset[2],
-  ];
+  const rest = restPose(rig).get(body)!.p;
   let excursion = { value: 0, time: 0 };
   data.poses.forEach((pose, index) => {
-    const p = rootPosition(pose, rig);
+    const p = pose.parts.get(body)!.p;
     const away = Math.hypot(p[0] - rest[0], p[2] - rest[2]);
     if (away > excursion.value) excursion = { value: away, time: data.times[index] };
   });
-  const start = rootPosition(data.poses[0], rig);
-  const end = rootPosition(data.poses[data.poses.length - 1], rig);
+  const start = data.poses[0].parts.get(body)!.p;
+  const end = data.poses[data.poses.length - 1].parts.get(body)!.p;
   const gap = Math.hypot(end[0] - start[0], end[2] - start[2]);
   const measured = { excursion: round(excursion.value), returnGap: round(gap) };
-  if (excursion.value > MOTION_LIMITS.rootExcursion) {
-    return result('rootDrift', true, `the body moves ${round(excursion.value)} studs from the HumanoidRootPart at ${seconds(excursion.time)}; limit ${MOTION_LIMITS.rootExcursion}`, measured);
+  if (excursion.value > scaled(rig, MOTION_LIMITS.rootExcursion)) {
+    return result('rootDrift', true, `the body moves ${round(excursion.value)} studs from the ${rig.rootPart} at ${seconds(excursion.time)}; limit ${scaledText(rig, MOTION_LIMITS.rootExcursion)}${scaledNote(rig)}`, measured);
   }
-  if (gap > MOTION_LIMITS.rootReturn) {
-    return result('rootDrift', true, `the body ends ${round(gap)} studs from where it started, so it snaps back when the animation stops; limit ${MOTION_LIMITS.rootReturn}`, measured);
+  if (gap > scaled(rig, MOTION_LIMITS.rootReturn)) {
+    return result('rootDrift', true, `the body ends ${round(gap)} studs from where it started, so it snaps back when the animation stops; limit ${scaledText(rig, MOTION_LIMITS.rootReturn)}${scaledNote(rig)}`, measured);
   }
-  return result('rootDrift', false, `the body stays within ${round(excursion.value)} studs of the HumanoidRootPart and returns within ${round(gap)}`, measured);
+  return result('rootDrift', false, `the body stays within ${round(excursion.value)} studs of the ${rig.rootPart} and returns within ${round(gap)}${scaledNote(rig)}`, measured);
 }
 
 function checkLoopContinuity(sequence: MotionSequence, data: Sampled, rig: Rig): MotionCheckResult {
@@ -322,10 +334,11 @@ function checkLoopContinuity(sequence: MotionSequence, data: Sampled, rig: Rig):
     const allowed = Math.max(MOTION_LIMITS.seamDegrees, MOTION_LIMITS.seamRatio * local);
     if (jump / allowed > worst.degrees / worst.allowed) worst = { joint: joint.name, degrees: jump, local, allowed };
   }
-  const a = rootPosition(first, rig);
-  const b = rootPosition(last, rig);
-  const studs = Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
-  const measured = { jointDegrees: round(worst.degrees, 1), jointLocalDegrees: round(worst.local, 1), rootStuds: round(studs) };
+  const body = rootBody(rig);
+  const a = body ? first.parts.get(body)!.p : [0, 0, 0];
+  const b = body ? last.parts.get(body)!.p : [0, 0, 0];
+  const jump = Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
+  const measured = { jointDegrees: round(worst.degrees, 1), jointLocalDegrees: round(worst.local, 1), rootStuds: round(jump) };
   if (worst.degrees > worst.allowed) {
     return result(
       'loopContinuity',
@@ -334,10 +347,10 @@ function checkLoopContinuity(sequence: MotionSequence, data: Sampled, rig: Rig):
       measured,
     );
   }
-  if (studs > MOTION_LIMITS.seamStuds) {
-    return result('loopContinuity', true, `the body jumps ${round(studs)} studs where the loop restarts; limit ${MOTION_LIMITS.seamStuds}`, measured);
+  if (jump > scaled(rig, MOTION_LIMITS.seamStuds)) {
+    return result('loopContinuity', true, `the body jumps ${round(jump)} studs where the loop restarts; limit ${scaledText(rig, MOTION_LIMITS.seamStuds)}${scaledNote(rig)}`, measured);
   }
-  return result('loopContinuity', false, 'the last pose meets the first', measured);
+  return result('loopContinuity', false, `the last pose meets the first${body ? scaledNote(rig) : ''}`, measured);
 }
 
 function footCorners(rig: Rig, foot: string): Vec3[] {
@@ -347,7 +360,7 @@ function footCorners(rig: Rig, foot: string): Vec3[] {
   return corners;
 }
 
-/** Each foot's corners over time, in the HumanoidRootPart's frame, as heights above the ground. */
+/** Each foot's corners over time, in the root part's frame, as heights above the ground. */
 function footPoints(data: Sampled, rig: Rig): Map<string, [number, number, number][][]> {
   const ground = rig.ground;
   const points = new Map<string, [number, number, number][][]>();
@@ -362,7 +375,9 @@ function footPoints(data: Sampled, rig: Rig): Map<string, [number, number, numbe
 }
 
 function checkGroundContact(data: Sampled, rig: Rig, gait: boolean): MotionCheckResult {
+  if (rig.feet.length === 0) return skipped('groundContact', 'not checked: the rig declares no feet');
   const points = footPoints(data, rig);
+  const contact = scaled(rig, MOTION_LIMITS.contactTolerance);
   let deepest = { value: 0, time: 0, foot: '' };
   let grounded = 0;
   data.times.forEach((time, index) => {
@@ -372,20 +387,21 @@ function checkGroundContact(data: Sampled, rig: Rig, gait: boolean): MotionCheck
       lowest = Math.min(lowest, low);
       if (-low > deepest.value) deepest = { value: -low, time, foot };
     }
-    if (lowest <= MOTION_LIMITS.contactTolerance) grounded += 1;
+    if (lowest <= contact) grounded += 1;
   });
   const share = grounded / data.times.length;
   const measured = { penetration: round(deepest.value), groundedShare: round(share) };
-  if (deepest.value > MOTION_LIMITS.groundPenetration) {
-    return result('groundContact', true, `${deepest.foot} sinks ${round(deepest.value)} studs into the ground at ${seconds(deepest.time)}; limit ${MOTION_LIMITS.groundPenetration}`, measured);
+  const note = scaledNote(rig);
+  if (deepest.value > scaled(rig, MOTION_LIMITS.groundPenetration)) {
+    return result('groundContact', true, `${deepest.foot} sinks ${round(deepest.value)} studs into the ground at ${seconds(deepest.time)}; limit ${scaledText(rig, MOTION_LIMITS.groundPenetration)}${note}`, measured);
   }
   if (!gait) {
-    return result('groundContact', false, `no foot sinks more than ${round(deepest.value)} studs into the ground; a foot is down for ${Math.round(share * 100)}% of it`, measured);
+    return result('groundContact', false, `no foot sinks more than ${round(deepest.value)} studs into the ground; a foot is down for ${Math.round(share * 100)}% of it${note}`, measured);
   }
   if (share < MOTION_LIMITS.groundedShare) {
-    return result('groundContact', true, `a foot touches the ground for only ${Math.round(share * 100)}% of the gait; needs ${Math.round(MOTION_LIMITS.groundedShare * 100)}%`, measured);
+    return result('groundContact', true, `a foot touches the ground for only ${Math.round(share * 100)}% of the gait; needs ${Math.round(MOTION_LIMITS.groundedShare * 100)}%${note}`, measured);
   }
-  return result('groundContact', false, `a foot is on the ground for ${Math.round(share * 100)}% of the gait`, measured);
+  return result('groundContact', false, `a foot is on the ground for ${Math.round(share * 100)}% of the gait${note}`, measured);
 }
 
 // In an in-place gait a planted foot moves backward (+Z) with the ground.
@@ -393,8 +409,10 @@ function checkGroundContact(data: Sampled, rig: Rig, gait: boolean): MotionCheck
 // while planted is sliding. Each corner of a foot is followed on its own, so a
 // foot rolling from heel to toe is not mistaken for one that moves.
 function checkFootSliding(data: Sampled, rate: number, rig: Rig): MotionCheckResult {
+  if (rig.feet.length === 0) return skipped('footSliding', 'not checked: the rig declares no feet');
   const points = footPoints(data, rig);
   const minimum = Math.ceil(MOTION_LIMITS.plantedSeconds * rate);
+  const contact = scaled(rig, MOTION_LIMITS.contactTolerance);
   let worst = { studs: 0, time: 0, foot: '' };
   let planted = 0;
   for (const foot of rig.feet) {
@@ -402,7 +420,7 @@ function checkFootSliding(data: Sampled, rate: number, rig: Rig): MotionCheckRes
     for (let corner = 0; corner < series[0].length; corner += 1) {
       let start = -1;
       for (let index = 0; index <= series.length; index += 1) {
-        const down = index < series.length && series[index][corner][1] <= MOTION_LIMITS.contactTolerance;
+        const down = index < series.length && series[index][corner][1] <= contact;
         if (down && start < 0) start = index;
         if (down || start < 0) continue;
         if (index - start >= minimum) {
@@ -421,10 +439,10 @@ function checkFootSliding(data: Sampled, rate: number, rig: Rig): MotionCheckRes
     }
   }
   const measured = { slide: round(worst.studs), plantedStretches: planted };
-  if (worst.studs > MOTION_LIMITS.footSlide) {
-    return result('footSliding', true, `${worst.foot} slides ${round(worst.studs)} studs while planted, by ${seconds(worst.time)}; limit ${MOTION_LIMITS.footSlide}`, measured);
+  if (worst.studs > scaled(rig, MOTION_LIMITS.footSlide)) {
+    return result('footSliding', true, `${worst.foot} slides ${round(worst.studs)} studs while planted, by ${seconds(worst.time)}; limit ${scaledText(rig, MOTION_LIMITS.footSlide)}${scaledNote(rig)}`, measured);
   }
-  return result('footSliding', false, planted ? `planted feet wander at most ${round(worst.studs)} studs` : 'no foot stays planted', measured);
+  return result('footSliding', false, `${planted ? `planted feet wander at most ${round(worst.studs)} studs` : 'no foot stays planted'}${scaledNote(rig)}`, measured);
 }
 
 /**
@@ -438,13 +456,14 @@ function checkFootSliding(data: Sampled, rate: number, rig: Rig): MotionCheckRes
 function measureGroundSpeed(data: Sampled, rate: number, rig: Rig): number | undefined {
   const points = footPoints(data, rig);
   const minimum = Math.ceil(MOTION_LIMITS.plantedSeconds * rate);
+  const contact = scaled(rig, MOTION_LIMITS.contactTolerance);
   const speeds: number[] = [];
   for (const foot of rig.feet) {
     const series = points.get(foot)!;
     for (let corner = 0; corner < series[0].length; corner += 1) {
       let start = -1;
       for (let index = 0; index <= series.length; index += 1) {
-        const down = index < series.length && series[index][corner][1] <= MOTION_LIMITS.contactTolerance;
+        const down = index < series.length && series[index][corner][1] <= contact;
         if (down && start < 0) start = index;
         if (down || start < 0) continue;
         if (index - start >= minimum) {
@@ -464,13 +483,15 @@ function measureGroundSpeed(data: Sampled, rate: number, rig: Rig): number | und
 }
 
 function checkGaitSymmetry(sequence: MotionSequence, data: Sampled, rig: Rig): MotionCheckResult {
+  const hips = rig.hips;
+  if (!hips) return skipped('gaitSymmetry', 'not checked: the rig declares no pair of hips to compare');
   if (!sequence.loop) return skipped('gaitSymmetry', 'a gait loops; this animation does not');
   // One cycle, without the last sample, which repeats the first.
   const count = data.poses.length - 1;
   if (count < 4) return skipped('gaitSymmetry', 'the animation is too short to compare the legs');
-  const [left, right] = rig.hips.map((name) => {
+  const [left, right] = hips.map((name) => {
     const hip = rig.joints.find((joint) => joint.name === name)!;
-    return data.poses.slice(0, count).map((pose) => bendDegrees(transformInParent(hip, pose.transforms.get(name)!).r));
+    return data.poses.slice(0, count).map((pose) => bendDegrees(transformInBody(hip, pose.transforms.get(name)!).r));
   });
   const amplitude = (series: number[]) => (Math.max(...series) - Math.min(...series)) / 2;
   const ampLeft = amplitude(left);

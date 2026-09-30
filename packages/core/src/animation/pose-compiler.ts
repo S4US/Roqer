@@ -7,6 +7,9 @@
 // spike showed that a part-keyed sequence drives AnimationConstraint joints as
 // it drives Motor6D ones, so nothing here writes joint objects.
 //
+// Every rig takes the same path: R15 and R6, and a rig read from a model,
+// whose limbs and hinges are what it declares (rig.ts).
+//
 // The whole animation is validated before anything is compiled, and every
 // problem is reported at once with its path, so a caller can fix them in one
 // pass. Nothing here touches Studio.
@@ -18,8 +21,9 @@ import {
   type PoseEasingDirection,
   type PoseEasingStyle,
 } from './easing.js';
-import { buildTracks, pointToWorld, poseRig, slerpRotation, transformFromParent, transformInParent, type Frame } from './motion.js';
-import { R15_RIG, type Rig, type RigJoint } from './r15-rig.js';
+import { buildTracks, pointToWorld, poseRig, restTurn, slerpRotation, transformFromBody, transformInBody, type Frame } from './motion.js';
+import { R15_RIG } from './r15-rig.js';
+import type { Rig, RigHinge, RigJoint, RigLimb } from './rig.js';
 import { RIGS } from './rigs.js';
 
 export { POSE_EASING_DIRECTIONS, POSE_EASING_STYLES, type PoseEasingDirection, type PoseEasingStyle };
@@ -33,7 +37,7 @@ export const POSE_LIMITS = {
   maxNameLength: 100,
   maxRotationDegrees: 360,
   maxRootOffsetStuds: 20,
-  /** How far from the HumanoidRootPart an aimAt target may be, in studs. */
+  /** How far from the root part an aimAt target may be, in studs. */
   maxAimAtStuds: 20,
   /** How far past a limb's reach an aimAt target may lie and still be reached. */
   aimAtToleranceStuds: 0.02,
@@ -80,12 +84,16 @@ export interface PoseEasing {
  * the rest pose.
  */
 export interface JointPoseSpec {
-  /** Degrees about the parent part's X, Y and Z axes, applied as CFrame.Angles does. */
+  /**
+   * Degrees about the body's X, Y and Z axes at rest, at the joint, applied
+   * as CFrame.Angles does: on R15 and R6, the parent part's axes.
+   */
   rotation?: [number, number, number];
   /**
-   * Shoulders and hips: the direction the limb points, as [right, up, forward]
-   * in the parent part's frame (the character's, while the torso is upright).
-   * [0, -1, 0] hangs it at rest.
+   * Shoulders and hips, or a rig's declared limbs: the direction the limb
+   * points, as [right, up, forward] in the body's axes at rest, carried by
+   * the parent part (the character's, while the torso is upright).
+   * [0, -1, 0] hangs an arm or leg at rest.
    */
   aim?: [number, number, number];
   /**
@@ -93,13 +101,14 @@ export interface JointPoseSpec {
    * Defaults to forward for arms and back for legs, as they fold at rest.
    */
   bendToward?: [number, number, number];
-  /** Elbows and knees: how far the joint flexes, in degrees; 0 is straight. */
+  /** Elbows and knees, or a rig's declared hinges: how far the joint flexes, in degrees; 0 is straight. */
   bend?: number;
   /**
-   * Shoulders and hips: a point, in studs as [right, up, forward] from the
-   * HumanoidRootPart's centre, that the limb's end reaches: the wrist or
-   * ankle on R15, which bends the elbow or knee to reach it, or the far end
-   * of the block on R6. `bendToward` turns the elbow or knee as with `aim`.
+   * Shoulders and hips, or a rig's declared limbs: a point, in studs as
+   * [right, up, forward] from the root part's centre, that the limb's end
+   * reaches: the wrist or ankle on R15, which bends the elbow or knee to
+   * reach it, or the far end of the block on R6. `bendToward` turns the elbow
+   * or knee as with `aim`.
    */
   aimAt?: [number, number, number];
   /**
@@ -108,7 +117,7 @@ export interface JointPoseSpec {
    * Kept there between two keys that both grip, as the weapon moves.
    */
   grip?: number;
-  /** Studs. Only the Root joint takes one: it offsets the whole body. */
+  /** Studs. Only the root joint (Root on R15 and R6) takes one: it offsets the whole body. */
   position?: [number, number, number];
   easing?: PoseEasing;
 }
@@ -136,7 +145,8 @@ export interface PoseKeyframeSpec {
 
 export interface PoseAnimationSpec {
   name: string;
-  rig: Rig['name'];
+  /** R15, R6, or the path of a model whose rig was read from Studio. */
+  rig: string;
   /** Defaults to false. */
   loop?: boolean;
   /** Defaults to Action, as a new KeyframeSequence does. */
@@ -186,7 +196,7 @@ export interface CompiledKeyframe {
 
 export interface KeyframeSequenceDescription {
   name: string;
-  rig: Rig['name'];
+  rig: string;
   loop: boolean;
   priority: AnimationPriority;
   /** The last keyframe's time, in seconds. */
@@ -247,34 +257,37 @@ function robloxDirection(value: readonly [number, number, number]): Vec {
   return [value[0], value[1], -value[2]];
 }
 
-/**
- * The limbs `aim` and `bend` understand. `fold` is where the limb's lower
- * half swings, in the upper part's own frame, when the elbow or knee flexes:
- * a forearm folds forward (-Z), a shin back (+Z). `defaultBend` is the fold
- * as [right, up, forward], used when a pose gives no `bendToward`.
- */
-const LIMBS: Readonly<Record<string, { fold: Vec; defaultBend: Vec }>> = {
-  LeftShoulder: { fold: [0, 0, -1], defaultBend: [0, 0, 1] },
-  RightShoulder: { fold: [0, 0, -1], defaultBend: [0, 0, 1] },
-  LeftHip: { fold: [0, 0, 1], defaultBend: [0, 0, -1] },
-  RightHip: { fold: [0, 0, 1], defaultBend: [0, 0, -1] },
-};
-/** The hinges `bend` understands, and the sign of the X rotation that flexes each. */
-const HINGES: Readonly<Record<string, 1 | -1>> ={ LeftElbow: 1, RightElbow: 1, LeftKnee: -1, RightKnee: -1 };
+/** How errors name the limbs `aim` and `aimAt` work on. */
+function limbWords(rig: Rig): string {
+  if (rig.words) return rig.words.limbs;
+  const names = Object.keys(rig.limbs);
+  return names.length > 0 ? `the limbs this rig declares, ${names.join(', ')}` : 'declared limbs, and this rig declares none';
+}
+
+/** How errors name the hinges `bend` works on. */
+function hingeWords(rig: Rig): string {
+  if (rig.words) return rig.words.hinges;
+  const names = Object.keys(rig.hinges);
+  return names.length > 0 ? `the hinges this rig declares, ${names.join(', ')}` : 'declared hinges, and this rig declares none';
+}
+
+/** The turn that flexes a hinge by `degrees`, about its axis in the body's axes. */
+function hingeMatrix(hinge: RigHinge, degrees: number): Matrix3 {
+  const turn = hinge.flex * degrees;
+  return eulerMatrix(hinge.axis === 'X' ? [turn, 0, 0] : hinge.axis === 'Y' ? [0, turn, 0] : [0, 0, turn]);
+}
 
 /**
- * The rotation that points a limb's long axis (-Y in its own frame) along
- * `aim` and turns its fold toward `bendToward`, both [right, up, forward] in
- * the parent part's frame. The fold is taken square to the aim; when the two
- * run together, the limb's usual fold is used, then up, then back.
+ * The rotation that points a limb's long axis along `aim` and turns its fold
+ * toward `bendToward`, both [right, up, forward] in the body's axes. The fold
+ * is taken square to the aim; when the two run together, the limb's usual
+ * fold is used, then up, then back.
  */
-export function aimRotation(jointName: string, aim: readonly [number, number, number], bendToward?: readonly [number, number, number]): Matrix3 {
-  const limb = LIMBS[jointName];
-  if (!limb) throw new Error(`${jointName} cannot aim`);
+export function aimRotation(limb: RigLimb, aim: readonly [number, number, number], bendToward?: readonly [number, number, number]): Matrix3 {
   const d = scale3(robloxDirection(aim), 1 / length3(robloxDirection(aim)));
   const candidates: Vec[] = [
     ...(bendToward ? [robloxDirection(bendToward)] : []),
-    robloxDirection(limb.defaultBend),
+    [...limb.fold] as Vec,
     [0, 1, 0],
     [0, 0, 1],
   ];
@@ -287,8 +300,9 @@ export function aimRotation(jointName: string, aim: readonly [number, number, nu
     }
   }
   // Map the limb's own axes (long axis, fold, and their cross) onto the aim's.
-  const long: Vec = [0, -1, 0];
-  const local = [long, limb.fold, cross3(long, limb.fold)];
+  const long = [...limb.axis] as Vec;
+  const folds = [...limb.fold] as Vec;
+  const local = [long, folds, cross3(long, folds)];
   const target = [d, fold, cross3(d, fold)];
   const matrix = [0, 0, 0, 0, 0, 0, 0, 0, 0];
   for (let k = 0; k < 3; k += 1) {
@@ -470,8 +484,8 @@ function parseJoints(value: unknown, rig: Rig, path: string, issues: Issues, all
         grip = { along: pose.grip, ...(toward ? { toward: robloxDirection(toward) } : {}), path: `${jointPath}.grip` };
       }
     } else if (pose.aimAt !== undefined) {
-      if (!LIMBS[joint.name] || !rig.limbs[joint.name]) {
-        issues.add(jointPath, 'aimAt works on shoulders and hips; use rotation here');
+      if (!rig.limbs[joint.name]) {
+        issues.add(jointPath, `aimAt works on ${limbWords(rig)}; use rotation here`);
       } else {
         const target = parseVector(pose.aimAt, POSE_LIMITS.maxAimAtStuds, 'studs', `${jointPath}.aimAt`, issues);
         const toward = pose.bendToward === undefined ? undefined : parseVector(pose.bendToward, 1e6, 'units', `${jointPath}.bendToward`, issues);
@@ -479,8 +493,9 @@ function parseJoints(value: unknown, rig: Rig, path: string, issues: Issues, all
         else aimAt = { target: robloxDirection(target), ...(toward ? { toward: robloxDirection(toward) } : {}), path: `${jointPath}.aimAt` };
       }
     } else if (pose.aim !== undefined || pose.bendToward !== undefined) {
-      if (!LIMBS[joint.name]) {
-        issues.add(jointPath, 'aim and bendToward work on shoulders and hips; use rotation here');
+      const limb = rig.limbs[joint.name];
+      if (!limb) {
+        issues.add(jointPath, `aim and bendToward work on ${limbWords(rig)}; use rotation here`);
       } else if (pose.aim === undefined) {
         issues.add(`${jointPath}.bendToward`, 'goes with aim, aimAt or grip');
       } else {
@@ -488,30 +503,32 @@ function parseJoints(value: unknown, rig: Rig, path: string, issues: Issues, all
         const toward = pose.bendToward === undefined ? undefined : parseVector(pose.bendToward, 1e6, 'units', `${jointPath}.bendToward`, issues);
         if (length3(aim) < 1e-6) issues.add(`${jointPath}.aim`, 'must point somewhere: [right, up, forward], not all zero');
         else if (toward !== undefined && length3(toward) < 1e-6) issues.add(`${jointPath}.bendToward`, 'must point somewhere: [right, up, forward], not all zero');
-        else rotation = aimRotation(joint.name, aim, toward);
+        else rotation = aimRotation(limb, aim, toward);
       }
     }
     if (pose.bend !== undefined) {
-      const flex = HINGES[joint.name];
-      if (!flex) {
-        issues.add(`${jointPath}.bend`, 'works on elbows and knees; use rotation here');
+      const hinge = rig.hinges[joint.name];
+      if (!hinge) {
+        issues.add(`${jointPath}.bend`, `works on ${hingeWords(rig)}; use rotation here`);
       } else if (typeof pose.bend !== 'number' || !Number.isFinite(pose.bend) || Math.abs(pose.bend) > POSE_LIMITS.maxRotationDegrees) {
         issues.add(`${jointPath}.bend`, `must be degrees within ±${POSE_LIMITS.maxRotationDegrees}; 0 is straight`);
       } else {
-        rotation = eulerMatrix([flex * pose.bend, 0, 0]);
+        rotation = hingeMatrix(hinge, pose.bend);
       }
     }
     let position: readonly [number, number, number] = [0, 0, 0];
     if (pose.position !== undefined) {
-      if (joint.name === rig.joints[0].name) {
+      if (joint.name === rig.rootJoint) {
         position = parseVector(pose.position, POSE_LIMITS.maxRootOffsetStuds, 'studs', `${jointPath}.position`, issues);
       } else {
-        issues.add(`${jointPath}.position`, `only ${rig.joints[0].name} takes a position; other joints only rotate`);
+        issues.add(`${jointPath}.position`, rig.rootJoint
+          ? `only ${rig.rootJoint} takes a position; other joints only rotate`
+          : `no one joint moves this rig's whole body (its ${rig.rootPart} holds several), so none takes a position; joints only rotate`);
       }
     }
-    // The pose is written in the parent part's axes; a joint whose frame is
-    // turned (R6, the weapon grip) takes it in its own.
-    const transform = transformFromParent(joint, { p: [...position], r: [...rotation] as [number, number, number, number, number, number, number, number, number] });
+    // The pose is written in the body's axes at rest; a joint whose frame is
+    // turned there (R6, the weapon grip, a model's own) takes it in its own.
+    const transform = transformFromBody(joint, { p: [...position], r: [...rotation] as [number, number, number, number, number, number, number, number, number] });
     joints.set(joint.childPart, {
       joint,
       rotation: transform.r,
@@ -586,10 +603,12 @@ function checkFirstKeys(keyframes: ParsedKeyframe[], complete: boolean, rig: Rig
   }
 }
 
-/** Rx(degrees): the turn a hinge flexes by. */
-function hingeTurn(degrees: number): Vec[] {
+/** The turn a hinge flexes by about its axis, as rows: Rx(degrees) for an elbow or knee. */
+function hingeTurn(axis: RigHinge['axis'], degrees: number): Vec[] {
   const radians = (degrees * Math.PI) / 180;
   const c = Math.cos(radians), s = Math.sin(radians);
+  if (axis === 'Y') return [[c, 0, s], [0, 1, 0], [-s, 0, c]];
+  if (axis === 'Z') return [[c, -s, 0], [s, c, 0], [0, 0, 1]];
   return [[1, 0, 0], [0, c, -s], [0, s, c]];
 }
 
@@ -607,7 +626,10 @@ type Solved = {
 
 /** The way the body faces at a time, flat on the ground: the forward a foot is laid along. */
 function heading(posed: ReturnType<typeof poseRig>, rig: Rig): Vec {
-  const r = posed.parts.get(rig.body)!.r;
+  // The body part's -Z, unless the part rests turned in the body.
+  const rest = restTurn(rig, rig.body);
+  const posedBody = posed.parts.get(rig.body)!.r;
+  const r = rest ? multiplyRotation(posedBody, transposeRotation(rest)) : posedBody;
   const forward: Vec = [-r[2], 0, -r[8]];
   return length3(forward) > 1e-6 ? scale3(forward, 1 / length3(forward)) : [0, 0, -1];
 }
@@ -633,10 +655,25 @@ function transposeRotation(a: readonly number[]): Matrix3 {
   return [a[0], a[3], a[6], a[1], a[4], a[7], a[2], a[5], a[8]];
 }
 
+/** A vector turned by a part's rest turn, or as it is when the part rests upright. */
+function turned(rest: readonly number[] | undefined, v: Vec): Vec {
+  return rest ? apply([[rest[0], rest[1], rest[2]], [rest[3], rest[4], rest[5]], [rest[6], rest[7], rest[8]]], v) : v;
+}
+
 /**
- * Turns a shoulder or hip, and bends its elbow or knee on R15, so the limb's
- * end lands on `target` with the body posed as `posed`. Returns why not when
- * the target is out of the limb's reach.
+ * A joint's child part's orientation, from its parent part's and the joint's
+ * Transform: parent * C0 * Transform * C1^-1, rotations only.
+ */
+function childTurn(parent: readonly number[], joint: RigJoint, transform: readonly number[]): Matrix3 {
+  const framed = joint.parentRotation ? multiplyRotation(parent, joint.parentRotation) : parent;
+  const moved = multiplyRotation(framed, transform);
+  return joint.childRotation ? multiplyRotation(moved, transposeRotation(joint.childRotation)) : moved;
+}
+
+/**
+ * Turns a shoulder or hip, or a declared limb's root, and bends its hinge
+ * where it has one, so the limb's end lands on `target` with the body posed
+ * as `posed`. Returns why not when the target is out of the limb's reach.
  */
 function solveLimb(
   joint: RigJoint,
@@ -651,31 +688,35 @@ function solveLimb(
   const limb = rig.limbs[joint.name];
   const end = (hand ? limb.hand : undefined) ?? limb.end;
   const hinge = limb.hinge ? rig.joints.find((candidate) => candidate.name === limb.hinge)! : undefined;
+  const bending = limb.hinge ? rig.hinges[limb.hinge] : undefined;
   const parent = posed.parts.get(joint.parentPart)!;
   const pivot = pointToWorld(parent, joint.parentOffset);
   const away: Vec = [0, 1, 2].map((axis) => target[axis] - pivot[axis]) as Vec;
-  // The target in the parent part's axes, which the pose is written in.
+  // The target in the parent part's axes, then the body's axes at rest,
+  // which the pose is written in: the same on R15 and R6.
   const r = parent.r;
-  const reach: Vec = [
+  const reach = turned(restTurn(rig, joint.parentPart), [
     r[0] * away[0] + r[3] * away[1] + r[6] * away[2],
     r[1] * away[0] + r[4] * away[1] + r[7] * away[2],
     r[2] * away[0] + r[5] * away[1] + r[8] * away[2],
-  ];
+  ]);
   const distance = length3(reach);
 
-  // The limb's end from its pivot, in its own frame, as a bend puts it. Every
-  // limb hangs in its parent's orientation at rest, so its own frame's axes
-  // start as the parent's.
+  // The limb's end from its pivot, in the body's axes, as a bend puts it:
+  // each part's offsets turned as the part rests, which on R15 and R6, whose
+  // limbs hang in their parents' orientation, is not at all.
   const pivotInLimb = joint.childOffset as Vec;
+  const upperRest = restTurn(rig, joint.childPart);
+  const lowerRest = hinge ? restTurn(rig, hinge.childPart) : undefined;
   const endAt = (bend: number): Vec => {
-    if (!hinge) return [0, 1, 2].map((axis) => end[axis] - pivotInLimb[axis]) as Vec;
-    const upper: Vec = [0, 1, 2].map((axis) => hinge.parentOffset[axis] - pivotInLimb[axis]) as Vec;
-    const lower = apply(hingeTurn(HINGES[hinge.name] * bend), [0, 1, 2].map((axis) => end[axis] - hinge.childOffset[axis]) as Vec);
+    if (!hinge || !bending) return turned(upperRest, [0, 1, 2].map((axis) => end[axis] - pivotInLimb[axis]) as Vec);
+    const upper = turned(upperRest, [0, 1, 2].map((axis) => hinge.parentOffset[axis] - pivotInLimb[axis]) as Vec);
+    const lower = apply(hingeTurn(bending.axis, bending.flex * bend), turned(lowerRest, [0, 1, 2].map((axis) => end[axis] - hinge.childOffset[axis]) as Vec));
     return [0, 1, 2].map((axis) => upper[axis] + lower[axis]) as Vec;
   };
   const longest = length3(endAt(0));
-  const shortest = hinge ? length3(endAt(POSE_LIMITS.maxAimAtBend)) : 0;
-  const what = joint.name.endsWith('Hip') ? 'leg' : 'arm';
+  const shortest = hinge && bending ? length3(endAt(POSE_LIMITS.maxAimAtBend)) : 0;
+  const what = !rig.words ? 'limb' : joint.name.endsWith('Hip') ? 'leg' : 'arm';
   const studs = (value: number) => Math.round(value * 100) / 100;
   if (distance > longest + POSE_LIMITS.aimAtToleranceStuds) {
     return `is ${studs(distance)} studs from ${joint.name}; the ${what} reaches ${studs(longest)} at most at ${studs(time)} s`;
@@ -685,7 +726,7 @@ function solveLimb(
   }
   // The bend whose reach is the distance: reach shrinks as the hinge folds.
   let bend = 0;
-  if (hinge && distance < longest) {
+  if (hinge && bending && distance < longest) {
     let low = 0;
     let high: number = POSE_LIMITS.maxAimAtBend;
     for (let step = 0; step < 60; step += 1) {
@@ -701,13 +742,13 @@ function solveLimb(
   const local = endAt(bend);
   const a = scale3(local, 1 / length3(local));
   const d = scale3(reach, 1 / distance);
-  const spec = LIMBS[joint.name];
+  const fold = [...limb.fold] as Vec;
   const square = (candidate: Vec, axis: Vec): Vec | undefined => {
     const v: Vec = [0, 1, 2].map((index) => candidate[index] - dot3(candidate, axis) * axis[index]) as Vec;
     return length3(v) > 1e-3 ? scale3(v, 1 / length3(v)) : undefined;
   };
-  const p = square(spec.fold, a) ?? square([0, 1, 0], a) ?? square([0, 0, 1], a)!;
-  const f = [toward, robloxDirection(spec.defaultBend), [0, 1, 0] as Vec, [0, 0, 1] as Vec]
+  const p = square(fold, a) ?? square([0, 1, 0], a) ?? square([0, 0, 1], a)!;
+  const f = [toward, [...limb.fold] as Vec, [0, 1, 0] as Vec, [0, 0, 1] as Vec]
     .filter((candidate): candidate is Vec => candidate !== undefined)
     .map((candidate) => square(candidate, d))
     .find((candidate) => candidate !== undefined)!;
@@ -719,16 +760,22 @@ function solveLimb(
       for (let j = 0; j < 3; j += 1) turn[i * 3 + j] += targetAxes[k][i] * localAxes[k][j];
     }
   }
-  const rotation = transformFromParent(joint, { p: [0, 0, 0], r: turn as Frame['r'] }).r;
-  const hingeRotation = hinge ? eulerMatrix([HINGES[hinge.name] * bend, 0, 0]) : undefined;
+  const rotation = transformFromBody(joint, { p: [0, 0, 0], r: turn as Frame['r'] }).r;
+  const hingeRotation = hinge && bending ? transformFromBody(hinge, { p: [0, 0, 0], r: [...hingeMatrix(bending, bend)] as Frame['r'] }).r : undefined;
 
   // Lay the foot flat, facing footForward: the ankle turns the foot from the
-  // shin's orientation to that one. Every R15 leg joint's frame is unturned.
+  // shin's orientation to the foot's at rest, turned to face footForward.
+  // Every R15 leg joint's frame is unturned, and every R15 part rests upright.
   let foot: Solved['foot'];
   if (limb.foot && hinge && hingeRotation) {
     const ankle = rig.joints.find((candidate) => candidate.name === limb.foot)!;
-    const shin = multiplyRotation(multiplyRotation(parent.r, rotation), hingeRotation);
-    foot = { joint: ankle, rotation: multiplyRotation(transposeRotation(shin), flatFacing(footForward)) };
+    const shin = childTurn(childTurn(parent.r, joint, rotation), hinge, hingeRotation);
+    const footRest = restTurn(rig, ankle.childPart);
+    const flat = footRest ? multiplyRotation(flatFacing(footForward), footRest) : flatFacing(footForward);
+    const inShin = multiplyRotation(transposeRotation(shin), flat);
+    // The ankle's Transform, in its own frame: C0^-1 * that * C1.
+    const framed = ankle.parentRotation ? multiplyRotation(transposeRotation(ankle.parentRotation), inShin) : inShin;
+    foot = { joint: ankle, rotation: ankle.childRotation ? multiplyRotation(framed, ankle.childRotation) : framed };
   }
   return {
     rotation,
@@ -1043,11 +1090,12 @@ function splitTurns(
         // For an arm or leg, say when most of the turn is the limb twisting
         // about itself: the usual cause is a raised arm left to fold its
         // elbow forward, which bendToward puts right.
+        const limb = rig.limbs[joint.name];
         const along = (rotation: Matrix3): Vec => {
-          const body = transformInParent(joint, { p: [0, 0, 0], r: [...rotation] as Frame['r'] }).r;
-          return [-body[1], -body[4], -body[7]];
+          const body = transformInBody(joint, { p: [0, 0, 0], r: [...rotation] as Frame['r'] }).r;
+          return apply([[body[0], body[1], body[2]], [body[3], body[4], body[5]], [body[6], body[7], body[8]]], [...limb.axis] as Vec);
         };
-        const swing = LIMBS[joint.name]
+        const swing = limb
           ? (Math.acos(Math.min(1, Math.max(-1, dot3(along(start.rotation), along(end.rotation))))) * 180) / Math.PI
           : undefined;
         issues.add(path, swing !== undefined && swing < POSE_LIMITS.maxSplitTurn - 10
@@ -1188,15 +1236,18 @@ function compileKeyframe(
 /**
  * Validates a pose description and compiles it. Returns every problem found
  * when it is invalid; never returns a partial sequence.
+ *
+ * `rig` is R15 or R6, or, given `model`, that rig read from a model in
+ * Studio, which the description names by the model's path.
  */
-export function compilePoseAnimation(input: unknown): PoseCompileResult {
+export function compilePoseAnimation(input: unknown, model?: Rig): PoseCompileResult {
   const issues = new Issues();
   if (!isRecord(input)) return { ok: false, errors: ['animation: must be an object'] };
   checkKeys(input, ['name', 'rig', 'loop', 'priority', 'easing', 'keyframes'], 'animation', issues);
 
   const name = parseName(input.name, 'name', issues);
-  const rig = typeof input.rig === 'string' ? RIGS.get(input.rig) : undefined;
-  if (!rig) issues.add('rig', `must be one of ${[...RIGS.keys()].join(', ')}`);
+  const rig = typeof input.rig !== 'string' ? undefined : model?.name === input.rig ? model : RIGS.get(input.rig);
+  if (!rig) issues.add('rig', `must be ${[...RIGS.keys()].join(' or ')}, or the path of a rigged Model in Studio`);
   if (input.loop !== undefined && typeof input.loop !== 'boolean') issues.add('loop', 'must be true or false');
   const priority = input.priority === undefined
     ? 'Action'

@@ -70,7 +70,7 @@ describe('prepareAnimation', () => {
         'locomotion: must be true or false',
         'grounded: must be true or false',
         'waive: unknown check "gait"; checks are jointLimits, velocity, rootDrift, loopContinuity, groundContact, footSliding, gaitSymmetry',
-        'rig: must be one of R15, R6',
+        'rig: must be R15 or R6, or the path of a rigged Model in Studio',
       ],
     });
   });

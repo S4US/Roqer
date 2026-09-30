@@ -4,7 +4,8 @@
 // sheet and the 3D preview draw whichever rig is current, so the model sees
 // the same figure the user plays back.
 
-import { R15_RIG, type Rig, type Vec3 } from './r15-rig.js';
+import { R15_RIG } from './r15-rig.js';
+import type { Rig, Vec3 } from './rig.js';
 
 export type Rgb = readonly [number, number, number];
 
@@ -12,12 +13,14 @@ export type Rgb = readonly [number, number, number];
 export const RIG_COLOR: Rgb = [214, 217, 222];
 
 /**
- * The body's parts, drawn in every preview: every part but the
- * HumanoidRootPart, which Roblox hides, and a held weapon's.
+ * The body's parts, drawn in every preview: every part but the hidden ones
+ * (on a character, the HumanoidRootPart, which Roblox hides) and a held
+ * weapon's.
  */
 export function drawnParts(rig: Rig = R15_RIG): string[] {
   const held = new Set(heldParts(rig));
-  return Object.keys(rig.parts).filter((part) => part !== rig.rootPart && !held.has(part));
+  const hidden = new Set(rig.hidden ?? [rig.rootPart]);
+  return Object.keys(rig.parts).filter((part) => !hidden.has(part) && !held.has(part));
 }
 
 /** The parts of optional joints, such as the weapon: drawn only when an animation moves them. */
@@ -25,7 +28,7 @@ export function heldParts(rig: Rig = R15_RIG): string[] {
   return rig.joints.filter((joint) => joint.optional).map((joint) => joint.childPart);
 }
 
-/** Where the ground is, in the HumanoidRootPart's frame. */
+/** Where the ground is, in the root part's frame. */
 export function groundHeight(rig: Rig = R15_RIG): number {
   return rig.ground;
 }
