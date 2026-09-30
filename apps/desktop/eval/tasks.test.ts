@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   ANIMATION_ALL_CHECKS_PASSED, ANIMATION_CHECKED_AS_GAIT, ANIMATION_GAIT_CHECKS_LABEL, ANIMATION_MOTION_CHECKS_LABEL,
   ANIMATION_NAME_LABEL, ANIMATION_PLAYED_FROM_LABEL, ANIMATION_PLAYED_PUBLISHED, ANIMATION_PREVIEW_TITLE, animationSlotLabel,
+  MODEL_MOVED_BY_GAME, MODEL_MOVED_BY_LABEL, MODEL_MOVED_BY_VERIFY, MODEL_WHILE_MOVING_LABEL, MODEL_WHILE_STANDING_LABEL,
   type RunEvidence,
 } from "../shared/run-events";
 import { findEvalTask, needsUploadKey, type EvalOracleInput } from "./tasks";
@@ -472,9 +473,10 @@ test("T12 is the only task that needs the Blender worker", () => {
   assert.equal(findEvalTask("T10-world-lowpoly-village")?.needsBlender, undefined);
 });
 
-test("T15 and a Blender run check the bridge's upload key first, and other tasks do not", () => {
+test("T15, T18 and a Blender run check the bridge's upload key first, and other tasks do not", () => {
   const task = (id: string) => findEvalTask(id)!;
   assert.equal(needsUploadKey([task("T15-animation-run")], false), true);
+  assert.equal(needsUploadKey([task("T18-npc-patrol")], false), true);
   assert.equal(needsUploadKey([task("T12-model-prop")], true), true);
   // Skipped without --blender, so it uploads nothing.
   assert.equal(needsUploadKey([task("T12-model-prop")], false), false);
@@ -645,4 +647,91 @@ test("T15 wants the published asset seen playing, a 3D preview, and a gait whose
   assert.match(animationRun({}, withMetadata(evidence, "e2", ANIMATION_GAIT_CHECKS_LABEL, "Not checked as a gait")).detail, /as a gait/);
   assert.match(animationRun({ sequences: 0 }).detail, /No KeyframeSequence/);
   assert.match(animationRun({}, evidence, false).detail, /completion gate/);
+});
+
+const OWNED = { id: 42, type: "User", assetType: 24 };
+const GUARD_PROBE = {
+  guard: "Model", humanoid: true, loader: "Script", enabled: true, idle: "601", walk: "602",
+  idleOwner: OWNED, walkOwner: OWNED, walkGroundSpeed: 2.21, place: { id: 42, type: "User" }, sequences: 2,
+};
+
+/** The evidence a finished guard run records, labelled as the Studio tool runner labels it. */
+function patrolEvidence(): RunEvidence[] {
+  const built = (id: string, name: string, gait: boolean): RunEvidence => ({
+    id, kind: "verification", changeKind: "instance", title: `game.ServerStorage.WorkbenchEval.${name}`, passed: true,
+    metadata: [
+      { label: ANIMATION_MOTION_CHECKS_LABEL, value: ANIMATION_ALL_CHECKS_PASSED },
+      ...(gait ? [{ label: ANIMATION_GAIT_CHECKS_LABEL, value: ANIMATION_CHECKED_AS_GAIT }] : []),
+    ],
+  });
+  return [
+    {
+      id: "p1", kind: "inspection", title: ANIMATION_PREVIEW_TITLE, passed: true, imageDataUrl: "data:image/png;base64,QUJD",
+      modelPreviewId: "a1b2c3d4-0", metadata: [{ label: ANIMATION_NAME_LABEL, value: "Walk" }],
+    },
+    built("p2", "Idle", false),
+    built("p3", "Walk", true),
+    { id: "p4", kind: "verification", changeKind: "asset", title: "rbxassetid://601", passed: true },
+    { id: "p5", kind: "verification", changeKind: "asset", title: "rbxassetid://602", passed: true },
+    { id: "p6", kind: "verification", changeKind: "instance", title: "game.Workspace.WorkbenchEvalGuard.RoqerModelAnimate", passed: true },
+    {
+      id: "p7", kind: "playtest", title: "game.Workspace.WorkbenchEvalGuard in the playtest", passed: true,
+      metadata: [
+        { label: MODEL_MOVED_BY_LABEL, value: MODEL_MOVED_BY_GAME },
+        { label: MODEL_WHILE_MOVING_LABEL, value: "walk 100%" },
+        { label: MODEL_WHILE_STANDING_LABEL, value: "idle 90%, walk 10%" },
+      ],
+    },
+  ];
+}
+
+function patrol(probe: Record<string, unknown> = {}, evidence: RunEvidence[] = patrolEvidence(), verified = true) {
+  return verdict("T18-npc-patrol", {
+    probe: { ...GUARD_PROBE, ...probe }, outcome: "completed", verified, toolCalls: [], changedTargets: [], evidence,
+  });
+}
+
+test("T18 passes a guard whose own idle and walk played through its own patrol", () => {
+  const result = patrol();
+  assert.equal(result.passed, true, result.detail);
+});
+
+test("T18 wants the guard's loader holding an idle and a walk this run published, owned by the place's owner, the walk paced", () => {
+  assert.match(patrol({}, patrolEvidence().filter((item) => item.changeKind !== "asset")).detail, /No animation was published/);
+  assert.match(patrol({ guard: false }).detail, /no WorkbenchEvalGuard/);
+  assert.match(patrol({ humanoid: false }).detail, /not a Model with a Humanoid/);
+  assert.match(patrol({ loader: false }).detail, /no RoqerModelAnimate loader/);
+  assert.match(patrol({ idle: undefined }).detail, /idle is not wired/);
+  // Roblox's default walk, which rig puts in the loader, is not this run's.
+  assert.match(patrol({ walk: "507777826" }).detail, /walk holds 507777826, which this run did not publish/);
+  assert.match(patrol({ walkOwner: { ...OWNED, id: 7 } }).detail, /not the place's owner/);
+  assert.match(patrol({ idleOwner: undefined }).detail, /could not be confirmed/);
+  assert.match(patrol({ walkGroundSpeed: false }).detail, /without its ground speed/);
+});
+
+test("T18 wants a playtest after the last wiring that watched the guard's own patrol play the walk and then the idle", () => {
+  const evidence = patrolEvidence();
+  assert.match(patrol({}, withMetadata(evidence, "p7", MODEL_MOVED_BY_LABEL, MODEL_MOVED_BY_VERIFY)).detail, /No playtest after the last wiring/);
+  assert.match(patrol({}, withMetadata(evidence, "p7", MODEL_WHILE_STANDING_LABEL, "nothing 100%")).detail, /No playtest after the last wiring/);
+  assert.match(patrol({}, withMetadata(evidence, "p7", MODEL_WHILE_MOVING_LABEL, "idle 100%")).detail, /No playtest after the last wiring/);
+  assert.match(patrol({}, evidence.map((item) => item.id === "p7" ? { ...item, passed: false } : item)).detail, /No playtest/);
+  // A playtest before the last wire saw states that are no longer wired.
+  const [p1, p2, p3, p4, p5, p6, p7] = evidence;
+  assert.match(patrol({}, [p1, p2, p3, p4, p5, p7, p6]).detail, /No playtest after the last wiring/);
+});
+
+test("T18 wants a 3D preview, both sequences kept with every check passed, a gait among them, and the completion gate", () => {
+  const evidence = patrolEvidence();
+  assert.match(patrol({}, evidence.map((item) => item.id === "p1" ? { ...item, modelPreviewId: undefined } : item)).detail, /No 3D preview/);
+  assert.match(patrol({}, evidence.filter((item) => item.id !== "p2")).detail, /Only one animation was built/);
+  assert.match(
+    patrol({}, withMetadata(evidence, "p2", ANIMATION_MOTION_CHECKS_LABEL, "Passed, with jointLimits waived")).detail,
+    /last build of game\.ServerStorage\.WorkbenchEval\.Idle: Passed, with jointLimits waived/,
+  );
+  assert.match(patrol({}, withMetadata(evidence, "p3", ANIMATION_GAIT_CHECKS_LABEL, "Not checked as a gait")).detail, /checked as a gait/);
+  assert.match(patrol({ sequences: 1 }).detail, /not both kept/);
+  assert.match(patrol({}, evidence, false).detail, /completion gate/);
+  // A failed build of a sequence that a later build replaced does not count against it.
+  const failedFirst = { ...evidence[1], id: "p0", passed: false };
+  assert.equal(patrol({}, [failedFirst, ...evidence]).passed, true);
 });

@@ -1,6 +1,6 @@
 # Roqer agent evaluation harness
 
-A production-path evaluation harness with deterministic place reset, fifteen seeded
+A production-path evaluation harness with deterministic place reset, sixteen seeded
 tasks, numeric per-turn telemetry for Roqer's own agent loop, and a JSONL
 trajectory per run.
 
@@ -53,7 +53,8 @@ describes an interrupted place, not the agent's result.
 tasks also destroy and rebuild `Workspace.WorkbenchEvalIsland` or
 `Workspace.WorkbenchEvalMeadow`, `Workspace.WorkbenchEvalRepair`, or
 `Workspace.WorkbenchEvalVillage`, `Workspace.WorkbenchEvalAdventure`, or `Workspace.WorkbenchEvalCart`; T8 adds
-Terrain that no reset removes, and T15 removes `ServerScriptService.RoqerAnimate`, the loader that wires animations to characters.
+Terrain that no reset removes, T15 removes `ServerScriptService.RoqerAnimate`, the loader that wires animations to characters,
+and T18 destroys and rebuilds `Workspace.WorkbenchEvalPosts` and removes `Workspace.WorkbenchEvalGuard`.
 Point it at a scratch place, never at real work.
 
 Results land in `eval/results/<taskId>.jsonl` (gitignored). Each file is one
@@ -85,6 +86,7 @@ prompt processing, and only the second is something this end can fix.
 | `T13-reference-style` | a small map in the style of an attached reference image | the Blender-first map: reused Blender kits, flat materials where the reference is flat, visual meshes without full-detail collision, plateaus a player can stand on, its own spawn with the place's left alone, the palette in WorldSpec, a final screenshot and a playtest |
 | `T14-ui-polished-shop` | "Make a simulator themed shop UI… Make it polished." | the harness's own layout audit of the shop, in its own playtest, comes back clean; at least four buttons; a screenshot after the last interface write; the completion gate |
 | `T15-animation-run` | "Make a running animation and set it up in R15." | the animation plan's goal: a published animation the place's owner owns, wired to the run slot, seen playing in a playtest, a 3D preview, and a gait whose motion checks all passed |
+| `T18-npc-patrol` | "Add a guard NPC who walks back and forth between the two posts, with idle and walk animations of its own." | the creature plan's step 2 goal: an idle and a walk the run published, owned by the place's owner, in the guard's loader with the walk's ground speed; a playtest of the guard's own patrol, after the last wiring, playing the walk while it moved and the idle while it stood; a 3D preview; and every kept build's checks passed, one as a gait |
 
 T7 and T8 are a pair. Either alone rewards a fixed preference; together they
 measure whether the agent chooses its construction from the requested style.
@@ -214,6 +216,29 @@ not.
 npm run eval -- --task T15-animation-run --provider claude --model opus
 ```
 
+T18 is [the creature plan's](../../../docs/creature-plan.md) step 2 goal
+prompt. It names the guard, the posts and where the sequences go, so the reset
+owns them, and asks for animations "of its own", since `rig` gives a stock NPC
+Roblox's default idle, walk and run, which a run could leave in place. Its
+seed builds a raised walkway with the two posts, apart from the other tasks'
+builds, so the guard has ground of its own. It publishes two real animations,
+so it needs the same key as T15. Its conditions:
+
+- an idle and a walk that this run published and Roblox read back, in the
+  guard's `RoqerModelAnimate` loader, each an Animation owned by the place's
+  creator;
+- the walk wired with its ground speed, so the loader paces it;
+- a playtest, after the last wiring, in which `verify` watched the guard's own
+  scripts move it (not `verify` walking it) and its loader played the walk
+  while it moved and the idle while it stood;
+- a 3D preview;
+- the last build of each sequence passing every motion check, one of them
+  checked as a gait, and both sequences kept.
+
+```bash
+npm run eval -- --task T18-npc-patrol --provider claude --model opus
+```
+
 The oracles read the run's evidence as well as its tool calls. So that
 evidence matches the app's, the harness keeps each tool image with its
 evidence as the tool's own bytes; the app downsizes them with Electron, which
@@ -305,4 +330,4 @@ the reset-per-task harness above; no model-quality result is implied by its pres
   belong to whoever serves the model and are not inferred here.
 - No competitor baseline. "Roqer versus X" needs X driven through the same
   reset and oracles, which is a larger piece of work than this slice.
-- Fifteen tasks. T15 exists because the animation plan set its goal as one prompt with five conditions. T9 exists because the first recorded world baselines exposed the need for a measured local visual-repair loop, T10 and T11 because the world-building plan's village and large-map baselines had no scored form, T12 because the first real Blender run brought in a model at the wrong scale and in one colour, T13 because a live map built from a reference image came out far from it, and T14 because a live shop passed its own screenshot review with overlapping text; add another only when a real failure or an outstanding baseline motivates it.
+- Sixteen tasks. T15 exists because the animation plan set its goal as one prompt with five conditions, and T18 because the creature plan did the same for an NPC. T9 exists because the first recorded world baselines exposed the need for a measured local visual-repair loop, T10 and T11 because the world-building plan's village and large-map baselines had no scored form, T12 because the first real Blender run brought in a model at the wrong scale and in one colour, T13 because a live map built from a reference image came out far from it, and T14 because a live shop passed its own screenshot review with overlapping text; add another only when a real failure or an outstanding baseline motivates it.

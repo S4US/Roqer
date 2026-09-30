@@ -118,6 +118,41 @@ tells you that publishing needs a key.
    given, Roqer also confirms that the character's `Animate` script holds the
    published animation.
 
+## NPCs
+
+Roqer can also make an NPC and animate it, for "Add a guard NPC who walks
+back and forth between two posts".
+
+- **The body.** The agent makes Roblox's stock R15 or R6 body where the NPC
+  should stand, in one undo step. A stock body's `Animate` script is a
+  LocalScript, which runs only under a player, so an NPC that keeps it stands
+  still. Roqer leaves it out.
+- **The loader.** In its place, Roqer puts one Script inside the NPC,
+  `RoqerModelAnimate`. It plays the NPC's idle while it stands and its walk or
+  run while it moves, reading how fast its Humanoid moves, and cross-fades
+  between them. It runs on the server, so every player sees the same thing,
+  and every copy of the NPC carries it, so a spawner that clones the NPC needs
+  nothing else. It starts with Roblox's default idle, walk and run, which the
+  agent replaces with the NPC's own, published as for a character.
+  - As with `RoqerAnimate`, its code never changes and each animation is one
+    of its attributes. Replacing one needs the ID it holds now, and a loader
+    whose code was edited is left alone.
+- **Feet that keep pace.** For a walk or run, the check reports the speed
+  its feet travel backward, its ground speed. The loader plays a gait at the
+  NPC's speed divided by that, from half to twice its own pace, so the feet
+  do not slide. Outside that range they still do, so the agent sets the NPC's
+  `WalkSpeed` to suit its walk, or makes a faster walk. Roblox's defaults have
+  no known ground speed, so the loader plays them at their own pace.
+- **A playtest proves it.** On the playtest's server, Roqer walks the NPC to a
+  point, or watches your game's own scripts move it. It records which
+  animation the loader played: the walk while the NPC moved and the idle while
+  it stood, at the pace its speed needs. A failure says what to change, such as
+  the WalkSpeed.
+
+An attack or other one-shot is played by your game's script on the NPC's
+`Animator`; the animation skill shows how. Creatures with bodies of their own,
+such as a four-legged wolf, are planned in [the creature plan](creature-plan.md).
+
 ## In the chat
 
 The latest animation plays in the answer's previews card, with a play/pause
@@ -147,7 +182,10 @@ between versions ("Version 3 of 6"), and the newest is shown first.
   equipped (or, for a sheath, when the character spawns), because Roblox's
   own grip weld cannot be animated. The animation skill has the scripts.
 - Animations are `KeyframeSequence`s, not `CurveAnimation`s.
-- Wiring sets the default `Animate` script's slots. A game that plays its own
-  animations from its own scripts needs those scripts changed instead.
+- Wiring sets the default `Animate` script's slots, or an NPC's idle, walk and
+  run. A game that plays its own animations from its own scripts needs those
+  scripts changed instead.
+- NPCs are Roblox's stock R15 and R6 bodies. The loader paces a gait only when
+  it was wired with its ground speed, which R6 animations do not report.
 - An animation is made in Studio from its pose description. Animating in
   Blender is not supported yet.

@@ -1,7 +1,7 @@
 # Character animation with the `animation` tool
 
 Use this to author an R15 animation with the `animation` tool (check, build,
-publish, wire, verify). Start from the recipe closest to the request and change
+publish, wire, verify), and to animate an NPC (see [NPCs](#npcs)). Start from the recipe closest to the request and change
 it. Run `check` before `build`: it validates the format, runs the motion checks
 and returns a contact sheet, without touching Studio. Pass `locomotion: true`
 for a walk or run, and `grounded: true` for anything else done standing on
@@ -389,6 +389,72 @@ With no elbow, the whole arm waves, raised out to the side and rocking up and
 down. An R6 arm turns about the top of its inner edge, so one raised past the
 shoulder brushes the head's block: keep the hand out to the side, not over
 the head.
+
+## NPCs
+
+An NPC is a Model the game moves, not a player's character. Roblox's `Animate`
+script is a LocalScript that runs only under a player, so on an NPC it plays
+nothing. The `animation` tool puts a loader in the model instead:
+`RoqerModelAnimate`, a server Script whose code never changes. It plays the
+model's idle while it stands and its walk or run while it moves, reading the
+Humanoid's `Running` speed. It cross-fades over 0.2 s, and what it plays
+reaches every client. Every copy of the model carries its loader, so a
+spawner that clones the NPC needs nothing else.
+
+1. **Make the body.** `rig {model: "game.Workspace.Guard", stock: "R15",
+   position: [x, y, z]}` makes Roblox's stock R15 or R6 body with its feet at
+   the position, as one undo step. Its loader already holds Roblox's default
+   idle, walk and run, listed in the result's `states`, so it animates as soon
+   as the game moves it. Make it where the game keeps it, for example
+   `game.ServerStorage.Guard` for a spawner to clone.
+2. **Give it its own animations.** Adapt the Idle and Walk recipes above (the
+   Run recipe for a run). Check a gait with `locomotion: true` and keep the
+   `groundSpeed` the check returns: how fast its planted feet travel backward,
+   in studs a second. It is 2.21 for the Walk recipe and 4.08 for the Run.
+   Build and publish each, then
+   `wire {model, slot: "walk", animation_id, ground_speed, expected_id}`,
+   where `expected_id` is the default the state holds now, from `rig`'s
+   `states`. Wire the idle the same way, without `ground_speed`.
+3. **Match its speed to its walk.** The loader plays a gait at the model's
+   speed divided by the gait's ground speed, from half to twice as fast, so
+   the feet keep pace. Beyond that range they slide. A Humanoid's WalkSpeed
+   defaults to 16, which is far beyond the Walk recipe's range of 1.1 to 4.4.
+   Either set the NPC's WalkSpeed within the range (the Run recipe suits 2 to
+   8.2), or make a faster gait and check it again for its new ground speed:
+   halving every keyframe time doubles the ground speed, and a longer stride
+   raises it too. Quickened steps alone soon look frantic, so lengthen the
+   stride as well, and look at the contact sheet. With a walk and a run
+   both wired with their ground speeds, the loader plays the run above the
+   speed halfway between them, and the walk below it.
+4. **Move it** from a server Script with `Humanoid:MoveTo` or a path; the
+   `roblox-npc-ai` skill has patrols, chases and spawners. Do not play the
+   idle or walk from that script, since the loader already plays them.
+5. **Play a one-shot**, such as an attack or a wave, from the game's script on
+   the model's Animator, at `Action` priority so it plays over the walk:
+
+   ```lua
+   local animator = npc.Humanoid:WaitForChild("Animator")
+   local animation = Instance.new("Animation")
+   animation.AnimationId = "rbxassetid://<published id>"
+   local attack = animator:LoadAnimation(animation)
+   attack.Priority = Enum.AnimationPriority.Action
+   attack:GetMarkerReachedSignal("Hit"):Connect(function() --[[ deal damage ]] end)
+   attack:Play()
+   ```
+
+6. **Verify it in a playtest.** Start one with
+   `solo_playtest {action: "start", mode: "play"}`. Then
+   `verify {model: "game.Workspace.Guard", position: [x, y, z]}` walks the
+   Humanoid there on the server and watches it stand. It passes when the walk
+   played for most of the time it moved, the idle for most of the time it
+   stood, and the walk at the pace its speed needs. A failure says what to
+   change, such as the WalkSpeed to set. Without `position`, it watches the
+   NPC for eight seconds while the game's own script moves it. With
+   `animation` it plays that animation on the NPC, and compares its joints as
+   `verify` does on a character.
+
+R6 reports no ground speed, since its feet are not checked for sliding, so the
+loader plays an R6 gait at its own pace.
 
 ## Reading the result
 

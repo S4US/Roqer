@@ -13,7 +13,8 @@
 
 import {
   ANIMATION_ALL_CHECKS_PASSED, ANIMATION_CHECKED_AS_GAIT, ANIMATION_GAIT_CHECKS_LABEL, ANIMATION_MOTION_CHECKS_LABEL,
-  ANIMATION_PLAYED_FROM_LABEL, ANIMATION_PLAYED_PUBLISHED, ANIMATION_PREVIEW_TITLE, animationSlotLabel, type RunEvidence,
+  ANIMATION_PLAYED_FROM_LABEL, ANIMATION_PLAYED_PUBLISHED, ANIMATION_PREVIEW_TITLE, animationSlotLabel, MODEL_MOVED_BY_GAME,
+  MODEL_MOVED_BY_LABEL, MODEL_WHILE_MOVING_LABEL, MODEL_WHILE_STANDING_LABEL, type RunEvidence,
 } from "../shared/run-events";
 import { connectedGroups, footprint, footprintGap, readBox } from "./footprints";
 import type { InterfaceAudit } from "./interface-audit";
@@ -1554,6 +1555,93 @@ ${EXTENT_LUAU}
     allowedRoots: [`game.${EVAL_ROOT}`, "game.ServerScriptService.RoqerAnimate"],
     oracle: ({ probe, verified, evidence }) => judgeAnimationRun(probe, verified, evidence ?? []),
   },
+  {
+    id: "T18-npc-patrol",
+    prompt: "Add a guard NPC who walks back and forth between the two posts, with idle and walk animations of its own. "
+      + "The posts are game.Workspace.WorkbenchEvalPosts.PostA and PostB. Name the guard game.Workspace.WorkbenchEvalGuard, "
+      + "and keep its KeyframeSequences under ServerStorage.WorkbenchEval.",
+    // The creature plan's step 2 goal prompt. The posts, the guard's path and
+    // where its sequences go are added so the reset owns them, and "of its
+    // own" because rig gives a stock NPC Roblox's default animations, which a
+    // run could leave in place. It is done only when each of the plan's
+    // conditions holds, judged from Studio or from the host's own evidence:
+    // an idle and a walk this run published, owned by the place's owner, in
+    // the guard's loader, the walk with its ground speed; a playtest, after the
+    // last wiring, in which the guard's own scripts moved it and its loader
+    // played the walk while it moved and the idle while it stood; a 3D
+    // preview; and every kept build's checks passed, one of them as a gait.
+    // The walkway is raised and apart from the other tasks' builds, so the
+    // guard has ground of its own.
+    needsUploads: true,
+    seed: `
+      for _, name in ipairs({ "WorkbenchEvalGuard", "WorkbenchEvalPosts" }) do
+        local old = workspace:FindFirstChild(name)
+        if old then old:Destroy() end
+      end
+      local posts = Instance.new("Model")
+      posts.Name = "WorkbenchEvalPosts"
+      local walkway = Instance.new("Part")
+      walkway.Name = "Walkway"
+      walkway.Anchored = true
+      walkway.Size = Vector3.new(36, 1, 8)
+      walkway.Position = Vector3.new(0, 0.5, -80)
+      walkway.Material = Enum.Material.Slate
+      walkway.Parent = posts
+      for name, x in pairs({ PostA = -14, PostB = 14 }) do
+        local post = Instance.new("Part")
+        post.Name = name
+        post.Anchored = true
+        post.Size = Vector3.new(1, 6, 1)
+        post.Position = Vector3.new(x, 4, -80)
+        post.Material = Enum.Material.Wood
+        post.Color = Color3.fromRGB(110, 80, 50)
+        post.Parent = posts
+      end
+      posts.Parent = workspace
+    `,
+    probe: `
+      local guard = workspace:FindFirstChild("WorkbenchEvalGuard")
+      local humanoid = guard and guard:FindFirstChildOfClass("Humanoid")
+      local loader = guard and guard:FindFirstChild("RoqerModelAnimate")
+      local function asset(state)
+        local id = loader and loader:GetAttribute(state)
+        return type(id) == "string" and string.match(id, "^rbxassetid://(%d+)$") or nil
+      end
+      local function ownerOf(assetId)
+        if not assetId then return nil end
+        local ok, info = pcall(function()
+          return game:GetService("MarketplaceService"):GetProductInfo(tonumber(assetId), Enum.InfoType.Asset)
+        end)
+        if ok and type(info) == "table" and type(info.Creator) == "table" then
+          return { id = info.Creator.CreatorTargetId, type = info.Creator.CreatorType, assetType = info.AssetTypeId }
+        end
+        return nil
+      end
+      local idle, walk = asset("idle"), asset("walk")
+      local walkSpeed = loader and loader:GetAttribute("walkSpeed")
+      local sequences = 0
+      for _, item in ipairs(game:GetService("ServerStorage").WorkbenchEval:GetDescendants()) do
+        if item:IsA("KeyframeSequence") then sequences += 1 end
+      end
+      return {
+        guard = guard and guard.ClassName or false,
+        humanoid = humanoid ~= nil,
+        loader = loader and loader.ClassName or false,
+        enabled = loader ~= nil and loader:IsA("Script") and loader.Enabled,
+        idle = idle,
+        walk = walk,
+        idleOwner = ownerOf(idle),
+        walkOwner = ownerOf(walk),
+        walkGroundSpeed = type(walkSpeed) == "number" and walkSpeed or false,
+        place = { id = game.CreatorId, type = game.CreatorType.Name },
+        sequences = sequences,
+      }
+    `,
+    allowedTargets: [],
+    // The patrol script may live in the guard or in ServerScriptService, under a name of the run's choosing.
+    allowedRoots: [`game.${EVAL_ROOT}`, "game.Workspace.WorkbenchEvalGuard", "game.ServerScriptService"],
+    oracle: ({ probe, verified, evidence }) => judgeNpcPatrol(probe, verified, evidence ?? []),
+  },
 ];
 
 /** Roblox's asset type number for an Animation. */
@@ -1563,15 +1651,30 @@ function metadataValue(evidence: RunEvidence, label: string): string | undefined
   return evidence.metadata?.find((entry) => entry.label === label)?.value;
 }
 
+/** The asset IDs this run published and read back from Roblox. */
+function publishedAssets(evidence: readonly RunEvidence[]): Set<string> {
+  return new Set(evidence.flatMap((item) => {
+    const id = /^rbxassetid:\/\/(\d+)$/.exec(item.title)?.[1];
+    return item.kind === "verification" && item.changeKind === "asset" && item.passed === true && id !== undefined ? [id] : [];
+  }));
+}
+
+/** Why an asset the probe described is not an Animation the place's owner owns, or undefined when it is. */
+function animationOwnershipProblem(assetId: string, owner: unknown, place: unknown): string | undefined {
+  if (!isRecord(owner) || !isRecord(place)) return `Roblox would not describe asset ${assetId}, so who owns it could not be confirmed.`;
+  if (owner.assetType !== ANIMATION_ASSET_TYPE) return `Asset ${assetId} is not an Animation.`;
+  if (owner.id !== place.id || owner.type !== place.type) {
+    return `Asset ${assetId} belongs to ${String(owner.type)} ${String(owner.id)}, not the place's owner, ${String(place.type)} ${String(place.id)}.`;
+  }
+  return undefined;
+}
+
 /**
  * The animation plan's "done" conditions, each from Studio or from evidence
  * the host recorded off a tool result. The first unmet one is the verdict.
  */
 function judgeAnimationRun(probe: unknown, verified: boolean, evidence: readonly RunEvidence[]): EvalVerdict {
-  const published = new Set(evidence.flatMap((item) => {
-    const id = /^rbxassetid:\/\/(\d+)$/.exec(item.title)?.[1];
-    return item.kind === "verification" && item.changeKind === "asset" && item.passed === true && id !== undefined ? [id] : [];
-  }));
+  const published = publishedAssets(evidence);
   if (published.size === 0) return { passed: false, detail: "No animation was published and read back from Roblox." };
 
   const loader = field(probe, "loader");
@@ -1584,15 +1687,8 @@ function judgeAnimationRun(probe: unknown, verified: boolean, evidence: readonly
     return { passed: false, detail: `The run slot holds ${assetId}, which this run did not publish.` };
   }
 
-  const owner = field(probe, "owner");
-  const place = field(probe, "place");
-  if (!isRecord(owner) || !isRecord(place)) {
-    return { passed: false, detail: `Roblox would not describe asset ${assetId}, so who owns it could not be confirmed.` };
-  }
-  if (owner.assetType !== ANIMATION_ASSET_TYPE) return { passed: false, detail: `Asset ${assetId} is not an Animation.` };
-  if (owner.id !== place.id || owner.type !== place.type) {
-    return { passed: false, detail: `Asset ${assetId} belongs to ${String(owner.type)} ${String(owner.id)}, not the place's owner, ${String(place.type)} ${String(place.id)}.` };
-  }
+  const ownership = animationOwnershipProblem(assetId, field(probe, "owner"), field(probe, "place"));
+  if (ownership) return { passed: false, detail: ownership };
 
   const played = evidence.some((item) => item.kind === "playtest" && item.passed === true &&
     metadataValue(item, ANIMATION_PLAYED_FROM_LABEL) === ANIMATION_PLAYED_PUBLISHED &&
@@ -1620,6 +1716,86 @@ function judgeAnimationRun(probe: unknown, verified: boolean, evidence: readonly
   }
   if (!verified) return { passed: false, detail: "The run finished without satisfying the completion gate." };
   return { passed: true, detail: `Animation ${assetId}, owned by the place's owner, is wired to the run slot and played in a playtest, with a 3D preview and every motion check passed.` };
+}
+
+const GUARD_PATH = "game.Workspace.WorkbenchEvalGuard";
+
+/**
+ * The creature plan's step 2 "done" conditions for the guard, each from
+ * Studio or from evidence the host recorded off a tool result. The first
+ * unmet one is the verdict.
+ */
+function judgeNpcPatrol(probe: unknown, verified: boolean, evidence: readonly RunEvidence[]): EvalVerdict {
+  const published = publishedAssets(evidence);
+  if (published.size === 0) return { passed: false, detail: "No animation was published and read back from Roblox." };
+
+  const guard = field(probe, "guard");
+  if (guard !== "Model" || field(probe, "humanoid") !== true) {
+    return { passed: false, detail: guard === false ? "There is no WorkbenchEvalGuard in Workspace." : "WorkbenchEvalGuard is not a Model with a Humanoid." };
+  }
+  const loader = field(probe, "loader");
+  if (loader !== "Script" || field(probe, "enabled") !== true) {
+    return {
+      passed: false,
+      detail: loader === false ? "The guard has no RoqerModelAnimate loader, so nothing animates it." : "The guard's RoqerModelAnimate is not an enabled Script.",
+    };
+  }
+  for (const state of ["idle", "walk"] as const) {
+    const assetId = field(probe, state);
+    if (typeof assetId !== "string") return { passed: false, detail: `The guard's ${state} is not wired.` };
+    if (!published.has(assetId)) {
+      return { passed: false, detail: `The guard's ${state} holds ${assetId}, which this run did not publish.` };
+    }
+    const ownership = animationOwnershipProblem(assetId, field(probe, `${state}Owner`), field(probe, "place"));
+    if (ownership) return { passed: false, detail: ownership };
+  }
+  if (typeof field(probe, "walkGroundSpeed") !== "number") {
+    return { passed: false, detail: "The guard's walk was wired without its ground speed, so its loader cannot pace it and its feet slide." };
+  }
+
+  // Watched after the last wiring, so the states it saw are the ones wired now,
+  // and moved by the guard's own scripts, so the patrol is the game's.
+  const loaderPath = `${GUARD_PATH}.RoqerModelAnimate`;
+  const lastWire = evidence.reduce((last, item, index) => item.kind === "verification" && item.title === loaderPath ? index : last, -1);
+  const watched = evidence.some((item, index) => index > lastWire && item.kind === "playtest" && item.passed === true &&
+    item.title === `${GUARD_PATH} in the playtest` &&
+    metadataValue(item, MODEL_MOVED_BY_LABEL) === MODEL_MOVED_BY_GAME &&
+    (metadataValue(item, MODEL_WHILE_MOVING_LABEL) ?? "").startsWith("walk ") &&
+    (metadataValue(item, MODEL_WHILE_STANDING_LABEL) ?? "").startsWith("idle "));
+  if (!watched) {
+    return {
+      passed: false,
+      detail: "No playtest after the last wiring watched the guard's own patrol and saw its walk play while it moved and its idle while it stood.",
+    };
+  }
+
+  if (!evidence.some((item) => item.title === ANIMATION_PREVIEW_TITLE && item.modelPreviewId !== undefined)) {
+    return { passed: false, detail: "No 3D preview of the motion was shown in the chat." };
+  }
+  // The last build of each sequence is the one kept.
+  const kept = new Map<string, RunEvidence>();
+  for (const item of evidence) {
+    if (item.kind === "verification" && item.changeKind === "instance" && metadataValue(item, ANIMATION_MOTION_CHECKS_LABEL) !== undefined) {
+      kept.set(item.title, item);
+    }
+  }
+  if (kept.size < 2) return { passed: false, detail: `${kept.size === 0 ? "No animation was" : "Only one animation was"} built in Studio; the guard needs an idle and a walk.` };
+  for (const [path, build] of kept) {
+    if (build.passed !== true) return { passed: false, detail: `The last build of ${path} did not play or read back as it was checked.` };
+    const checks = metadataValue(build, ANIMATION_MOTION_CHECKS_LABEL);
+    if (checks !== ANIMATION_ALL_CHECKS_PASSED) return { passed: false, detail: `The last build of ${path}: ${checks}; none may be left failing.` };
+  }
+  if (![...kept.values()].some((build) => metadataValue(build, ANIMATION_GAIT_CHECKS_LABEL) === ANIMATION_CHECKED_AS_GAIT)) {
+    return { passed: false, detail: "No build was checked as a gait, so the walk's feet were never checked." };
+  }
+  if (Number(field(probe, "sequences") ?? 0) < 2) {
+    return { passed: false, detail: "The idle's and the walk's KeyframeSequences are not both kept under ServerStorage.WorkbenchEval." };
+  }
+  if (!verified) return { passed: false, detail: "The run finished without satisfying the completion gate." };
+  return {
+    passed: true,
+    detail: `The guard's idle ${String(field(probe, "idle"))} and walk ${String(field(probe, "walk"))}, owned by the place's owner, played in a playtest of its own patrol, with a 3D preview and every motion check passed.`,
+  };
 }
 
 /** A plateau is a real height change, not a kerb: the lowest and highest standing levels this far apart. */

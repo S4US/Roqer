@@ -60,4 +60,6 @@ end
 
 - Throttle and stagger AI based on NPC count, path cost, and profiler evidence, not a universal tick rate. Keep NPC decisions and movement server-side; client code may handle presentation.
 
+To make an NPC's body and animate it, use the `animation` tool's `rig` and load `roblox-animation-vfx` `references/character-animation.md` (section NPCs): a loader in the model plays its idle, walk and run as it moves, so the movement script plays none of them.
+
 For spawners, lifecycle cleanup, timeout handling, and performance budgets, load `references/full.md`.

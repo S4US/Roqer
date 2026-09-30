@@ -14,7 +14,8 @@ import { boundedCode, diffDeletedRange, diffText, normalizeNewlines } from "../s
 import {
   ANIMATION_ALL_CHECKS_PASSED, ANIMATION_CHECKED_AS_GAIT, ANIMATION_GAIT_CHECKS_LABEL, ANIMATION_MOTION_CHECKS_LABEL,
   ANIMATION_NAME_LABEL, ANIMATION_PLAYED_FROM_LABEL, ANIMATION_PLAYED_PUBLISHED, ANIMATION_PREVIEW_TITLE, animationSlotLabel,
-  BLENDER_MODEL_LABEL, BLENDER_PREVIEW_TITLE, MAX_EVIDENCE_SUBJECT_CHARS, SCREENSHOT_VIEW_LABEL, SCREENSHOT_VIEW_PLAYTEST,
+  BLENDER_MODEL_LABEL, BLENDER_PREVIEW_TITLE, MAX_EVIDENCE_SUBJECT_CHARS, MODEL_MOVED_BY_GAME, MODEL_MOVED_BY_LABEL,
+  MODEL_MOVED_BY_VERIFY, MODEL_WHILE_MOVING_LABEL, MODEL_WHILE_STANDING_LABEL, SCREENSHOT_VIEW_LABEL, SCREENSHOT_VIEW_PLAYTEST,
   type RunChange, type RunEvidence, type RunMetadata,
 } from "../shared/run-events";
 import {
@@ -1337,8 +1338,9 @@ function recordModelVerify(context: PlannerContext, args: JsonRecord, data: Json
       ? `On the playtest server, ${facts.join(", and ")}.`
       : `Not verified: ${reasons.join("; ") || "the playtest did not show what was asked"}.`,
     metadata: [
-      ...(movement && isRecord(movement.moving) ? [{ label: "While moving", value: playedTally(movement.moving.played) }] : []),
-      ...(movement && isRecord(movement.standing) ? [{ label: "While standing", value: playedTally(movement.standing.played) }] : []),
+      ...(movement ? [{ label: MODEL_MOVED_BY_LABEL, value: movement.mode === "watched" ? MODEL_MOVED_BY_GAME : MODEL_MOVED_BY_VERIFY }] : []),
+      ...(movement && isRecord(movement.moving) ? [{ label: MODEL_WHILE_MOVING_LABEL, value: playedTally(movement.moving.played) }] : []),
+      ...(movement && isRecord(movement.standing) ? [{ label: MODEL_WHILE_STANDING_LABEL, value: playedTally(movement.standing.played) }] : []),
       ...(pace ? [{
         label: "Pace",
         value: `${String(pace.state)} at ${String(pace.played)}× for ${String(pace.averageSpeed)} studs a second; written for ${String(pace.groundSpeed)}`,

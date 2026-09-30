@@ -64,9 +64,11 @@ What still assumes a two-legged character, or a player's character:
 - **A stock dummy.** The Studio preview builds its dummy with
   `CreateHumanoidModelFromDescription` and caps a keyframe at 32 poses nested 8
   deep. A spider's legs pass the first, a snake's spine the second.
-- **The player's character.** `verify` plays on `Players.LocalPlayer`'s
-  character, and `wire` sets slots of the `Animate` script Roblox gives player
-  characters.
+- **A character or a stock NPC.** Since step 2, `wire` and `verify` also take
+  a model, whose loader plays its idle, walk and run, and `rig` makes a stock
+  R15 or R6 NPC. A model of any other shape can be wired and verified, but no
+  animation can yet be written for it: everything above reads R15's or R6's
+  table.
 
 On the modeling side:
 
@@ -84,8 +86,8 @@ On the modeling side:
   pivots from Blender to the rig.
 - `generate_model` with `schema_groups` returns each group as its own MeshPart,
   named `<group>_geom`, rigged flat as an upload is (spike question 8).
-- The NPC skill covers pathfinding and state machines, and says nothing about
-  animating an NPC.
+- The NPC skill covers pathfinding and state machines, and since step 2 points
+  to the animation skill's NPC section for animating one.
 
 ## Principles
 
@@ -237,11 +239,15 @@ Two other forms:
 - **Adopt.** Given only a model and, optionally, declarations, `rig` reads the
   model's existing joints, writes `RoqerRig`, and changes no joint. That covers
   creatures from the Creator Store and rigs the user made.
-- **Stock.** Given `R15` or `R6`, it makes a stock NPC body at the model's path
-  from a `HumanoidDescription` (body colours and scale), which the recipes
-  already fit, instead of the agent writing Luau for it. It leaves out the
-  body's `Animate` script, which plays nothing on an NPC (spike question 5),
-  so the loader is the one thing that animates it.
+- **Stock.** Given `stock: "R15"` or `"R6"`, it makes a stock NPC body at a
+  path that names nothing yet, from a default `HumanoidDescription`, which the
+  recipes already fit, instead of the agent writing Luau for it. Its feet
+  stand at `position`, the origin by default. It leaves out the body's
+  `Animate` script, which plays nothing on an NPC (spike question 5), and
+  puts the loader in its place holding the idle, walk and run `Animate`
+  carried, so the loader is the one thing that animates it, and a stock NPC
+  moves like a character until its own animations replace Roblox's. Built in
+  step 2.
 
 The inspector edition refuses `rig`, which writes. Reading a rig for `check`
 works in both editions.
@@ -329,29 +335,37 @@ Roblox-published animated creatures turn up, they are measured the same way.
 
 ### Wiring and verifying a model
 
-- **`wire` on a model** (a `model` and a `state` instead of a `slot`) keeps one
-  Script, `RoqerModelAnimate`, inside the model, so every copy carries it. Its
-  code never changes. Its attributes are the data: one asset ID per state
-  (idle, walk, run, and a named one-shot per action), and the ground speed
-  each gait was written for. Replacing an ID needs the current one, and a
-  loader whose code was edited is left alone, as with `RoqerAnimate`. It runs
-  on the server, and what it plays reaches every client, as a published
-  animation the spike's server played did (question 1).
+- **`wire` on a model** (a `model`, with `slot` naming one of its states)
+  keeps one Script, `RoqerModelAnimate`, inside the model, so every copy
+  carries it. Its code never changes. Its attributes are the data: one asset
+  ID per state (idle, walk and run), and the ground speed each gait was
+  written for. Replacing an ID needs the current one, and a loader whose code
+  was edited is left alone, as with `RoqerAnimate`. It runs on the server, and
+  what it plays reaches every client, as a published animation the spike's
+  server played did (question 1).
 - **The loader** picks idle, walk or run from how fast the model moves
   (`Humanoid.Running`, which reported 7.97 and 15.94 studs a second for a dog
   walking at 8 and 16 in the spike, or the root's motion each frame under an
-  `AnimationController`), cross-fades between them, and plays a gait at the
-  model's speed over the speed it was written for, within limits, so feet do
-  not slide in the game. A game script plays an action by firing the loader's
-  `Play` event with the action's name, and hears every marker, such as `Hit`,
-  on its `Marker` event.
-- **`verify` on a model** runs on the playtest's server peer. It plays an
-  animation on the model's Animator and compares the joints with the checked
-  model, as it does on a character. It also watches the model for up to ten
-  seconds, or moves it itself with `move` (`Humanoid:MoveTo`, or pivoting it
-  along a line under an `AnimationController`), and records which track the
-  loader played at which speed: the walk while it moved, the idle while it
-  stood.
+  `AnimationController`): the idle below half a stud a second, and, with both
+  gaits paced, the run above the speed halfway between their ground speeds.
+  It cross-fades over 0.2 s, and plays a gait at the model's speed over the
+  speed it was written for, from half to twice its own pace, so feet do not
+  slide in the game. A one-shot, such as an attack, is the game's: its script
+  plays the animation on the model's Animator at `Action` priority and hears
+  its markers with `GetMarkerReachedSignal`. The loader has no events of its
+  own, so a game depends on nothing in it but its attributes.
+- **`verify` on a model** runs on the playtest's server peer. With an
+  animation, it plays it on the model's Animator and compares the joints with
+  the checked model, as it does on a character; with a slot, it reads the ID
+  that state holds. With `position` it walks the model's Humanoid there with
+  `Humanoid:MoveTo`, for up to nine seconds, since `MoveTo` gives up after
+  eight, then samples it standing; with nothing else it watches the model for
+  eight seconds while the game moves it. A model under an
+  `AnimationController` is watched, never moved: its speed is timed from its
+  root's motion. Walked or watched, it records a tenth of a second apart which
+  track the loader played at which speed, and passes when the walk played for
+  most of the time it moved, the idle for most of the time it stood, and the
+  gait at the pace the model's speed needs.
 
 A stock R15 or R6 NPC is a model too, and the same loader animates it.
 
@@ -454,7 +468,7 @@ says how to run it. Its questions:
 A "no" changes the steps that rest on it before any code is written. The
 answers, and what they changed, are in [Live results](#live-results).
 
-### 2. NPCs on stock rigs — proposed
+### 2. NPCs on stock rigs — built, awaiting its live run
 
 The smallest step that animates something other than the player's character.
 It builds what every creature needs anyway: a way to make a body, a loader on
@@ -462,7 +476,7 @@ a model, verification on a model, and states that follow movement. The rigs are
 R15 and R6, whose recipes already pass.
 
 - `rig` in its stock form.
-- `wire` with a `model` and a `state`: the `RoqerModelAnimate` loader, and the
+- `wire` with a `model` and a state (`slot`): the `RoqerModelAnimate` loader, and the
   rules for installing and replacing it.
 - `verify` with a `model`, on the server peer, watching or moving it.
 - The ground speed of every locomotion animation, reported by the checks.
@@ -471,8 +485,9 @@ R15 and R6, whose recipes already pass.
   and `wire` are mutations, `verify` a read), approval summaries in words,
   activity labels, playtest evidence naming the model and the states seen, and
   the drift tests.
-- Guidance: an NPC section in the animation skill (a stock NPC, the loader's
-  `Play` and `Marker` events), and a pointer to it from the NPC skill.
+- Guidance: an NPC section in the animation skill (a stock NPC, the loader,
+  WalkSpeed and ground speed, and one-shots from the game's script), and a
+  pointer to it from the NPC skill.
 - Tests: unit tests for the loader's fixed code, the compare-and-set rules and
   the comparisons `verify` makes; in the live animation suite, an R15 NPC walks
   with `MoveTo` and the loader switches between walk and idle.
@@ -482,6 +497,38 @@ R15 and R6, whose recipes already pass.
   stood, a 3D preview, and every check passed.
 
 **Done when** T18 passes.
+
+**Status, 2026-09-30.** Everything above is built, with its unit tests and
+every repository check passing. The live suite's NPC section
+(`npm run test:studio:animation`) and T18 have not run against Studio yet, so
+this step is not done. What changed from the proposal, and why:
+
+- `wire` and `verify` name a model's state with `slot`, as for a character,
+  rather than a new `state` argument: one argument fewer in the catalog.
+- The loader plays idle, walk and run only. It has no `Play` or `Marker`
+  events: a one-shot is played by the game's own script on the model's
+  Animator, which needs no loader support and keeps the loader's code fixed.
+- `rig`'s stock form carries Roblox's default idle, walk and run into the
+  loader, so an NPC moves like a character from the start. Their ground speed
+  is unknown, so the loader plays them at their own pace until the NPC's own
+  replace them.
+- `verify` moves a model only through its Humanoid, with `position`. A model
+  under an `AnimationController` is watched while the game moves it; pivoting
+  one along a line is left for a step that animates such creatures.
+- The ground speed is the median backward speed of planted foot corners over
+  planted stretches: 2.21 studs a second for the skill's Walk and 4.08 for
+  its Run. A Humanoid's default WalkSpeed of 16 is beyond what the loader can
+  pace them to, so the guidance has the agent match an NPC's WalkSpeed to its
+  walk, and a pace `verify` cannot keep fails with the speed to set.
+- The repository runs no Luau, so the loader's fixed code is unit-tested as a
+  contract (`model-loader-contract.test.ts`): its pace limits, its states and
+  the ground speed cap match core's. Its behaviour is the live suite's to
+  check; while it was written, it ran in a Luau VM against mocked services.
+- T18's prompt adds "with idle and walk animations of its own", since `rig`'s
+  defaults would otherwise be a fair answer, and names the posts, the guard
+  and where the sequences go, so the reset owns them. Its oracle wants the
+  playtest to have watched the guard's own patrol, after the last wiring,
+  rather than `verify` walking it.
 
 ### 3. Rigs read from Studio — proposed
 

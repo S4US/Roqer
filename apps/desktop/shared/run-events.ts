@@ -482,6 +482,17 @@ export const ANIMATION_CHECKED_AS_GAIT = "Checked as a gait";
 export const ANIMATION_PLAYED_FROM_LABEL = "Played from";
 export const ANIMATION_PLAYED_PUBLISHED = "The published asset";
 
+/**
+ * Metadata on a model's playtest verification: what its loader played while
+ * it moved and while it stood, such as "walk 100%", and what moved it: the
+ * game's own scripts while verify watched it, or verify walking it itself.
+ */
+export const MODEL_WHILE_MOVING_LABEL = "While moving";
+export const MODEL_WHILE_STANDING_LABEL = "While standing";
+export const MODEL_MOVED_BY_LABEL = "Moved by";
+export const MODEL_MOVED_BY_GAME = "The game's own scripts";
+export const MODEL_MOVED_BY_VERIFY = "verify, walking it to a position";
+
 /** Metadata on a playtest verification that also checked a default Animate slot, such as "run slot". */
 export function animationSlotLabel(slot: string): string {
   return `${slot} slot`;

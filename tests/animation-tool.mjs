@@ -14,6 +14,12 @@
 // the wired ID and plays it. Publishing is refused without an Open Cloud key;
 // with ROQER_ANIMATION_UPLOAD=1 and a key, it uploads one real test animation,
 // reads it back, and verifies the published copy in the playtest.
+//
+// Last, an NPC (docs/creature-plan.md step 2): rig makes a stock R15 body in
+// Workspace as one undo step, with the model loader holding the idle, walk
+// and run its Animate script carried; a state is replaced only when its
+// current ID is named; and in the same playtest, verify walks the NPC with
+// MoveTo and sees the loader play the walk, paced, and then the idle.
 
 import { McpClient, assert, runTest, safeStopPlaytest, startPlaytestAndWait } from './lib/mcp-client.mjs';
 
@@ -21,6 +27,13 @@ const FOLDER_NAME = '__RoqerAnimationTest';
 const PARENT = `game.ServerStorage.${FOLDER_NAME}`;
 const ROBLOX_WAVE = 'rbxassetid://507770239';
 const UPLOAD = process.env.ROQER_ANIMATION_UPLOAD === '1';
+const GUARD_NAME = '__RoqerAnimationTestGuard';
+const GUARD = `game.Workspace.${GUARD_NAME}`;
+const REMOVE_GUARD = `
+local guard = workspace:FindFirstChild(${JSON.stringify(GUARD_NAME)})
+if guard then guard:Destroy() end
+return true
+`;
 const REMOVE_LOADER = `
 local loader = game:GetService("ServerScriptService"):FindFirstChild("RoqerAnimate")
 if loader then loader:Destroy() end
@@ -334,6 +347,39 @@ const passed = await runTest('animation tool', async ({ track }) => {
     const same = await client.callTool('animation', { action: 'wire', slot: 'idle', animation_id: ROBLOX_WAVE, expected_id: ROBLOX_WAVE });
     assert(same.wired === true && same.installed === false, 'naming the current ID replaces it');
 
+    // An NPC: a stock body whose loader stands in for its Animate script.
+    await luau(client, REMOVE_GUARD);
+    const rigged = await client.callTool('animation', { action: 'rig', model: GUARD, stock: 'R15', position: [60, 0, 60] }, 60_000);
+    assert(rigged.rigged === true && rigged.rigType === 'R15' && rigged.readBackMatches === true, `rig makes a stock R15 NPC and reads it back (${rigged.error ?? `${rigged.parts} parts, ${rigged.joints} joints, feet at ${JSON.stringify(rigged.feet)}`})`);
+    const defaults = rigged.states ?? {};
+    assert(['idle', 'walk', 'run'].every((state) => /^rbxassetid:\/\/\d+$/.test(defaults[state] ?? '')) && rigged.animateRemoved === true, `its loader holds the idle, walk and run its Animate carried, and Animate is gone (${JSON.stringify(defaults)})`);
+    const inspectGuard = `
+      local guard = workspace:FindFirstChild(${JSON.stringify(GUARD_NAME)})
+      local root = guard and guard:FindFirstChild("HumanoidRootPart")
+      return {
+        exists = guard ~= nil,
+        loader = guard ~= nil and guard:FindFirstChild("RoqerModelAnimate") ~= nil,
+        animate = guard ~= nil and guard:FindFirstChild("Animate") ~= nil,
+        anchored = root ~= nil and root.Anchored,
+      }
+    `;
+    const made = await luau(client, inspectGuard);
+    assert(made.exists === true && made.loader === true && made.animate === false && made.anchored === false, `Studio holds the NPC with its loader, no Animate, and a root free to walk (${JSON.stringify(made)})`);
+    const taken = await client.callTool('animation', { action: 'rig', model: GUARD, stock: 'R15' }, 60_000);
+    assert(taken.errorCode === 'target_exists', `rig never replaces what a path already names (${taken.errorCode})`);
+    const undoneRig = await luau(client, `game:GetService("ChangeHistoryService"):Undo() ${inspectGuard}`);
+    assert(undoneRig.exists === false, 'one undo removes the NPC');
+    const remade = await client.callTool('animation', { action: 'rig', model: GUARD, stock: 'R15', position: [60, 0, 60] }, 60_000);
+    assert(remade.rigged === true && remade.readBackMatches === true, `rig makes it again (${remade.error ?? 'ok'})`);
+
+    // Pacing the walk as written for 10 studs a second has the loader play it
+    // 1.6 times as fast at the stock WalkSpeed of 16: a value chosen to see the
+    // pacing work, not a measurement of Roblox's walk.
+    const unnamedState = await client.callTool('animation', { action: 'wire', model: GUARD, slot: 'walk', animation_id: defaults.walk, ground_speed: 10 });
+    assert(unnamedState.errorCode === 'expected_id_required', `replacing an NPC's state needs its current ID (${unnamedState.errorCode})`);
+    const pacedWalk = await client.callTool('animation', { action: 'wire', model: GUARD, slot: 'walk', animation_id: defaults.walk, expected_id: defaults.walk, ground_speed: 10 });
+    assert(pacedWalk.wired === true && pacedWalk.installed === false && pacedWalk.groundSpeed === 10 && pacedWalk.readBackMatches === true, `wire paces the NPC's walk (${pacedWalk.error ?? 'ok'})`);
+
     let playtestStarted = false;
     try {
       playtestStarted = true;
@@ -346,6 +392,11 @@ const passed = await runTest('animation tool', async ({ track }) => {
         const published = await client.callTool('animation', { action: 'verify', animation: wave(100), animation_id: publishedId }, 60_000);
         assert(published.verified === true && published.played?.source === 'published', `the published copy plays as checked (within ${published.played?.maxDegrees}°)`);
       }
+      const walked = await client.callTool('animation', { action: 'verify', model: GUARD, position: [60, 0, 90], slot: 'walk', animation_id: defaults.walk }, 90_000);
+      const movement = walked.movement ?? {};
+      assert(movement.reached === true && movement.moving?.played?.walk > 0 && movement.standing?.played?.idle > 0, `the NPC walked there, playing its walk and then its idle (${walked.error ?? JSON.stringify({ moving: movement.moving, standing: movement.standing })})`);
+      assert(movement.pace?.state === 'walk' && movement.pace.kept === true, `its loader paced the walk to its speed (${JSON.stringify(movement.pace ?? movement.reason)})`);
+      assert(walked.verified === true && walked.wiring?.matches === true, `verify passes the NPC on the playtest server (${walked.error ?? movement.reason ?? 'ok'})`);
     } finally {
       if (playtestStarted) await safeStopPlaytest(client);
     }
@@ -359,6 +410,7 @@ const passed = await runTest('animation tool', async ({ track }) => {
     const modified = await client.callTool('animation', { action: 'wire', slot: 'run', animation_id: ROBLOX_WAVE });
     assert(modified.errorCode === 'loader_modified', `an edited loader is left alone (${modified.errorCode})`);
   } finally {
+    await luau(client, REMOVE_GUARD).catch((error) => console.error(`  NPC cleanup failed: ${error.message}`));
     await luau(client, REMOVE_LOADER).catch((error) => console.error(`  loader cleanup failed: ${error.message}`));
     await luau(client, `
       local folder = game:GetService("ServerStorage"):FindFirstChild(${JSON.stringify(FOLDER_NAME)})
