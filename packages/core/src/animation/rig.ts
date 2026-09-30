@@ -91,6 +91,8 @@ export interface RigAttachment {
   offset: readonly number[];
   size: Vec3;
   shape: PartShape;
+  /** A welded MeshPart's mesh, drawn once read from Studio; its box until then. */
+  mesh?: string;
 }
 
 /**
@@ -146,6 +148,8 @@ export interface Rig {
   shapes?: Readonly<Record<string, PartShape>>;
   /** Parts welded to each jointed part, by the part they move with. */
   attached?: Readonly<Record<string, readonly RigAttachment[]>>;
+  /** Each MeshPart's mesh, by part: drawn once read from Studio, as its box until then. */
+  meshIds?: Readonly<Record<string, string>>;
   /** Part sizes in studs (x, y, z). */
   parts: Readonly<Record<string, Vec3>>;
   /** Joints ordered parent before child. */

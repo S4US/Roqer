@@ -7,8 +7,12 @@
 // A rig read from a model is drawn the same way, each part as its shape
 // (a block, wedge, cylinder or ball) with the parts welded to it.
 
+import { fittedMesh, type ModelMesh } from './model-meshes.js';
 import { R15_RIG } from './r15-rig.js';
 import type { PartShape, Rig, RigAttachment, Vec3 } from './rig.js';
+
+/** Meshes read from Studio for a model's MeshParts, by mesh ID. */
+export type MeshLibrary = ReadonlyMap<string, ModelMesh>;
 
 export type Rgb = readonly [number, number, number];
 
@@ -259,13 +263,18 @@ function merged(meshes: readonly PartMesh[]): PartMesh {
   return result;
 }
 
-/** A part's mesh, in the part's own frame, with the parts welded to it. */
-export function partMesh(part: string, rig: Rig = R15_RIG): PartMesh {
+/**
+ * A part's mesh, in the part's own frame, with the parts welded to it: a
+ * MeshPart as its mesh when `library` holds it, and as its box otherwise.
+ */
+export function partMesh(part: string, rig: Rig = R15_RIG, library?: MeshLibrary): PartMesh {
   const size = rig.parts[part];
   const shape = rig.shapes?.[part];
-  const own = shape === undefined
-    ? roundedBox(size, edgeRadius(part, size))
-    : shapeMesh(shape, size, modelEdgeRadius(size));
+  const id = rig.meshIds?.[part];
+  const read = id === undefined ? undefined : library?.get(id);
+  const own = read
+    ? fittedMesh(read, size)
+    : shape === undefined ? roundedBox(size, edgeRadius(part, size)) : shapeMesh(shape, size, modelEdgeRadius(size));
   const offset = rig.drawOffsets?.[part];
   if (offset) own.positions = own.positions.map((value, index) => value + offset[index % 3]);
   const attached = rig.attached?.[part] ?? [];
@@ -273,6 +282,9 @@ export function partMesh(part: string, rig: Rig = R15_RIG): PartMesh {
   const hidden = !drawnParts(rig).includes(part) && !heldParts(rig).includes(part);
   return merged([
     ...(hidden ? [] : [own]),
-    ...attached.map((piece) => placed(shapeMesh(piece.shape, piece.size, modelEdgeRadius(piece.size)), piece.offset)),
+    ...attached.map((piece) => {
+      const mesh = piece.mesh === undefined ? undefined : library?.get(piece.mesh);
+      return placed(mesh ? fittedMesh(mesh, piece.size) : shapeMesh(piece.shape, piece.size, modelEdgeRadius(piece.size)), piece.offset);
+    }),
   ]);
 }

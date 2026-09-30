@@ -49,7 +49,8 @@ import { renderRigGlb } from '../animation/rig-glb.js';
 import { rigFromModel } from '../animation/model-rig.js';
 import type { Rig } from '../animation/rig.js';
 import { RIGS, rigFor } from '../animation/rigs.js';
-import { cachedRigMeshes, currentRigMeshes, storeRigMeshes } from '../animation/rig-meshes.js';
+import { cachedRigMeshes, currentRigMeshes, modelRigMeshes, rigMeshCacheDirectory, storeRigMeshes, type BoxedMeshPart } from '../animation/rig-meshes.js';
+import { MAX_MESHES_PER_READ, meshesToRead, storeModelMesh } from '../animation/model-meshes.js';
 import * as fs from 'fs';
 import * as path from 'path';
 
@@ -230,6 +231,13 @@ function sleep(ms: number): Promise<void> {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+/** Which MeshParts a preview drew as their boxes, and why, the first few by name. */
+function describeBoxes(boxes: readonly BoxedMeshPart[]): string {
+  const named = boxes.slice(0, 6).map((box) => `${box.part} (${box.reason})`);
+  const more = boxes.length > named.length ? `, and ${boxes.length - named.length} more` : '';
+  return `MeshParts drawn as their boxes: ${named.join(', ')}${more}`;
 }
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {
@@ -1799,6 +1807,7 @@ export class RobloxStudioTools {
       });
     }
     const { sequence, report, failing, waived } = prepared.value;
+    if (model) await this._fetchModelMeshes(model.rig, instance_id);
     const checks = {
       passed: failing.length === 0,
       results: compactChecks(report),
@@ -1897,6 +1906,31 @@ export class RobloxStudioTools {
     }
   }
 
+  /**
+   * Read the meshes of a model's MeshParts from Studio that no earlier call
+   * has, at most MAX_MESH_READS a call, so previews draw them; each is kept by
+   * its mesh ID. A mesh Studio will not hand over is drawn as its box, and a
+   * failed read leaves the rest to a later call.
+   */
+  private async _fetchModelMeshes(rig: Rig, instance_id?: string): Promise<void> {
+    const directory = rigMeshCacheDirectory();
+    const wanted = meshesToRead(rig, directory).slice(0, RobloxStudioTools.MAX_MESH_READS);
+    for (let start = 0; start < wanted.length; start += MAX_MESHES_PER_READ) {
+      const batch = wanted.slice(start, start + MAX_MESHES_PER_READ);
+      let answer: { error?: unknown; meshes?: Record<string, unknown> } | undefined;
+      try {
+        answer = await this._callSingle('/api/animation-read-meshes', { meshes: batch }, undefined, instance_id);
+      } catch {
+        return;
+      }
+      if (typeof answer?.error === 'string' || typeof answer?.meshes !== 'object' || answer.meshes === null) return;
+      for (const id of batch) storeModelMesh(id, answer.meshes[id] ?? { error: 'Studio did not answer for it' }, directory);
+    }
+  }
+
+  /** The most meshes one check or build reads from Studio; the rest wait for a later call. */
+  private static readonly MAX_MESH_READS = 64;
+
   private _animationResult(
     body: Record<string, unknown>,
     sequence: KeyframeSequenceDescription,
@@ -1904,7 +1938,10 @@ export class RobloxStudioTools {
     model?: { rig: Rig; notes: string[] },
   ) {
     const rig = model?.rig ?? rigFor(sequence.rig);
-    const meshes = currentRigMeshes(rig);
+    const drawn: { meshes: ReturnType<typeof currentRigMeshes>; boxes: BoxedMeshPart[] } = model
+      ? modelRigMeshes(rig)
+      : { meshes: currentRigMeshes(rig), boxes: [] };
+    const { meshes, boxes } = drawn;
     const sheet = renderContactSheet(sequence, meshes, { locomotion, rig });
     const preview = renderRigGlb(sequence, sequence.name, meshes, rig);
     return {
@@ -1919,10 +1956,11 @@ export class RobloxStudioTools {
               // What each column is, beside the even steps: its keyframe name, marker, or the fastest instant.
               ...(sheet.labels.some((label) => label !== '') ? { shows: sheet.labels } : {}),
               rig: model
-                ? `${rig.name}'s own parts, each drawn as its shape, a block, wedge, cylinder or ball, with the parts welded to it`
+                ? `${rig.name}'s own parts, each drawn as its shape, a block, wedge, cylinder or ball, or as its MeshPart's mesh, with the parts welded to it`
                 : rig.name === 'R6'
                   ? 'the R6 rig, whose parts are blocks'
                   : meshes.source === 'studio' ? 'the stock R15 rig' : 'a stand-in block rig, until a build reads the stock rig from Studio',
+              ...(boxes.length > 0 ? { boxes: describeBoxes(boxes) } : {}),
               ...(previewProps(sequence, rig).length > 0
                 ? { props: 'stand-ins: a 4-stud blade along each hand prop\'s +Y, a 3.8-stud sheath along SheathAttach\'s +Y' }
                 : {}),

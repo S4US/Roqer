@@ -30,6 +30,8 @@ export interface ModelRigPart {
   size: [number, number, number];
   /** How it is drawn; a block when absent. */
   shape?: PartShape;
+  /** A MeshPart's MeshId, which the previews draw it with once the mesh is read. */
+  mesh?: string;
   /** Not drawn: fully transparent, as a HumanoidRootPart is. */
   hidden?: boolean;
 }
@@ -43,6 +45,8 @@ export interface ModelRigWeldedPart {
   offset: number[];
   size: [number, number, number];
   shape?: PartShape;
+  /** A MeshPart's MeshId. */
+  mesh?: string;
 }
 
 export interface ModelRigJoint {
@@ -86,6 +90,10 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
 
 const isName = (value: unknown): value is string => typeof value === 'string' && value.trim() !== '' && value.length <= 100;
+
+/** A MeshId as a reading carries it: absent, or a string of at most 200 characters. */
+const isMeshId = (value: unknown): value is string | undefined =>
+  value === undefined || (typeof value === 'string' && value !== '' && value.length <= 200);
 
 function numbers(value: unknown, count: number): number[] | undefined {
   return Array.isArray(value) && value.length === count && value.every((entry) => typeof entry === 'number' && Number.isFinite(entry))
@@ -161,6 +169,7 @@ export function rigFromModel(input: unknown): ModelRigResult {
   // Parts, each named once.
   const sizes = new Map<string, Vec3>();
   const shapes = new Map<string, PartShape>();
+  const meshIds = new Map<string, string>();
   const hidden: string[] = [];
   const partList = Array.isArray(reading.parts) ? reading.parts : [];
   if (!Array.isArray(reading.parts)) errors.push('parts: must be a list');
@@ -175,6 +184,8 @@ export function rigFromModel(input: unknown): ModelRigResult {
     if (part.shape !== undefined && !SHAPES.includes(part.shape as PartShape)) {
       errors.push(`parts: ${part.name}'s shape must be one of ${SHAPES.join(', ')}`);
     }
+    if (!isMeshId(part.mesh)) errors.push(`parts: ${part.name}'s mesh must be its MeshId`);
+    else if (part.mesh !== undefined) meshIds.set(part.name, part.mesh);
     if (sizes.has(part.name)) repeatedParts.add(part.name);
     sizes.set(part.name, [size[0], size[1], size[2]]);
     shapes.set(part.name, SHAPES.includes(part.shape as PartShape) ? part.shape as PartShape : 'Block');
@@ -293,6 +304,9 @@ export function rigFromModel(input: unknown): ModelRigResult {
     limits,
     hidden: hidden.filter((part) => reached.has(part)),
     shapes: Object.fromEntries(Object.keys(parts).map((part) => [part, shapes.get(part)!])),
+    ...([...meshIds.keys()].some((part) => reached.has(part))
+      ? { meshIds: Object.fromEntries([...meshIds].filter(([part]) => reached.has(part))) }
+      : {}),
     ...(attached.size > 0 ? { attached: Object.fromEntries(attached) } : {}),
     parts,
     joints: ordered,
@@ -345,12 +359,22 @@ function weldedParts(reading: Partial<ModelRigReading>, sizes: ReadonlyMap<strin
       errors.push(`welded: ${name}'s shape must be one of ${SHAPES.join(', ')}`);
       continue;
     }
+    if (!isMeshId(entry.mesh)) {
+      errors.push(`welded: ${name}'s mesh must be its MeshId`);
+      continue;
+    }
     if (!sizes.has(entry.to)) {
       errors.push(`welded: ${name} is welded to ${entry.to}, which is not one of the rig's parts`);
       continue;
     }
     const pieces = attached.get(entry.to) ?? [];
-    pieces.push({ part: entry.name, offset, size: [size[0], size[1], size[2]], shape: (entry.shape as PartShape | undefined) ?? 'Block' });
+    pieces.push({
+      part: entry.name,
+      offset,
+      size: [size[0], size[1], size[2]],
+      shape: (entry.shape as PartShape | undefined) ?? 'Block',
+      ...(entry.mesh === undefined ? {} : { mesh: entry.mesh }),
+    });
     attached.set(entry.to, pieces);
   }
   return attached;

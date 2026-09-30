@@ -1382,14 +1382,14 @@ const MAX_WELDED_PARTS = 256;
 const HIDDEN_TRANSPARENCY = 0.95;
 
 type RigJointReading = { name: string; part0: BasePart; part1: BasePart; c0: CFrame; c1: CFrame };
-type WeldedReading = { name: string; to: string; offset: number[]; size: number[]; shape: string };
+type WeldedReading = { name: string; to: string; offset: number[]; size: number[]; shape: string; mesh?: string };
 type RigReading = {
 	path: string;
 	revision: string;
 	rootPart: string;
 	controller: "Humanoid" | "AnimationController";
 	hipHeight?: number;
-	parts: { name: string; size: number[]; shape: string; hidden?: boolean }[];
+	parts: { name: string; size: number[]; shape: string; mesh?: string; hidden?: boolean }[];
 	joints: { name: string; part0: string; part1: string; c0: number[]; c1: number[] }[];
 	declarations?: string;
 	welded?: WeldedReading[];
@@ -1405,6 +1405,11 @@ function partShape(part: BasePart): string {
 		if (part.Shape === Enum.PartType.Wedge) return "Wedge";
 	}
 	return "Block";
+}
+
+/** A MeshPart's mesh, which the previews draw it with once core has read it; a mesh is not read here. */
+function meshOf(part: BasePart): { mesh?: string } {
+	return part.IsA("MeshPart") && part.MeshId !== "" ? { mesh: part.MeshId } : {};
 }
 
 function sizeOf(part: BasePart): number[] {
@@ -1513,7 +1518,7 @@ function weldedParts(model: Model, rigParts: Set<BasePart>): { welded: WeldedRea
 	for (let index = 0; index < math.min(visible.size(), MAX_WELDED_PARTS); index++) {
 		const part = visible[index];
 		const to = host.get(part)!;
-		welded.push({ name: part.Name, to: to.Name, offset: componentsOf(to.CFrame.ToObjectSpace(part.CFrame)), size: sizeOf(part), shape: partShape(part) });
+		welded.push({ name: part.Name, to: to.Name, offset: componentsOf(to.CFrame.ToObjectSpace(part.CFrame)), size: sizeOf(part), shape: partShape(part), ...meshOf(part) });
 	}
 	return { welded, leftOut: visible.size() - welded.size() };
 }
@@ -1566,7 +1571,7 @@ function readModelRig(target: AnimatedModel): RigReading | Refusal {
 	}
 	const parts: RigReading["parts"] = [];
 	for (const part of rigParts) {
-		parts.push({ name: part.Name, size: sizeOf(part), shape: partShape(part), ...(part.Transparency >= HIDDEN_TRANSPARENCY ? { hidden: true } : {}) });
+		parts.push({ name: part.Name, size: sizeOf(part), shape: partShape(part), ...meshOf(part), ...(part.Transparency >= HIDDEN_TRANSPARENCY ? { hidden: true } : {}) });
 	}
 	parts.sort((a, b) => a.name < b.name);
 	const { welded, leftOut } = weldedParts(model, rigParts);
@@ -1635,8 +1640,69 @@ function copyRefusal(model: Model): string | undefined {
 	return undefined;
 }
 
+/** The most meshes one read hands over, and the most triangles in each: Roqer's bounds for previews. */
+const MAX_MESHES_PER_READ = 8;
+const MAX_MODEL_MESH_FACES = 3000;
+
+/** One mesh's triangles in its own space, each corner with its normal, and its bounds; or why not. */
+function readMesh(id: string): Data {
+	const assets = game.GetService("AssetService");
+	const mesh = assets.CreateEditableMeshAsync(Content.fromUri(id));
+	const [ok, result] = pcall(() => {
+		const faces = mesh.GetFaces() as number[];
+		if (faces.size() > MAX_MODEL_MESH_FACES) {
+			return { error: `it has ${faces.size()} triangles; a preview draws a mesh of at most ${MAX_MODEL_MESH_FACES}` };
+		}
+		let min = new Vector3(math.huge, math.huge, math.huge);
+		let max = new Vector3(-math.huge, -math.huge, -math.huge);
+		const positions: number[] = [];
+		const normals: number[] = [];
+		for (const face of faces) {
+			const corners = mesh.GetFaceVertices(face) as number[];
+			const faceNormals = mesh.GetFaceNormals(face) as number[];
+			if (corners.size() !== 3 || faceNormals.size() !== 3) continue;
+			for (let corner = 0; corner < 3; corner++) {
+				const position = mesh.GetPosition(corners[corner]);
+				const normal = mesh.GetNormal(faceNormals[corner]) ?? Vector3.yAxis;
+				min = min.Min(position);
+				max = max.Max(position);
+				positions.push(round4(position.X), round4(position.Y), round4(position.Z));
+				normals.push(round4(normal.X), round4(normal.Y), round4(normal.Z));
+			}
+		}
+		if (positions.size() === 0) return { error: "it has no triangles" };
+		return { positions, normals, min: [round4(min.X), round4(min.Y), round4(min.Z)], max: [round4(max.X), round4(max.Y), round4(max.Z)] };
+	});
+	mesh.Destroy();
+	if (!ok) error(result, 0);
+	return result as Data;
+}
+
+/**
+ * Meshes of a model's MeshParts for the animation preview, by mesh ID: each as
+ * triangles in the mesh's own space with its bounds, which core stretches onto
+ * each part's size as Studio does. A mesh Studio will not hand over, or one
+ * too large to draw, comes back as why. Read-only: nothing enters the place.
+ */
+function animationReadMeshes(requestData: Data) {
+	const ids = requestData.meshes;
+	if (!typeIs(ids, "table") || (ids as unknown[]).size() === 0 || (ids as unknown[]).size() > MAX_MESHES_PER_READ) {
+		return { error: `meshes must list 1 to ${MAX_MESHES_PER_READ} mesh IDs.`, errorCode: "invalid_arguments" };
+	}
+	const meshes: Record<string, Data> = {};
+	for (const id of ids as unknown[]) {
+		if (!typeIs(id, "string") || id === "" || id.size() > 200) {
+			return { error: "every mesh ID must be a string of 1 to 200 characters.", errorCode: "invalid_arguments" };
+		}
+		const [ok, result] = pcall(() => readMesh(id));
+		meshes[id] = ok ? (result as Data) : { error: `Studio would not hand it over: ${tostring(result)}` };
+	}
+	return { meshes };
+}
+
 export = {
 	previewAnimation,
+	animationReadMeshes,
 	animationReadRig,
 	buildAnimation,
 	animationRigMeshes,

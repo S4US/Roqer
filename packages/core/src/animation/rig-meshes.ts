@@ -9,7 +9,8 @@
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { drawnParts, heldParts, meshParts, partMesh, type PartMesh } from './box-rig.js';
+import { drawnParts, heldParts, meshParts, partMesh, type MeshLibrary, type PartMesh } from './box-rig.js';
+import { MAX_PREVIEW_MESH_TRIANGLES, meshRefusal, modelMesh, type ModelMesh } from './model-meshes.js';
 import { R15_RIG } from './r15-rig.js';
 import type { Rig } from './rig.js';
 import { RIGS } from './rigs.js';
@@ -32,18 +33,66 @@ let loaded: RigMeshes | undefined;
 
 /**
  * The block rig: every body part, and a held weapon's stand-in, as rounded
- * boxes, or on a model's rig as each part's shape with what is welded to it.
- * R15's and R6's are kept; a model's rig may change between calls.
+ * boxes, or on a model's rig as each part's shape, or its MeshPart's mesh from
+ * `library`, with what is welded to it. R15's and R6's are kept; a model's rig
+ * may change between calls.
  */
-export function generatedRigMeshes(rig: Rig = R15_RIG): RigMeshes {
+export function generatedRigMeshes(rig: Rig = R15_RIG, library?: MeshLibrary): RigMeshes {
   const builtIn = RIGS.get(rig.name) === rig;
   let meshes = builtIn ? generated.get(rig.name) : undefined;
   if (!meshes) {
     const parts = [...meshParts(rig), ...heldParts(rig)];
-    meshes = { source: 'generated', parts: new Map(parts.map((part) => [part, partMesh(part, rig)])) };
+    meshes = { source: 'generated', parts: new Map(parts.map((part) => [part, partMesh(part, rig, library)])) };
     if (builtIn) generated.set(rig.name, meshes);
   }
   return meshes;
+}
+
+/** A MeshPart drawn as its box, and why. */
+export interface BoxedMeshPart {
+  part: string;
+  reason: string;
+}
+
+/**
+ * What a model's rig is drawn with: each MeshPart as its mesh where Studio
+ * handed it over and the preview's triangle budget holds it, as its box
+ * otherwise, and which were boxes and why. A mesh several parts show counts
+ * for each.
+ */
+export function modelRigMeshes(rig: Rig, directory = rigMeshCacheDirectory()): { meshes: RigMeshes; boxes: BoxedMeshPart[] } {
+  const uses: { part: string; id: string }[] = [];
+  const drawn = new Set(drawnParts(rig));
+  for (const part of meshParts(rig)) {
+    const own = rig.meshIds?.[part];
+    if (own !== undefined && drawn.has(part)) uses.push({ part, id: own });
+    for (const piece of rig.attached?.[part] ?? []) if (piece.mesh !== undefined) uses.push({ part: piece.part, id: piece.mesh });
+  }
+  const library = new Map<string, ModelMesh>();
+  const over = new Set<string>();
+  let triangles = 0;
+  for (const { id } of uses) {
+    if (library.has(id) || over.has(id)) continue;
+    const mesh = modelMesh(id, directory);
+    if (!mesh) continue;
+    const needed = (mesh.indices.length / 3) * uses.filter((use) => use.id === id).length;
+    if (triangles + needed > MAX_PREVIEW_MESH_TRIANGLES) {
+      over.add(id);
+      continue;
+    }
+    triangles += needed;
+    library.set(id, mesh);
+  }
+  const boxes = uses
+    .filter(({ id }) => !library.has(id))
+    .map(({ part, id }) => ({
+      part,
+      reason: over.has(id)
+        ? `past the ${MAX_PREVIEW_MESH_TRIANGLES} triangles of meshes a preview draws`
+        : meshRefusal(id) ?? 'its mesh has not been read from Studio',
+    }));
+  const meshes = generatedRigMeshes(rig, library);
+  return { meshes: library.size > 0 ? { ...meshes, source: 'studio' } : meshes, boxes };
 }
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -123,9 +172,11 @@ export function cachedRigMeshes(directory = rigMeshCacheDirectory()): RigMeshes 
 /**
  * What the preview draws now: the stock R15 rig's real meshes when known, the
  * generated rig otherwise. A held weapon is always the generated stand-in,
- * and R6 is always blocks, as its parts are.
+ * and R6 is always blocks, as its parts are. A model's rig is drawn as
+ * modelRigMeshes draws it.
  */
 export function currentRigMeshes(rig: Rig = R15_RIG): RigMeshes {
+  if (RIGS.get(rig.name) !== rig) return modelRigMeshes(rig).meshes;
   const cached = rig.name === 'R15' ? cachedRigMeshes() : undefined;
   if (!cached) return generatedRigMeshes(rig);
   const standIns = generatedRigMeshes(rig).parts;

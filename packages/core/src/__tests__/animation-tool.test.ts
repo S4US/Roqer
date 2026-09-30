@@ -847,7 +847,8 @@ describe('an animation for a model\'s own rig', () => {
     expect(result.rig.scale).toMatch(/^0\.66 times R15's distance limits, from its height at rest$/);
     const limits = result.checks.results.find((check: { id: string }) => check.id === 'jointLimits');
     expect(limits).toEqual({ id: 'jointLimits', status: 'skipped', detail: 'not checked: Neck and Tail turn with no declared range' });
-    expect(result.sheet.rig).toBe('game.Workspace.Dog\'s own parts, each drawn as its shape, a block, wedge, cylinder or ball, with the parts welded to it');
+    expect(result.sheet.rig).toBe('game.Workspace.Dog\'s own parts, each drawn as its shape, a block, wedge, cylinder or ball, or as its MeshPart\'s mesh, with the parts welded to it');
+    expect(result.sheet).not.toHaveProperty('boxes');
     expect(result.sheet.reading).toContain('straight at its front, its right side on the left');
   });
 
@@ -911,6 +912,31 @@ describe('an animation for a model\'s own rig', () => {
       errorCode: 'stale_rig',
     });
     expect(calls.map((call) => call.endpoint)).not.toContain('/api/build-animation');
+  });
+
+  test('check reads the meshes of its MeshParts once, and names those drawn as boxes with why', async () => {
+    const tetrahedron = {
+      positions: [0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 1, 0, 0, 0, 1, 0, 0, 0, 1],
+      normals: [0, 0, -1, 0, 0, -1, 0, 0, -1, 0, -1, 0, 0, -1, 0, 0, -1, 0, -1, 0, 0, -1, 0, 0, -1, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+      min: [0, 0, 0],
+      max: [1, 1, 1],
+    };
+    const reading = {
+      ...partsDog(),
+      parts: partsDog().parts.map((part) => (part.name === 'Head' ? { ...part, mesh: 'rbxassetid://31' } : part.name === 'Tail' ? { ...part, mesh: 'rbxassetid://32' } : part)),
+    };
+    const { tools, calls } = studio({
+      '/api/animation-read-rig': () => reading,
+      '/api/animation-read-meshes': () => ({ meshes: { 'rbxassetid://31': tetrahedron, 'rbxassetid://32': { error: 'Studio would not hand it over: not permitted' } } }),
+    });
+    const first = body(await tools.animation({ action: 'check', animation: wag() }));
+    expect(calls.map((call) => call.endpoint)).toEqual(['/api/animation-read-rig', '/api/animation-read-meshes']);
+    expect(calls[1].data).toEqual({ meshes: ['rbxassetid://31', 'rbxassetid://32'] });
+    expect(first.sheet.boxes).toBe('MeshParts drawn as their boxes: Tail (Studio would not hand it over: not permitted)');
+    // Kept, and refused, for this process: the next check reads the rig alone.
+    const second = body(await tools.animation({ action: 'check', animation: wag() }));
+    expect(calls.map((call) => call.endpoint).slice(2)).toEqual(['/api/animation-read-rig']);
+    expect(second.sheet.boxes).toBe(first.sheet.boxes);
   });
 
   test('verify compares the model\'s playtest with its own rig, and a character is not asked to play it', async () => {
