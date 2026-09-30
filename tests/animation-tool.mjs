@@ -19,7 +19,9 @@
 // Workspace as one undo step, with the model loader holding the idle, walk
 // and run its Animate script carried; a state is replaced only when its
 // current ID is named; and in the same playtest, verify walks the NPC with
-// MoveTo and sees the loader play the walk, paced, and then the idle.
+// MoveTo and sees the loader play the walk, paced, and then the idle. Then
+// the NPC's own Patrol script walks it back and forth, pausing at each end,
+// and verify, given only the model, watches that patrol and passes it.
 
 import { McpClient, assert, runTest, safeStopPlaytest, startPlaytestAndWait } from './lib/mcp-client.mjs';
 
@@ -32,6 +34,30 @@ const GUARD = `game.Workspace.${GUARD_NAME}`;
 const REMOVE_GUARD = `
 local guard = workspace:FindFirstChild(${JSON.stringify(GUARD_NAME)})
 if guard then guard:Destroy() end
+return true
+`;
+// A patrol as a game writes one, dormant until the test switches it on, so it
+// does not fight verify's own walk to a position.
+const ADD_PATROL = `
+local guard = workspace:FindFirstChild(${JSON.stringify(GUARD_NAME)})
+local patrol = Instance.new("Script")
+patrol.Name = "Patrol"
+patrol.Source = [[
+local guard = script.Parent
+local humanoid = guard:WaitForChild("Humanoid")
+while guard:GetAttribute("Patrol") ~= true do
+	guard:GetAttributeChangedSignal("Patrol"):Wait()
+end
+humanoid.WalkSpeed = 8
+for _ = 1, 3 do
+	for _, z in { 60, 90 } do
+		humanoid:MoveTo(Vector3.new(60, 0, z))
+		humanoid.MoveToFinished:Wait()
+		task.wait(3)
+	end
+end
+]]
+patrol.Parent = guard
 return true
 `;
 const REMOVE_LOADER = `
@@ -379,6 +405,7 @@ const passed = await runTest('animation tool', async ({ track }) => {
     assert(unnamedState.errorCode === 'expected_id_required', `replacing an NPC's state needs its current ID (${unnamedState.errorCode})`);
     const pacedWalk = await client.callTool('animation', { action: 'wire', model: GUARD, slot: 'walk', animation_id: defaults.walk, expected_id: defaults.walk, ground_speed: 10 });
     assert(pacedWalk.wired === true && pacedWalk.installed === false && pacedWalk.groundSpeed === 10 && pacedWalk.readBackMatches === true, `wire paces the NPC's walk (${pacedWalk.error ?? 'ok'})`);
+    assert(await luau(client, ADD_PATROL) === true, 'the NPC has a patrol script, waiting to be switched on');
 
     let playtestStarted = false;
     try {
@@ -397,6 +424,17 @@ const passed = await runTest('animation tool', async ({ track }) => {
       assert(movement.reached === true && movement.moving?.played?.walk > 0 && movement.standing?.played?.idle > 0, `the NPC walked there, playing its walk and then its idle (${walked.error ?? JSON.stringify({ moving: movement.moving, standing: movement.standing })})`);
       assert(movement.pace?.state === 'walk' && movement.pace.kept === true, `its loader paced the walk to its speed (${JSON.stringify(movement.pace ?? movement.reason)})`);
       assert(walked.verified === true && walked.wiring?.matches === true, `verify passes the NPC on the playtest server (${walked.error ?? movement.reason ?? 'ok'})`);
+
+      // Its own patrol, at a WalkSpeed of 8 over 30 studs, pausing 3 s at each end.
+      const started = await client.callTool('execute_luau', {
+        code: `workspace:FindFirstChild(${JSON.stringify(GUARD_NAME)}):SetAttribute("Patrol", true) return true`,
+        target: 'server',
+      }, 60_000);
+      assert(started?.success === true, `the NPC's patrol is switched on in the playtest (${started?.error ?? 'ok'})`);
+      const watched = await client.callTool('animation', { action: 'verify', model: GUARD }, 90_000);
+      const seen = watched.movement ?? {};
+      assert(seen.mode === 'watched' && seen.moving?.played?.walk > 0 && seen.standing?.played?.idle > 0, `verify watched the patrol walk and then pause (${watched.error ?? JSON.stringify({ moving: seen.moving, standing: seen.standing })})`);
+      assert(watched.verified === true && seen.pace?.kept === true, `verify passes the NPC's own patrol, its walk paced to it (${watched.error ?? seen.reason ?? JSON.stringify(seen.pace)})`);
     } finally {
       if (playtestStarted) await safeStopPlaytest(client);
     }
