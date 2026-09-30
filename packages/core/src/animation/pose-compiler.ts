@@ -735,6 +735,11 @@ function solveLimb(
       else high = middle;
     }
     bend = (low + high) / 2;
+    // A declared hinge whose reach does not shrink steadily as it folds may
+    // have no bend that reaches the distance: say so rather than miss.
+    if (Math.abs(length3(endAt(bend)) - distance) > POSE_LIMITS.aimAtToleranceStuds) {
+      return `is ${studs(distance)} studs from ${joint.name}; the ${what} cannot bend to reach that far at ${studs(time)} s`;
+    }
   }
 
   // Turn the limb so its end points at the target, and its fold toward

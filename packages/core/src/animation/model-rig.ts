@@ -5,13 +5,14 @@
 //
 // The reading is the truth about the joints the Animator will drive. What
 // geometry cannot say, such as which parts are feet or how far a joint may
-// turn, comes only from declarations; without them a rig can still be
-// animated with `rotation`, and each check that needs them says it could not
-// run.
+// turn, comes only from the model's RoqerRig declarations
+// (rig-declarations.ts); without them a rig can still be animated with
+// `rotation`, and each check that needs them says it could not run.
 
 import { drawnParts } from './box-rig.js';
 import { multiply, poseRig, pointToWorld, type Frame } from './motion.js';
 import { R15_RIG } from './r15-rig.js';
+import { declareRig } from './rig-declarations.js';
 import type { Rig, RigJoint, RigJointLimit, Rotation, Vec3 } from './rig.js';
 
 /** The most joints a rig may have: a bound of Roqer's for summaries and previews, not the engine's. */
@@ -54,6 +55,8 @@ export interface ModelRigReading {
   /** The root part and every part a joint moves. */
   parts: ModelRigPart[];
   joints: ModelRigJoint[];
+  /** The model's RoqerRig attribute, as its JSON text, when it has one. */
+  declarations?: string;
 }
 
 export type ModelRigResult = { ok: true; rig: Rig; notes: string[] } | { ok: false; errors: string[] };
@@ -122,6 +125,9 @@ export function rigFromModel(input: unknown): ModelRigResult {
   }
   if (reading.hipHeight !== undefined && (typeof reading.hipHeight !== 'number' || !Number.isFinite(reading.hipHeight))) {
     errors.push('hipHeight: must be a number');
+  }
+  if (reading.declarations !== undefined && typeof reading.declarations !== 'string') {
+    errors.push('declarations: must be the RoqerRig attribute\'s text');
   }
 
   // Parts, each named once.
@@ -259,16 +265,44 @@ export function rigFromModel(input: unknown): ModelRigResult {
     const frame: Frame = multiply(parent, { p: [0, 0, 0], r: [...(joint.parentRotation ?? [1, 0, 0, 0, 1, 0, 0, 0, 1])] as Frame['r'] });
     return { ...joint, restRotation: frame.r as unknown as Rotation };
   });
-  const rig: Rig = { ...draft, joints: withAxes };
+  let rig: Rig = { ...draft, joints: withAxes };
+  if (reading.declarations !== undefined) {
+    const declared = declareRig(rig, reading.declarations);
+    if (!declared.ok) return declared;
+    rig = declared.rig;
+  }
 
-  // Where the ground is: under the lowest drawn part at rest. The distance
-  // limits scale with the body's height, as nothing yet says where its hips are.
+  // Where the ground is: under the lowest drawn part at rest.
   const drawn = drawnParts(rig);
   const { low, high } = restBounds(rig, drawn.length > 0 ? drawn : Object.keys(parts));
-  const height = high - low;
-  return {
-    ok: true,
-    rig: { ...rig, ground: low, scale: { factor: height / R15_REST_HEIGHT, basis: 'its height at rest' } },
-    notes,
-  };
+  rig = { ...rig, ground: low };
+  return { ok: true, rig: { ...rig, scale: bodyScale(rig, high - low) }, notes };
+}
+
+/**
+ * How much bigger than R15 a body is, for its distance limits: how high the
+ * roots of the limbs that stand on its feet are above the ground at rest,
+ * over R15's hips' 2.19 studs; or, with no legs declared, its height at rest
+ * over R15's.
+ */
+function bodyScale(rig: Rig, height: number): NonNullable<Rig['scale']> {
+  const feet = new Set(rig.feet);
+  const rest = poseRig(new Map(), 0, rig).parts;
+  const hips = Object.entries(rig.limbs)
+    .filter(([name, limb]) => {
+      const root = rig.joints.find((joint) => joint.name === name)!;
+      const last = limb.hinge ? rig.joints.find((joint) => joint.name === limb.hinge)!.childPart : root.childPart;
+      const foot = limb.foot ? rig.joints.find((joint) => joint.name === limb.foot)!.childPart : undefined;
+      return feet.has(last) || (foot !== undefined && feet.has(foot));
+    })
+    .map(([name]) => {
+      const root = rig.joints.find((joint) => joint.name === name)!;
+      return pointToWorld(rest.get(root.parentPart)!, root.parentOffset)[1] - rig.ground;
+    })
+    .filter((above) => above > 0);
+  if (hips.length > 0) {
+    const mean = hips.reduce((sum, above) => sum + above, 0) / hips.length;
+    return { factor: mean / R15_RIG.hipHeight, basis: 'its hips\' height at rest' };
+  }
+  return { factor: height / R15_REST_HEIGHT, basis: 'its height at rest' };
 }

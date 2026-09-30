@@ -100,6 +100,8 @@ export interface Rig {
   ground: number;
   /** The parts that stand on the ground; R15 and R6 list theirs left then right. */
   feet: readonly string[];
+  /** Where a foot meets the ground, in its part's frame, when not at its box's corners. */
+  footPoints?: Readonly<Record<string, readonly Vec3[]>>;
   /** A biped's hip joints, left then right, whose swing the gait symmetry check compares. */
   hips?: readonly [string, string];
   /** The part heading and the body's shadow follow. */

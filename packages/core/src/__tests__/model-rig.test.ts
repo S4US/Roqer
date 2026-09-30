@@ -5,63 +5,18 @@
 import { renderContactSheet } from '../animation/contact-sheet.js';
 import { checkMotion } from '../animation/motion-checks.js';
 import { buildTracks, pointToWorld, poseRig } from '../animation/motion.js';
-import { MAX_RIG_JOINTS, R15_REST_HEIGHT, rigFromModel, type ModelRigJoint, type ModelRigReading } from '../animation/model-rig.js';
+import { MAX_RIG_JOINTS, R15_REST_HEIGHT, rigFromModel, type ModelRigReading } from '../animation/model-rig.js';
 import { compilePoseAnimation, type KeyframeSequenceDescription } from '../animation/pose-compiler.js';
 import { renderRigGlb } from '../animation/rig-glb.js';
 import type { Rig } from '../animation/rig.js';
+import { cf, IDENTITY, LEG_ROOTS, motor, partsDog, type CF, type V } from './fixtures/parts-dog.js';
 
-type V = [number, number, number];
-const IDENTITY = [1, 0, 0, 0, 1, 0, 0, 0, 1];
-
-/** A CFrame: a position and a row-major rotation. */
-interface CF { p: V; r: number[] }
-const cf = (p: V, r: number[] = IDENTITY): CF => ({ p, r });
-const rotate = (r: number[], v: number[]): V => [0, 1, 2].map((row) => r[row * 3] * v[0] + r[row * 3 + 1] * v[1] + r[row * 3 + 2] * v[2]) as V;
-const transpose = (r: number[]) => [r[0], r[3], r[6], r[1], r[4], r[7], r[2], r[5], r[8]];
-const inverse = (a: CF): CF => ({ p: rotate(transpose(a.r), a.p).map((value) => -value) as V, r: transpose(a.r) });
-const times = (a: CF, b: CF): CF => ({
-  p: rotate(a.r, b.p).map((value, axis) => value + a.p[axis]) as V,
-  r: Array.from({ length: 9 }, (_unused, index) => [0, 1, 2].reduce((sum, k) => sum + a.r[Math.floor(index / 3) * 3 + k] * b.r[k * 3 + (index % 3)], 0)),
-});
-/** A Motor6D made as a script makes one: C0 and C1 put its frame at the pivot, from each part's CFrame. */
-const motor = (name: string, part0: [string, CF], part1: [string, CF], pivot: CF): ModelRigJoint => ({
-  name,
-  part0: part0[0],
-  part1: part1[0],
-  c0: [...times(inverse(part0[1]), pivot).p, ...times(inverse(part0[1]), pivot).r],
-  c1: [...times(inverse(part1[1]), pivot).p, ...times(inverse(part1[1]), pivot).r],
-});
+/** The dog, with parts or joints replaced. */
+const dog = (overrides: Partial<ModelRigReading> = {}): ModelRigReading => ({ ...partsDog(), ...overrides });
+const LEGS = LEG_ROOTS;
 
 /** C0 or C1 for a part standing upright at `at`: the pivot's offset from it, unturned. */
 const offset = (pivot: V, at: V, turn: number[] = IDENTITY) => [pivot[0] - at[0], pivot[1] - at[1], pivot[2] - at[2], ...turn];
-
-const LEGS: Record<string, V> = { FrontLeft: [-0.7, -1.4, -1.4], FrontRight: [0.7, -1.4, -1.4], HindLeft: [-0.7, -1.4, 1.4], HindRight: [0.7, -1.4, 1.4] };
-
-/** The spike's dog: a hidden root over the body, a head, four legs and a tail, each on a Motor6D at its pivot. */
-function dog(overrides: Partial<ModelRigReading> = {}): ModelRigReading {
-  const joints: ModelRigJoint[] = [
-    { name: 'Root', part0: 'HumanoidRootPart', part1: 'Body', c0: offset([0, 0, 0], [0, 0, 0]), c1: offset([0, 0, 0], [0, 0, 0]) },
-    { name: 'Neck', part0: 'Body', part1: 'Head', c0: offset([0, 0.4, -2], [0, 0, 0]), c1: offset([0, 0.4, -2], [0, 0.8, -2.6]) },
-    ...Object.entries(LEGS).map(([name, at]) => ({ name, part0: 'Body', part1: name, c0: offset([at[0], -0.6, at[2]], [0, 0, 0]), c1: offset([at[0], -0.6, at[2]], at) })),
-    { name: 'Tail', part0: 'Body', part1: 'Tail', c0: offset([0, 0.3, 1.9], [0, 0, 0]), c1: offset([0, 0.3, 1.9], [0, 0.3, 2.7]) },
-  ];
-  return {
-    path: 'game.Workspace.Dog',
-    revision: 'r1',
-    rootPart: 'HumanoidRootPart',
-    controller: 'Humanoid',
-    hipHeight: 1.6,
-    parts: [
-      { name: 'HumanoidRootPart', size: [2, 1.2, 4], hidden: true },
-      { name: 'Body', size: [2, 1.2, 4] },
-      { name: 'Head', size: [1.2, 1.2, 1.4] },
-      ...Object.keys(LEGS).map((name) => ({ name, size: [0.5, 1.6, 0.5] as V })),
-      { name: 'Tail', size: [0.3, 0.3, 1.6] },
-    ],
-    joints,
-    ...overrides,
-  };
-}
 
 function rigOf(reading: unknown): Rig {
   const result = rigFromModel(reading);
