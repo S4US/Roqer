@@ -232,7 +232,11 @@ owns them, and asks for animations "of its own", since `rig` gives a stock NPC
 Roblox's default idle, walk and run, which a run could leave in place. Its
 seed builds a raised walkway with the two posts, apart from the other tasks'
 builds, so the guard has ground of its own. It publishes two real animations,
-so it needs the same key as T15. Its conditions:
+so it needs the same key as T15, and like T15 a published place, opened from
+Roblox, that the key's creator owns. The harness refuses an unpublished one
+before a run: it reports its CreatorId as 0, which no uploaded animation's
+owner can match, as the first run found after building a guard that patrolled.
+Its conditions:
 
 - an idle and a walk that this run published and Roblox read back, in the
   guard's `RoqerModelAnimate` loader, each an Animation owned by the place's

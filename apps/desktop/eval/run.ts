@@ -41,9 +41,11 @@ import { McpClient } from "../runtime/mcp-client";
 import { BLENDER_OPERATION } from "../shared/blender";
 import { CUSTOM_API_FORMATS, DEFAULT_CUSTOM_REASONING_EFFORTS, type CustomApiFormat, type CustomConnection } from "../shared/custom-providers";
 import { isReasoningEffort, type ReasoningEffort } from "../shared/provider";
-import { formatEvalResult, requireMatchingBridge, requireUploads, resolveBlender, runEvalTask, type EvalResult } from "./harness";
+import {
+  formatEvalResult, requireMatchingBridge, requirePublishedPlace, requireUploads, resolveBlender, runEvalTask, type EvalResult,
+} from "./harness";
 import { probePlace, resetPlace } from "./reset";
-import { EVAL_TASKS, findEvalTask, needsUploadKey, type EvalTask } from "./tasks";
+import { EVAL_TASKS, findEvalTask, needsPublishedPlace, needsUploadKey, type EvalTask } from "./tasks";
 import { createEvalTelemetryCollector } from "./telemetry";
 
 const DEFAULT_ENDPOINT = "http://127.0.0.1:58741";
@@ -161,6 +163,9 @@ async function main(): Promise<void> {
   const blender = worker !== undefined;
   if (needsUploadKey(options.tasks, blender)) {
     await requireUploads(client, instanceId, options.endpoint);
+  }
+  if (needsPublishedPlace(options.tasks)) {
+    await requirePublishedPlace(client, instanceId);
   }
 
   // `agent/` sits beside the built main process at runtime and beside this file

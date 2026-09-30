@@ -72,6 +72,13 @@ export type EvalTask = {
    * task uploads its models too and is checked whenever it runs.
    */
   needsUploads?: boolean;
+  /**
+   * The oracle judges a published asset's owner against the place's, so the
+   * place must be published: one that never was, or was opened from a file
+   * rather than from Roblox, reports its CreatorId as 0 and has no owner to
+   * match. The harness checks before it spends a model run.
+   */
+  needsPublishedPlace?: boolean;
   /** An image in `eval/fixtures` attached to the prompt, as a user pastes a style reference. */
   referenceImage?: string;
   /**
@@ -81,6 +88,11 @@ export type EvalTask = {
   auditInterface?: string;
   oracle: (input: EvalOracleInput) => EvalVerdict;
 };
+
+/** Whether any task that will run judges ownership against the place's, so the place must be published. */
+export function needsPublishedPlace(tasks: readonly EvalTask[]): boolean {
+  return tasks.some((task) => task.needsPublishedPlace === true);
+}
 
 /** Whether any task that will run uploads, so the bridge must have an Open Cloud key. */
 export function needsUploadKey(tasks: readonly EvalTask[], blender: boolean): boolean {
@@ -1521,6 +1533,7 @@ ${EXTENT_LUAU}
     // so it needs the bridge's Open Cloud key. Its first run had none and could
     // only build and play a temporary clip, so the harness now checks first.
     needsUploads: true,
+    needsPublishedPlace: true,
     seed: `
       local loader = game:GetService("ServerScriptService"):FindFirstChild("RoqerAnimate")
       if loader then loader:Destroy() end
@@ -1571,8 +1584,11 @@ ${EXTENT_LUAU}
     // played the walk while it moved and the idle while it stood; a 3D
     // preview; and every kept build's checks passed, one of them as a gait.
     // The walkway is raised and apart from the other tasks' builds, so the
-    // guard has ground of its own.
+    // guard has ground of its own. Its first run in a place that had never
+    // been published built a patrolling guard and could still not pass, since
+    // an unpublished place has no owner; the harness now checks first.
     needsUploads: true,
+    needsPublishedPlace: true,
     seed: `
       for _, name in ipairs({ "WorkbenchEvalGuard", "WorkbenchEvalPosts" }) do
         local old = workspace:FindFirstChild(name)
@@ -1661,6 +1677,10 @@ function publishedAssets(evidence: readonly RunEvidence[]): Set<string> {
 
 /** Why an asset the probe described is not an Animation the place's owner owns, or undefined when it is. */
 function animationOwnershipProblem(assetId: string, owner: unknown, place: unknown): string | undefined {
+  if (isRecord(place) && place.id === 0) {
+    return `The place is not published, or was opened from a file, so it has no owner for asset ${assetId} to match: `
+      + "run the task in a published place, opened from Roblox, that the Open Cloud key's creator owns.";
+  }
   if (!isRecord(owner) || !isRecord(place)) return `Roblox would not describe asset ${assetId}, so who owns it could not be confirmed.`;
   if (owner.assetType !== ANIMATION_ASSET_TYPE) return `Asset ${assetId} is not an Animation.`;
   if (owner.id !== place.id || owner.type !== place.type) {

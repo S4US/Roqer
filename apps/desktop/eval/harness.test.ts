@@ -19,7 +19,7 @@ import type { Planner, PlannerContext } from "../runtime/run-engine";
 import { createStudioToolRunner } from "../runtime/studio-tools";
 import { TOOL_CATALOG_DIGEST } from "../shared/mcp-tool-schemas";
 import { ANIMATION_PREVIEW_TITLE, type RunEvidence } from "../shared/run-events";
-import { formatEvalResult, requireMatchingBridge, requireUploads, runEvalTask } from "./harness";
+import { formatEvalResult, requireMatchingBridge, requirePublishedPlace, requireUploads, runEvalTask } from "./harness";
 import { EVAL_TASKS, type EvalTask } from "./tasks";
 import type { EvalPlannerMetrics } from "./telemetry";
 
@@ -743,6 +743,26 @@ test("a run refuses a bridge built from other tool definitions before any model 
   );
   // A bridge from before bridges said which: as unusable, and said so.
   assert.throws(() => requireMatchingBridge(health()), /other tool definitions than this checkout, or before bridges said which,/);
+});
+
+test("an ownership task refuses a place that was never published before any model is spent", async () => {
+  const calls: Array<Record<string, unknown>> = [];
+  const place = (owner: unknown): McpToolCaller => ({
+    callTool: async (_tool, args) => {
+      calls.push(args);
+      return { ok: true, data: { returnValue: JSON.stringify(owner) }, text: "", httpStatus: 200, durationMs: 1 };
+    },
+  });
+
+  await assert.rejects(
+    requirePublishedPlace(place({ id: 0, type: "User" }), "place:1"),
+    /^Error: The connected place is not published, or was opened from a file, so it has no owner \(its CreatorId is 0\)/,
+  );
+  await requirePublishedPlace(place({ id: 972858366, type: "User" }), "place:1");
+  await requirePublishedPlace(place({ id: 35_000_000, type: "Group" }), null);
+  // It only reads the place.
+  assert.deepEqual(calls[0], { code: "return { id = game.CreatorId, type = game.CreatorType.Name }", instance_id: "place:1" });
+  await assert.rejects(requirePublishedPlace(place("not a table"), null), /Could not read the place's owner/);
 });
 
 test("a modeling run refuses a bridge with no Open Cloud key before any model is spent", async () => {

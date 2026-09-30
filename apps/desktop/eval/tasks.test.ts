@@ -7,7 +7,7 @@ import {
   MODEL_MOVED_BY_GAME, MODEL_MOVED_BY_LABEL, MODEL_MOVED_BY_VERIFY, MODEL_WHILE_MOVING_LABEL, MODEL_WHILE_STANDING_LABEL,
   type RunEvidence,
 } from "../shared/run-events";
-import { findEvalTask, needsUploadKey, type EvalOracleInput } from "./tasks";
+import { EVAL_TASKS, findEvalTask, needsPublishedPlace, needsUploadKey, type EvalOracleInput } from "./tasks";
 
 function verdict(taskId: string, input: EvalOracleInput) {
   const task = findEvalTask(taskId);
@@ -621,6 +621,11 @@ test("T15 passes a run that meets every one of the plan's conditions", () => {
   assert.equal(result.passed, true, result.detail);
 });
 
+test("only the tasks that judge an owner against the place's need a published place", () => {
+  assert.deepEqual(EVAL_TASKS.filter((task) => needsPublishedPlace([task])).map((task) => task.id), ["T15-animation-run", "T18-npc-patrol"]);
+  assert.match(animationRun({ place: { id: 0, type: "User" } }).detail, /The place is not published/);
+});
+
 test("T15 wants the published animation, owned by the place's owner, in the run slot", () => {
   assert.match(animationRun({}, runEvidence().filter((item) => item.id !== "e3")).detail, /No animation was published/);
   assert.match(animationRun({ loader: false }).detail, /No RoqerAnimate loader/);
@@ -706,6 +711,11 @@ test("T18 wants the guard's loader holding an idle and a walk this run published
   assert.match(patrol({ walk: "507777826" }).detail, /walk holds 507777826, which this run did not publish/);
   assert.match(patrol({ walkOwner: { ...OWNED, id: 7 } }).detail, /not the place's owner/);
   assert.match(patrol({ idleOwner: undefined }).detail, /could not be confirmed/);
+  // Its first run: a place never published has no owner, whoever uploaded.
+  assert.match(
+    patrol({ place: { id: 0, type: "User" }, walkOwner: { ...OWNED, id: 972858366 } }).detail,
+    /^The place is not published, or was opened from a file, so it has no owner for asset 601 to match/,
+  );
   assert.match(patrol({ walkGroundSpeed: false }).detail, /without its ground speed/);
 });
 

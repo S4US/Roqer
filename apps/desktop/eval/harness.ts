@@ -27,7 +27,7 @@ import { isKnownTool, TOOL_RISK } from "../shared/mcp-tools";
 import type { ProviderId, ReasoningEffort } from "../shared/provider";
 import type { RunEvent } from "../shared/run-events";
 import { auditInterface, type InterfaceAudit, type InterfaceAuditOptions } from "./interface-audit";
-import { probePlace, resetPlace } from "./reset";
+import { placeOwner, probePlace, resetPlace } from "./reset";
 import { isAllowedTarget, type EvalTask, type EvalVerdict } from "./tasks";
 import type { EvalModelToolCall, EvalPlannerMetrics } from "./telemetry";
 
@@ -487,6 +487,20 @@ export function requireMatchingBridge(health: McpHealth): void {
     + "Then, from this checkout, run npm run build:plugin:artifact and npm run build, start the checkout's bridge "
     + "(npm run dev -w apps/desktop, or node packages/robloxstudio-mcp/dist/index.js --auto-install-plugin), "
     + "and restart Studio so it loads the matching plugin.",
+  );
+}
+
+/**
+ * Refuse an unpublished place for a task that judges a published asset's owner
+ * against the place's, which such a place cannot pass whatever the agent does.
+ */
+export async function requirePublishedPlace(caller: McpToolCaller, instanceId: string | null): Promise<void> {
+  const owner = await placeOwner(caller, instanceId);
+  if (owner.id !== 0) return;
+  throw new Error(
+    "The connected place is not published, or was opened from a file, so it has no owner (its CreatorId is 0), "
+    + "and a task that judges a published animation's owner against the place's cannot pass. Publish the eval place "
+    + "to Roblox as the Open Cloud key's creator (File > Publish to Roblox), or open it from Roblox, then run again.",
   );
 }
 

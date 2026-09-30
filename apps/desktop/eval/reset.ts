@@ -99,6 +99,20 @@ export async function probePlace(
   return luauReturnValue(outcome.data);
 }
 
+/**
+ * Who owns the connected place, as Studio says: `id` is 0 for a place that
+ * was never published, or was opened from a file rather than from Roblox.
+ */
+export async function placeOwner(caller: McpToolCaller, instanceId: string | null): Promise<{ id: number; type: string }> {
+  const outcome = await runLuau(caller, "return { id = game.CreatorId, type = game.CreatorType.Name }", instanceId);
+  const owner = outcome.ok ? luauReturnValue(outcome.data) : undefined;
+  const record = typeof owner === "object" && owner !== null ? owner as Record<string, unknown> : {};
+  if (typeof record.id !== "number" || typeof record.type !== "string") {
+    throw new EvalResetError(`Could not read the place's owner: ${outcome.message ?? outcome.errorCode ?? JSON.stringify(owner)}`);
+  }
+  return { id: record.id, type: record.type };
+}
+
 /** The value a Luau program returned, from any shape the bridge reports it in. */
 export function luauReturnValue(data: unknown): unknown {
   // The bridge has returned the Luau result three different ways, and reading
