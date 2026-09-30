@@ -592,19 +592,13 @@ end
 return true
 `;
 
-// What an insert put in the holder: its children; each part, joint, bone,
-// controller, model and folder with its parent, and for a part its size, place,
-// pivot and axes, for a joint the parts it joins and where; everything else
-// only counted by class and parent, since an importer's pose values alone can
-// fill any list.
-const readImport = (holder) => `${PRELUDE}
-local folder = workspace:FindFirstChild(SPIKE)
-local holder = folder and folder:FindFirstChild(${lua(holder)})
-if not holder then return { error = ${lua(`no ${holder}`)} } end
-local top = {}
-for _, child in holder:GetChildren() do
-  if #top < 20 then table.insert(top, { class = child.ClassName, name = child.Name }) end
-end
+// Reads a tree as an import is judged: each part, joint, bone, controller,
+// model and folder with its parent, and for a part its size, place, pivot and
+// axes, for a joint the parts it joins and where; each value the importer
+// keeps in InitialPoses, with its frame's place and turn, since those may hold
+// the modelled pivots the parts and joints lost; everything else only counted
+// by class and parent.
+const TREE = `
 local LISTED = { "BasePart", "JointInstance", "WeldConstraint", "AnimationConstraint", "Bone", "Humanoid",
   "AnimationController", "Animator", "Model", "Folder" }
 local function listed(instance)
@@ -613,52 +607,78 @@ local function listed(instance)
   end
   return false
 end
-local items, counted, overflow = {}, {}, 0
-for _, descendant in holder:GetDescendants() do
-  local parent = descendant.Parent
-  if not listed(descendant) then
-    local key = descendant.ClassName .. " in " .. parent.Name
-    counted[key] = (counted[key] or 0) + 1
-  elseif #items >= 100 then
-    overflow += 1
-  else
-    local entry = { class = descendant.ClassName, name = descendant.Name, parent = parent.Name, parentClass = parent.ClassName }
-    if descendant:IsA("BasePart") then
-      entry.size = vec(descendant.Size)
-      entry.position = vec(descendant.Position)
-      entry.pivot = vec(descendant:GetPivot().Position)
-      entry.pivotOffset = vec(descendant.PivotOffset.Position)
-      entry.look = vec(descendant.CFrame.LookVector)
-      entry.up = vec(descendant.CFrame.UpVector)
-      entry.anchored = descendant.Anchored
-    end
-    if descendant:IsA("MeshPart") then
-      entry.meshId = descendant.MeshId
-      entry.meshSize = vec(descendant.MeshSize)
-    end
-    if descendant:IsA("Model") then entry.pivot = vec(descendant:GetPivot().Position) end
-    if descendant:IsA("JointInstance") or descendant:IsA("WeldConstraint") or descendant:IsA("AnimationConstraint") then
-      local ok, part0, part1 = pcall(function()
-        if descendant:IsA("AnimationConstraint") then
-          local a0, a1 = descendant.Attachment0, descendant.Attachment1
-          return a0 and a0.Parent, a1 and a1.Parent
+
+local function listTree(root)
+  local items, poses, counted, overflow = {}, {}, {}, 0
+  for _, descendant in root:GetDescendants() do
+    local parent = descendant.Parent
+    if descendant:IsA("CFrameValue") and parent.Name == "InitialPoses" then
+      if #poses >= 64 then
+        overflow += 1
+      else
+        table.insert(poses, {
+          name = descendant.Name,
+          position = vec(descendant.Value.Position),
+          turn = round(degreesOf(descendant.Value), 1),
+        })
+      end
+    elseif not listed(descendant) then
+      local key = descendant.ClassName .. " in " .. parent.Name
+      counted[key] = (counted[key] or 0) + 1
+    elseif #items >= 100 then
+      overflow += 1
+    else
+      local entry = { class = descendant.ClassName, name = descendant.Name, parent = parent.Name, parentClass = parent.ClassName }
+      if descendant:IsA("BasePart") then
+        entry.size = vec(descendant.Size)
+        entry.position = vec(descendant.Position)
+        entry.pivot = vec(descendant:GetPivot().Position)
+        entry.pivotOffset = vec(descendant.PivotOffset.Position)
+        entry.look = vec(descendant.CFrame.LookVector)
+        entry.up = vec(descendant.CFrame.UpVector)
+        entry.anchored = descendant.Anchored
+      end
+      if descendant:IsA("MeshPart") then
+        entry.meshId = descendant.MeshId
+        entry.meshSize = vec(descendant.MeshSize)
+      end
+      if descendant:IsA("Model") then entry.pivot = vec(descendant:GetPivot().Position) end
+      if descendant:IsA("JointInstance") or descendant:IsA("WeldConstraint") or descendant:IsA("AnimationConstraint") then
+        local ok, part0, part1 = pcall(function()
+          if descendant:IsA("AnimationConstraint") then
+            local a0, a1 = descendant.Attachment0, descendant.Attachment1
+            return a0 and a0.Parent, a1 and a1.Parent
+          end
+          return descendant.Part0, descendant.Part1
+        end)
+        if ok then
+          entry.part0 = part0 and part0.Name or nil
+          entry.part1 = part1 and part1.Name or nil
         end
-        return descendant.Part0, descendant.Part1
-      end)
-      if ok then
-        entry.part0 = part0 and part0.Name or nil
-        entry.part1 = part1 and part1.Name or nil
+        -- Where the joint is: its frame on the first part, which at rest is its frame on the second.
+        if descendant:IsA("JointInstance") and descendant.Part0 then
+          entry.at = vec((descendant.Part0.CFrame * descendant.C0).Position)
+        end
       end
-      -- Where the joint is: its frame on the first part, which at rest is its frame on the second.
-      if descendant:IsA("JointInstance") and descendant.Part0 then
-        entry.at = vec((descendant.Part0.CFrame * descendant.C0).Position)
-      end
+      if descendant:IsA("Bone") then entry.at = vec(descendant.WorldPosition) end
+      table.insert(items, entry)
     end
-    if descendant:IsA("Bone") then entry.at = vec(descendant.WorldPosition) end
-    table.insert(items, entry)
   end
+  return items, poses, counted, overflow
 end
-return { top = top, items = items, counted = counted, overflow = overflow }
+`;
+
+// What an insert put in the holder: its children, and its tree as TREE reads one.
+const readImport = (holder) => `${PRELUDE}${TREE}
+local folder = workspace:FindFirstChild(SPIKE)
+local holder = folder and folder:FindFirstChild(${lua(holder)})
+if not holder then return { error = ${lua(`no ${holder}`)} } end
+local top = {}
+for _, child in holder:GetChildren() do
+  if #top < 20 then table.insert(top, { class = child.ClassName, name = child.Name }) end
+end
+local items, poses, counted, overflow = listTree(holder)
+return { top = top, items = items, poses = poses, counted = counted, overflow = overflow }
 `;
 
 // Whether the plugin can read the uploaded meshes, as previews of a creature would.
@@ -710,22 +730,14 @@ end
 return { exists = generated ~= nil, names = names }
 `;
 
-const readGenerated = (name) => `${PRELUDE}
+// The generated model's tree as TREE reads one, and its bounding box.
+const readGenerated = (name) => `${PRELUDE}${TREE}
 local generated = game:GetService("ServerStorage"):FindFirstChild("__MCPGeneratedModels")
 local model = generated and generated:FindFirstChild(${lua(name)})
 if not model then return { error = "the generated model is missing" } end
-local items = {}
-for _, descendant in model:GetDescendants() do
-  if #items >= 60 then break end
-  local entry = { class = descendant.ClassName, name = descendant.Name, parent = descendant.Parent.Name }
-  if descendant:IsA("BasePart") then
-    entry.size = vec(descendant.Size)
-    entry.position = vec(descendant.Position)
-  end
-  table.insert(items, entry)
-end
+local items, poses, counted, overflow = listTree(model)
 local _, size = model:GetBoundingBox()
-return { name = model.Name, size = vec(size), items = items }
+return { name = model.Name, size = vec(size), items = items, poses = poses, counted = counted, overflow = overflow }
 `;
 
 // Question 5 in the playtest: whether the NPC's Animate plays anything, on either peer.
@@ -1179,15 +1191,43 @@ function judgeUpload(asked) {
   };
 }
 
+// A group's piece is a part named after it, or after it with the "_geom" the
+// importer adds, as it did to every group on 2026-09-30.
 function judgeGenerated(made, readback) {
   if (!made || made.error || made.success !== true) return couldNotAsk(made);
-  const names = new Set((readback?.items ?? []).map((item) => item.name));
-  const named = GENERATED_GROUPS.filter((group) => names.has(group));
+  const items = readback?.items ?? [];
+  const parts = items.filter((item) => (item?.class === 'MeshPart' || item?.class === 'Part') && Array.isArray(item.size) && Array.isArray(item.position));
+  const pieces = GENERATED_GROUPS.map((group) => {
+    const part = parts.find((item) => item.name === group) ?? parts.find((item) => item.name === `${group}_geom`);
+    return { group, part: part?.name ?? null, size: part?.size ?? null, position: part?.position ?? null };
+  });
+  const named = pieces.filter((piece) => piece.part !== null);
+  const suffixed = named.filter((piece) => piece.part !== piece.group).length;
+  const naming = suffixed === 0 ? '' : suffixed === named.length ? ', as <group>_geom' : `, ${suffixed} as <group>_geom`;
+
+  // Which way it faces, from where its head is against its body (Roblox's
+  // forward is -Z), and how far its pieces reach, the importer's root aside.
+  const head = pieces.find((piece) => piece.group === 'Head' && piece.position);
+  const body = pieces.find((piece) => piece.group === 'Body' && piece.position);
+  const facing = head && body ? (head.position[2] < body.position[2] ? '-Z' : '+Z') : null;
+  const extent = (axis, sign) => Math.max(...named.map((piece) => sign * (piece.position[axis] + sign * piece.size[axis] / 2)));
+  const span = named.length === 0 ? null
+    : [0, 1, 2].map((axis) => Math.round((extent(axis, 1) + extent(axis, -1)) * 100) / 100);
+  const joints = items.filter((item) => item?.class === 'Motor6D');
+  const rig = {
+    joints: joints.length,
+    from: [...new Set(joints.map((joint) => joint.part0 ?? null))],
+    controllers: items.filter((item) => item?.class === 'AnimationController' || item?.class === 'Humanoid').map((item) => item.class),
+  };
+  const shape = [
+    ...(facing ? [`facing ${facing}`] : []),
+    ...(span ? [`spanning ${span.join(' x ')} studs`] : []),
+  ];
   return {
-    answer: named.length === GENERATED_GROUPS.length ? 'separate, named pieces'
-      : named.length > 0 ? `${named.length} of ${GENERATED_GROUPS.length} groups came back as named parts`
-        : 'no group came back as a named part',
-    evidence: { groups: GENERATED_GROUPS, named, made, readback },
+    answer: (named.length === GENERATED_GROUPS.length ? `separate, named pieces${naming}`
+      : named.length > 0 ? `${named.length} of ${GENERATED_GROUPS.length} groups came back as named parts${naming}`
+        : 'no group came back as a named part') + (shape.length > 0 ? `; ${shape.join(', ')}` : ''),
+    evidence: { groups: GENERATED_GROUPS, pieces, facing, span, rig, made, readback },
   };
 }
 

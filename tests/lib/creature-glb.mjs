@@ -194,11 +194,13 @@ const round = (value) => Math.round(value * 1000) / 1000;
  * `top`, its children; `items`, its parts, joints, bones, controllers, models
  * and folders, each with class, name and parent, for a part its size,
  * position, pivot and axes, and for a joint the parts it joins and where it is;
- * `counted`, every other descendant counted by class and parent; and
- * `overflow`, how many listable descendants did not fit in `items`.
+ * `poses`, the values in the importer's InitialPoses folder, each with its
+ * frame's place and turn; `counted`, every other descendant counted by class
+ * and parent; and `overflow`, how many of the listed kinds did not fit.
  */
 export function judgeImport(readback, pieces = CREATURE_PIECES) {
   const items = Array.isArray(readback?.items) ? readback.items : [];
+  const poses = Array.isArray(readback?.poses) ? readback.poses : [];
   const counted = readback?.counted && !Array.isArray(readback.counted) ? readback.counted : {};
   const overflow = typeof readback?.overflow === 'number' ? readback.overflow : 0;
   const meshParts = items.filter((item) => item?.class === 'MeshPart' && isVector(item.size) && isVector(item.position));
@@ -230,7 +232,8 @@ export function judgeImport(readback, pieces = CREATURE_PIECES) {
     // Of the pieces recognised; one that did not arrive shows in `found` instead.
     sizesMatch: found.length > 0 && pieceSummary.filter((entry) => entry.part !== null).every((entry) => entry.sizeMatches),
     pieceSummary,
-    rig: judgeRig(items, counted, found, body, reference),
+    rig: judgeRig(items, poses, counted, found, body, reference),
+    initialPoses: judgePoses(poses, pieces),
     overflow,
   };
   if (!reference || found.length < 2) return { ...finding, layout: 'unknown', origins: 'unknown', hierarchy: 'unknown' };
@@ -294,13 +297,14 @@ export function judgeImport(readback, pieces = CREATURE_PIECES) {
  * it came with, whether a joint joins each piece to the piece it hangs from,
  * and whether the joints sit at the node origins, where the pieces turn.
  */
-function judgeRig(items, counted, found, body, reference) {
+function judgeRig(items, poses, counted, found, body, reference) {
   const joints = items.filter((item) => JOINT_CLASSES.has(item?.class));
   const summary = {
     joints: joints.map((joint) => ({ class: joint.class, name: joint.name, part0: joint.part0 ?? null, part1: joint.part1 ?? null })),
     controllers: items.filter((item) => item?.class === 'Humanoid' || item?.class === 'AnimationController').map((item) => item.class),
     animators: items.filter((item) => item?.class === 'Animator').length,
-    initialPoseValues: Object.entries(counted)
+    // Listed with their frames, or, from a readback older than the listing, only counted.
+    initialPoseValues: poses.length + Object.entries(counted)
       .filter(([key, count]) => key.endsWith(' in InitialPoses') && typeof count === 'number')
       .reduce((sum, [, count]) => sum + count, 0),
   };
@@ -320,9 +324,13 @@ function judgeRig(items, counted, found, body, reference) {
     : joined.length === pairs.length ? 'kept'
       : joined.length > 0 ? `${joined.length} of ${pairs.length} pairs joined`
         : 'not joined as modelled';
+  // Every joint hanging from one part, as an importer's root joins each piece.
+  const firstParts = new Set(links.map((joint) => joint.part0 ?? null));
+  const from = links.length > 1 && firstParts.size === 1 ? [...firstParts][0] : null;
 
   // A joint belongs where the node origin of the piece it moves is; a bone,
-  // where the origin of the node it is named after is.
+  // where the origin of the node it is named after is. An importer that keeps
+  // no origin puts each joint at the middle of the part it moves.
   const pieceOfPart = new Map(found.map(({ piece, part }) => [part.name, piece]));
   const pieceNamed = new Map(found.map(({ piece }) => [piece.name, piece]));
   const offsets = !reference ? [] : joints.flatMap((joint) => {
@@ -330,10 +338,49 @@ function judgeRig(items, counted, found, body, reference) {
     if (!piece || !isVector(joint.at)) return [];
     return [distance(difference(joint.at, reference.position), robloxAxes(difference(piece.origin, body.piece.center)))];
   });
+  const partNamed = new Map(items.filter((item) => isVector(item?.position)).map((item) => [item.name, item]));
+  const fromCentres = links.flatMap((joint) => {
+    const part = partNamed.get(joint.part1);
+    return part && isVector(joint.at) ? [distance(joint.at, part.position)] : [];
+  });
   const jointsAt = offsets.length === 0 ? 'unknown'
     : offsets.every((offset) => offset <= NEAR) ? 'the modelled origins'
-      : 'elsewhere';
-  return { ...summary, tree, jointsAt, ...(offsets.length > 0 ? { worstJointStuds: round(Math.max(...offsets)) } : {}) };
+      : fromCentres.length === links.length && fromCentres.every((offset) => offset <= NEAR) ? "the pieces' centres"
+        : 'elsewhere';
+  return { ...summary, tree, from, jointsAt, ...(offsets.length > 0 ? { worstJointStuds: round(Math.max(...offsets)) } : {}) };
+}
+
+/**
+ * What the importer's InitialPoses values hold. For each node's name and each
+ * mesh's name it keeps three, `_Initial`, `_Original` and `_Composited`; each
+ * kind is tested against the places the GLB modelled, in the import's own
+ * space, since values do not move when the model does: the node's origin, the
+ * node's offset from its parent's origin, the mesh's centre, and the origin.
+ */
+function judgePoses(poses, pieces) {
+  const at = new Map(poses.filter((pose) => isVector(pose?.position)).map((pose) => [pose.name, pose.position]));
+  const pieceNamed = new Map(pieces.map((piece) => [piece.name, piece]));
+  const places = {
+    'the node origins': (piece) => robloxAxes(piece.origin),
+    "the offsets from each parent's origin": (piece) => robloxAxes(difference(piece.origin, piece.parent === null ? [0, 0, 0] : pieceNamed.get(piece.parent).origin)),
+    "the meshes' centres": (piece) => robloxAxes(piece.center),
+    'the origin': () => [0, 0, 0],
+  };
+  const kinds = {};
+  for (const [kind, nameOf] of [['node', (piece) => piece.name], ['mesh', meshName]]) {
+    for (const suffix of ['Initial', 'Original', 'Composited']) {
+      const kept = pieces.flatMap((piece) => {
+        const position = at.get(`${nameOf(piece)}_${suffix}`);
+        return position ? [{ piece, position }] : [];
+      });
+      if (kept.length === 0) continue;
+      const matching = Object.entries(places)
+        .filter(([, placeOf]) => kept.every(({ piece, position }) => distance(position, placeOf(piece)) <= NEAR))
+        .map(([place]) => place);
+      kinds[`${kind} _${suffix}`] = `${kept.length} at ${matching.length > 0 ? matching.join(' and ') : 'none of these'}`;
+    }
+  }
+  return kinds;
 }
 
 /** One line for the report's answer. */
@@ -342,6 +389,9 @@ export function describeImport(finding) {
   const naming = new Set(finding.pieceSummary.filter((entry) => entry.part).map((entry) => entry.namedAfter));
   const rig = finding.rig;
   const kinds = [...new Set((rig?.joints ?? []).map((joint) => joint.class))];
+  const pivotsKept = Object.entries(finding.initialPoses ?? {})
+    .filter(([, held]) => held.includes('the node origins'))
+    .map(([kind]) => kind);
   return [
     `${finding.meshParts} MeshParts for ${finding.pieces} pieces${finding.found < finding.pieces ? `, ${finding.found} recognised` : ''}`,
     `named after the ${[...naming].join(' or ')}`,
@@ -350,8 +400,10 @@ export function describeImport(finding) {
     `origins ${finding.origins}`,
     `hierarchy ${finding.hierarchy}`,
     !rig || rig.joints.length === 0 ? 'no joints'
-      : `${rig.joints.length} joints (${kinds.join(', ')}), tree ${rig.tree}, at ${rig.jointsAt}`
+      : `${rig.joints.length} joints (${kinds.join(', ')}), `
+        + `${rig.tree !== 'kept' && rig.from ? `all from ${rig.from}` : `tree ${rig.tree}`}, at ${rig.jointsAt}`
         + `${rig.controllers.length > 0 ? `, under ${rig.controllers.join(' and ')}` : ', no controller'}`,
-    ...(finding.overflow > 0 ? [`${finding.overflow} parts or joints not listed`] : []),
+    ...(pivotsKept.length > 0 ? [`InitialPoses keeps the node origins (${pivotsKept.join(', ')})`] : []),
+    ...(finding.overflow > 0 ? [`${finding.overflow} parts, joints or pose values not listed`] : []),
   ].join('; ');
 }

@@ -293,11 +293,15 @@ asks what Roblox does with a rig that is not a character:
    inserts it twice: with no position, and with one, since the kit probe's lost
    layout may have been `insert_asset`'s doing. It lists the joints, bones and
    controllers the import came with, and whether the joints join the pieces as
-   modelled, at their node origins. It reads the meshes back through
+   modelled, at their node origins, and it reads where the values in the
+   importer's `InitialPoses` folder put their frames, in case those keep the
+   pivots the joints lost. It reads the meshes back through
    `EditableMesh`, and publishes the dog's test animation, so question 1 can
    see a published animation reach the client.
 8. With `ROQER_SPIKE_GENERATE=1`: does `generate_model`, given
-   `schema_groups`, return a creature's pieces as separate, named parts?
+   `schema_groups`, return a creature's pieces as separate, named parts? It
+   also reports how they are jointed, which way the creature faces, and how
+   far its pieces reach.
 
 ```bash
 npm run test:spike:creature
