@@ -662,6 +662,269 @@ function animationVerify(requestData: Data) {
 	return { ...(result as object), rigType: humanoid.RigType.Name, ...(wiredIds ? { wiredIds, playingIds } : {}) };
 }
 
+// -- Models: NPCs and creatures -------------------------------------------------
+
+const MODEL_LOADER_NAME = "RoqerModelAnimate";
+/** The states a model's loader plays, by how fast the model moves. */
+const MODEL_STATES = ["idle", "walk", "run"];
+/** The fastest ground speed a gait may be wired with, in studs a second. */
+const MAX_GROUND_SPEED = 200;
+/**
+ * The model loader's whole code. It never changes; the animations are its
+ * attributes. It is a server Script inside the model, so every copy of the
+ * model carries it and what it plays reaches every client.
+ */
+const MODEL_LOADER_SOURCE = `-- Built by Roqer (RoqerModelAnimate 1). Plays this model's idle, walk and run
+-- animations by how fast the model moves. They are this script's attributes:
+-- idle, walk and run hold animation IDs, and walkSpeed and runSpeed the ground
+-- speed in studs a second each was written for, so its feet keep pace. Roqer's
+-- animation tool sets them; this code stays as it is.
+local RunService = game:GetService("RunService")
+
+local model = script.Parent
+local humanoid = model:FindFirstChildOfClass("Humanoid")
+local controller = humanoid or model:FindFirstChildOfClass("AnimationController")
+if not controller then
+	warn(script:GetFullName() .. ": " .. model.Name .. " has no Humanoid or AnimationController to animate")
+	return
+end
+local animator = controller:FindFirstChildOfClass("Animator")
+if not animator then
+	animator = Instance.new("Animator")
+	animator.Parent = controller
+end
+
+local PRIORITY = {
+	idle = Enum.AnimationPriority.Idle,
+	walk = Enum.AnimationPriority.Movement,
+	run = Enum.AnimationPriority.Movement,
+}
+-- Seconds to cross-fade from one state to the next.
+local FADE = 0.2
+-- Studs a second below which the model stands.
+local STANDING = 0.5
+-- How far a gait may be slowed down or sped up to keep pace with the model.
+local SLOWEST, FASTEST = 0.5, 2
+
+local tracks = {}
+local current = nil
+
+local function load(state)
+	local old = tracks[state]
+	if old then
+		old:Stop(0)
+		old:Destroy()
+		tracks[state] = nil
+	end
+	if current == state then
+		current = nil
+	end
+	local id = script:GetAttribute(state)
+	if typeof(id) ~= "string" or id == "" then
+		return
+	end
+	local animation = Instance.new("Animation")
+	animation.AnimationId = id
+	local ok, track = pcall(animator.LoadAnimation, animator, animation)
+	if not ok then
+		warn(script:GetFullName() .. ": the " .. state .. " animation " .. id .. " did not load: " .. tostring(track))
+		return
+	end
+	track.Priority = PRIORITY[state]
+	track.Looped = true
+	tracks[state] = track
+end
+
+for state in PRIORITY do
+	load(state)
+end
+script.AttributeChanged:Connect(function(name)
+	if PRIORITY[name] then
+		load(name)
+	end
+end)
+
+local function choose(speed)
+	if speed < STANDING then
+		return "idle"
+	end
+	local walkSpeed, runSpeed = script:GetAttribute("walkSpeed"), script:GetAttribute("runSpeed")
+	if tracks.walk and tracks.run and typeof(walkSpeed) == "number" and typeof(runSpeed) == "number" then
+		return if speed > (walkSpeed + runSpeed) / 2 then "run" else "walk"
+	end
+	return if tracks.walk then "walk" elseif tracks.run then "run" else "idle"
+end
+
+-- A Humanoid reports its speed; anything else is timed from frame to frame.
+local running = 0
+if humanoid then
+	humanoid.Running:Connect(function(speed)
+		running = speed
+	end)
+end
+local measured, last = 0, nil
+
+RunService.Heartbeat:Connect(function(dt)
+	local speed = running
+	if not humanoid then
+		local root = model.PrimaryPart
+		local position = root and root.Position
+		if position and last and dt > 0 then
+			local moved = (position - last) * Vector3.new(1, 0, 1)
+			measured += (moved.Magnitude / dt - measured) * math.min(1, dt * 5)
+		end
+		last = position
+		speed = measured
+	end
+	local state = choose(speed)
+	if state ~= current then
+		local previous = current and tracks[current]
+		if previous then
+			previous:Stop(FADE)
+		end
+		if tracks[state] then
+			tracks[state]:Play(FADE)
+		end
+		current = state
+	end
+	local track = tracks[state]
+	local written = script:GetAttribute(state .. "Speed")
+	if track and state ~= "idle" and typeof(written) == "number" and written > 0 then
+		track:AdjustSpeed(math.clamp(speed / written, SLOWEST, FASTEST))
+	end
+end)
+`;
+
+type AnimatedModel = { model: Model; controller: Humanoid | AnimationController };
+type Refusal = { error: string; errorCode: string };
+
+/**
+ * The model the path names, when a loader can animate it: a Model with a
+ * Humanoid or an AnimationController, and not a player's character, whose own
+ * Animate script the slots are for.
+ */
+function animatedModel(path: unknown): AnimatedModel | Refusal {
+	if (!typeIs(path, "string") || path === "") return { error: "model is required.", errorCode: "invalid_arguments" };
+	const target = resolveInstance(path, undefined);
+	if (!target) return { error: `${path} does not exist.`, errorCode: "model_not_found" };
+	if (!target.IsA("Model")) return { error: `${path} is a ${target.ClassName}, not a Model.`, errorCode: "target_not_model" };
+	if (target.IsDescendantOf(game.GetService("StarterPlayer"))) {
+		return { error: `${path} is a player's character; wire its Animate slots with slot and no model.`, errorCode: "player_character" };
+	}
+	const controller = target.FindFirstChildOfClass("Humanoid") ?? target.FindFirstChildOfClass("AnimationController");
+	if (!controller) {
+		return { error: `${path} has no Humanoid or AnimationController to animate; rig it first.`, errorCode: "model_not_rigged" };
+	}
+	return { model: target, controller };
+}
+
+/** The model's loader, if it has one, when it is the one loader this tool installs and its code is unchanged. */
+function modelLoader(model: Model): { loader?: Script } | Refusal {
+	const named = model.GetChildren().filter((child) => child.Name === MODEL_LOADER_NAME);
+	if (named.size() > 1) {
+		return { error: `${getInstancePath(model)} holds ${named.size()} children named ${MODEL_LOADER_NAME}; keep one.`, errorCode: "ambiguous_target" };
+	}
+	const existing = named[0];
+	if (existing && (!existing.IsA("Script") || readScriptSource(existing) !== MODEL_LOADER_SOURCE)) {
+		return { error: `${getInstancePath(existing)} is not the loader this tool installs, or its code was changed; it is left alone.`, errorCode: "loader_modified" };
+	}
+	return { loader: existing as Script | undefined };
+}
+
+/**
+ * Set one state of a model's loader to a published animation, installing the
+ * loader in the model when it has none. As with the character loader, a state
+ * is replaced only when the caller names the ID it holds now, and the gait's
+ * ground speed, which paces it, is replaced along with its ID.
+ */
+function animationWireModel(requestData: Data) {
+	const state = requestData.state;
+	const animationId = requestData.animationId;
+	const expectedId = requestData.expectedId;
+	const groundSpeed = requestData.groundSpeed;
+	if (!typeIs(state, "string") || !MODEL_STATES.includes(state)) return { error: `state must be one of ${MODEL_STATES.join(", ")}.` };
+	if (!typeIs(animationId, "string") || animationId.match("^rbxassetid://%d+$")[0] === undefined) {
+		return { error: "animationId must be rbxassetid://<digits>." };
+	}
+	if (expectedId !== undefined && !typeIs(expectedId, "string")) return { error: "expectedId must be a string." };
+	if (groundSpeed !== undefined && (state === "idle" || !typeIs(groundSpeed, "number") || !(groundSpeed > 0 && groundSpeed <= MAX_GROUND_SPEED))) {
+		return { error: `groundSpeed is for walk and run, above 0 and at most ${MAX_GROUND_SPEED} studs a second.` };
+	}
+
+	const found = animatedModel(requestData.model);
+	if ("error" in found) return { ...found, error: `${found.error} Nothing was wired.` };
+	const model = found.model;
+	const loaded = modelLoader(model);
+	if ("error" in loaded) return { ...loaded, error: `${loaded.error} Nothing was wired.` };
+	const existing = loaded.loader;
+
+	const current = existing?.GetAttribute(state);
+	const currentId = typeIs(current, "string") ? current : undefined;
+	if (currentId !== undefined && expectedId === undefined) {
+		return { error: `${model.Name}'s ${state} already holds ${currentId}; pass it as expected_id to replace it. Nothing was wired.`, errorCode: "expected_id_required", currentId };
+	}
+	if (currentId !== expectedId) {
+		return {
+			error: currentId === undefined
+				? `${model.Name}'s ${state} holds nothing yet; omit expected_id. Nothing was wired.`
+				: `${model.Name}'s ${state} holds ${currentId}, not ${expectedId}; someone changed it. Nothing was wired.`,
+			errorCode: "animation_id_changed",
+			currentId: currentId ?? false,
+		};
+	}
+
+	const speedAttribute = `${state}Speed`;
+	const paced = state !== "idle";
+	const previousSpeed = existing?.GetAttribute(speedAttribute);
+	const recordingId = beginRecording(`Wire ${model.Name} ${state} animation`);
+	let loader = existing;
+	const installed = loader === undefined;
+	const [applied, applyError] = pcall(() => {
+		if (!loader) {
+			const created = new Instance("Script");
+			created.Name = MODEL_LOADER_NAME;
+			created.Source = MODEL_LOADER_SOURCE;
+			created.SetAttribute(state, animationId);
+			if (paced) created.SetAttribute(speedAttribute, groundSpeed as number | undefined);
+			created.Parent = model;
+			loader = created;
+		} else {
+			loader.SetAttribute(state, animationId);
+			if (paced) loader.SetAttribute(speedAttribute, groundSpeed as number | undefined);
+		}
+	});
+	if (!applied) {
+		pcall(() => {
+			if (installed && loader) {
+				loader.Destroy();
+			} else if (loader) {
+				loader.SetAttribute(state, currentId);
+				if (paced) loader.SetAttribute(speedAttribute, previousSpeed as number | undefined);
+			}
+		});
+		finishRecording(recordingId, false);
+		return { error: `Wiring failed: ${tostring(applyError)}. The previous state was restored.` };
+	}
+	finishRecording(recordingId, true);
+	const wired = loader as unknown as Script;
+	const readSpeed = wired.GetAttribute(speedAttribute);
+	return {
+		model: getInstancePath(model),
+		controller: found.controller.ClassName,
+		loader: getInstancePath(wired),
+		installed,
+		slot: state,
+		animationId: wired.GetAttribute(state),
+		previousId: currentId ?? false,
+		...(paced ? { groundSpeed: typeIs(readSpeed, "number") ? readSpeed : false } : {}),
+		readBackMatches: wired.GetAttribute(state) === animationId
+			&& (!paced || readSpeed === groundSpeed)
+			&& readScriptSource(wired) === MODEL_LOADER_SOURCE,
+		undoable: recordingId !== undefined,
+		...(installed ? { loaderSource: MODEL_LOADER_SOURCE } : {}),
+	};
+}
+
 /** Roblox's classic head, which ships with Studio; the stock rig's own dynamic head cannot be read. */
 const CLASSIC_HEAD = "rbxasset://avatar/heads/head.mesh";
 const MAX_RIG_FACES = 4000;
@@ -732,4 +995,5 @@ export = {
 	animationReadBack,
 	animationWire,
 	animationVerify,
+	animationWireModel,
 };

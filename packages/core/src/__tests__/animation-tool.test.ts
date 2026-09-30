@@ -441,3 +441,71 @@ describe('verifying in a playtest', () => {
     expect(calls).toEqual([]);
   });
 });
+
+describe('animating a model', () => {
+  type Call = { endpoint: string; data: Record<string, unknown>; target: unknown; instance_id?: string };
+  function toolsAnswering(answer: (endpoint: string, data: Record<string, unknown>) => unknown) {
+    const tools = new RobloxStudioTools(new BridgeService());
+    const calls: Call[] = [];
+    (tools as unknown as { _callSingle: unknown })._callSingle = async (endpoint: string, data: Record<string, unknown>, target: unknown, instance_id?: string) => {
+      calls.push({ endpoint, data, target, instance_id });
+      return answer(endpoint, data);
+    };
+    return { tools, calls };
+  }
+
+  test('wire sets the state of the model\'s loader it names, paced by its ground speed', async () => {
+    const { tools, calls } = toolsAnswering(() => ({
+      model: 'game.Workspace.Guard',
+      loader: 'game.Workspace.Guard.RoqerModelAnimate',
+      installed: true,
+      slot: 'walk',
+      animationId: 'rbxassetid://555',
+      previousId: false,
+      groundSpeed: 2.2,
+      readBackMatches: true,
+      undoable: true,
+    }));
+    const result = body(await tools.animation(
+      { action: 'wire', model: 'game.Workspace.Guard', slot: 'walk', animation_id: '555', ground_speed: 2.2 },
+      'place:1',
+    ));
+    expect(calls).toEqual([{
+      endpoint: '/api/animation-wire-model',
+      data: { model: 'game.Workspace.Guard', state: 'walk', animationId: 'rbxassetid://555', expectedId: undefined, groundSpeed: 2.2 },
+      target: undefined,
+      instance_id: 'place:1',
+    }]);
+    expect(result).toMatchObject({ wired: true, installed: true, groundSpeed: 2.2, readBackMatches: true });
+    expect(result).not.toHaveProperty('note');
+  });
+
+  test('a gait wired without its ground speed says its feet may slide; an idle has no pace to keep', async () => {
+    const { tools } = toolsAnswering((_endpoint, data) => ({ slot: data.state, animationId: data.animationId, readBackMatches: true }));
+    const walk = body(await tools.animation({ action: 'wire', model: 'game.Workspace.Guard', slot: 'run', animation_id: '7', expected_id: 'rbxassetid://6' }));
+    expect(walk.note).toMatch(/plays this run at its own pace whatever the model's speed, so its feet may slide/);
+    const idle = body(await tools.animation({ action: 'wire', model: 'game.Workspace.Guard', slot: 'idle', animation_id: '8' }));
+    expect(idle).toMatchObject({ wired: true });
+    expect(idle).not.toHaveProperty('note');
+  });
+
+  test('refuses what a loader cannot play before Studio sees it', async () => {
+    const { tools, calls } = toolsAnswering(() => ({}));
+    const wire = (args: Record<string, unknown>) => tools.animation({ action: 'wire', model: 'game.Workspace.Guard', slot: 'walk', animation_id: '5', ...args });
+    await expect(wire({ slot: 'jump' })).rejects.toThrow('with model, slot must be one of idle, walk, run: the states its loader plays by how fast it moves');
+    await expect(wire({ model: ' ' })).rejects.toThrow(/model must be the path of the NPC or creature Model/);
+    await expect(wire({ expected_id: 'the old one' })).rejects.toThrow(/expected_id must be the asset ID the model's walk holds now/);
+    await expect(wire({ slot: 'idle', ground_speed: 2 })).rejects.toThrow('ground_speed is for walk and run: an idle does not move');
+    for (const groundSpeed of [0, -1, 201, Number.NaN, '2.2']) {
+      await expect(wire({ ground_speed: groundSpeed })).rejects.toThrow(/ground_speed must be the groundSpeed its check reported: above 0 and at most 200/);
+    }
+    expect(calls).toEqual([]);
+  });
+
+  test('a refusal from Studio comes back as it was given, with nothing wired', async () => {
+    const refusal = { error: 'game.Workspace.Guard.RoqerModelAnimate is not the loader this tool installs, or its code was changed; it is left alone. Nothing was wired.', errorCode: 'loader_modified' };
+    const { tools } = toolsAnswering(() => refusal);
+    const result = body(await tools.animation({ action: 'wire', model: 'game.Workspace.Guard', slot: 'walk', animation_id: '5', ground_speed: 3 }));
+    expect(result).toEqual(refusal);
+  });
+});

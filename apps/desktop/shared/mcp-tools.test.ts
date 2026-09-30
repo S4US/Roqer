@@ -112,6 +112,17 @@ test("mcp-tools - publishing and wiring are summarised by what they change", () 
     summarizeToolCall("animation", { action: "wire", slot: "run", animation_id: "rbxassetid://555", expected_id: "rbxassetid://554" }),
     "animation · wire rbxassetid://555 to the run slot of every character, replacing rbxassetid://554",
   );
+  assert.strictEqual(
+    summarizeToolCall("animation", {
+      action: "wire", model: "game.Workspace.Guard", slot: "walk", animation_id: "rbxassetid://555", ground_speed: 2.2, expected_id: "rbxassetid://554",
+    }),
+    "animation · wire rbxassetid://555 as the walk of game.Workspace.Guard, paced for 2.2 studs a second, replacing rbxassetid://554",
+  );
+  assert.strictEqual(
+    summarizeToolCall("animation", { action: "wire", model: "game.Workspace.Guard", slot: "idle", animation_id: "rbxassetid://556", ground_speed: "fast" }),
+    "animation · wire rbxassetid://556 as the idle of game.Workspace.Guard",
+  );
+  assert.strictEqual(riskForTool("animation", { action: "wire", model: "game.Workspace.Guard", slot: "walk", animation_id: "rbxassetid://1" }), "mutation");
 });
 
 test("mcp-tools - an animation call is summarised in words, not as its pose JSON", () => {

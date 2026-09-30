@@ -1143,6 +1143,32 @@ test("publishing, wiring and verifying an animation each leave their own record"
   ]);
 });
 
+test("wiring a model's state records the loader inside the model, and says every copy plays it", async () => {
+  const { context, changes, evidence } = contextWith([
+    ok({
+      wired: true, model: "game.Workspace.Guard", loader: "game.Workspace.Guard.RoqerModelAnimate", installed: true, slot: "walk",
+      animationId: "rbxassetid://555", previousId: false, groundSpeed: 2.2, readBackMatches: true, undoable: true,
+    }),
+    ok({
+      wired: true, model: "game.Workspace.Guard", loader: "game.Workspace.Guard.RoqerModelAnimate", installed: false, slot: "idle",
+      animationId: "rbxassetid://556", previousId: "rbxassetid://550", readBackMatches: false, undoable: true,
+    }),
+  ]);
+  const run = createStudioToolRunner(context);
+
+  await run("animation", { action: "wire", model: "game.Workspace.Guard", slot: "walk", animation_id: "rbxassetid://555", ground_speed: 2.2 });
+  await run("animation", { action: "wire", model: "game.Workspace.Guard", slot: "idle", animation_id: "rbxassetid://556", expected_id: "rbxassetid://550" });
+
+  assert.deepEqual(changes.map((change) => [change.target, change.summary]), [
+    ["game.Workspace.Guard.RoqerModelAnimate", "Installed the animation loader in game.Workspace.Guard and set its walk to rbxassetid://555 (paced for 2.2 studs a second), in one undoable step."],
+    ["game.Workspace.Guard.RoqerModelAnimate", "Set game.Workspace.Guard's idle to rbxassetid://556, replacing rbxassetid://550, in one undoable step."],
+  ]);
+  assert.deepEqual(evidence.map((item) => [item.title, item.passed, item.detail]), [
+    ["game.Workspace.Guard.RoqerModelAnimate", true, "Studio read the loader back: its code is the fixed loader, and its walk holds the new ID. Every copy of the model plays it."],
+    ["game.Workspace.Guard.RoqerModelAnimate", false, "Studio read the loader back, and it does not hold what was wired: its code, or the idle's ID, differs."],
+  ]);
+});
+
 test("the Studio tool description stays inside a model turn's tool limit", () => {
   // turn-contract refuses a tool description over 8,192 characters.
   assert.ok(studioToolDescription().length <= 8_192, `${studioToolDescription().length} characters`);

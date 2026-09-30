@@ -257,6 +257,12 @@ function summarizeAnimation(args: Record<string, unknown>): string {
     const slot = typeof args.slot === "string" ? truncate(args.slot, 20) : "a slot";
     const id = typeof args.animation_id === "string" ? truncate(args.animation_id, 40) : "an animation";
     const replaces = typeof args.expected_id === "string" ? `, replacing ${truncate(args.expected_id, 40)}` : "";
+    if (typeof args.model === "string" && args.model !== "") {
+      const pace = typeof args.ground_speed === "number" && Number.isFinite(args.ground_speed)
+        ? `, paced for ${Math.round(args.ground_speed * 100) / 100} studs a second`
+        : "";
+      return `animation · wire ${id} as the ${slot} of ${truncate(args.model, 60)}${pace}${replaces}`;
+    }
     return `animation · wire ${id} to the ${slot} slot of every character${replaces}`;
   }
   const action = args.action === "build" ? "build" : args.action === "verify" ? "verify" : "check";

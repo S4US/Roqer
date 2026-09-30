@@ -44,7 +44,7 @@ export type ToolSchema = {
 };
 
 /** sha256 of `packages/core/src/tools/definitions.ts` with LF newlines. */
-export const TOOL_DEFINITIONS_DIGEST = "3cf9054f0fd998624e315e77e9e2d79bc665b1ea0f875232359b0a1143b08905";
+export const TOOL_DEFINITIONS_DIGEST = "5d7258eda0be3c4a242cdfb0b49cb1a3a72d2059829221d6d41be5adc369c47f";
 
 export const TOOL_SCHEMAS: Readonly<Record<string, ToolSchema>> = {
   animation: {
@@ -59,9 +59,11 @@ export const TOOL_SCHEMAS: Readonly<Record<string, ToolSchema>> = {
       { name: "waive", type: "string[]", required: false, description: "Failed checks to accept." },
       { name: "path", type: "string", required: false, description: "Publish: the KeyframeSequence a build wrote." },
       { name: "display_name", type: "string", required: false, description: "Publish: asset name; defaults to the sequence name." },
-      { name: "slot", type: "string", required: false, enumValues: ["idle", "walk", "run", "jump", "fall", "climb", "swim", "swimidle", "sit"], description: "Wire/verify: default Animate slot." },
+      { name: "slot", type: "string", required: false, enumValues: ["idle", "walk", "run", "jump", "fall", "climb", "swim", "swimidle", "sit"], description: "Wire/verify: Animate slot, or with model its state." },
       { name: "animation_id", type: "string", required: false, description: "Wire/verify: published ID, rbxassetid://N; verify with slot needs it." },
       { name: "expected_id", type: "string", required: false, description: "Wire: ID the slot holds now; required to replace it." },
+      { name: "model", type: "string", required: false, description: "Wire/verify: an NPC or creature Model, not a character." },
+      { name: "ground_speed", type: "number", required: false, description: "Wire walk/run: the groundSpeed its check reported." },
       { name: "instance_id", type: "string", required: false, description: "Connected place ID; required with multiple places." },
     ],
   },

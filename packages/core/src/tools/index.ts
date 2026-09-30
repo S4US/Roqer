@@ -25,6 +25,8 @@ import { createUISnapshot, normalizeUIInspection } from '../ui-semantics.js';
 import { auditUI } from '../ui-audit.js';
 import {
   ANIMATE_SLOTS,
+  MAX_GROUND_SPEED,
+  MODEL_STATES,
   choosePublisher,
   compactChecks,
   describeAnimation,
@@ -36,6 +38,7 @@ import {
   verifyLivePlayback,
   verifyPlayback,
   type AnimateSlot,
+  type ModelState,
 } from '../animation/animation-tool.js';
 import { compilePoseAnimation, type KeyframeSequenceDescription } from '../animation/pose-compiler.js';
 import { renderContactSheet } from '../animation/contact-sheet.js';
@@ -1974,6 +1977,7 @@ export class RobloxStudioTools {
    * one, so an ID changed by anyone else is never overwritten.
    */
   private async _animationWire(args: Record<string, unknown>, instance_id?: string) {
+    if (args.model !== undefined) return this._animationWireModel(args, instance_id);
     const slot = args.slot;
     if (typeof slot !== 'string' || !ANIMATE_SLOTS.includes(slot as AnimateSlot)) {
       throw new Error(`slot must be one of ${ANIMATE_SLOTS.join(', ')}`);
@@ -1986,6 +1990,49 @@ export class RobloxStudioTools {
     }
     const response = await this._callSingle('/api/animation-wire', { slot, animationId, expectedId }, undefined, instance_id);
     return this._textResult(response?.error ? response : { wired: true, ...response });
+  }
+
+  /**
+   * Set one state of a model's loader to a published animation: the Script
+   * this tool keeps inside an NPC or creature, which plays its idle, walk and
+   * run by how fast it moves. Its code never changes; each state's ID, and a
+   * gait's ground speed, which paces it, are its attributes. As with the
+   * character loader, an ID is replaced only when the caller names the current one.
+   */
+  private async _animationWireModel(args: Record<string, unknown>, instance_id?: string) {
+    const model = args.model;
+    if (typeof model !== 'string' || model.trim() === '') throw new Error('model must be the path of the NPC or creature Model to wire');
+    const slot = args.slot;
+    if (typeof slot !== 'string' || !MODEL_STATES.includes(slot as ModelState)) {
+      throw new Error(`with model, slot must be one of ${MODEL_STATES.join(', ')}: the states its loader plays by how fast it moves`);
+    }
+    const animationId = normalizeAnimationId(args.animation_id);
+    if (!animationId) throw new Error('animation_id must be a published asset ID, such as rbxassetid://123');
+    const expectedId = args.expected_id === undefined ? undefined : normalizeAnimationId(args.expected_id);
+    if (args.expected_id !== undefined && !expectedId) {
+      throw new Error(`expected_id must be the asset ID the model's ${slot} holds now, such as rbxassetid://123`);
+    }
+    const groundSpeed = args.ground_speed;
+    if (groundSpeed !== undefined) {
+      if (slot === 'idle') throw new Error('ground_speed is for walk and run: an idle does not move');
+      if (typeof groundSpeed !== 'number' || !(groundSpeed > 0 && groundSpeed <= MAX_GROUND_SPEED)) {
+        throw new Error(`ground_speed must be the groundSpeed its check reported: above 0 and at most ${MAX_GROUND_SPEED} studs a second`);
+      }
+    }
+    const response = await this._callSingle(
+      '/api/animation-wire-model',
+      { model, state: slot, animationId, expectedId, groundSpeed },
+      undefined,
+      instance_id,
+    );
+    if (response?.error) return this._textResult(response);
+    return this._textResult({
+      wired: true,
+      ...response,
+      ...(slot !== 'idle' && groundSpeed === undefined
+        ? { note: `The loader plays this ${slot} at its own pace whatever the model's speed, so its feet may slide. Wire it again with ground_speed, the groundSpeed its check reported, to pace it.` }
+        : {}),
+    });
   }
 
   /**

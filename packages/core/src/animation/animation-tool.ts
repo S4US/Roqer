@@ -194,6 +194,15 @@ export function verifyPlayback(sequence: KeyframeSequenceDescription, samples: u
 export const ANIMATE_SLOTS = ['idle', 'walk', 'run', 'jump', 'fall', 'climb', 'swim', 'swimidle', 'sit'] as const;
 export type AnimateSlot = (typeof ANIMATE_SLOTS)[number];
 
+/**
+ * The states a model's loader plays by how fast the model moves: the slots
+ * `wire` and `verify` take with a model rather than a character.
+ */
+export const MODEL_STATES = ['idle', 'walk', 'run'] as const;
+export type ModelState = (typeof MODEL_STATES)[number];
+/** The fastest ground speed a gait may be wired with, in studs a second. */
+export const MAX_GROUND_SPEED = 200;
+
 /** An asset ID in any of the forms Roblox accepts, as rbxassetid://N; undefined otherwise. */
 export function normalizeAnimationId(value: unknown): string | undefined {
   if (typeof value === 'number' && Number.isSafeInteger(value) && value > 0) return `rbxassetid://${value}`;

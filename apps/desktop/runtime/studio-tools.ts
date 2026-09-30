@@ -142,7 +142,8 @@ const DOCUMENTED_OPERATIONS = [
   "delete_script_lines",
   "set_properties",
   "build_instances",
-  "animation",
+  // Not `animation`: its guide below names each action's arguments where they
+  // are used, which the bare signature of its many optional ones did not.
   "insert_asset",
   "solo_playtest",
   "get_runtime_logs",
@@ -176,7 +177,7 @@ export function studioToolDescription(): string {
     // text over button edges and a row past the end of its scroll.
     "After creating or changing interface (anything under StarterGui), start a playtest and call inspect_ui {mode: 'audit'} on the client. Roqer does not verify the run until an audit after the last interface change reports no problems: fix what it names (text_obscured, text_straddles_edge, content_beyond_scroll, text_overflow) and audit again.",
     "To aim a screenshot, call selection {action: 'view', path, from, angleY, padding} before capture_screenshot (from: azimuth degrees, 0 = +X, 90 = +Z; angleY: elevation, -89 to 89; padding: distance scale, above 0, at most 10); it is a read needing no approval. Do not move the camera with execute_luau. For comparable before and after views, frame the same stable container (the zone or build root, not the part being changed, whose bounds move) with the same from, angleY and padding.",
-    "Animate characters with animation, never a KeyframeSequence in execute_luau; first load_skill {name: 'roblox-animation-vfx', resource: 'references/character-animation.md'} and adapt its tested recipes. animation: {name, rig: 'R15', loop?, priority?, easing?, keyframes: [{time, easing?, joints}]}, first at time 0; joints maps Root, Waist, Neck, Left/Right Shoulder, Elbow, Wrist, Hip, Knee, Ankle to one of aim: [right, up, forward] + bendToward? (shoulders, hips), bend: degrees (elbows, knees), rotation: [x, y, z] degrees about the parent part; position? (Root, studs). Key moved joints at time 0; a joint turns at most 90° between keys. easing: {style: Linear|Constant|CubicV2|Bounce|Elastic, direction: In|Out|InOut}. Flow: check (free; locomotion: true for gaits; fix what fails) → build {parent} → publish {path} (asks first; place owner only) → wire {slot, animation_id} (expected_id to replace) → playtest → verify {animation, animation_id, slot}. With no Open Cloud key, verify with just animation and say publishing needs a key. Rebuild with expected_revision; waive only intended failures.",
+    "Animate characters with animation, never a KeyframeSequence in execute_luau; first load_skill {name: 'roblox-animation-vfx', resource: 'references/character-animation.md'} and adapt its tested recipes. animation: {name, rig: 'R15', loop?, priority?, easing?, keyframes: [{time, easing?, joints}]}, first at time 0; joints maps Root, Waist, Neck, Left/Right Shoulder, Elbow, Wrist, Hip, Knee, Ankle to one of aim: [right, up, forward] + bendToward? (shoulders, hips), bend: degrees (elbows, knees), rotation: [x, y, z] degrees about the parent part; position? (Root, studs). Key moved joints at time 0; a joint turns at most 90° between keys. easing: {style: Linear|Constant|CubicV2|Bounce|Elastic, direction: In|Out|InOut}. Flow: check {animation, locomotion?: true for gaits, grounded?} (free; fix what fails) → build {animation, parent} → publish {path, display_name?} (asks first; place owner only) → wire {slot, animation_id} (expected_id to replace) → playtest → verify {animation, animation_id?, slot?}. An NPC's or creature's Model plays its own: wire {model, slot: idle|walk|run, animation_id, ground_speed: the gait's check groundSpeed} puts a loader in it. With no Open Cloud key, verify with just animation and say publishing needs a key. Rebuild with expected_revision; waive only intended failures.",
     "For seeded bulk placement, build_instances accepts one sole step {op:'scatter', name, zone:{min:[x,z],max:[x,z]}, density:countPer10000SquareStuds, seed, templates:[{source,weight,kit?}], ground:[path], raycast:{top,bottom}, rotation?:[minYaw,maxYaw], scale?:[min,max], spacing?, avoid?:[{tag,distance}], maxSlope?, replace?, parent?, tags?, attributes?, id?}. Ground and templates must already exist. The named scatter group is replaced only with replace:true and matching ownership; the entire replacement is undoable. Requested count is floor(area*density/10000), limited to 1-1000. Footprints stay inside the rectangle and clear of tagged bounds. Inspect returned scatter.requested/placed/attempts: blocked ground can produce fewer placements. Same seed reproduces only with unchanged inputs and scene. Load roblox-building references/scatter.md for details.",
   ].join("\n");
 }
@@ -1207,7 +1208,7 @@ function recordAnimationPublish(context: PlannerContext, outcome: McpToolOutcome
   });
 }
 
-/** A wired slot as a change to the loader that carries it. */
+/** A wired slot, or a model's wired state, as a change to the loader that carries it. */
 function recordAnimationWire(context: PlannerContext, outcome: McpToolOutcome): void {
   const data = isRecord(outcome.data) ? outcome.data : {};
   const loader = stringField(data, "loader");
@@ -1215,18 +1216,28 @@ function recordAnimationWire(context: PlannerContext, outcome: McpToolOutcome): 
   const animationId = stringField(data, "animationId");
   if (data.wired !== true || !loader || !slot || !animationId) return;
   const previous = stringField(data, "previousId");
+  const model = stringField(data, "model");
+  const groundSpeed = numberField(data, "groundSpeed");
+  const pace = groundSpeed === undefined ? "" : ` (paced for ${groundSpeed} studs a second)`;
   context.recordChange({
     kind: "instance",
     target: loader,
     instanceId: context.instanceId ?? undefined,
-    summary: `${data.installed === true ? "Installed the animation loader and set" : "Set"} the ${slot} slot to ${animationId}${previous ? `, replacing ${previous}` : ""}, in one undoable step.`,
+    summary: model
+      ? `${data.installed === true ? `Installed the animation loader in ${model} and set its` : `Set ${model}'s`} ${slot} to ${animationId}${pace}${previous ? `, replacing ${previous}` : ""}, in one undoable step.`
+      : `${data.installed === true ? "Installed the animation loader and set" : "Set"} the ${slot} slot to ${animationId}${previous ? `, replacing ${previous}` : ""}, in one undoable step.`,
   });
+  const matches = data.readBackMatches === true;
   context.recordEvidence({
     kind: "verification",
     changeKind: "instance",
     title: loader,
-    passed: data.readBackMatches === true,
-    detail: "Studio read the loader back: its code is the fixed loader, and the slot holds the new ID. Every character spawned from now on gets it.",
+    passed: matches,
+    detail: !matches
+      ? `Studio read the loader back, and it does not hold what was wired: its code, or the ${model ? slot : `${slot} slot`}'s ID${model && slot !== "idle" ? " or pace" : ""}, differs.`
+      : model
+        ? `Studio read the loader back: its code is the fixed loader, and its ${slot} holds the new ID. Every copy of the model plays it.`
+        : "Studio read the loader back: its code is the fixed loader, and the slot holds the new ID. Every character spawned from now on gets it.",
     metadata: [{ label: "Undo", value: data.undoable !== false ? "One Studio undo step" : "Not recorded in Studio's undo history" }],
   });
 }

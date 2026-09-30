@@ -228,7 +228,7 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
         slot: {
           type: 'string',
           enum: [...ANIMATE_SLOTS],
-          description: 'Wire/verify: default Animate slot.'
+          description: "Wire/verify: Animate slot, or with model its state."
         },
         animation_id: {
           type: 'string',
@@ -237,6 +237,14 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
         expected_id: {
           type: 'string',
           description: 'Wire: ID the slot holds now; required to replace it.'
+        },
+        model: {
+          type: 'string',
+          description: 'Wire/verify: an NPC or creature Model, not a character.'
+        },
+        ground_speed: {
+          type: 'number',
+          description: 'Wire walk/run: the groundSpeed its check reported.'
         },
         instance_id: {
           type: 'string',
