@@ -83,6 +83,16 @@ get the direction of wrong, and they paint it when given a colour:
   wheel, a lid, a door) on its own.
 - `roqer.paint(obj, rgba)` and `roqer.vertex_color_material()`, for parts made
   another way.
+- `roqer.piece(obj, pivot, parent=None)`: makes a joined object a moving piece
+  of a creature (see "A creature of moving pieces"): its origin goes to
+  `pivot` without moving its shape, its mesh is named after it, and it hangs
+  from `parent`.
+- `roqer.bind(obj, bones)` and `roqer.skin(obj, bones, name="Armature")`: for
+  a creature that bends (see "A creature that bends"): bind says which bones a
+  part follows, and skin makes the armature and weights the joined mesh.
+- `roqer.export_animation(name, source, rig, start=None, end=None, loop=True)`:
+  bakes what a creature does in the scene into an animation for Studio (see
+  "Animating a creature in Blender").
 
 Prefer them for any part that is not upright. Raw `bpy` is still available for
 shapes they do not cover; there, keep the model flat-shaded (no
@@ -100,6 +110,11 @@ its triangles, meshes, materials and size, its layout, and a preview of four
 views in one image: the side from +X, the top, and three-quarter views from two
 opposite corners.
 
+- The preview is how you check the model, but it is not evidence of the
+  place: Roqer's completion check counts only what Studio shows. In a task
+  list, a task that only models in Blender asks for no evidence; ask for
+  visual evidence on the task that inserts the model, and take a Studio
+  screenshot there.
 - Look at every view. A part that looks right from one angle can lean the wrong
   way, float, or pass through another part in the side or top view. If the
   silhouette or colours are wrong, fix the script; do not upload a model you
@@ -158,6 +173,222 @@ size.
    name, or by the size Roqer listed if Roblox renamed it.
 6. **Register the kits** in the registry's `Kit` folder and place them by
    cloning, like any template.
+
+## A creature of moving pieces
+
+A creature that will be animated (a wolf, a spider, a bird, a robot) is
+modelled as separate pieces, one object for each part that moves on its own,
+and rigged in Studio by the `animation` tool's `rig` action. An upload keeps
+every piece where it was modelled but not where it turns, so the pivots leave
+Blender in the job's result. Load the animation skill's
+`references/creature-animation.md` before modelling: it names the pieces a
+body plan needs.
+
+- **One object per moving piece**, joined with `roqer.join`: the body; the
+  head; the tail, or each tail segment; each leg as an upper and a lower
+  piece, so it has a knee. Ears, eyes and teeth that never move on their own
+  are joined into their piece. Give each piece one material.
+- **Name pieces as the body plan does**, since each arrives as a MeshPart of
+  that name: `Body`, `Head`, `Tail`, and for a four-legged body
+  `FrontLeftUpper`, `FrontLeftLower`, `FrontRightUpper`, `FrontRightLower`,
+  `HindLeftUpper` and so on. With the front toward −Y, the creature's left is
+  Blender's +X.
+- **`roqer.piece(obj, pivot, parent)` for every piece but the body**, after
+  it is joined: `pivot` is the point the piece turns about, in the same
+  coordinates the piece was built in. A leg's upper piece turns at the hip,
+  inside the body; its lower piece at the knee, where the two overlap; the
+  head at the back of the skull; the tail at its root. A pivot at a piece's
+  middle makes it spin in place.
+- **Overlap pieces at their joints** by a tenth of a stud or more, so a turn
+  opens no gap. The layout does not report those overlaps.
+- **Model it standing as it rests**: feet at Z 0, front toward −Y.
+- **Bend each leg at rest**, as an animal's are. A leg modelled straight has
+  no slack, so a walk can only stride by lowering the body and every knee
+  stays bent: the creature walks crouched. Put each knee off the line from
+  hip to foot by about 15% of the leg's height, a front knee forward (toward
+  −Y) and a hind knee back (toward +Y), which is the way each folds. The leg
+  then strides by straightening.
+- Export one GLB as usual.
+
+Read the result's **moving pieces** line. It lists anything that would rig
+badly (an origin left at a piece's middle or outside both pieces it joins,
+left and right pivots that do not mirror, a mesh named apart from its object,
+a piece with two materials, a piece parented to nothing, legs modelled
+straight or bent against their fold), each with what to
+change: fix those in the next job before uploading, since an upload cannot be
+changed. It ends with the `joints` to pass to `rig`, pivots included.
+
+```python
+import bpy, os
+
+FUR, DARK, PALE = (0.45, 0.45, 0.48, 1), (0.2, 0.2, 0.22, 1), (0.8, 0.8, 0.78, 1)
+
+# A low-poly wolf facing -Y, standing on Z 0, about 5 studs long.
+body = roqer.join("Body", [
+    roqer.box("chest", (1.3, 1.6, 1.3), (0, -0.8, 2.3), FUR),
+    roqer.box("belly", (1.1, 1.8, 1.1), (0, 0.8, 2.25), FUR),
+])
+
+head = roqer.join("Head", [
+    roqer.box("skull", (1.0, 1.0, 1.0), (0, -2.0, 2.9), FUR),
+    roqer.box("snout", (0.5, 0.7, 0.45), (0, -2.8, 2.75), PALE),
+    roqer.cone_between("ear_l", (0.3, -1.8, 3.3), (0.3, -1.8, 3.8), 0.18, 0, DARK, vertices=4),
+    roqer.cone_between("ear_r", (-0.3, -1.8, 3.3), (-0.3, -1.8, 3.8), 0.18, 0, DARK, vertices=4),
+])
+roqer.piece(head, (0, -1.5, 2.7), body)          # the neck, inside the chest
+
+tail = roqer.join("Tail", [roqer.box_between("t", (0, 1.6, 2.5), (0, 3.0, 2.0), 0.3, 0.3, rgba=DARK)])
+roqer.piece(tail, (0, 1.6, 2.5), body)
+
+# Blender +X is the wolf's left once it faces -Y. Each leg is bent at rest: its
+# knee stands 0.3 off the line from hip to paw, a front knee forward, a hind knee back.
+for end, y, bend in (("Front", -1.1, -0.3), ("Hind", 1.3, 0.3)):
+    for side, x in (("Left", 0.45), ("Right", -0.45)):
+        knee = (x, y + bend, 0.95)
+        upper = roqer.join(f"{end}{side}Upper", [roqer.box_between("u", (x, y, 2.0), (x, y + bend * 1.1, 0.85), 0.42, 0.5, rgba=FUR)])
+        lower = roqer.join(f"{end}{side}Lower", [
+            roqer.box_between("l", (x, y + bend * 1.1, 1.05), (x, y, 0.1), 0.34, 0.4, rgba=FUR),
+            roqer.box("paw", (0.4, 0.55, 0.2), (x, y - 0.08, 0.1), PALE),
+        ])
+        roqer.piece(upper, (x, y, 1.9), body)     # the hip or shoulder, inside the body
+        roqer.piece(lower, knee, upper)           # the knee, where the two overlap
+
+bpy.ops.export_scene.gltf(filepath=os.path.join(OUTPUT_DIR, "wolf.glb"), export_format="GLB", export_apply=True, use_visible=True)
+```
+
+Then upload and insert it as in "Getting it into Studio", and rig it: the
+creature reference's "From Blender" section has the call.
+
+## A creature that bends: one skinned mesh
+
+Pieces turn rigidly, which suits a blocky creature. A body that must bend
+along its length (a snake, a fish, a tentacle, a worm, a long tail or neck)
+is one mesh skinned to bones instead. The upload keeps the bones and the
+weights, so nothing about the rig has to be carried to Studio by hand.
+
+- **Bind each part to its bones as you make it**: `roqer.bind(part, "Head")`
+  for a part that moves rigidly with one bone, `roqer.bind(part, ["Tail",
+  "Tail2"])` for one that bends between several. A part left unbound is
+  weighted among every bone by which lie nearest, which is right for a single
+  tube and wrong for a leg beside a belly.
+- **Run a limb up into the body it hangs from.** A part bound to several
+  bones keeps its top with the bone above them: whatever of a leg lies above
+  its hip stays with the spine, and blends into the leg just below the hip,
+  so the thigh does not swing out of the rump as the leg turns. So start a
+  leg's mesh a little above its upper bone's head, inside the body, and put
+  that bone's head where the leg should turn. A part bound to one bone moves
+  rigidly with it.
+- **A part bends only where it has vertices.** A box has them at its ends, so
+  build a bending length from several short segments end to end (a tail of six
+  boxes, a snake of twenty), all bound to the same list of bones.
+- **Join everything into one object** with `roqer.join`, then
+  `roqer.skin(obj, bones)`. `bones` lists `(name, head, tail)` or
+  `(name, head, tail, parent)`, parents first: each bone runs from `head` to
+  `tail`, and a part turns about its bone's `head`. Keep to 63 bones or fewer.
+- **Name bones as the body plan names pieces**: `Head`, `Tail`, `Tail2`, and
+  for a four-legged body `FrontLeftUpper`, `FrontLeftLower` and
+  `FrontLeftFoot` for each leg. The foot bone's head is at the sole, on Z 0:
+  it is where the leg ends and where the foot meets the ground. Do not name a
+  bone `Root`, or after the mesh; name the spine `Spine`.
+- **Bend each leg at rest**, the mesh and its bones alike: the knee, which is
+  the lower bone's head, off the line from hip to foot by about 15% of the
+  leg's height, a front knee toward −Y and a hind knee toward +Y. A straight
+  leg has no slack, and the creature walks crouched (see "A creature of
+  moving pieces").
+- Model it at rest, front toward −Y, feet on Z 0, and export one GLB as usual.
+
+Read the result's **skinned** line. It names the mesh and its bones, and
+lists what Roblox would not keep, each with what to change: a vertex no bone
+holds, a vertex held by more than four bones, more than one mesh or armature,
+a leg with no foot bone, legs modelled straight. It ends with the `rig` call,
+which takes no joints.
+
+```python
+import bpy, os
+
+GREEN, PALE = (0.3, 0.5, 0.28, 1), (0.75, 0.78, 0.6, 1)
+names = [f"Spine{index + 1}" for index in range(8)]
+
+# A snake facing -Y, 8 studs long, lying on Z 0: twenty short segments that
+# bend along eight bones, and a head that moves with the first.
+parts = [roqer.bind(roqer.box_between("head", (0, -4.6, 0.3), (0, -4.0, 0.3), 0.7, 0.5, rgba=GREEN), "Spine1")]
+for index in range(20):
+    y = -4 + index * 0.4
+    parts.append(roqer.bind(roqer.box_between(f"s{index}", (0, y, 0.25), (0, y + 0.4, 0.25), 0.5, 0.5, rgba=GREEN if index % 2 else PALE), names))
+
+bones = [(name, (0, -4 + index, 0.25), (0, -3 + index, 0.25), names[index - 1] if index else None) for index, name in enumerate(names)]
+snake = roqer.join("Snake", parts)
+roqer.skin(snake, bones)
+
+bpy.ops.export_scene.gltf(filepath=os.path.join(OUTPUT_DIR, "snake.glb"), export_format="GLB", export_apply=True, use_visible=True)
+```
+
+Then upload and insert it, and rig it: the creature reference's "A skinned
+creature" section has the call.
+
+## Animating a creature in Blender
+
+Most creature motion is written for the `animation` tool directly: keys,
+`waves` and `gait` (the animation skill's creature reference). Animate in
+Blender instead when Blender's own tools make the motion: inverse
+kinematics pulling a chain toward a moving target, a constraint that makes a
+head track a point, a path, a physics bake. Roqer samples the result frame by
+frame and hands the `animation` tool a pose description, so everything after
+that (checks, previews, build, publish, wire) is the same.
+
+- **Animate the scene the creature was exported from**: a second job with
+  `continue_from` set to the job that made it. The armature is named
+  `Armature`; a creature of pieces has its body piece. Leave the model as it
+  is: an animation made on a body of another shape is refused in Studio.
+- **Set the frames**: `scene.frame_start`, `scene.frame_end` and
+  `scene.render.fps`. At most 60 seconds, sampled as up to 240 keyframes.
+- **For a loop, the last frame is the first pose again.**
+- **`roqer.export_animation(name, source, rig, start=None, end=None,
+  loop=True)`** bakes it. `source` is the armature, or the body piece of a
+  creature of pieces. `rig` is the path the model has, or will have, in
+  Studio, such as `game.Workspace.Snake`: the model must be uploaded,
+  inserted there and rigged before the animation is checked.
+- A creature of pieces is at rest at `start`, so begin from the pose it was
+  exported in.
+- Only the body as a whole can travel: the root bone's, or the body piece's,
+  change of place goes on the rig's `Root` joint. Any other bone or piece
+  only turns, and a slide of its own is left out and reported.
+
+The result lists each animation with its length, how many joints move, how
+many keys were kept, and its file. Pass the file, not its contents:
+
+```text
+{ "action": "check", "animation_file": "<path from the job's result>", "locomotion": false }
+```
+
+then `build` with the same animation_file and a `parent`. A gait made this
+way is checked with `locomotion: true` like any other. After publishing and
+wiring it, `verify` with the model, the same animation_file, the published
+animation_id and the `slot`, in a playtest, checks that the asset plays on
+the model as checked and that the state holds it.
+
+This job continues from the snake's and sweeps its tail from side to side
+with inverse kinematics:
+
+```python
+import bpy, math
+
+armature = bpy.data.objects["Armature"]
+scene = bpy.context.scene
+scene.frame_start, scene.frame_end, scene.render.fps = 1, 41, 20
+
+# The last five bones reach for a target that swings across behind the snake and lifts.
+target = bpy.data.objects.new("TailTarget", None)
+scene.collection.objects.link(target)
+reach = armature.pose.bones["Spine8"].constraints.new("IK")
+reach.target, reach.chain_count = target, 5
+for frame in range(1, 42):
+    turn = 2 * math.pi * (frame - 1) / 40
+    target.location = (1.6 * math.sin(turn), 3.6, 0.25 + 0.7 * abs(math.sin(turn)))
+    target.keyframe_insert("location", frame=frame)
+
+roqer.export_animation("TailSweep", armature, "game.Workspace.Snake")
+```
 
 ## Getting it into Studio
 

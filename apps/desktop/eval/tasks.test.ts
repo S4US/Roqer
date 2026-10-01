@@ -3,10 +3,12 @@ import test from "node:test";
 
 import {
   ANIMATION_ALL_CHECKS_PASSED, ANIMATION_CHECKED_AS_GAIT, ANIMATION_GAIT_CHECKS_LABEL, ANIMATION_MOTION_CHECKS_LABEL,
+  ANIMATION_DESCRIBED_BY_BAKE, ANIMATION_DESCRIBED_BY_LABEL, MODEL_STATE_WIRED, modelStateLabel,
   ANIMATION_NAME_LABEL, ANIMATION_PLAYED_FROM_LABEL, ANIMATION_PLAYED_PUBLISHED, ANIMATION_PREVIEW_TITLE, animationSlotLabel,
-  type RunEvidence,
+  MODEL_MOVED_BY_GAME, MODEL_MOVED_BY_LABEL, MODEL_MOVED_BY_VERIFY, MODEL_WHILE_MOVING_LABEL, MODEL_WHILE_STANDING_LABEL,
+  RIG_RANGE_SHEET_TITLE, type RunEvidence,
 } from "../shared/run-events";
-import { findEvalTask, needsUploadKey, type EvalOracleInput } from "./tasks";
+import { EVAL_TASKS, findEvalTask, needsPublishedPlace, needsUploadKey, type EvalOracleInput } from "./tasks";
 
 function verdict(taskId: string, input: EvalOracleInput) {
   const task = findEvalTask(taskId);
@@ -472,9 +474,10 @@ test("T12 is the only task that needs the Blender worker", () => {
   assert.equal(findEvalTask("T10-world-lowpoly-village")?.needsBlender, undefined);
 });
 
-test("T15 and a Blender run check the bridge's upload key first, and other tasks do not", () => {
+test("T15, T18 and a Blender run check the bridge's upload key first, and other tasks do not", () => {
   const task = (id: string) => findEvalTask(id)!;
   assert.equal(needsUploadKey([task("T15-animation-run")], false), true);
+  assert.equal(needsUploadKey([task("T18-npc-patrol")], false), true);
   assert.equal(needsUploadKey([task("T12-model-prop")], true), true);
   // Skipped without --blender, so it uploads nothing.
   assert.equal(needsUploadKey([task("T12-model-prop")], false), false);
@@ -619,6 +622,11 @@ test("T15 passes a run that meets every one of the plan's conditions", () => {
   assert.equal(result.passed, true, result.detail);
 });
 
+test("only the tasks that judge an owner against the place's need a published place", () => {
+  assert.deepEqual(EVAL_TASKS.filter((task) => needsPublishedPlace([task])).map((task) => task.id), ["T15-animation-run", "T18-npc-patrol", "T19-creature-parts", "T17-creature-blender", "T20-creature-skinned", "T21-creature-blender-animation"]);
+  assert.match(animationRun({ place: { id: 0, type: "User" } }).detail, /The place is not published/);
+});
+
 test("T15 wants the published animation, owned by the place's owner, in the run slot", () => {
   assert.match(animationRun({}, runEvidence().filter((item) => item.id !== "e3")).detail, /No animation was published/);
   assert.match(animationRun({ loader: false }).detail, /No RoqerAnimate loader/);
@@ -645,4 +653,297 @@ test("T15 wants the published asset seen playing, a 3D preview, and a gait whose
   assert.match(animationRun({}, withMetadata(evidence, "e2", ANIMATION_GAIT_CHECKS_LABEL, "Not checked as a gait")).detail, /as a gait/);
   assert.match(animationRun({ sequences: 0 }).detail, /No KeyframeSequence/);
   assert.match(animationRun({}, evidence, false).detail, /completion gate/);
+});
+
+const OWNED = { id: 42, type: "User", assetType: 24 };
+const GUARD_PROBE = {
+  guard: "Model", humanoid: true, loader: "Script", enabled: true, idle: "601", walk: "602",
+  idleOwner: OWNED, walkOwner: OWNED, walkGroundSpeed: 2.21, place: { id: 42, type: "User" }, sequences: 2,
+};
+
+/** The evidence a finished guard run records, labelled as the Studio tool runner labels it. */
+function patrolEvidence(): RunEvidence[] {
+  const built = (id: string, name: string, gait: boolean): RunEvidence => ({
+    id, kind: "verification", changeKind: "instance", title: `game.ServerStorage.WorkbenchEval.${name}`, passed: true,
+    metadata: [
+      { label: ANIMATION_MOTION_CHECKS_LABEL, value: ANIMATION_ALL_CHECKS_PASSED },
+      ...(gait ? [{ label: ANIMATION_GAIT_CHECKS_LABEL, value: ANIMATION_CHECKED_AS_GAIT }] : []),
+    ],
+  });
+  return [
+    {
+      id: "p1", kind: "inspection", title: ANIMATION_PREVIEW_TITLE, passed: true, imageDataUrl: "data:image/png;base64,QUJD",
+      modelPreviewId: "a1b2c3d4-0", metadata: [{ label: ANIMATION_NAME_LABEL, value: "Walk" }],
+    },
+    built("p2", "Idle", false),
+    built("p3", "Walk", true),
+    { id: "p4", kind: "verification", changeKind: "asset", title: "rbxassetid://601", passed: true },
+    { id: "p5", kind: "verification", changeKind: "asset", title: "rbxassetid://602", passed: true },
+    { id: "p6", kind: "verification", changeKind: "instance", title: "game.Workspace.WorkbenchEvalGuard.RoqerModelAnimate", passed: true },
+    {
+      id: "p7", kind: "playtest", title: "game.Workspace.WorkbenchEvalGuard in the playtest", passed: true,
+      metadata: [
+        { label: MODEL_MOVED_BY_LABEL, value: MODEL_MOVED_BY_GAME },
+        { label: MODEL_WHILE_MOVING_LABEL, value: "walk 100%" },
+        { label: MODEL_WHILE_STANDING_LABEL, value: "idle 90%, walk 10%" },
+      ],
+    },
+  ];
+}
+
+function patrol(probe: Record<string, unknown> = {}, evidence: RunEvidence[] = patrolEvidence(), verified = true) {
+  return verdict("T18-npc-patrol", {
+    probe: { ...GUARD_PROBE, ...probe }, outcome: "completed", verified, toolCalls: [], changedTargets: [], evidence,
+  });
+}
+
+test("T18 passes a guard whose own idle and walk played through its own patrol", () => {
+  const result = patrol();
+  assert.equal(result.passed, true, result.detail);
+});
+
+test("T18 wants the guard's loader holding an idle and a walk this run published, owned by the place's owner, the walk paced", () => {
+  assert.match(patrol({}, patrolEvidence().filter((item) => item.changeKind !== "asset")).detail, /No animation was published/);
+  assert.match(patrol({ guard: false }).detail, /no WorkbenchEvalGuard/);
+  assert.match(patrol({ humanoid: false }).detail, /not a Model with a Humanoid/);
+  assert.match(patrol({ loader: false }).detail, /no RoqerModelAnimate loader/);
+  assert.match(patrol({ idle: undefined }).detail, /idle is not wired/);
+  // Roblox's default walk, which rig puts in the loader, is not this run's.
+  assert.match(patrol({ walk: "507777826" }).detail, /walk holds 507777826, which this run did not publish/);
+  assert.match(patrol({ walkOwner: { ...OWNED, id: 7 } }).detail, /not the place's owner/);
+  assert.match(patrol({ idleOwner: undefined }).detail, /could not be confirmed/);
+  // Its first run: a place never published has no owner, whoever uploaded.
+  assert.match(
+    patrol({ place: { id: 0, type: "User" }, walkOwner: { ...OWNED, id: 972858366 } }).detail,
+    /^The place is not published, or was opened from a file, so it has no owner for asset 601 to match/,
+  );
+  assert.match(patrol({ walkGroundSpeed: false }).detail, /without its ground speed/);
+});
+
+test("T18 wants a playtest after the last wiring that watched the guard's own patrol play the walk and then the idle", () => {
+  const evidence = patrolEvidence();
+  assert.match(patrol({}, withMetadata(evidence, "p7", MODEL_MOVED_BY_LABEL, MODEL_MOVED_BY_VERIFY)).detail, /No playtest after the last wiring/);
+  assert.match(patrol({}, withMetadata(evidence, "p7", MODEL_WHILE_STANDING_LABEL, "nothing 100%")).detail, /No playtest after the last wiring/);
+  assert.match(patrol({}, withMetadata(evidence, "p7", MODEL_WHILE_MOVING_LABEL, "idle 100%")).detail, /No playtest after the last wiring/);
+  assert.match(patrol({}, evidence.map((item) => item.id === "p7" ? { ...item, passed: false } : item)).detail, /No playtest/);
+  // A playtest before the last wire saw states that are no longer wired.
+  const [p1, p2, p3, p4, p5, p6, p7] = evidence;
+  assert.match(patrol({}, [p1, p2, p3, p4, p5, p7, p6]).detail, /No playtest after the last wiring/);
+});
+
+const DOG_PATH = "game.Workspace.WorkbenchEvalDog";
+const DOG_PROBE = {
+  dog: "Model", humanoid: true, loader: "Script", enabled: true, idle: "601", walk: "602",
+  idleOwner: OWNED, walkOwner: OWNED, walkGroundSpeed: 1.85, place: { id: 42, type: "User" }, sequences: 2,
+  motors: 11, meshParts: 0, feet: 4, rigStamp: "rr1:4300:eacf5e7cde01a843",
+};
+
+/** A finished dog run: the rig's read-back and range sheet, then what a guard run records, on the dog. */
+function dogEvidence(): RunEvidence[] {
+  const onDog = patrolEvidence().map((item) => ({ ...item, title: item.title.replace("game.Workspace.WorkbenchEvalGuard", DOG_PATH) }));
+  return [
+    { id: "d1", kind: "verification", changeKind: "instance", title: DOG_PATH, passed: true },
+    { id: "d2", kind: "inspection", title: RIG_RANGE_SHEET_TITLE, subject: DOG_PATH, passed: true, imageDataUrl: "data:image/png;base64,QUJD", modelPreviewId: "a1b2c3d4-1" },
+    ...onDog,
+  ];
+}
+
+function creature(probe: Record<string, unknown> = {}, evidence: RunEvidence[] = dogEvidence(), verified = true) {
+  return verdict("T19-creature-parts", {
+    probe: { ...DOG_PROBE, ...probe }, outcome: "completed", verified, toolCalls: [], changedTargets: [], evidence,
+  });
+}
+
+test("T19 passes a dog of Parts that rig rigged, whose own idle and walk played through its own wandering", () => {
+  const result = creature();
+  assert.equal(result.passed, true, result.detail);
+});
+
+test("T19 wants the dog built from Parts, with a rig that rig built, read back, declared four feet on and drew", () => {
+  assert.match(creature({ dog: false }).detail, /no WorkbenchEvalDog/);
+  assert.match(creature({ meshParts: 2 }).detail, /built from Parts/);
+  // Joints made in hand-written Luau carry no stamp, and no pivot of theirs was checked.
+  assert.match(creature({ rigStamp: false }).detail, /not built by rig/);
+  assert.match(creature({}, dogEvidence().filter((item) => item.id !== "d1")).detail, /No rig call built/);
+  assert.match(creature({}, dogEvidence().map((item) => item.id === "d1" ? { ...item, passed: false } : item)).detail, /did not read back/);
+  assert.match(creature({ feet: 0 }).detail, /declares 0 feet on 11 joints/);
+  assert.match(creature({}, dogEvidence().filter((item) => item.id !== "d2")).detail, /No range sheet/);
+  // A range sheet of some other model is not the dog's.
+  assert.match(creature({}, dogEvidence().map((item) => item.id === "d2" ? { ...item, subject: "game.Workspace.Cat" } : item)).detail, /No range sheet/);
+});
+
+test("T19 then holds the dog to what T18 holds the guard to", () => {
+  assert.match(creature({ walk: "507777826" }).detail, /The dog's walk holds 507777826, which this run did not publish/);
+  assert.match(creature({ walkGroundSpeed: false }).detail, /The dog's walk was wired without its ground speed/);
+  assert.match(creature({}, withMetadata(dogEvidence(), "p7", MODEL_MOVED_BY_LABEL, MODEL_MOVED_BY_VERIFY)).detail, /watched the dog's own wandering/);
+  assert.match(creature({}, withMetadata(dogEvidence(), "p3", ANIMATION_GAIT_CHECKS_LABEL, "Not checked as a gait")).detail, /checked as a gait/);
+  assert.match(creature({}, dogEvidence(), false).detail, /completion gate/);
+});
+
+const WOLF_PATH = "game.Workspace.WorkbenchEvalWolf";
+// The dog's probe under the wolf's key: `dog` set aside, so the judge reads the body by `wolf` alone.
+const WOLF_PROBE = { ...DOG_PROBE, dog: undefined, wolf: "Model", meshParts: 11 };
+const BLENDER_CALLS = [{ tool: "run_blender_script", ok: true }, { tool: "upload_asset", ok: true }];
+
+function wolf(probe: Record<string, unknown> = {}, evidence?: RunEvidence[], toolCalls = BLENDER_CALLS) {
+  const onWolf = dogEvidence().map((item) => ({
+    ...item,
+    title: item.title.replace(DOG_PATH, WOLF_PATH),
+    ...(item.subject === undefined ? {} : { subject: item.subject.replace(DOG_PATH, WOLF_PATH) }),
+  }));
+  return verdict("T17-creature-blender", {
+    probe: { ...WOLF_PROBE, ...probe }, outcome: "completed", verified: true, toolCalls, changedTargets: [], evidence: evidence ?? onWolf,
+  });
+}
+
+test("T17 passes a wolf modelled in Blender, uploaded as pieces and rigged by rig, that walks and idles on its own", () => {
+  const result = wolf();
+  assert.equal(result.passed, true, result.detail);
+});
+
+test("T17 wants a Blender job, an upload, and the pieces the upload arrived as, under a rig that rig built", () => {
+  assert.match(wolf({}, undefined, [{ tool: "upload_asset", ok: true }]).detail, /No Blender job succeeded; the wolf was not modelled/);
+  assert.match(wolf({}, undefined, [{ tool: "run_blender_script", ok: true }, { tool: "upload_asset", ok: false }]).detail, /never uploaded/);
+  // A wolf of Parts, or one uploaded as a single mesh, was not modelled as moving pieces.
+  assert.match(wolf({ meshParts: 0 }).detail, /The wolf has 0 MeshParts/);
+  assert.match(wolf({ meshParts: 1 }).detail, /The wolf has 1 MeshParts/);
+  // The importer's rig left in place carries no stamp.
+  assert.match(wolf({ rigStamp: false }).detail, /The wolf's rig was not built by rig/);
+  assert.match(wolf({ feet: 0 }).detail, /The wolf's rig declares 0 feet/);
+  assert.match(wolf({ walkGroundSpeed: false }).detail, /The wolf's walk was wired without its ground speed/);
+});
+
+/** The wolf as one skinned mesh: a MeshPart Roblox reports as skinned, holding its bones, under the root rig made. */
+const SKINNED_PROBE = { meshParts: 1, skinnedParts: 1, bones: 16, motors: 1 };
+
+function skinnedWolf(probe: Record<string, unknown> = {}, toolCalls = BLENDER_CALLS) {
+  const onWolf = dogEvidence().map((item) => ({
+    ...item,
+    title: item.title.replace(DOG_PATH, WOLF_PATH),
+    ...(item.subject === undefined ? {} : { subject: item.subject.replace(DOG_PATH, WOLF_PATH) }),
+  }));
+  return verdict("T20-creature-skinned", {
+    probe: { ...WOLF_PROBE, ...SKINNED_PROBE, ...probe }, outcome: "completed", verified: true, toolCalls, changedTargets: [], evidence: onWolf,
+  });
+}
+
+test("T20 passes a wolf that is one skinned mesh, rigged by rig around its bones, that walks and idles on its own", () => {
+  const result = skinnedWolf();
+  assert.equal(result.passed, true, result.detail);
+});
+
+test("T20 wants one skinned MeshPart holding a four-legged body's bones, under a rig that rig built", () => {
+  assert.match(skinnedWolf({}, [{ tool: "upload_asset", ok: true }]).detail, /No Blender job succeeded/);
+  // Pieces, or a mesh Roblox does not report as skinned, are not one skinned mesh.
+  assert.match(skinnedWolf({ meshParts: 12, skinnedParts: 0 }).detail, /The wolf has 12 MeshParts, 0 of them skinned; it was to be one skinned mesh/);
+  assert.match(skinnedWolf({ skinnedParts: 0 }).detail, /it was to be one skinned mesh/);
+  assert.match(skinnedWolf({ bones: 4 }).detail, /The wolf's mesh holds 4 Bones/);
+  assert.match(skinnedWolf({ rigStamp: false }).detail, /The wolf's rig was not built by rig/);
+  // Declared but never built around: no root joins the mesh.
+  assert.match(skinnedWolf({ motors: 0 }).detail, /The wolf's rig declares 4 feet on 16 joints/);
+  assert.match(skinnedWolf({ feet: 0 }).detail, /The wolf's rig declares 0 feet/);
+  // The pieces task still refuses one mesh.
+  assert.match(wolf({ ...SKINNED_PROBE }).detail, /The wolf has 1 MeshParts/);
+});
+
+const SNAKE_PATH = "game.Workspace.WorkbenchEvalSnake";
+const SNAKE_PROBE = {
+  snake: "Model", humanoid: true, loader: "Script", enabled: true, idle: "701", idleOwner: OWNED,
+  walkGroundSpeed: false, place: { id: 42, type: "User" }, sequences: 1,
+  motors: 1, meshParts: 1, skinnedParts: 1, bones: 8, feet: 0, rigStamp: "rr1:4300:eacf5e7cde01a843",
+};
+
+/** A finished snake run: its rig read back, the slither built from the baked file, published, wired, and played. */
+function snakeEvidence(): RunEvidence[] {
+  return [
+    { id: "s1", kind: "verification", changeKind: "instance", title: SNAKE_PATH, passed: true },
+    {
+      id: "s2", kind: "inspection", title: ANIMATION_PREVIEW_TITLE, passed: true, imageDataUrl: "data:image/png;base64,QUJD",
+      modelPreviewId: "a1b2c3d4-2", metadata: [{ label: ANIMATION_NAME_LABEL, value: "Slither" }],
+    },
+    {
+      id: "s3", kind: "verification", changeKind: "instance", title: "game.ServerStorage.WorkbenchEval.Slither", passed: true,
+      metadata: [
+        { label: ANIMATION_MOTION_CHECKS_LABEL, value: ANIMATION_ALL_CHECKS_PASSED },
+        { label: ANIMATION_DESCRIBED_BY_LABEL, value: ANIMATION_DESCRIBED_BY_BAKE },
+      ],
+    },
+    { id: "s4", kind: "verification", changeKind: "asset", title: "rbxassetid://701", passed: true },
+    { id: "s5", kind: "verification", changeKind: "instance", title: `${SNAKE_PATH}.RoqerModelAnimate`, passed: true },
+    {
+      id: "s6", kind: "playtest", title: `${SNAKE_PATH} in the playtest`, passed: true,
+      metadata: [
+        { label: ANIMATION_PLAYED_FROM_LABEL, value: ANIMATION_PLAYED_PUBLISHED },
+        { label: modelStateLabel("idle"), value: MODEL_STATE_WIRED },
+      ],
+    },
+  ];
+}
+
+function snake(probe: Record<string, unknown> = {}, evidence: RunEvidence[] = snakeEvidence(), toolCalls = BLENDER_CALLS, verified = true) {
+  return verdict("T21-creature-blender-animation", {
+    probe: { ...SNAKE_PROBE, ...probe }, outcome: "completed", verified, toolCalls, changedTargets: [], evidence,
+  });
+}
+
+test("T21 passes a skinned snake whose slither was baked in Blender, built from the file, published and played on it", () => {
+  const result = snake();
+  assert.equal(result.passed, true, result.detail);
+});
+
+test("T21 wants the snake modelled in Blender as one skinned mesh, under a rig that rig built around its bones", () => {
+  assert.match(snake({}, snakeEvidence(), [{ tool: "upload_asset", ok: true }]).detail, /No Blender job succeeded/);
+  assert.match(snake({}, snakeEvidence(), [{ tool: "run_blender_script", ok: true }]).detail, /never uploaded/);
+  assert.match(snake({ snake: false }).detail, /no WorkbenchEvalSnake/);
+  assert.match(snake({ meshParts: 6, skinnedParts: 0 }).detail, /The snake has 6 MeshParts, 0 of them skinned/);
+  assert.match(snake({ bones: 2 }).detail, /holds 2 Bones/);
+  assert.match(snake({ rigStamp: false }).detail, /not built by rig/);
+  assert.match(snake({ motors: 0 }).detail, /not built by rig/);
+  assert.match(snake({}, snakeEvidence().filter((item) => item.id !== "s1")).detail, /No rig call built/);
+});
+
+test("T21 wants the kept slither built from the baked file, with every check passed, and a 3D preview", () => {
+  const evidence = snakeEvidence();
+  const unbaked = evidence.map((item) => item.id === "s3"
+    ? { ...item, metadata: item.metadata?.filter((entry) => entry.label !== ANIMATION_DESCRIBED_BY_LABEL) }
+    : item);
+  assert.match(snake({}, evidence.filter((item) => item.id !== "s3")).detail, /No animation was built/);
+  // The same motion written out as poses is not what the task asked for.
+  assert.match(snake({}, unbaked).detail, /written as poses instead/);
+  // A later build of the same sequence from poses replaces the baked one.
+  assert.match(snake({}, [...evidence, unbaked[2]]).detail, /written as poses instead/);
+  assert.match(snake({}, withMetadata(evidence, "s3", ANIMATION_MOTION_CHECKS_LABEL, "Passed, with jointLimits waived")).detail, /jointLimits waived/);
+  assert.match(snake({}, evidence.map((item) => item.id === "s3" ? { ...item, passed: false } : item)).detail, /did not play or read back/);
+  assert.match(snake({}, evidence.map((item) => item.id === "s2" ? { ...item, modelPreviewId: undefined } : item)).detail, /No 3D preview/);
+  assert.match(snake({ sequences: 0 }).detail, /No KeyframeSequence/);
+});
+
+test("T21 wants the published slither in the snake's idle, owned by the place's owner, and seen playing after the last wiring", () => {
+  const evidence = snakeEvidence();
+  assert.match(snake({}, evidence.filter((item) => item.id !== "s4")).detail, /No animation was published/);
+  assert.match(snake({ loader: false }).detail, /no RoqerModelAnimate loader/);
+  assert.match(snake({ idle: undefined }).detail, /idle is not wired/);
+  assert.match(snake({ idle: "507766388" }).detail, /which this run did not publish/);
+  assert.match(snake({ idleOwner: { ...OWNED, id: 7 } }).detail, /not the place's owner/);
+  assert.match(snake({}, withMetadata(evidence, "s6", ANIMATION_PLAYED_FROM_LABEL, "A temporary clip")).detail, /No playtest after the last wiring/);
+  assert.match(snake({}, withMetadata(evidence, "s6", modelStateLabel("idle"), "Not wired")).detail, /No playtest after the last wiring/);
+  const [s1, s2, s3, s4, s5, s6] = evidence;
+  assert.match(snake({}, [s1, s2, s3, s4, s6, s5]).detail, /No playtest after the last wiring/);
+  assert.match(snake({}, evidence, BLENDER_CALLS, false).detail, /completion gate/);
+});
+
+test("T18 wants a 3D preview, both sequences kept with every check passed, a gait among them, and the completion gate", () => {
+  const evidence = patrolEvidence();
+  assert.match(patrol({}, evidence.map((item) => item.id === "p1" ? { ...item, modelPreviewId: undefined } : item)).detail, /No 3D preview/);
+  assert.match(patrol({}, evidence.filter((item) => item.id !== "p2")).detail, /Only one animation was built/);
+  assert.match(
+    patrol({}, withMetadata(evidence, "p2", ANIMATION_MOTION_CHECKS_LABEL, "Passed, with jointLimits waived")).detail,
+    /last build of game\.ServerStorage\.WorkbenchEval\.Idle: Passed, with jointLimits waived/,
+  );
+  assert.match(patrol({}, withMetadata(evidence, "p3", ANIMATION_GAIT_CHECKS_LABEL, "Not checked as a gait")).detail, /checked as a gait/);
+  assert.match(patrol({ sequences: 1 }).detail, /not both kept/);
+  assert.match(patrol({}, evidence, false).detail, /completion gate/);
+  // A failed build of a sequence that a later build replaced does not count against it.
+  const failedFirst = { ...evidence[1], id: "p0", passed: false };
+  assert.equal(patrol({}, [failedFirst, ...evidence]).passed, true);
 });

@@ -1,5 +1,5 @@
 import { inflateSync } from 'zlib';
-import { drawnParts, roundedBox } from '../animation/box-rig.js';
+import { ball, cylinder, drawnParts, roundedBox, wedge, type PartMesh } from '../animation/box-rig.js';
 import { MAX_COLUMNS, renderContactSheet, sheetMoments, sheetTimes } from '../animation/contact-sheet.js';
 import { GLB_SAMPLE_RATE, glbSampleTimes, renderRigGlb } from '../animation/rig-glb.js';
 import { compilePoseAnimation, type KeyframeSequenceDescription } from '../animation/pose-compiler.js';
@@ -109,26 +109,65 @@ describe('contact sheet', () => {
   });
 });
 
+/** Unit normals, and every triangle wound to face the way its corners' normals do: outward. */
+function expectWoundOutward(mesh: PartMesh) {
+  for (let index = 0; index < mesh.normals.length; index += 3) {
+    expect(Math.hypot(mesh.normals[index], mesh.normals[index + 1], mesh.normals[index + 2])).toBeCloseTo(1, 6);
+  }
+  let faces = 0;
+  for (let index = 0; index < mesh.indices.length; index += 3) {
+    const [a, b, c] = [0, 1, 2].map((offset) => mesh.indices[index + offset]);
+    const p = (i: number) => mesh.positions.slice(i * 3, i * 3 + 3);
+    const [pa, pb, pc] = [p(a), p(b), p(c)];
+    const u = pb.map((value, axis) => value - pa[axis]);
+    const v = pc.map((value, axis) => value - pa[axis]);
+    const face = [u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0]];
+    if (Math.hypot(...face) < 1e-9) continue;
+    faces += 1;
+    for (const corner of [a, b, c]) {
+      const normal = mesh.normals.slice(corner * 3, corner * 3 + 3);
+      expect(face[0] * normal[0] + face[1] * normal[1] + face[2] * normal[2]).toBeGreaterThan(0);
+    }
+  }
+  expect(faces).toBeGreaterThan(0);
+}
+
+/** The lowest and highest value along each axis. */
+function extent(mesh: PartMesh): number[][] {
+  return [0, 1, 2].map((axis) => {
+    const values = mesh.positions.filter((_value, index) => index % 3 === axis);
+    return [Math.min(...values), Math.max(...values)].map((value) => Math.round(value * 1e6) / 1e6);
+  });
+}
+
 describe('block rig meshes', () => {
   test('are rounded boxes of the part’s size, closed, wound outward, with unit normals', () => {
     const mesh = roundedBox([2, 1, 1], 0.2);
-    const xs = mesh.positions.filter((_value, index) => index % 3 === 0);
-    const ys = mesh.positions.filter((_value, index) => index % 3 === 1);
-    expect([Math.min(...xs), Math.max(...xs), Math.min(...ys), Math.max(...ys)].map((value) => Math.round(value * 1e6) / 1e6)).toEqual([-1, 1, -0.5, 0.5]);
-    for (let index = 0; index < mesh.normals.length; index += 3) {
-      expect(Math.hypot(mesh.normals[index], mesh.normals[index + 1], mesh.normals[index + 2])).toBeCloseTo(1, 6);
+    expect(extent(mesh).slice(0, 2)).toEqual([[-1, 1], [-0.5, 0.5]]);
+    expectWoundOutward(mesh);
+  });
+
+  test('draw a ball, a cylinder and a wedge as Roblox shapes them', () => {
+    // A ball fills its box.
+    const round = ball([2, 2, 2]);
+    expect(extent(round)).toEqual([[-1, 1], [-1, 1], [-1, 1]]);
+    for (let index = 0; index < round.positions.length; index += 3) {
+      expect(Math.hypot(round.positions[index], round.positions[index + 1], round.positions[index + 2])).toBeCloseTo(1, 9);
     }
-    // Every triangle faces away from the centre: its winding agrees with its vertices' normals.
-    for (let index = 0; index < mesh.indices.length; index += 3) {
-      const [a, b, c] = [0, 1, 2].map((offset) => mesh.indices[index + offset]);
-      const p = (i: number) => mesh.positions.slice(i * 3, i * 3 + 3);
-      const [pa, pb, pc] = [p(a), p(b), p(c)];
-      const u = pb.map((value, axis) => value - pa[axis]);
-      const v = pc.map((value, axis) => value - pa[axis]);
-      const face = [u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0]];
-      const normal = mesh.normals.slice(a * 3, a * 3 + 3);
-      if (Math.hypot(...face) > 1e-9) expect(face[0] * normal[0] + face[1] * normal[1] + face[2] * normal[2]).toBeGreaterThan(0);
-    }
+    expectWoundOutward(round);
+    // A cylinder runs along X, as wide as the smaller of Y and Z.
+    const rod = cylinder([3, 1, 2]);
+    expect(extent(rod)).toEqual([[-1.5, 1.5], [-0.5, 0.5], [-0.5, 0.5]]);
+    expectWoundOutward(rod);
+    // A wedge is full underneath and at the back, its slope facing up and forward.
+    const ramp = wedge([2, 1, 3]);
+    expect(extent(ramp)).toEqual([[-1, 1], [-0.5, 0.5], [-1.5, 1.5]]);
+    const corners = Array.from({ length: ramp.positions.length / 3 }, (_unused, index) => ramp.positions.slice(index * 3, index * 3 + 3));
+    expect(corners.filter((corner) => corner[1] === 0.5).every((corner) => corner[2] === 1.5)).toBe(true);
+    const slope = corners.findIndex((_corner, index) => ramp.normals[index * 3 + 1] > 0);
+    expect(ramp.normals[slope * 3 + 1]).toBeGreaterThan(0);
+    expect(ramp.normals[slope * 3 + 2]).toBeLessThan(0);
+    expectWoundOutward(ramp);
   });
 });
 

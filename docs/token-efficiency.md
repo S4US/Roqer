@@ -5,7 +5,7 @@ Version 3.0 treats the MCP wire surface as a budgeted public API.
 ## Catalog budget
 
 The regression test in `packages/core/src/__tests__/mcp-runtime.test.ts` caps
-the serialized full catalog at 47,300 characters for its 51 tools and the
+the serialized full catalog at 50,850 characters for its 52 tools and the
 inspector catalog at 20,000 for its 25, tool descriptions at 120 characters, and
 argument descriptions at 64 characters. It also requires structured output
 schemas for every tool except the Markdown-returning `get_roblox_docs` tool.

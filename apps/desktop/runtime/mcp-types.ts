@@ -24,6 +24,12 @@ export type McpHealth = {
   pluginConnected: boolean;
   endpoint: string;
   serverVersion?: string;
+  /**
+   * Which tool definitions the bridge was built from, as it reports it; a
+   * bridge older than the report has none. `TOOL_CATALOG_DIGEST` in
+   * `shared/mcp-tool-schemas.ts` is this checkout's.
+   */
+  toolCatalogDigest?: string;
   instanceCount: number;
   instances: McpInstance[];
   /** Human-readable status, safe to show in the interface. */

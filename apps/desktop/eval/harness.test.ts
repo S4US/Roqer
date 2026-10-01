@@ -14,11 +14,12 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
-import type { McpToolCaller, McpToolOutcome } from "../runtime/mcp-types";
+import type { McpHealth, McpToolCaller, McpToolOutcome } from "../runtime/mcp-types";
 import type { Planner, PlannerContext } from "../runtime/run-engine";
 import { createStudioToolRunner } from "../runtime/studio-tools";
+import { TOOL_CATALOG_DIGEST } from "../shared/mcp-tool-schemas";
 import { ANIMATION_PREVIEW_TITLE, type RunEvidence } from "../shared/run-events";
-import { formatEvalResult, requireUploads, runEvalTask } from "./harness";
+import { formatEvalResult, requireMatchingBridge, requirePublishedPlace, requireUploads, runEvalTask } from "./harness";
 import { EVAL_TASKS, type EvalTask } from "./tasks";
 import type { EvalPlannerMetrics } from "./telemetry";
 
@@ -561,7 +562,7 @@ test("a reset the bridge rejects is an error, not a failing score", async () => 
 });
 
 test("every shipped task declares a prompt, a seed, a probe, and its targets", () => {
-  assert.equal(EVAL_TASKS.length, 15);
+  assert.equal(EVAL_TASKS.length, 20);
   const ids = new Set(EVAL_TASKS.map((task) => task.id));
   assert.equal(ids.size, EVAL_TASKS.length, "task ids are unique");
 
@@ -727,6 +728,41 @@ test("the realistic meadow must add real Terrain and be screenshotted", () => {
   assert.match(parts.detail, /not built with Terrain/);
   assert.equal(task.oracle({ ...common, probe: { terrainAdded: 120, rootFound: true }, toolCalls: screenshot }).passed, false);
   assert.equal(task.oracle({ ...common, probe: { terrainAdded: 40_000, rootFound: true }, toolCalls: [] }).passed, false);
+});
+
+test("a run refuses a bridge built from other tool definitions before any model is spent", () => {
+  const health = (toolCatalogDigest?: string): McpHealth => ({
+    reachable: true, pluginConnected: true, endpoint: "http://127.0.0.1:58741", serverVersion: "3.0.3",
+    ...(toolCatalogDigest === undefined ? {} : { toolCatalogDigest }), instanceCount: 1, instances: [], message: "Connected",
+  });
+  requireMatchingBridge(health(TOOL_CATALOG_DIGEST));
+  // The installed app's own bridge, built from the definitions of its release.
+  assert.throws(
+    () => requireMatchingBridge(health("0".repeat(64))),
+    /^Error: The bridge at http:\/\/127\.0\.0\.1:58741 \(v3\.0\.3\) was built from other tool definitions than this checkout, so a run would not measure this code\. Close Roqer if it is running/,
+  );
+  // A bridge from before bridges said which: as unusable, and said so.
+  assert.throws(() => requireMatchingBridge(health()), /other tool definitions than this checkout, or before bridges said which,/);
+});
+
+test("an ownership task refuses a place that was never published before any model is spent", async () => {
+  const calls: Array<Record<string, unknown>> = [];
+  const place = (owner: unknown): McpToolCaller => ({
+    callTool: async (_tool, args) => {
+      calls.push(args);
+      return { ok: true, data: { returnValue: JSON.stringify(owner) }, text: "", httpStatus: 200, durationMs: 1 };
+    },
+  });
+
+  await assert.rejects(
+    requirePublishedPlace(place({ id: 0, type: "User" }), "place:1"),
+    /^Error: The connected place is not published, or was opened from a file, so it has no owner \(its CreatorId is 0\)/,
+  );
+  await requirePublishedPlace(place({ id: 972858366, type: "User" }), "place:1");
+  await requirePublishedPlace(place({ id: 35_000_000, type: "Group" }), null);
+  // It only reads the place.
+  assert.deepEqual(calls[0], { code: "return { id = game.CreatorId, type = game.CreatorType.Name }", instance_id: "place:1" });
+  await assert.rejects(requirePublishedPlace(place("not a table"), null), /Could not read the place's owner/);
 });
 
 test("a modeling run refuses a bridge with no Open Cloud key before any model is spent", async () => {

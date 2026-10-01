@@ -1,6 +1,6 @@
 # Roqer agent evaluation harness
 
-A production-path evaluation harness with deterministic place reset, fifteen seeded
+A production-path evaluation harness with deterministic place reset, sixteen seeded
 tasks, numeric per-turn telemetry for Roqer's own agent loop, and a JSONL
 trajectory per run.
 
@@ -13,8 +13,18 @@ harness that reimplemented the run loop would be measuring itself.
 
 ## Running it
 
-Requires a live MCP bridge with Roblox Studio connected. Two providers can
-drive it:
+Requires a live MCP bridge with Roblox Studio connected, built from this
+checkout. A run shows the model this checkout's tools and scores this
+checkout's agent, so it stops before spending anything when the bridge's
+`/health` reports other tool definitions (`toolCatalogDigest`, against
+`TOOL_CATALOG_DIGEST` in `shared/mcp-tool-schemas.ts`). The usual cause is the
+installed Roqer app, which starts its own bridge on the default port: close it,
+run `npm run build:plugin:artifact` and `npm run build`, start this checkout's
+bridge (`npm run dev -w apps/desktop`, or
+`node packages/robloxstudio-mcp/dist/index.js --auto-install-plugin`), and
+restart Studio, which keeps the plugin it loaded until it restarts. A plugin
+older than the bridge answers an endpoint it lacks with a `plugin_outdated`
+error. Two providers can drive it:
 
 - `claude` (the default) runs Claude Code on your own Claude subscription. It
   needs a signed-in Claude Code CLI.
@@ -53,7 +63,10 @@ describes an interrupted place, not the agent's result.
 tasks also destroy and rebuild `Workspace.WorkbenchEvalIsland` or
 `Workspace.WorkbenchEvalMeadow`, `Workspace.WorkbenchEvalRepair`, or
 `Workspace.WorkbenchEvalVillage`, `Workspace.WorkbenchEvalAdventure`, or `Workspace.WorkbenchEvalCart`; T8 adds
-Terrain that no reset removes, and T15 removes `ServerScriptService.RoqerAnimate`, the loader that wires animations to characters.
+Terrain that no reset removes, T15 removes `ServerScriptService.RoqerAnimate`, the loader that wires animations to characters,
+T18 destroys and rebuilds `Workspace.WorkbenchEvalPosts` and removes `Workspace.WorkbenchEvalGuard`,
+T19 destroys and rebuilds `Workspace.WorkbenchEvalYard` and removes `Workspace.WorkbenchEvalDog`,
+and T17, T20 and T21 destroy and rebuild `Workspace.WorkbenchEvalDen` and remove `Workspace.WorkbenchEvalWolf` and `Workspace.WorkbenchEvalSnake`.
 Point it at a scratch place, never at real work.
 
 Results land in `eval/results/<taskId>.jsonl` (gitignored). Each file is one
@@ -85,6 +98,11 @@ prompt processing, and only the second is something this end can fix.
 | `T13-reference-style` | a small map in the style of an attached reference image | the Blender-first map: reused Blender kits, flat materials where the reference is flat, visual meshes without full-detail collision, plateaus a player can stand on, its own spawn with the place's left alone, the palette in WorldSpec, a final screenshot and a playtest |
 | `T14-ui-polished-shop` | "Make a simulator themed shop UI… Make it polished." | the harness's own layout audit of the shop, in its own playtest, comes back clean; at least four buttons; a screenshot after the last interface write; the completion gate |
 | `T15-animation-run` | "Make a running animation and set it up in R15." | the animation plan's goal: a published animation the place's owner owns, wired to the run slot, seen playing in a playtest, a 3D preview, and a gait whose motion checks all passed |
+| `T18-npc-patrol` | "Add a guard NPC who walks back and forth between the two posts, with idle and walk animations of its own." | the creature plan's step 2 goal: an idle and a walk the run published, owned by the place's owner, in the guard's loader with the walk's ground speed; a playtest of the guard's own patrol, after the last wiring, playing the walk while it moved and the idle while it stood; a 3D preview; and every kept build's checks passed, one as a gait |
+| `T19-creature-parts` | "Build a blocky four-legged dog from Parts and make it wander around the spawn, with idle and walk animations of its own." | the creature plan's Parts prompt: a dog of Parts whose rig `rig` built, read back, declared four feet on and drew a range sheet of; then T18's conditions on the dog |
+| `T17-creature-blender` | "Model a low-poly wolf in Blender, rig it, give it idle and walk animations, and make it walk around the den." | the creature plan's Blender prompt: a Blender job and an upload; a wolf of five or more MeshParts whose rig `rig` built, read back, declared four feet on and drew a range sheet of; then T18's conditions on the wolf. Needs `--blender` |
+| `T20-creature-skinned` | "Model a low-poly wolf in Blender as one skinned mesh, so that it bends at bones instead of turning as separate pieces. Rig it, give it idle and walk animations, and make it walk around the den." | the creature plan's step 7: T17's conditions on a wolf that is one MeshPart Roblox reports as skinned, holding 13 or more Bones, under a root `rig` made. Needs `--blender` |
+| `T21-creature-blender-animation` | "Model a low-poly snake in Blender as one skinned mesh, and animate it in Blender too: a looping slither on the spot, a wave running down its body from head to tail. Bring the snake and its slither into Studio and make the snake play it while it rests in the den." | the creature plan's step 8: a Blender job and an upload; a snake that is one skinned MeshPart holding four or more Bones, under a root `rig` made; its slither's last build described by a file baked in Blender, every check passed; that animation published, owned by the place's owner, in the snake's idle, and seen playing on it in a playtest after the last wiring. Needs `--blender` |
 
 T7 and T8 are a pair. Either alone rewards a fixed preference; together they
 measure whether the agent chooses its construction from the requested style.
@@ -214,6 +232,95 @@ not.
 npm run eval -- --task T15-animation-run --provider claude --model opus
 ```
 
+T18 is [the creature plan's](../../../docs/creature-plan.md) step 2 goal
+prompt. It names the guard, the posts and where the sequences go, so the reset
+owns them, and asks for animations "of its own", since `rig` gives a stock NPC
+Roblox's default idle, walk and run, which a run could leave in place. Its
+seed builds a raised walkway with the two posts, apart from the other tasks'
+builds, so the guard has ground of its own. It publishes two real animations,
+so it needs the same key as T15, and like T15 a published place, opened from
+Roblox, that the key's creator owns. The harness refuses an unpublished one
+before a run: it reports its CreatorId as 0, which no uploaded animation's
+owner can match, as the first run found after building a guard that patrolled.
+Its conditions:
+
+- an idle and a walk that this run published and Roblox read back, in the
+  guard's `RoqerModelAnimate` loader, each an Animation owned by the place's
+  creator;
+- the walk wired with its ground speed, so the loader paces it;
+- a playtest, after the last wiring, in which `verify` watched the guard's own
+  scripts move it (not `verify` walking it) and its loader played the walk
+  while it moved and the idle while it stood;
+- a 3D preview;
+- the last build of each sequence passing every motion check, one of them
+  checked as a gait, and both sequences kept.
+
+```bash
+npm run eval -- --task T18-npc-patrol --provider claude --model opus
+```
+
+T19 is the creature plan's Parts prompt (step 5): "Build a blocky four-legged
+dog from Parts and make it wander around the spawn." It names the dog, the
+spawn and where the sequences go, so the reset owns them. Its seed builds a
+raised yard apart from the other tasks' builds, with a plain Part as its
+spawn, so no other task's playtest spawns a player there. It needs the same
+key and published place as T18. Its conditions are T18's, on the dog, after
+four of its own:
+
+- the dog is made of Parts, with no MeshPart;
+- its rig carries `rig`'s stamp, and the run's last `rig` call on it read
+  back as built;
+- the rig declares four feet, on at least five joints;
+- the rig's range sheet, with its 3D view, was shown in the chat.
+
+```bash
+npm run eval -- --task T19-creature-parts --provider claude --model opus
+```
+
+T17 is the creature plan's Blender prompt (step 6): "Model a low-poly wolf in
+Blender, rig it, give it idle and walk animations, and make it walk around."
+It needs `--blender`, and the same key and published place as T18, since it
+uploads the model as well as two animations. Its conditions are T19's, on the
+wolf, with the body's turned round: a Blender job and an upload succeeded, and
+the wolf is made of at least five MeshParts, the pieces it was modelled as.
+Its rig carrying `rig`'s stamp and reading back as built means `rig` built
+it, at pivots that lay in the pieces they join. It passed on 2026-10-01 in 43
+calls; its upload arrived with no importer's rig, which the creature plan's
+step 6 records.
+
+```bash
+npm run eval -- --task T17-creature-blender --provider claude --model opus --blender auto
+```
+
+T20 is T17 for a skinned creature (the creature plan's step 7): the same
+prompt, asking for one skinned mesh that bends at bones. In place of five
+MeshParts it wants exactly one, which Roblox reports as skinned, holding the
+bones of four legs and a body, with the one `Motor6D` of the root `rig` makes
+around it. It passed on 2026-10-01 in 55 calls; the creature plan's step 7
+records the root it found too large.
+
+```bash
+npm run eval -- --task T20-creature-skinned --provider claude --model opus --blender auto
+```
+
+T21 is the creature plan's step 8: a snake modelled as one skinned mesh and
+animated in Blender, where a wave down a chain of bones is easier to make than
+to write as poses. The body's conditions are T20's without legs. The motion's
+are that the sequence kept in Studio was last built from the file a Blender
+job baked (a build records what described it), with every motion check
+passed, and that the published asset sits in the snake's idle and played on
+the snake as checked, in a playtest after the last wiring. A snake has no
+feet, so no gait check is asked for. Its first run, on 2026-10-01, did all of
+it in 22 calls, and the slither played in the playtest, but it was scored a
+failure: its only `verify` passed `slot` and an animation_id, which checks
+what the idle holds and not how the asset plays. The Blender guidance now
+gives the one call that checks both, and a wiring-only result says what it
+left unchecked.
+
+```bash
+npm run eval -- --task T21-creature-blender-animation --provider claude --model opus --blender auto
+```
+
 The oracles read the run's evidence as well as its tool calls. So that
 evidence matches the app's, the harness keeps each tool image with its
 evidence as the tool's own bytes; the app downsizes them with Electron, which
@@ -305,4 +412,4 @@ the reset-per-task harness above; no model-quality result is implied by its pres
   belong to whoever serves the model and are not inferred here.
 - No competitor baseline. "Roqer versus X" needs X driven through the same
   reset and oracles, which is a larger piece of work than this slice.
-- Fifteen tasks. T15 exists because the animation plan set its goal as one prompt with five conditions. T9 exists because the first recorded world baselines exposed the need for a measured local visual-repair loop, T10 and T11 because the world-building plan's village and large-map baselines had no scored form, T12 because the first real Blender run brought in a model at the wrong scale and in one colour, T13 because a live map built from a reference image came out far from it, and T14 because a live shop passed its own screenshot review with overlapping text; add another only when a real failure or an outstanding baseline motivates it.
+- Twenty tasks. T17 and T19 exist because the creature plan set goal prompts for a creature modelled in Blender and one built from Parts, T20 because its step 7 is done when a skinned creature passes T17's checks, and T21 because its step 8 was built with no agent run to show it. T15 exists because the animation plan set its goal as one prompt with five conditions, and T18 because the creature plan did the same for an NPC. T9 exists because the first recorded world baselines exposed the need for a measured local visual-repair loop, T10 and T11 because the world-building plan's village and large-map baselines had no scored form, T12 because the first real Blender run brought in a model at the wrong scale and in one colour, T13 because a live map built from a reference image came out far from it, and T14 because a live shop passed its own screenshot review with overlapping text; add another only when a real failure or an outstanding baseline motivates it.

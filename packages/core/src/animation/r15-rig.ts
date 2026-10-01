@@ -3,78 +3,9 @@
 // dummy came from CreateHumanoidModelFromDescription with a default
 // HumanoidDescription; every joint was an AnimationConstraint.
 
-export type Vec3 = readonly [number, number, number];
-/** A rotation, row-major, as CFrame components 4 to 12. */
-export type Rotation = readonly [number, number, number, number, number, number, number, number, number];
+import type { Rig, RigJointLimit, RigLimb, Rotation, Vec3 } from './rig.js';
 
-export const IDENTITY_ROTATION: Rotation = [1, 0, 0, 0, 1, 0, 0, 0, 1];
-
-export interface RigJoint {
-  /** The joint's name in the rig, e.g. "RightShoulder". */
-  name: string;
-  parentPart: string;
-  /** The part a pose on this joint moves. Keyframe poses are named after it. */
-  childPart: string;
-  /** The joint's attachment position in the parent part, in studs. */
-  parentOffset: Vec3;
-  /** The joint's attachment position in the child part, in studs. */
-  childOffset: Vec3;
-  /**
-   * The joint frame's rotation in the parent part (Motor6D.C0's rotation);
-   * the identity when absent, as on every body joint of the stock R15 rig.
-   */
-  parentRotation?: Rotation;
-  /** The joint frame's rotation in the child part (Motor6D.C1's rotation). */
-  childRotation?: Rotation;
-  /**
-   * A joint a character has only while it holds something, such as the
-   * weapon grip. It is previewed and verified only when an animation keys it.
-   */
-  optional?: boolean;
-  /**
-   * For a prop: the attachment in the parent part whose Position the game
-   * uses as the motor's C0 position, so the prop follows a scaled avatar's
-   * hand. C0's rotation is always parentRotation: the attachments' own turn
-   * differs between rigs (R15's grips are turned -90° about X, R6's are not,
-   * measured by tests/animation-tool.mjs), and a prop points the same way on
-   * both. Without an attachment, C0 is parentOffset and parentRotation.
-   */
-  attachment?: string;
-}
-
-export interface Rig {
-  name: 'R15' | 'R6';
-  rootPart: string;
-  hipHeight: number;
-  /** The ground's height in the HumanoidRootPart's frame, in studs. */
-  ground: number;
-  /** The parts that stand on the ground, left then right. */
-  feet: readonly [string, string];
-  /** The joints that swing the legs, left then right. */
-  hips: readonly [string, string];
-  /** The part the body's shadow is drawn under. */
-  body: string;
-  /**
-   * The limbs `aimAt` reaches with, by the joint at their root (a shoulder or
-   * hip): the hinge that bends them, if any, and the point that lands on the
-   * target, in the last part's frame (the hinge's child, or the joint's own).
-   */
-  limbs: Readonly<Record<string, { hinge?: string; end: Vec3; foot?: string; hand?: Vec3 }>>;
-  /**
-   * Where a drawn stand-in's box sits in its part, when not at its centre:
-   * the weapon's blade runs out of the fist rather than through it.
-   */
-  drawOffsets?: Readonly<Record<string, Vec3>>;
-  /**
-   * Motion checks that cannot judge this rig yet, by check id, with why. They
-   * are reported as skipped, never as passed.
-   */
-  uncheckedChecks?: Readonly<Record<string, string>>;
-  /** Part sizes in studs (x, y, z). */
-  parts: Readonly<Record<string, Vec3>>;
-  /** Joints ordered parent before child. */
-  joints: readonly RigJoint[];
-}
+export { IDENTITY_ROTATION, type Rig, type RigJoint, type Rotation, type Vec3 } from './rig.js';
 
 /** Rx(-90°): the grip attachment's frame in the hand, its +Y out of the fist toward the character's front at rest. */
 export const GRIP_ROTATION: Rotation = [1, 0, 0, 0, 0, 1, 0, -1, 0];
@@ -113,23 +44,81 @@ export const PROP_DRAW_OFFSETS: Readonly<Record<string, Vec3>> = {
   [SHEATH_PART]: SHEATH_STAND_IN_OFFSET,
 };
 
+/** A limb that hangs at rest: `aim` points its -Y. */
+export const HANGING: Vec3 = [0, -1, 0];
+/** Where an arm's forearm folds as its elbow flexes: forward (-Z). */
+export const ARM_FOLD: Vec3 = [0, 0, -1];
+/** Where a leg's shin folds as its knee flexes: back (+Z). */
+export const LEG_FOLD: Vec3 = [0, 0, 1];
+
+/** The errors' names for a character's limbs and hinges. */
+export const CHARACTER_WORDS = { limbs: 'shoulders and hips', hinges: 'elbows and knees' } as const;
+
+/**
+ * How far each R15 joint may turn. The limits let Roblox's own R15 animations
+ * pass, with a margin: the live calibration run
+ * (tests/animation-calibration.mjs) measured the 26 animations of the
+ * default Animate script, and the animation plan's "Live results" records it.
+ *
+ * A turn is the largest from rest, in degrees, for joints that turn freely.
+ * Anatomical; Roblox's worst: shoulder 160 (climb), hip 111 (laugh), wrist 64
+ * and ankle 39 (swim), neck 56 (idle), waist 45 (laugh).
+ *
+ * A hinge's range is signed about X: an elbow bends the forearm forward (+X),
+ * a knee bends the shin back (-X). Roblox's worst: knees -143 to 4.3 (run,
+ * cheer), elbows -6.7 to 123 (jump, swim), 17° off axis (dance3).
+ *
+ * Root turns the whole body, and a held or worn prop turns as the game needs.
+ */
+export const R15_JOINT_LIMITS: Readonly<Record<string, RigJointLimit>> = {
+  Root: 'free',
+  Waist: { turn: 90 },
+  Neck: { turn: 90 },
+  LeftShoulder: { turn: 180 },
+  RightShoulder: { turn: 180 },
+  LeftElbow: { min: -15, max: 160, offAxis: 35 },
+  RightElbow: { min: -15, max: 160, offAxis: 35 },
+  LeftWrist: { turn: 100 },
+  RightWrist: { turn: 100 },
+  LeftHip: { turn: 150 },
+  RightHip: { turn: 150 },
+  LeftKnee: { min: -160, max: 10, offAxis: 35 },
+  RightKnee: { min: -160, max: 10, offAxis: 35 },
+  LeftAnkle: { turn: 80 },
+  RightAnkle: { turn: 80 },
+  Weapon: 'free',
+  OffHand: 'free',
+  Sheath: 'free',
+};
+
+// The wrist and the ankle: an ankle stands 0.26 studs above the ground.
+const R15_LIMBS: Readonly<Record<string, RigLimb>> = {
+  // An arm's hand: the hand's centre with the wrist straight, which grip holds on the weapon.
+  LeftShoulder: { hinge: 'LeftElbow', end: [0, -0.532, 0], hand: [0, -0.664, 0], axis: HANGING, fold: ARM_FOLD },
+  RightShoulder: { hinge: 'RightElbow', end: [0, -0.532, 0], axis: HANGING, fold: ARM_FOLD },
+  // A leg's aimAt also keys its ankle, to lay the foot flat.
+  LeftHip: { hinge: 'LeftKnee', end: [0, -0.596, 0], foot: 'LeftAnkle', axis: HANGING, fold: LEG_FOLD },
+  RightHip: { hinge: 'RightKnee', end: [0, -0.596, 0], foot: 'RightAnkle', axis: HANGING, fold: LEG_FOLD },
+};
+
 export const R15_RIG: Rig = {
   name: 'R15',
   rootPart: 'HumanoidRootPart',
+  rootJoint: 'Root',
   hipHeight: 2.19,
   ground: -(2.19 + 2 / 2),
   feet: ['LeftFoot', 'RightFoot'],
   hips: ['LeftHip', 'RightHip'],
   body: 'LowerTorso',
-  // The wrist and the ankle: an ankle stands 0.26 studs above the ground.
-  limbs: {
-    // An arm's hand: the hand's centre with the wrist straight, which grip holds on the weapon.
-    LeftShoulder: { hinge: 'LeftElbow', end: [0, -0.532, 0], hand: [0, -0.664, 0] },
-    RightShoulder: { hinge: 'RightElbow', end: [0, -0.532, 0] },
-    // A leg's aimAt also keys its ankle, to lay the foot flat.
-    LeftHip: { hinge: 'LeftKnee', end: [0, -0.596, 0], foot: 'LeftAnkle' },
-    RightHip: { hinge: 'RightKnee', end: [0, -0.596, 0], foot: 'RightAnkle' },
+  limbs: R15_LIMBS,
+  hinges: {
+    LeftElbow: { axis: 'X', flex: 1 },
+    RightElbow: { axis: 'X', flex: 1 },
+    LeftKnee: { axis: 'X', flex: -1 },
+    RightKnee: { axis: 'X', flex: -1 },
   },
+  limits: R15_JOINT_LIMITS,
+  words: CHARACTER_WORDS,
   drawOffsets: PROP_DRAW_OFFSETS,
   parts: {
     HumanoidRootPart: [2, 2, 1],

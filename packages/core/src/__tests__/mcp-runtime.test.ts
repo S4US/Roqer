@@ -127,6 +127,24 @@ describe('MCP v2 tool runtime', () => {
   // nothing to fire on, and without R6 an R6 place got no animation at all.
   // `grounded` then added about 90: without it a crouching or lunging attack
   // could put a foot through the floor with no check noticing.
+  // `model` and `ground_speed` then added about 160: without them an NPC or a
+  // creature could be animated only by hand-written Luau, and nothing paced
+  // its walk to how fast it moves, so its feet slid. `position` then added
+  // about 100: verify walks the model there to see its walk and idle play.
+  // The `rig` action and `stock` then added about 110: without them an agent
+  // made an NPC's body in hand-written Luau, and kept its Animate script,
+  // which plays nothing outside a player's character. Its build and adopt
+  // forms (joints, controller, plan, declarations, replace) then added about
+  // 490: without them a creature's pieces were joined in hand-written Luau,
+  // with nothing to check a pivot, and an upload kept the importer's rig, whose
+  // pieces each turn about their own middle. `waves` and `duration` then added
+  // about 160: without them a tail, a wing or a tentacle swaying was dozens of
+  // hand-written keys a joint, each a chance to break the loop's seam. `gait`
+  // then added about 130: without it a four-legged walk was some sixty aimAt
+  // targets worked out by hand, and its feet slid wherever one was off.
+  // `animation_file` then added about 100: without it an animation baked in
+  // Blender, hundreds of poses, crossed the model's context twice, once as the
+  // job's result and again as the call's arguments.
   test('keeps the catalog within the 3.0 token budget', () => {
     const catalog = TOOL_DEFINITIONS.map(publicToolDefinition);
     const names = new Set(catalog.map((tool) => tool.name));
@@ -142,7 +160,7 @@ describe('MCP v2 tool runtime', () => {
     // The action branches on solo_playtest added about 200: a recorded run
     // started a playtest without mode because it looked optional, and each
     // miss cost a round trip to learn the rule.
-    expect(serialized.length).toBeLessThanOrEqual(49_500);
+    expect(serialized.length).toBeLessThanOrEqual(50_850);
     expect(catalog.filter((tool) => tool.outputSchema)).toHaveLength(51);
     expect(catalog.every((tool) => tool.description.length <= 120)).toBe(true);
     expect(inspectorCatalog).toHaveLength(25);

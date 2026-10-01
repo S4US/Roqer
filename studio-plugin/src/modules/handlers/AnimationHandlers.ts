@@ -2,7 +2,7 @@ import Utils from "../Utils";
 import Recording from "../Recording";
 import { sourceRevision } from "../SourceRevision";
 
-const { getInstancePath, resolveInstance, getInstanceReference, readScriptSource } = Utils;
+const { getInstancePath, resolveInstance, resolveParentAndName, getInstanceReference, readScriptSource } = Utils;
 const { beginRecording, finishRecording } = Recording;
 
 const Players = game.GetService("Players");
@@ -13,8 +13,9 @@ const Workspace = game.GetService("Workspace");
  *
  * Core compiles and checks the pose description; the plugin only turns the
  * compiled keyframes into instances. `previewAnimation` plays them on a
- * temporary R15 or R6 dummy, as the sequence's rig says, and reports the
- * joints, without leaving anything behind.
+ * temporary R15 or R6 dummy, as the sequence's rig says, or on a temporary
+ * copy of the model whose rig it was written for, and reports the joints,
+ * without leaving anything behind.
  * `buildAnimation` writes the KeyframeSequence as one undo step, replacing a
  * sequence only when it was built here, is unchanged since, and matches the
  * revision the caller expects.
@@ -23,8 +24,9 @@ const Workspace = game.GetService("Workspace");
 const REVISION_ATTRIBUTE = "RoqerAnimationRevision";
 const PREVIEW_FOLDER = "__RoqerAnimationPreview";
 const MAX_KEYFRAMES = 240;
-const MAX_POSES_PER_KEYFRAME = 32;
-const MAX_POSE_DEPTH = 8;
+/** A keyframe's poses and their nesting: a rig's joints, at most 64, and its root. */
+const MAX_POSES_PER_KEYFRAME = 65;
+const MAX_POSE_DEPTH = 65;
 const MAX_NAME_LENGTH = 100;
 const MAX_MARKERS_PER_KEYFRAME = 16;
 const MAX_MARKER_VALUE_LENGTH = 200;
@@ -195,6 +197,27 @@ function componentsOf(cframe: CFrame): number[] {
 	return out;
 }
 
+/**
+ * A rig's animated joints, by the name of the part each moves: a Motor6D, or
+ * an AnimationConstraint, which Roblox's avatar joint upgrade builds stock
+ * bodies with instead; and a skinned mesh's Bones, each by its own name, which
+ * an Animator drives through the same Transform.
+ */
+function animatedJoints(rig: Instance): Map<string, Instance> {
+	const joints = new Map<string, Instance>();
+	for (const descendant of rig.GetDescendants()) {
+		if (descendant.IsA("AnimationConstraint")) {
+			const attachment = descendant.Attachment1;
+			if (attachment && attachment.Parent) joints.set(attachment.Parent.Name, descendant);
+		} else if (descendant.IsA("Motor6D") && descendant.Part1) {
+			joints.set(descendant.Part1.Name, descendant);
+		} else if (descendant.IsA("Bone")) {
+			joints.set(descendant.Name, descendant);
+		}
+	}
+	return joints;
+}
+
 function destroyQuietly(instance: Instance | undefined) {
 	if (instance) pcall(() => instance.Destroy());
 }
@@ -262,6 +285,24 @@ function previewAnimation(requestData: Data) {
 		last = time;
 	}
 
+	// A model's own rig is previewed on a copy of the model, and only while its
+	// rig is as it was when the animation was checked.
+	let model: AnimatedModel | undefined;
+	if (requestData.model !== undefined) {
+		const request = requestData.model;
+		if (!typeIs(request, "table")) return { error: "model must be {path, revision}.", errorCode: "invalid_arguments" };
+		const found = animatedModel((request as Data).path);
+		if ("error" in found) return found;
+		const reading = readModelRig(found);
+		if ("error" in reading) return reading;
+		if (reading.revision !== (request as Data).revision) {
+			return { error: `${reading.path}'s rig has changed since the animation was checked against it; check it again.`, errorCode: "stale_rig" };
+		}
+		const refusal = copyRefusal(found.model);
+		if (refusal !== undefined) return { error: `${refusal}.`, errorCode: "model_not_copyable" };
+		model = found;
+	}
+
 	const [built, sequenceOrError] = pcall(() => buildSequence(requestData.sequence));
 	if (!built) return { error: tostring(sequenceOrError) };
 	const sequence = sequenceOrError as KeyframeSequence;
@@ -281,30 +322,37 @@ function previewAnimation(requestData: Data) {
 		folder.Name = PREVIEW_FOLDER;
 		folder.Archivable = false;
 		folder.Parent = Workspace;
-		const rigType = (requestData.sequence as Data).rig === "R6" ? Enum.HumanoidRigType.R6 : Enum.HumanoidRigType.R15;
-		const rig = Players.CreateHumanoidModelFromDescription(new Instance("HumanoidDescription"), rigType);
+		let rig: Model;
+		let root: Instance | undefined;
+		if (model) {
+			rig = model.model.Clone();
+			// Nothing in the copy runs: it is only posed.
+			for (const descendant of rig.GetDescendants()) {
+				if (descendant.IsA("BaseScript")) descendant.Enabled = false;
+			}
+			// Its root is the one part its joints hang from, as its reading found:
+			// a copy's Humanoid does not know its root part until it is placed.
+			const roots = jointRoots(modelJoints(rig));
+			if (roots.size() !== 1) error("the copy of the model does not hang from one root");
+			root = roots[0];
+		} else {
+			const rigType = (requestData.sequence as Data).rig === "R6" ? Enum.HumanoidRigType.R6 : Enum.HumanoidRigType.R15;
+			rig = Players.CreateHumanoidModelFromDescription(new Instance("HumanoidDescription"), rigType);
+			root = rig.FindFirstChild("HumanoidRootPart");
+		}
 		rig.Archivable = false;
 		rig.PivotTo(new CFrame(0, 100000, 0));
-		const root = rig.FindFirstChild("HumanoidRootPart");
 		if (root && root.IsA("BasePart")) root.Anchored = true;
 		rig.Parent = folder;
-		addProps(rig, requestData.props);
+		if (!model) addProps(rig, requestData.props);
 
-		const joints = new Map<string, Instance>();
-		for (const descendant of rig.GetDescendants()) {
-			if (descendant.IsA("AnimationConstraint")) {
-				const attachment = descendant.Attachment1;
-				if (attachment && attachment.Parent) joints.set(attachment.Parent.Name, descendant);
-			} else if (descendant.IsA("Motor6D") && descendant.Part1) {
-				joints.set(descendant.Part1.Name, descendant);
-			}
-		}
-		const humanoid = rig.FindFirstChildOfClass("Humanoid");
-		if (!humanoid) error("the preview dummy has no Humanoid");
-		let animator = humanoid.FindFirstChildOfClass("Animator");
+		const joints = animatedJoints(rig);
+		const controller = rig.FindFirstChildOfClass("Humanoid") ?? rig.FindFirstChildOfClass("AnimationController");
+		if (!controller) error("the preview dummy has no Humanoid");
+		let animator = controller.FindFirstChildOfClass("Animator");
 		if (!animator) {
 			animator = new Instance("Animator");
-			animator.Parent = humanoid;
+			animator.Parent = controller;
 		}
 		const stepper = animator as AnimatorWithStep;
 		animation = new Instance("Animation");
@@ -609,6 +657,20 @@ function animationVerify(requestData: Data) {
 		}
 	}
 
+	const played = playAndSample(character, animator, requestData, "the character");
+	if ("error" in played) return played;
+	return { ...played, rigType: humanoid.RigType.Name, ...(wiredIds ? { wiredIds, playingIds } : {}) };
+}
+
+type PlayedSamples = { length: number; samples: { time: number; transforms: Record<string, number[]> }[] };
+
+/**
+ * Play an animation on a rig's Animator as a game would, above whatever else
+ * it plays, and sample the rig's joints on the Animator's own clock; then stop
+ * it, leaving nothing behind. The animation is the published animationId, or
+ * a temporary clip built from the compiled sequence.
+ */
+function playAndSample(rig: Instance, animator: Animator, requestData: Data, what: string): PlayedSamples | { error: string } {
 	let sequence: KeyframeSequence | undefined;
 	let animation: Animation | undefined;
 	let track: AnimationTrack | undefined;
@@ -619,15 +681,7 @@ function animationVerify(requestData: Data) {
 			const provider = game.GetService("AnimationClipProvider" as keyof Services) as unknown as ClipProvider;
 			id = tostring(provider.RegisterAnimationClip(sequence));
 		}
-		const joints = new Map<string, Instance>();
-		for (const descendant of character!.GetDescendants()) {
-			if (descendant.IsA("AnimationConstraint")) {
-				const attachment = descendant.Attachment1;
-				if (attachment && attachment.Parent) joints.set(attachment.Parent.Name, descendant);
-			} else if (descendant.IsA("Motor6D") && descendant.Part1) {
-				joints.set(descendant.Part1.Name, descendant);
-			}
-		}
+		const joints = animatedJoints(rig);
 		animation = new Instance("Animation");
 		animation.AnimationId = id as string;
 		track = animator.LoadAnimation(animation);
@@ -635,7 +689,7 @@ function animationVerify(requestData: Data) {
 		track.Play(0);
 		const loadDeadline = os.clock() + TRACK_LOAD_SECONDS;
 		while (track.Length === 0 && os.clock() < loadDeadline) task.wait(0.05);
-		if (track.Length === 0) error("the animation never loaded on the character");
+		if (track.Length === 0) error(`the animation never loaded on ${what}`);
 		const count = 10;
 		const gap = math.max(track.Length, 0.2) / (count + 1);
 		const samples: { time: number; transforms: Record<string, number[]> }[] = [];
@@ -659,7 +713,602 @@ function animationVerify(requestData: Data) {
 	destroyQuietly(animation);
 	destroyQuietly(sequence);
 	if (!ok) return { error: `${tostring(result)}.` };
-	return { ...(result as object), rigType: humanoid.RigType.Name, ...(wiredIds ? { wiredIds, playingIds } : {}) };
+	return result as PlayedSamples;
+}
+
+// -- Models: NPCs and creatures -------------------------------------------------
+
+const MODEL_LOADER_NAME = "RoqerModelAnimate";
+/** The states a model's loader plays, by how fast the model moves. */
+const MODEL_STATES = ["idle", "walk", "run"];
+/** The fastest ground speed a gait may be wired with, in studs a second. */
+const MAX_GROUND_SPEED = 200;
+/**
+ * The model loader's whole code. It never changes; the animations are its
+ * attributes. It is a server Script inside the model, so every copy of the
+ * model carries it and what it plays reaches every client.
+ */
+const MODEL_LOADER_SOURCE = `-- Built by Roqer (RoqerModelAnimate 1). Plays this model's idle, walk and run
+-- animations by how fast the model moves. They are this script's attributes:
+-- idle, walk and run hold animation IDs, and walkSpeed and runSpeed the ground
+-- speed in studs a second each was written for, so its feet keep pace. Roqer's
+-- animation tool sets them; this code stays as it is.
+local RunService = game:GetService("RunService")
+
+local model = script.Parent
+local humanoid = model:FindFirstChildOfClass("Humanoid")
+local controller = humanoid or model:FindFirstChildOfClass("AnimationController")
+if not controller then
+	warn(script:GetFullName() .. ": " .. model.Name .. " has no Humanoid or AnimationController to animate")
+	return
+end
+local animator = controller:FindFirstChildOfClass("Animator")
+if not animator then
+	animator = Instance.new("Animator")
+	animator.Parent = controller
+end
+
+local PRIORITY = {
+	idle = Enum.AnimationPriority.Idle,
+	walk = Enum.AnimationPriority.Movement,
+	run = Enum.AnimationPriority.Movement,
+}
+-- Seconds to cross-fade from one state to the next.
+local FADE = 0.2
+-- Studs a second below which the model stands.
+local STANDING = 0.5
+-- How far a gait may be slowed down or sped up to keep pace with the model.
+local SLOWEST, FASTEST = 0.5, 2
+
+local tracks = {}
+local current = nil
+
+local function load(state)
+	local old = tracks[state]
+	if old then
+		old:Stop(0)
+		old:Destroy()
+		tracks[state] = nil
+	end
+	if current == state then
+		current = nil
+	end
+	local id = script:GetAttribute(state)
+	if typeof(id) ~= "string" or id == "" then
+		return
+	end
+	local animation = Instance.new("Animation")
+	animation.AnimationId = id
+	local ok, track = pcall(animator.LoadAnimation, animator, animation)
+	if not ok then
+		warn(script:GetFullName() .. ": the " .. state .. " animation " .. id .. " did not load: " .. tostring(track))
+		return
+	end
+	track.Priority = PRIORITY[state]
+	track.Looped = true
+	tracks[state] = track
+end
+
+for state in PRIORITY do
+	load(state)
+end
+script.AttributeChanged:Connect(function(name)
+	if PRIORITY[name] then
+		load(name)
+	end
+end)
+
+local function choose(speed)
+	if speed < STANDING then
+		return "idle"
+	end
+	local walkSpeed, runSpeed = script:GetAttribute("walkSpeed"), script:GetAttribute("runSpeed")
+	if tracks.walk and tracks.run and typeof(walkSpeed) == "number" and typeof(runSpeed) == "number" then
+		return if speed > (walkSpeed + runSpeed) / 2 then "run" else "walk"
+	end
+	return if tracks.walk then "walk" elseif tracks.run then "run" else "idle"
+end
+
+-- A Humanoid reports its speed; anything else is timed from frame to frame.
+local running = 0
+if humanoid then
+	humanoid.Running:Connect(function(speed)
+		running = speed
+	end)
+end
+local measured, last = 0, nil
+
+RunService.Heartbeat:Connect(function(dt)
+	local speed = running
+	if not humanoid then
+		local root = model.PrimaryPart
+		local position = root and root.Position
+		if position and last and dt > 0 then
+			local moved = (position - last) * Vector3.new(1, 0, 1)
+			measured += (moved.Magnitude / dt - measured) * math.min(1, dt * 5)
+		end
+		last = position
+		speed = measured
+	end
+	local state = choose(speed)
+	if state ~= current then
+		local previous = current and tracks[current]
+		if previous then
+			previous:Stop(FADE)
+		end
+		if tracks[state] then
+			tracks[state]:Play(FADE)
+		end
+		current = state
+	end
+	local track = tracks[state]
+	local written = script:GetAttribute(state .. "Speed")
+	if track and state ~= "idle" and typeof(written) == "number" and written > 0 then
+		track:AdjustSpeed(math.clamp(speed / written, SLOWEST, FASTEST))
+	end
+end)
+`;
+
+type AnimatedModel = { model: Model; controller: Humanoid | AnimationController };
+type Refusal = { error: string; errorCode: string };
+
+/**
+ * The model the path names, when a loader can animate it: a Model with a
+ * Humanoid or an AnimationController, and not a player's character, whose own
+ * Animate script the slots are for.
+ */
+function animatedModel(path: unknown): AnimatedModel | Refusal {
+	if (!typeIs(path, "string") || path === "") return { error: "model is required.", errorCode: "invalid_arguments" };
+	const target = resolveInstance(path, undefined);
+	if (!target) return { error: `${path} does not exist.`, errorCode: "model_not_found" };
+	if (!target.IsA("Model")) return { error: `${path} is a ${target.ClassName}, not a Model.`, errorCode: "target_not_model" };
+	if (target.IsDescendantOf(game.GetService("StarterPlayer"))) {
+		return { error: `${path} is a player's character; wire its Animate slots with slot and no model.`, errorCode: "player_character" };
+	}
+	const controller = target.FindFirstChildOfClass("Humanoid") ?? target.FindFirstChildOfClass("AnimationController");
+	if (!controller) {
+		return { error: `${path} has no Humanoid or AnimationController to animate; rig it first.`, errorCode: "model_not_rigged" };
+	}
+	return { model: target, controller };
+}
+
+/** The model's loader, if it has one, when it is the one loader this tool installs and its code is unchanged. */
+function modelLoader(model: Model): { loader?: Script } | Refusal {
+	const named = model.GetChildren().filter((child) => child.Name === MODEL_LOADER_NAME);
+	if (named.size() > 1) {
+		return { error: `${getInstancePath(model)} holds ${named.size()} children named ${MODEL_LOADER_NAME}; keep one.`, errorCode: "ambiguous_target" };
+	}
+	const existing = named[0];
+	if (existing && (!existing.IsA("Script") || readScriptSource(existing) !== MODEL_LOADER_SOURCE)) {
+		return { error: `${getInstancePath(existing)} is not the loader this tool installs, or its code was changed; it is left alone.`, errorCode: "loader_modified" };
+	}
+	return { loader: existing as Script | undefined };
+}
+
+/**
+ * Set one state of a model's loader to a published animation, installing the
+ * loader in the model when it has none. As with the character loader, a state
+ * is replaced only when the caller names the ID it holds now, and the gait's
+ * ground speed, which paces it, is replaced along with its ID.
+ */
+function animationWireModel(requestData: Data) {
+	const state = requestData.state;
+	const animationId = requestData.animationId;
+	const expectedId = requestData.expectedId;
+	const groundSpeed = requestData.groundSpeed;
+	if (!typeIs(state, "string") || !MODEL_STATES.includes(state)) return { error: `state must be one of ${MODEL_STATES.join(", ")}.` };
+	if (!typeIs(animationId, "string") || animationId.match("^rbxassetid://%d+$")[0] === undefined) {
+		return { error: "animationId must be rbxassetid://<digits>." };
+	}
+	if (expectedId !== undefined && !typeIs(expectedId, "string")) return { error: "expectedId must be a string." };
+	if (groundSpeed !== undefined && (state === "idle" || !typeIs(groundSpeed, "number") || !(groundSpeed > 0 && groundSpeed <= MAX_GROUND_SPEED))) {
+		return { error: `groundSpeed is for walk and run, above 0 and at most ${MAX_GROUND_SPEED} studs a second.` };
+	}
+
+	const found = animatedModel(requestData.model);
+	if ("error" in found) return { ...found, error: `${found.error} Nothing was wired.` };
+	const model = found.model;
+	const loaded = modelLoader(model);
+	if ("error" in loaded) return { ...loaded, error: `${loaded.error} Nothing was wired.` };
+	const existing = loaded.loader;
+
+	const current = existing?.GetAttribute(state);
+	const currentId = typeIs(current, "string") ? current : undefined;
+	if (currentId !== undefined && expectedId === undefined) {
+		return { error: `${model.Name}'s ${state} already holds ${currentId}; pass it as expected_id to replace it. Nothing was wired.`, errorCode: "expected_id_required", currentId };
+	}
+	if (currentId !== expectedId) {
+		return {
+			error: currentId === undefined
+				? `${model.Name}'s ${state} holds nothing yet; omit expected_id. Nothing was wired.`
+				: `${model.Name}'s ${state} holds ${currentId}, not ${expectedId}; someone changed it. Nothing was wired.`,
+			errorCode: "animation_id_changed",
+			currentId: currentId ?? false,
+		};
+	}
+
+	const speedAttribute = `${state}Speed`;
+	const paced = state !== "idle";
+	const previousSpeed = existing?.GetAttribute(speedAttribute);
+	const recordingId = beginRecording(`Wire ${model.Name} ${state} animation`);
+	let loader = existing;
+	const installed = loader === undefined;
+	const [applied, applyError] = pcall(() => {
+		if (!loader) {
+			const created = new Instance("Script");
+			created.Name = MODEL_LOADER_NAME;
+			created.Source = MODEL_LOADER_SOURCE;
+			created.SetAttribute(state, animationId);
+			if (paced) created.SetAttribute(speedAttribute, groundSpeed as number | undefined);
+			created.Parent = model;
+			loader = created;
+		} else {
+			loader.SetAttribute(state, animationId);
+			if (paced) loader.SetAttribute(speedAttribute, groundSpeed as number | undefined);
+		}
+	});
+	if (!applied) {
+		pcall(() => {
+			if (installed && loader) {
+				loader.Destroy();
+			} else if (loader) {
+				loader.SetAttribute(state, currentId);
+				if (paced) loader.SetAttribute(speedAttribute, previousSpeed as number | undefined);
+			}
+		});
+		finishRecording(recordingId, false);
+		return { error: `Wiring failed: ${tostring(applyError)}. The previous state was restored.` };
+	}
+	finishRecording(recordingId, true);
+	const wired = loader as unknown as Script;
+	const readSpeed = wired.GetAttribute(speedAttribute);
+	return {
+		model: getInstancePath(model),
+		controller: found.controller.ClassName,
+		loader: getInstancePath(wired),
+		installed,
+		slot: state,
+		animationId: wired.GetAttribute(state),
+		previousId: currentId ?? false,
+		...(paced ? { groundSpeed: typeIs(readSpeed, "number") ? readSpeed : false } : {}),
+		readBackMatches: wired.GetAttribute(state) === animationId
+			&& (!paced || readSpeed === groundSpeed)
+			&& readScriptSource(wired) === MODEL_LOADER_SOURCE,
+		undoable: recordingId !== undefined,
+		...(installed ? { loaderSource: MODEL_LOADER_SOURCE } : {}),
+	};
+}
+
+/** The longest a watch lasts, for a model something else moves. */
+const WATCH_SECONDS = 20;
+/** A watch ends sooner once it has seen the model move, and stand, each for this long without a break. */
+const WATCH_STRETCH_SECONDS = 2;
+/** Studs a second at or above which a model moves, and at or below which it stands, as verify's judge counts them. */
+const MOVING_SPEED = 1;
+const STANDING_SPEED = 0.2;
+/** Seconds a walk to a position may take: Humanoid:MoveTo gives up after 8. */
+const WALK_SECONDS = 9;
+/** Samples taken a tenth of a second apart once a walk ends, while the model stands. */
+const STANDING_SAMPLES = 15;
+
+type LoaderStates = { unchanged: boolean; ids: Record<string, string>; speeds: Record<string, number> };
+
+/** What the model's loader holds, to tell which of its states is playing. */
+function loaderStates(model: Model): LoaderStates | undefined {
+	const loader = model.FindFirstChild(MODEL_LOADER_NAME);
+	if (!loader || !loader.IsA("Script")) return undefined;
+	const ids: Record<string, string> = {};
+	const speeds: Record<string, number> = {};
+	for (const state of MODEL_STATES) {
+		const id = loader.GetAttribute(state);
+		if (typeIs(id, "string")) ids[state] = id;
+		const speed = loader.GetAttribute(`${state}Speed`);
+		if (typeIs(speed, "number")) speeds[state] = speed;
+	}
+	return { unchanged: readScriptSource(loader) === MODEL_LOADER_SOURCE, ids, speeds };
+}
+
+function horizontal(vector: Vector3): number {
+	return new Vector3(vector.X, 0, vector.Z).Magnitude;
+}
+
+function round2(value: number): number {
+	return math.round(value * 100) / 100;
+}
+
+type MovementSample = { t: number; phase: string; speed: number; playing: string | false; pace?: number };
+
+/**
+ * Sample, a tenth of a second apart, how fast the model moves, which of the
+ * loader's tracks carries the most weight, and at what pace it plays: while
+ * the model walks to the target and then stands, or, with no target, while
+ * whatever moves it does, until it has been seen moving and standing.
+ */
+function observeModel(model: Model, humanoid: Humanoid | undefined, animator: Animator, ids: Set<string>, target: Vector3 | undefined) {
+	const root = humanoid?.RootPart ?? model.PrimaryPart;
+	if (!root) return { error: `${getInstancePath(model)} has no root part to follow; set its PrimaryPart.` };
+	if (target && !humanoid) return { error: "position walks a model's Humanoid; move a model without one some other way, and verify it without position." };
+	if (target && root.Anchored) return { error: `${getInstancePath(model)}'s root part is anchored, so it cannot walk.` };
+	const samples: MovementSample[] = [];
+	const started = os.clock();
+	let last = root.Position;
+	/** Takes one sample, and returns the speed it measured and the seconds since the last. */
+	const sample = (phase: string): [number, number] => {
+		const elapsed = task.wait(0.1);
+		const position = root.Position;
+		const speed = humanoid ? horizontal(root.AssemblyLinearVelocity) : horizontal(position.sub(last)) / math.max(elapsed, 0.001);
+		last = position;
+		let best: AnimationTrack | undefined;
+		for (const track of animator.GetPlayingAnimationTracks()) {
+			const id = track.Animation ? track.Animation.AnimationId : "";
+			if (ids.has(id) && (!best || track.WeightCurrent > best.WeightCurrent)) best = track;
+		}
+		samples.push({
+			t: round2(os.clock() - started),
+			phase,
+			speed: round2(speed),
+			playing: best && best.Animation ? best.Animation.AnimationId : false,
+			...(best ? { pace: round2(best.Speed) } : {}),
+		});
+		return [speed, elapsed];
+	};
+	if (!target) {
+		// A patrol walks a leg and pauses at its end, so the watch lasts until
+		// it has seen a stretch of each, not a fixed time a long leg outlasts.
+		let moving = 0;
+		let standing = 0;
+		let sawMoving = false;
+		let sawStanding = false;
+		while (os.clock() - started < WATCH_SECONDS && !(sawMoving && sawStanding)) {
+			const [speed, elapsed] = sample("watching");
+			moving = speed >= MOVING_SPEED ? moving + elapsed : 0;
+			standing = speed <= STANDING_SPEED ? standing + elapsed : 0;
+			if (moving >= WATCH_STRETCH_SECONDS) sawMoving = true;
+			if (standing >= WATCH_STRETCH_SECONDS) sawStanding = true;
+		}
+		return { mode: "watched", samples };
+	}
+	const walker = humanoid as Humanoid;
+	let reached: boolean | undefined;
+	const connection = walker.MoveToFinished.Connect((value) => {
+		reached = value;
+	});
+	walker.MoveTo(target);
+	while (reached === undefined && os.clock() - started < WALK_SECONDS) sample("moving");
+	connection.Disconnect();
+	for (let index = 0; index < STANDING_SAMPLES; index++) sample("standing");
+	return { mode: "walked", reached: reached === true, samples };
+}
+
+/**
+ * On the playtest's server, where a model's loader runs: play the checked
+ * animation on the model and sample its joints, and watch which of the
+ * loader's states plays as the model moves and stands, walking it to a
+ * target first when one is given.
+ */
+function animationVerifyModel(requestData: Data) {
+	const found = animatedModel(requestData.model);
+	if ("error" in found) return found;
+	const { model, controller } = found;
+	const humanoid = controller.IsA("Humanoid") ? controller : undefined;
+	// A model's loader makes its Animator when it has none; give it a moment.
+	let animator = controller.FindFirstChildOfClass("Animator");
+	const deadline = os.clock() + 3;
+	while (!animator && os.clock() < deadline) {
+		task.wait(0.1);
+		animator = controller.FindFirstChildOfClass("Animator");
+	}
+	if (!animator) return { error: `${getInstancePath(model)} has no Animator in the playtest, and no loader made one.` };
+
+	const loader = loaderStates(model);
+	const result: Data = { ...(humanoid ? { rigType: humanoid.RigType.Name } : {}), loader: loader ?? false };
+	if (requestData.animationId !== undefined || requestData.sequence !== undefined) {
+		const played = playAndSample(model, animator, requestData, getInstancePath(model));
+		if ("error" in played) return played;
+		result.length = played.length;
+		result.samples = played.samples;
+	}
+	const observe = requestData.observe;
+	if (observe === "walk" || observe === "watch") {
+		let target: Vector3 | undefined;
+		if (observe === "walk") {
+			const point = requestData.target;
+			if (!typeIs(point, "table") || (point as unknown[]).size() !== 3) return { error: "target must be [x, y, z]." };
+			const [x, y, z] = point as number[];
+			for (const value of [x, y, z]) {
+				if (!typeIs(value, "number") || value !== value || math.abs(value) === math.huge) return { error: "target must be three finite numbers." };
+			}
+			target = new Vector3(x, y, z);
+		}
+		const ids = new Set<string>();
+		for (const state of MODEL_STATES) {
+			const id = loader?.ids[state];
+			if (id !== undefined) ids.add(id);
+		}
+		const observation = observeModel(model, humanoid, animator, ids, target);
+		if ("error" in observation) return observation;
+		result.observation = observation;
+	}
+	return result;
+}
+
+// -- Stock NPC bodies -----------------------------------------------------------
+
+/** The rig types rig makes a stock NPC body of. */
+const STOCK_RIGS = ["R15", "R6"];
+/** Frames a new body gets to settle in the place; it has once two frames running move it less than this. */
+const SETTLE_FRAMES = 10;
+const SETTLED_STUDS = 0.001;
+/** How far from where they were asked the read-back may find the feet. */
+const FEET_TOLERANCE = 0.05;
+
+/** A model's lowest point, under the middle of its bounding box. */
+function footing(model: Model): Vector3 {
+	const [box, size] = model.GetBoundingBox();
+	return box.Position.sub(new Vector3(0, size.Y / 2, 0));
+}
+
+/** An asset ID as the model loader holds it, from either form an Animate script's Animation carries. */
+function loaderAssetId(value: string): string | undefined {
+	const [plain] = value.match("^rbxassetid://(%d+)$");
+	if (typeIs(plain, "string")) return `rbxassetid://${plain}`;
+	const [linked] = value.match("^https?://www%.roblox%.com/[Aa]sset/%?[Ii][Dd]=(%d+)$");
+	return typeIs(linked, "string") ? `rbxassetid://${linked}` : undefined;
+}
+
+/**
+ * The animation a stock body's Animate script plays for a state: of the
+ * Animations in the state's slot, the one with the most weight, which is the
+ * one Animate mostly plays.
+ */
+function stockAnimation(animate: Instance, state: string): string | undefined {
+	const slot = animate.FindFirstChild(state);
+	if (!slot) return undefined;
+	let best: string | undefined;
+	let bestWeight = -math.huge;
+	for (const child of slot.GetChildren()) {
+		if (!child.IsA("Animation")) continue;
+		const id = loaderAssetId(child.AnimationId);
+		const weight = child.FindFirstChild("Weight");
+		const value = weight && weight.IsA("NumberValue") ? weight.Value : 1;
+		if (id !== undefined && value > bestWeight) {
+			best = id;
+			bestWeight = value;
+		}
+	}
+	return best;
+}
+
+/**
+ * Make a stock R15 or R6 NPC body at a path that names nothing yet: Roblox's
+ * default body, with its feet at a position, animated by the model loader
+ * holding the idle, walk and run the body's own Animate script carries.
+ * Animate is left out: it is a LocalScript, which runs only under a player,
+ * so on an NPC it plays nothing. The body is made outside the place, so a
+ * failure leaves nothing behind, and goes in as one undo step, read back:
+ * each way the read-back differs from what was made is named.
+ */
+function animationRig(requestData: Data) {
+	const path = requestData.model;
+	const stock = requestData.stock;
+	if (!typeIs(path, "string") || path === "") return { error: "model is required.", errorCode: "invalid_arguments" };
+	if (!typeIs(stock, "string") || !STOCK_RIGS.includes(stock)) return { error: "stock must be R15 or R6.", errorCode: "invalid_arguments" };
+	let feet = new Vector3(0, 0, 0);
+	if (requestData.position !== undefined) {
+		const point = requestData.position;
+		if (!typeIs(point, "table") || (point as unknown[]).size() !== 3) return { error: "position must be [x, y, z].", errorCode: "invalid_arguments" };
+		const [x, y, z] = point as number[];
+		for (const value of [x, y, z]) {
+			if (!typeIs(value, "number") || value !== value || math.abs(value) === math.huge) {
+				return { error: "position must be three finite numbers.", errorCode: "invalid_arguments" };
+			}
+		}
+		feet = new Vector3(x, y, z);
+	}
+
+	const { parent, name } = resolveParentAndName(path);
+	if (!parent || name === undefined) {
+		return { error: `${path} names no place for a model: its parent does not exist. Nothing was made.`, errorCode: "parent_not_found" };
+	}
+	const starterPlayer = game.GetService("StarterPlayer");
+	if (parent === starterPlayer || parent.IsDescendantOf(starterPlayer)) {
+		return { error: `${path} is under StarterPlayer, where a model is a player's character; rig makes an NPC. Nothing was made.`, errorCode: "player_character" };
+	}
+	if (parent.FindFirstChild(name)) {
+		return { error: `${path} already exists; rig makes a new NPC at a path that names nothing. Nothing was made.`, errorCode: "target_exists" };
+	}
+
+	const rigType = stock === "R6" ? Enum.HumanoidRigType.R6 : Enum.HumanoidRigType.R15;
+	const [made, bodyOrError] = pcall(() => Players.CreateHumanoidModelFromDescription(new Instance("HumanoidDescription"), rigType));
+	if (!made) return { error: `Studio could not make the body: ${tostring(bodyOrError)}. Nothing was made.` };
+	const body = bodyOrError as Model;
+	const animate = body.FindFirstChild("Animate");
+	const ids: Record<string, string> = {};
+	const missing: string[] = [];
+	for (const state of MODEL_STATES) {
+		const id = animate ? stockAnimation(animate, state) : undefined;
+		if (id !== undefined) ids[state] = id;
+		else missing.push(state);
+	}
+
+	const recordingId = beginRecording(`Make NPC ${name}`);
+	let loader: Script | undefined;
+	const [applied, applyError] = pcall(() => {
+		body.Name = name;
+		if (animate) animate.Destroy();
+		const created = new Instance("Script");
+		created.Name = MODEL_LOADER_NAME;
+		created.Source = MODEL_LOADER_SOURCE;
+		for (const [state, id] of pairs(ids)) created.SetAttribute(state, id);
+		created.Parent = body;
+		loader = created;
+		// An NPC walks: its root is never anchored.
+		const root = body.FindFirstChild("HumanoidRootPart");
+		if (root && root.IsA("BasePart")) root.Anchored = false;
+		body.PivotTo(body.GetPivot().add(feet.sub(footing(body))));
+		body.Parent = parent;
+		// A stock body settles as it enters the place, its joints fitting its
+		// limbs to its root, which moves its feet; so it is stood again once
+		// it has stopped moving.
+		let settled = footing(body);
+		let still = 0;
+		for (let frame = 0; frame < SETTLE_FRAMES && still < 2; frame++) {
+			task.wait();
+			const now = footing(body);
+			still = now.sub(settled).Magnitude < SETTLED_STUDS ? still + 1 : 0;
+			settled = now;
+		}
+		body.PivotTo(body.GetPivot().add(feet.sub(settled)));
+	});
+	if (!applied) {
+		pcall(() => body.Destroy());
+		finishRecording(recordingId, false);
+		return { error: `Making the NPC failed: ${tostring(applyError)}. Nothing was made.` };
+	}
+	finishRecording(recordingId, true);
+
+	const humanoid = body.FindFirstChildOfClass("Humanoid");
+	const states = loaderStates(body);
+	let parts = 0;
+	for (const descendant of body.GetDescendants()) {
+		if (descendant.IsA("BasePart")) parts += 1;
+	}
+	const joints = animatedJoints(body).size();
+	const [, size] = body.GetBoundingBox();
+	const standing = footing(body);
+	const feetAt = [round2(standing.X), round2(standing.Y), round2(standing.Z)];
+	const mismatches: string[] = [];
+	if (body.Parent !== parent) mismatches.push(`it is not in ${getInstancePath(parent)}`);
+	if (!humanoid) mismatches.push("it has no Humanoid");
+	else if (humanoid.RigType !== rigType) mismatches.push(`its Humanoid is ${humanoid.RigType.Name}, not ${stock}`);
+	if (joints === 0) mismatches.push("it has no Motor6D or AnimationConstraint joints to animate");
+	if (!states) mismatches.push("it has no loader");
+	else {
+		if (!states.unchanged) mismatches.push("its loader's code is not the loader's");
+		for (const state of MODEL_STATES) {
+			if (states.ids[state] !== ids[state]) mismatches.push(`its loader's ${state} is not the one Animate carried`);
+		}
+	}
+	if (body.FindFirstChild("Animate")) mismatches.push("its Animate script is still in it");
+	const off = standing.sub(feet).Magnitude;
+	if (off > FEET_TOLERANCE) mismatches.push(`its feet stand at [${feetAt.join(", ")}], ${round2(off)} studs from where they were asked`);
+	return {
+		model: getInstancePath(body),
+		rigType: humanoid ? humanoid.RigType.Name : false,
+		parts,
+		joints,
+		height: round2(size.Y),
+		feet: feetAt,
+		walkSpeed: humanoid ? humanoid.WalkSpeed : false,
+		loader: getInstancePath(loader as unknown as Script),
+		states: states ? states.ids : {},
+		...(missing.size() > 0 ? { missingStates: missing } : {}),
+		animateRemoved: animate !== undefined,
+		readBackMatches: mismatches.size() === 0,
+		...(mismatches.size() > 0 ? { mismatches } : {}),
+		undoable: recordingId !== undefined,
+		loaderSource: MODEL_LOADER_SOURCE,
+	};
 }
 
 /** Roblox's classic head, which ships with Studio; the stock rig's own dynamic head cannot be read. */
@@ -724,12 +1373,813 @@ function animationRigMeshes() {
 	return { parts, head: "classic" };
 }
 
+// -- Rigs read from models ------------------------------------------------------
+
+/** The RoqerRig attribute: what a model's geometry cannot say about its rig. */
+const RIG_ATTRIBUTE = "RoqerRig";
+/** Roqer's bounds on a rig it reads, for summaries and previews; not the engine's. */
+const MAX_RIG_JOINTS = 64;
+const MAX_RIG_PARTS = 128;
+const MAX_WELDED_PARTS = 256;
+/** A part at least this transparent is not drawn, as a HumanoidRootPart is not. */
+const HIDDEN_TRANSPARENCY = 0.95;
+
+/** What a joint joins: two parts, or, for a skinned mesh's bone, the bone and the bone or part it hangs from. */
+type RigNode = BasePart | Bone;
+type PartJointReading = { name: string; part0: BasePart; part1: BasePart; c0: CFrame; c1: CFrame };
+type RigJointReading = { name: string; part0: RigNode; part1: RigNode; c0: CFrame; c1: CFrame };
+/** The size a bone is read with: it has no box, and is never drawn. */
+const BONE_SIZE = [0.1, 0.1, 0.1];
+type WeldedReading = { name: string; to: string; offset: number[]; size: number[]; shape: string; mesh?: string };
+type RigReading = {
+	path: string;
+	revision: string;
+	rootPart: string;
+	controller: "Humanoid" | "AnimationController";
+	hipHeight?: number;
+	parts: { name: string; size: number[]; shape: string; mesh?: string; hidden?: boolean; bone?: boolean }[];
+	joints: { name: string; part0: string; part1: string; c0: number[]; c1: number[] }[];
+	declarations?: string;
+	welded?: WeldedReading[];
+	weldedLeftOut?: number;
+};
+
+/** How the previews draw a part: Roblox's own shape, or its box for anything else. */
+function partShape(part: BasePart): string {
+	if (part.IsA("WedgePart")) return "Wedge";
+	if (part.IsA("Part")) {
+		if (part.Shape === Enum.PartType.Ball) return "Ball";
+		if (part.Shape === Enum.PartType.Cylinder) return "Cylinder";
+		if (part.Shape === Enum.PartType.Wedge) return "Wedge";
+	}
+	return "Block";
+}
+
+/** A MeshPart's mesh, which the previews draw it with once core has read it; a mesh is not read here. */
+function meshOf(part: BasePart): { mesh?: string } {
+	return part.IsA("MeshPart") && part.MeshId !== "" ? { mesh: part.MeshId } : {};
+}
+
+function sizeOf(part: BasePart): number[] {
+	return [part.Size.X, part.Size.Y, part.Size.Z].map((value) => math.round(value * 1e6) / 1e6);
+}
+
+/**
+ * The joints between a model's parts that the Animator drives: its Motor6Ds,
+ * and its AnimationConstraints, whose frames are their attachments'. Only
+ * joints between two of the model's own parts are the model's rig.
+ */
+function partJoints(model: Model): PartJointReading[] {
+	const joints: PartJointReading[] = [];
+	for (const descendant of model.GetDescendants()) {
+		if (descendant.IsA("Motor6D")) {
+			const [part0, part1] = [descendant.Part0, descendant.Part1];
+			if (!part0 || !part1 || !part0.IsDescendantOf(model) || !part1.IsDescendantOf(model)) continue;
+			joints.push({ name: descendant.Name, part0, part1, c0: descendant.C0, c1: descendant.C1 });
+		} else if (descendant.IsA("AnimationConstraint")) {
+			const [a0, a1] = [descendant.Attachment0, descendant.Attachment1];
+			const part0 = a0?.Parent;
+			const part1 = a1?.Parent;
+			if (!a0 || !a1 || !part0 || !part1 || !part0.IsA("BasePart") || !part1.IsA("BasePart")) continue;
+			if (!part0.IsDescendantOf(model) || !part1.IsDescendantOf(model)) continue;
+			joints.push({ name: descendant.Name, part0, part1, c0: a0.CFrame, c1: a1.CFrame });
+		}
+	}
+	return joints;
+}
+
+/**
+ * Every joint the Animator drives in a model: the joints between its parts,
+ * and its skinned meshes' Bones. A bone is a joint named after itself, from
+ * the bone or part it is in to itself: its CFrame is the joint's frame in its
+ * parent, as a Motor6D's C0 is, and it has no frame of its own, as a C1 of
+ * the identity. A keyframe's pose finds it by its name, as it finds a part.
+ */
+function modelJoints(model: Model): RigJointReading[] {
+	const joints: RigJointReading[] = [...partJoints(model)];
+	for (const descendant of model.GetDescendants()) {
+		if (!descendant.IsA("Bone")) continue;
+		const parent = descendant.Parent;
+		if (!parent || !(parent.IsA("Bone") || parent.IsA("BasePart"))) continue;
+		joints.push({ name: descendant.Name, part0: parent, part1: descendant, c0: descendant.CFrame, c1: new CFrame() });
+	}
+	return joints;
+}
+
+/** The parts joints hang from that no joint moves: one, on a rig that is one tree. */
+function jointRoots(joints: RigJointReading[]): BasePart[] {
+	const moved = new Set<RigNode>();
+	for (const joint of joints) moved.add(joint.part1);
+	const roots: BasePart[] = [];
+	for (const joint of joints) {
+		const from = joint.part0;
+		if (from.IsA("BasePart") && !moved.has(from) && !roots.includes(from)) roots.push(from);
+	}
+	return roots;
+}
+
+/**
+ * The part a model's joints hang from: a Humanoid's root part; under an
+ * AnimationController, the one part joints hang from that none moves,
+ * preferring the model's PrimaryPart.
+ */
+function rigRoot(model: Model, controller: Humanoid | AnimationController, joints: RigJointReading[]): BasePart | string {
+	if (controller.IsA("Humanoid")) {
+		return controller.RootPart ?? `${getInstancePath(model)}'s Humanoid has no root part; give it a HumanoidRootPart`;
+	}
+	const roots = jointRoots(joints);
+	const primary = model.PrimaryPart;
+	if (primary && roots.includes(primary)) return primary;
+	if (roots.size() === 1) return roots[0];
+	if (roots.size() === 0) return `${getInstancePath(model)}'s joints hang from no part that none of them moves`;
+	const names = roots.map((root) => root.Name).join(", ");
+	return `${getInstancePath(model)}'s joints hang from ${roots.size()} parts that nothing moves (${names}); set its PrimaryPart to the one the rig hangs from`;
+}
+
+/** The two parts a weld holds together, when it is one: a Weld, ManualWeld, Snap, Glue, WeldConstraint or RigidConstraint. */
+function weldedPair(instance: Instance): [BasePart, BasePart] | undefined {
+	let pair: [Instance | undefined, Instance | undefined] | undefined;
+	if (instance.IsA("Weld") || instance.IsA("ManualWeld") || instance.IsA("Snap") || instance.IsA("Glue")) {
+		pair = [instance.Part0, instance.Part1];
+	} else if (instance.IsA("WeldConstraint")) {
+		pair = [instance.Part0, instance.Part1];
+	} else if (instance.IsA("RigidConstraint")) {
+		pair = [instance.Attachment0?.Parent, instance.Attachment1?.Parent];
+	}
+	if (!pair) return undefined;
+	const [a, b] = pair;
+	return a && b && a.IsA("BasePart") && b.IsA("BasePart") ? [a, b] : undefined;
+}
+
+/**
+ * The visible parts welded to the rig's parts, directly or through each other,
+ * each by the rig part it moves with and where it sits on it; the largest
+ * MAX_WELDED_PARTS of them.
+ */
+function weldedParts(model: Model, rigParts: Set<BasePart>): { welded: WeldedReading[]; leftOut: number } {
+	const neighbours = new Map<BasePart, BasePart[]>();
+	const link = (a: BasePart, b: BasePart) => {
+		const list = neighbours.get(a) ?? [];
+		list.push(b);
+		neighbours.set(a, list);
+	};
+	for (const descendant of model.GetDescendants()) {
+		const pair = weldedPair(descendant);
+		if (!pair || !pair[0].IsDescendantOf(model) || !pair[1].IsDescendantOf(model)) continue;
+		link(pair[0], pair[1]);
+		link(pair[1], pair[0]);
+	}
+	const host = new Map<BasePart, BasePart>();
+	const queue: BasePart[] = [];
+	for (const part of rigParts) queue.push(part);
+	for (let index = 0; index < queue.size(); index++) {
+		const part = queue[index];
+		const reached = rigParts.has(part) ? part : host.get(part)!;
+		for (const neighbour of neighbours.get(part) ?? []) {
+			if (rigParts.has(neighbour) || host.has(neighbour)) continue;
+			host.set(neighbour, reached);
+			queue.push(neighbour);
+		}
+	}
+	const visible: BasePart[] = [];
+	for (const [part] of host) {
+		if (part.Transparency < HIDDEN_TRANSPARENCY) visible.push(part);
+	}
+	const volume = (part: BasePart) => part.Size.X * part.Size.Y * part.Size.Z;
+	visible.sort((a, b) => (volume(a) === volume(b) ? getInstancePath(a) < getInstancePath(b) : volume(a) > volume(b)));
+	const welded: WeldedReading[] = [];
+	for (let index = 0; index < math.min(visible.size(), MAX_WELDED_PARTS); index++) {
+		const part = visible[index];
+		const to = host.get(part)!;
+		welded.push({ name: part.Name, to: to.Name, offset: componentsOf(to.CFrame.ToObjectSpace(part.CFrame)), size: sizeOf(part), shape: partShape(part), ...meshOf(part) });
+	}
+	return { welded, leftOut: visible.size() - welded.size() };
+}
+
+function formatComponents(values: number[]): string {
+	return values.map((value) => formatNumber(value)).join(",");
+}
+
+/**
+ * A revision of the rig as read: everything the compiler, the checks and the
+ * previews take from it. A build compares it with the one its checks used.
+ */
+function rigRevision(reading: Omit<RigReading, "revision">): string {
+	const out: string[] = [`c:${reading.controller}:${reading.rootPart}:${formatNumber(reading.hipHeight ?? 0)}`];
+	for (const part of reading.parts) out.push(`p:${part.name}:${formatComponents(part.size)}:${part.shape}:${tostring(part.hidden === true)}${part.bone === true ? ":bone" : ""}`);
+	for (const joint of reading.joints) out.push(`j:${joint.name}:${joint.part0}:${joint.part1}:${formatComponents(joint.c0)}:${formatComponents(joint.c1)}`);
+	// A welded part's offset is left out: a WeldConstraint stores none, so it is
+	// worked out from where the two parts are, and moving the model changes its
+	// last digits (a position is a 32-bit float). A model that was only moved
+	// must read as the same rig.
+	for (const piece of reading.welded ?? []) out.push(`w:${piece.name}:${piece.to}:${formatComponents(piece.size)}:${piece.shape}`);
+	out.push(`d:${reading.declarations ?? ""}`);
+	return `rr1:${sourceRevision(out.join("\n")).sub(5)}`;
+}
+
+/**
+ * Read a model's rig as the Animator will drive it: its joints, the parts they
+ * join with their sizes and shapes, what is welded to them, its controller and
+ * root, and its RoqerRig declarations; bounded, and read-only.
+ */
+function readModelRig(target: AnimatedModel): RigReading | Refusal {
+	const { model, controller } = target;
+	const path = getInstancePath(model);
+	const joints = modelJoints(model);
+	if (joints.size() === 0) {
+		return { error: `${path} has no Motor6D or AnimationConstraint joints between its parts, and no Bones, to animate.`, errorCode: "model_not_rigged" };
+	}
+	if (joints.size() > MAX_RIG_JOINTS) {
+		return { error: `${path} has ${joints.size()} joints; Roqer animates a rig of at most ${MAX_RIG_JOINTS}.`, errorCode: "rig_too_large" };
+	}
+	const root = rigRoot(model, controller, joints);
+	if (typeIs(root, "string")) return { error: `${root}.`, errorCode: "rig_root" };
+	const rigNodes = new Set<RigNode>([root]);
+	for (const joint of joints) {
+		rigNodes.add(joint.part0);
+		rigNodes.add(joint.part1);
+	}
+	if (rigNodes.size() > MAX_RIG_PARTS) {
+		return { error: `${path}'s joints join ${rigNodes.size()} parts and bones; Roqer animates a rig of at most ${MAX_RIG_PARTS}.`, errorCode: "rig_too_large" };
+	}
+	const rigParts = new Set<BasePart>();
+	for (const node of rigNodes) if (node.IsA("BasePart")) rigParts.add(node);
+	const declared = model.GetAttribute(RIG_ATTRIBUTE);
+	if (declared !== undefined && !typeIs(declared, "string")) {
+		return { error: `${path}'s ${RIG_ATTRIBUTE} attribute is a ${typeOf(declared)}; it must be the declarations' JSON text.`, errorCode: "invalid_declarations" };
+	}
+	const parts: RigReading["parts"] = [];
+	for (const part of rigNodes) {
+		if (part.IsA("Bone")) parts.push({ name: part.Name, size: BONE_SIZE, shape: "Block", bone: true });
+		else parts.push({ name: part.Name, size: sizeOf(part), shape: partShape(part), ...meshOf(part), ...(part.Transparency >= HIDDEN_TRANSPARENCY ? { hidden: true } : {}) });
+	}
+	parts.sort((a, b) => a.name < b.name);
+	const { welded, leftOut } = weldedParts(model, rigParts);
+	const reading: Omit<RigReading, "revision"> = {
+		path,
+		rootPart: root.Name,
+		controller: controller.IsA("Humanoid") ? "Humanoid" : "AnimationController",
+		...(controller.IsA("Humanoid") ? { hipHeight: math.round(controller.HipHeight * 1e6) / 1e6 } : {}),
+		parts,
+		joints: joints.map((joint) => ({
+			name: joint.name,
+			part0: joint.part0.Name,
+			part1: joint.part1.Name,
+			c0: componentsOf(joint.c0),
+			c1: componentsOf(joint.c1),
+		})),
+		...(declared !== undefined ? { declarations: declared } : {}),
+		...(welded.size() > 0 ? { welded } : {}),
+		...(leftOut > 0 ? { weldedLeftOut: leftOut } : {}),
+	};
+	return { ...reading, revision: rigRevision(reading) };
+}
+
+/** Read the rig of the model at requestData.model: read-only, for check and build. */
+function animationReadRig(requestData: Data) {
+	const target = animatedModel(requestData.model);
+	if ("error" in target) return target;
+	return readModelRig(target);
+}
+
+/** Whether an instance, or anything in it, is what a copy of a rig needs: a part, a joint, a weld, an attachment or its controller. */
+function holdsRig(instance: Instance): boolean {
+	const needed = (candidate: Instance) =>
+		candidate.IsA("BasePart") || candidate.IsA("JointInstance") || candidate.IsA("WeldConstraint") || candidate.IsA("Constraint")
+		|| candidate.IsA("Attachment") || candidate.IsA("Humanoid") || candidate.IsA("AnimationController") || candidate.IsA("Animator");
+	if (needed(instance)) return true;
+	for (const descendant of instance.GetDescendants()) if (needed(descendant)) return true;
+	return false;
+}
+
+/**
+ * Why a copy of the model would not preview it faithfully, if it would not: a
+ * copy leaves out what cannot be archived, and a joint or weld in the copy
+ * that held it, or held a part outside the model, still holds the original's
+ * part, which moving the copy would move.
+ */
+function copyRefusal(model: Model): string | undefined {
+	const path = getInstancePath(model);
+	if (!model.Archivable) return `${path} cannot be archived, so it cannot be copied to preview on`;
+	for (const descendant of model.GetDescendants()) {
+		if (!descendant.Archivable && holdsRig(descendant)) {
+			return `${getInstancePath(descendant)} cannot be archived, so a copy of ${path} would leave it out; make it archivable to preview on the model`;
+		}
+		let held: (Instance | undefined)[] = [];
+		if (descendant.IsA("JointInstance") || descendant.IsA("WeldConstraint") || descendant.IsA("NoCollisionConstraint")) {
+			held = [descendant.Part0, descendant.Part1];
+		} else if (descendant.IsA("Constraint")) {
+			held = [descendant.Attachment0?.Parent, descendant.Attachment1?.Parent];
+		}
+		for (const part of held) {
+			if (part && !part.IsDescendantOf(model)) {
+				return `${getInstancePath(descendant)} holds ${getInstancePath(part)}, outside ${path}, which a copy's ${descendant.ClassName} would still hold`;
+			}
+		}
+	}
+	return undefined;
+}
+
+/** The most meshes one read hands over, and the most triangles in each: Roqer's bounds for previews. */
+const MAX_MESHES_PER_READ = 8;
+const MAX_MODEL_MESH_FACES = 3000;
+
+/** The slots of bones a skinned vertex has. */
+const SKIN_SLOTS = 4;
+
+/** EditableMesh's skin, which the skinned spike found it hands over (docs/creature-plan.md, "A skinned upload"). */
+interface SkinnedEditableMesh {
+	GetBones(): number[];
+	GetBoneName(bone: number): string;
+	GetVertexBones(vertex: number): number[];
+	GetVertexBoneWeights(vertex: number): number[];
+}
+
+/** One mesh's triangles in its own space, each corner with its normal, and its bounds; or why not. */
+function readMesh(id: string): Data {
+	const assets = game.GetService("AssetService");
+	const mesh = assets.CreateEditableMeshAsync(Content.fromUri(id));
+	const [ok, result] = pcall(() => {
+		const faces = mesh.GetFaces() as number[];
+		if (faces.size() > MAX_MODEL_MESH_FACES) {
+			return { error: `it has ${faces.size()} triangles; a preview draws a mesh of at most ${MAX_MODEL_MESH_FACES}` };
+		}
+		let min = new Vector3(math.huge, math.huge, math.huge);
+		let max = new Vector3(-math.huge, -math.huge, -math.huge);
+		const positions: number[] = [];
+		const normals: number[] = [];
+		// A skinned mesh's bones, by name, and each vertex's slots of them, read once a vertex.
+		const skinned = mesh as unknown as SkinnedEditableMesh;
+		const [hasBones, boneIds] = pcall(() => skinned.GetBones());
+		const boneIndex = new Map<number, number>();
+		const boneNames: string[] = [];
+		if (hasBones) {
+			for (const id of boneIds as number[]) {
+				boneIndex.set(id, boneNames.size());
+				boneNames.push(skinned.GetBoneName(id));
+			}
+		}
+		const joints: number[] = [];
+		const weights: number[] = [];
+		const slotsOf = new Map<number, { joints: number[]; weights: number[] }>();
+		const vertexSlots = (vertex: number) => {
+			let slots = slotsOf.get(vertex);
+			if (!slots) {
+				const onVertex = skinned.GetVertexBones(vertex);
+				const weighing = skinned.GetVertexBoneWeights(vertex);
+				slots = { joints: [], weights: [] };
+				for (let slot = 0; slot < SKIN_SLOTS; slot++) {
+					const index = boneIndex.get(onVertex[slot]);
+					const weight = weighing[slot];
+					const used = index !== undefined && weight !== undefined && weight > 0;
+					slots.joints.push(used ? index : 0);
+					slots.weights.push(used ? round4(weight) : 0);
+				}
+				slotsOf.set(vertex, slots);
+			}
+			return slots;
+		};
+		for (const face of faces) {
+			const corners = mesh.GetFaceVertices(face) as number[];
+			const faceNormals = mesh.GetFaceNormals(face) as number[];
+			if (corners.size() !== 3 || faceNormals.size() !== 3) continue;
+			for (let corner = 0; corner < 3; corner++) {
+				const position = mesh.GetPosition(corners[corner]);
+				const normal = mesh.GetNormal(faceNormals[corner]) ?? Vector3.yAxis;
+				min = min.Min(position);
+				max = max.Max(position);
+				positions.push(round4(position.X), round4(position.Y), round4(position.Z));
+				normals.push(round4(normal.X), round4(normal.Y), round4(normal.Z));
+				if (boneNames.size() > 0) {
+					const slots = vertexSlots(corners[corner]);
+					for (const joint of slots.joints) joints.push(joint);
+					for (const weight of slots.weights) weights.push(weight);
+				}
+			}
+		}
+		if (positions.size() === 0) return { error: "it has no triangles" };
+		return {
+			positions,
+			normals,
+			min: [round4(min.X), round4(min.Y), round4(min.Z)],
+			max: [round4(max.X), round4(max.Y), round4(max.Z)],
+			...(boneNames.size() > 0 ? { skin: { bones: boneNames, joints, weights } } : {}),
+		};
+	});
+	mesh.Destroy();
+	if (!ok) error(result, 0);
+	return result as Data;
+}
+
+/**
+ * Meshes of a model's MeshParts for the animation preview, by mesh ID: each as
+ * triangles in the mesh's own space with its bounds, which core stretches onto
+ * each part's size as Studio does. A mesh Studio will not hand over, or one
+ * too large to draw, comes back as why. Read-only: nothing enters the place.
+ */
+function animationReadMeshes(requestData: Data) {
+	const ids = requestData.meshes;
+	if (!typeIs(ids, "table") || (ids as unknown[]).size() === 0 || (ids as unknown[]).size() > MAX_MESHES_PER_READ) {
+		return { error: `meshes must list 1 to ${MAX_MESHES_PER_READ} mesh IDs.`, errorCode: "invalid_arguments" };
+	}
+	const meshes: Record<string, Data> = {};
+	for (const id of ids as unknown[]) {
+		if (!typeIs(id, "string") || id === "" || id.size() > 200) {
+			return { error: "every mesh ID must be a string of 1 to 200 characters.", errorCode: "invalid_arguments" };
+		}
+		const [ok, result] = pcall(() => readMesh(id));
+		meshes[id] = ok ? (result as Data) : { error: `Studio would not hand it over: ${tostring(result)}` };
+	}
+	return { meshes };
+}
+
+// -- Building rigs ---------------------------------------------------------------
+
+/** The revision of the rig `rig` built, stamped on the model: a rig whose revision differs was edited since. */
+const RIG_REVISION_ATTRIBUTE = "RoqerRigRevision";
+/** Marks the root and the welds `rig` made, which a rebuild takes again or out. */
+const MADE_ROOT_ATTRIBUTE = "RoqerRigRoot";
+const MADE_WELD_ATTRIBUTE = "RoqerRigWeld";
+/**
+ * Where the origin an upload was modelled about is, as a CFrame in the rig's
+ * root part: kept when rig replaces an importer's rig, so a rebuild can still
+ * take pivots measured from that origin wherever the model has been moved.
+ */
+const RIG_ORIGIN_ATTRIBUTE = "RoqerRigOrigin";
+/** The most parts a model rig builds on may have: Roqer's bound, so a reading stays small. */
+const MAX_PIECE_PARTS = 512;
+/** The most Bones such a model may have. */
+const MAX_PIECE_BONES = 256;
+const ROOT_PART_NAME = "HumanoidRootPart";
+/** How near its piece's centre an importer's joint frame sits. */
+const IMPORTER_CENTRE_STUDS = 0.01;
+
+type WeldReading = { instance: Instance; pair: [BasePart, BasePart] };
+type ImporterReading = { root?: BasePart; motors: Motor6D[]; initialPoses: Instance[]; controllers: AnimationController[] };
+type Pieces = {
+	model: Model;
+	parts: BasePart[];
+	joints: PartJointReading[];
+	welds: WeldReading[];
+	controllers: (Humanoid | AnimationController)[];
+	/** Its skinned meshes' Bones, parents before children. */
+	bones: Bone[];
+	importer?: ImporterReading;
+};
+
+/**
+ * An importer's rig, when the model has one: every Motor6D hangs from one
+ * part, each with its frame at the centre of the piece it moves, under an
+ * AnimationController, as an uploaded model or a generated one arrives.
+ */
+function importerRig(model: Model, joints: PartJointReading[], controllers: (Humanoid | AnimationController)[], bones: Bone[]): ImporterReading | undefined {
+	if (joints.size() === 0) {
+		// A skinned mesh needs no joints, so an importer leaves it only an
+		// AnimationController and its InitialPoses folder.
+		const poses = model.FindFirstChild("InitialPoses");
+		const onlyControllers = controllers.filter((controller): controller is AnimationController => controller.IsA("AnimationController"));
+		if (bones.size() === 0 || !poses || onlyControllers.size() === 0 || onlyControllers.size() !== controllers.size()) return undefined;
+		return { motors: [], initialPoses: [poses], controllers: onlyControllers };
+	}
+	const motors: Motor6D[] = [];
+	for (const descendant of model.GetDescendants()) {
+		if (descendant.IsA("AnimationConstraint")) return undefined;
+		if (descendant.IsA("Motor6D") && descendant.Part0 && descendant.Part1 && descendant.Part0.IsDescendantOf(model) && descendant.Part1.IsDescendantOf(model)) {
+			motors.push(descendant);
+		}
+	}
+	const root = motors[0]?.Part0;
+	if (!root || motors.size() !== joints.size()) return undefined;
+	for (const motor of motors) {
+		if (motor.Part0 !== root || motor.C1.Position.Magnitude > IMPORTER_CENTRE_STUDS) return undefined;
+	}
+	const animationControllers = controllers.filter((controller): controller is AnimationController => controller.IsA("AnimationController"));
+	if (animationControllers.size() === 0) return undefined;
+	const initialPoses = model.GetDescendants().filter((descendant) => descendant.Name === "InitialPoses");
+	return { root, motors, initialPoses, controllers: animationControllers };
+}
+
+function modelPieces(path: unknown): Pieces | Refusal {
+	if (!typeIs(path, "string") || path === "") return { error: "model is required.", errorCode: "invalid_arguments" };
+	const target = resolveInstance(path, undefined);
+	if (!target) return { error: `${path} does not exist.`, errorCode: "model_not_found" };
+	if (!target.IsA("Model")) return { error: `${path} is a ${target.ClassName}, not a Model.`, errorCode: "target_not_model" };
+	if (target.IsDescendantOf(game.GetService("StarterPlayer"))) {
+		return { error: `${path} is a player's character, which Roblox rigs; rig builds an NPC's or a creature's.`, errorCode: "player_character" };
+	}
+	const parts: BasePart[] = [];
+	for (const descendant of target.GetDescendants()) {
+		if (descendant.IsA("BasePart")) parts.push(descendant);
+	}
+	if (parts.size() === 0) return { error: `${path} has no parts to rig.`, errorCode: "model_empty" };
+	if (parts.size() > MAX_PIECE_PARTS) {
+		return { error: `${path} has ${parts.size()} parts; rig builds on a model of at most ${MAX_PIECE_PARTS}.`, errorCode: "model_too_large" };
+	}
+	const welds: WeldReading[] = [];
+	for (const descendant of target.GetDescendants()) {
+		const pair = weldedPair(descendant);
+		if (pair && pair[0].IsDescendantOf(target) && pair[1].IsDescendantOf(target)) welds.push({ instance: descendant, pair });
+	}
+	const controllers: (Humanoid | AnimationController)[] = [];
+	for (const child of target.GetChildren()) {
+		if (child.IsA("Humanoid") || child.IsA("AnimationController")) controllers.push(child);
+	}
+	const joints = partJoints(target);
+	const bones: Bone[] = [];
+	for (const descendant of target.GetDescendants()) {
+		const parent = descendant.Parent;
+		if (descendant.IsA("Bone") && parent && (parent.IsA("Bone") || parent.IsA("BasePart"))) bones.push(descendant);
+	}
+	if (bones.size() > MAX_PIECE_BONES) {
+		return { error: `${path} has ${bones.size()} Bones; rig builds on a model of at most ${MAX_PIECE_BONES}.`, errorCode: "model_too_large" };
+	}
+	return { model: target, parts, joints, welds, controllers, bones, importer: importerRig(target, joints, controllers, bones) };
+}
+
+/** A revision of everything rig's build reads from a model, which its write compares. */
+function piecesRevision(pieces: Pieces): string {
+	const { model } = pieces;
+	const declared = model.GetAttribute(RIG_ATTRIBUTE);
+	const stamp = model.GetAttribute(RIG_REVISION_ATTRIBUTE);
+	const out: string[] = [`m:${tostring(declared)}:${tostring(stamp)}:${formatComponents(componentsOf(model.GetPivot()))}`];
+	for (const part of pieces.parts) {
+		const made = part.GetAttribute(MADE_ROOT_ATTRIBUTE) === true;
+		out.push(`p:${getInstancePath(part)}:${part.ClassName}:${partShape(part)}:${formatComponents(componentsOf(part.CFrame))}:${formatComponents(sizeOf(part))}:${formatNumber(part.Transparency)}:${tostring(made)}`);
+	}
+	for (const joint of pieces.joints) {
+		out.push(`j:${joint.name}:${getInstancePath(joint.part0)}:${getInstancePath(joint.part1)}:${formatComponents(componentsOf(joint.c0))}:${formatComponents(componentsOf(joint.c1))}`);
+	}
+	for (const weld of pieces.welds) out.push(`w:${weld.instance.ClassName}:${getInstancePath(weld.pair[0])}:${getInstancePath(weld.pair[1])}`);
+	for (const controller of pieces.controllers) out.push(`c:${controller.ClassName}`);
+	for (const bone of pieces.bones) out.push(`b:${getInstancePath(bone)}:${formatComponents(componentsOf(bone.CFrame))}`);
+	return `rp1:${sourceRevision(out.join("\n")).sub(5)}`;
+}
+
+/**
+ * Read a model's pieces for rig's build form: every part with where it is,
+ * the joints and welds between them, its controllers, any importer's rig, and
+ * the rig rig built on it before, with a revision of all of it. Read-only.
+ */
+function animationReadPieces(requestData: Data) {
+	const pieces = modelPieces(requestData.model);
+	if ("error" in pieces) return pieces;
+	const { model, parts } = pieces;
+	const index = new Map<BasePart, number>();
+	parts.forEach((part, at) => index.set(part, at));
+	const declared = model.GetAttribute(RIG_ATTRIBUTE);
+	const built = model.GetAttribute(RIG_REVISION_ATTRIBUTE);
+	let rig: Data | undefined;
+	if (pieces.joints.size() > 0) {
+		const controller = pieces.controllers[0];
+		const reading = controller ? readModelRig({ model, controller }) : undefined;
+		const revision = reading && !("error" in reading) ? reading.revision : "unreadable";
+		rig = { revision, ...(typeIs(built, "string") ? { builtRevision: built } : {}) };
+	}
+	const importer = pieces.importer;
+	const kept = model.GetAttribute(RIG_ORIGIN_ATTRIBUTE);
+	const madeRoot = parts.find((part) => part.GetAttribute(MADE_ROOT_ATTRIBUTE) === true) ?? parts.find((part) => part.Name === ROOT_PART_NAME);
+	return {
+		path: getInstancePath(model),
+		revision: piecesRevision(pieces),
+		pivot: componentsOf(model.GetPivot()),
+		parts: parts.map((part) => ({
+			name: part.Name,
+			cframe: componentsOf(part.CFrame),
+			size: sizeOf(part),
+			shape: partShape(part),
+			...meshOf(part),
+			...(part.Transparency >= HIDDEN_TRANSPARENCY ? { hidden: true } : {}),
+			...(part.GetAttribute(MADE_ROOT_ATTRIBUTE) === true ? { madeRoot: true } : {}),
+		})),
+		joints: pieces.joints.map((joint) => ({ name: joint.name, part0: index.get(joint.part0)!, part1: index.get(joint.part1)! })),
+		welds: pieces.welds.map((weld) => ({
+			part0: index.get(weld.pair[0])!,
+			part1: index.get(weld.pair[1])!,
+			...(weld.instance.GetAttribute(MADE_WELD_ATTRIBUTE) === true ? { made: true } : {}),
+		})),
+		controllers: pieces.controllers.map((controller) => controller.ClassName),
+		...(pieces.bones.size() > 0
+			? {
+				bones: pieces.bones.map((bone) => ({
+					name: bone.Name,
+					parent: bone.Parent!.Name,
+					part: index.get(bone.FindFirstAncestorWhichIsA("BasePart")!)!,
+					cframe: componentsOf(bone.CFrame),
+				})),
+			}
+			: {}),
+		...(importer
+			? { importer: { ...(importer.root ? { rootPart: index.get(importer.root)! } : {}), joints: importer.motors.size(), initialPoses: importer.initialPoses.size() } }
+			: {}),
+		...(!importer && madeRoot && typeIs(kept, "CFrame") ? { origin: componentsOf(madeRoot.CFrame.mul(kept)) } : {}),
+		...(rig ? { rig } : {}),
+		...(typeIs(declared, "string") ? { declarations: declared } : {}),
+	};
+}
+
+function cframeFrom(value: unknown, what: string): CFrame {
+	if (!typeIs(value, "table") || (value as unknown[]).size() !== 12) error(`${what} must be a CFrame's 12 components`, 0);
+	const c = value as number[];
+	for (const entry of c) if (!typeIs(entry, "number") || entry !== entry) error(`${what} must be 12 numbers`, 0);
+	return new CFrame(c[0], c[1], c[2], c[3], c[4], c[5], c[6], c[7], c[8], c[9], c[10], c[11]);
+}
+
+/** The one part of a name in the model; the build's plan names each part once. */
+function partNamed(parts: BasePart[], name: unknown): BasePart {
+	if (!typeIs(name, "string")) error("a part name must be a string", 0);
+	const found = parts.filter((part) => part.Name === name);
+	if (found.size() !== 1) error(`the model has ${found.size()} parts named ${name}`, 0);
+	return found[0];
+}
+
+/**
+ * Build the rig core planned from animationReadPieces, while the model is as
+ * it was read: take out the importer's rig or the one rig built before, make
+ * or take the root, join the pieces with Motor6Ds at their pivots, weld the
+ * parts that move with them, set the physics and the controller, and write
+ * RoqerRig and the revision stamp. One undo step, all or nothing; read back.
+ */
+function animationBuildRig(requestData: Data) {
+	const plan = requestData.plan as Data | undefined;
+	if (!typeIs(plan, "table")) return { error: "plan is required.", errorCode: "invalid_arguments" };
+	const pieces = modelPieces(plan.model);
+	if ("error" in pieces) return { ...pieces, error: `${pieces.error} Nothing was changed.` };
+	const { model } = pieces;
+	const path = getInstancePath(model);
+	if (piecesRevision(pieces) !== plan.revision) {
+		return { error: `${path} has changed since its pieces were read. Nothing was changed; call rig again.`, errorCode: "model_changed" };
+	}
+	const importer = pieces.importer;
+	if (plan.replaceImporter === true && !importer) return { error: `${path} has no importer's rig to replace. Nothing was changed.`, errorCode: "no_importer_rig" };
+	const recordingId = beginRecording(`Rig ${model.Name}`);
+	if (recordingId === undefined) {
+		return { error: "Studio could not start an undo step, as it cannot while a playtest runs. Nothing was changed.", errorCode: "recording_unavailable" };
+	}
+	const removed: string[] = [];
+	const [applied, applyError] = pcall(() => {
+		// Out with what this rig replaces.
+		if (plan.replaceImporter === true && importer) {
+			for (const motor of importer.motors) motor.Destroy();
+			for (const poses of importer.initialPoses) if (poses.Parent) poses.Destroy();
+			for (const controller of importer.controllers) controller.Destroy();
+			if (importer.root) removed.push(`${importer.motors.size()} Motor6Ds`, importer.root.Name);
+			if (importer.initialPoses.size() > 0) removed.push("InitialPoses");
+			removed.push("AnimationController");
+			if (importer.root) importer.root.Destroy();
+		}
+		if (plan.rebuild === true) {
+			let joints = 0;
+			for (const descendant of model.GetDescendants()) {
+				if (descendant.IsA("Motor6D") || descendant.IsA("AnimationConstraint")) {
+					descendant.Destroy();
+					joints += 1;
+				}
+			}
+			for (const weld of pieces.welds) {
+				if (weld.instance.GetAttribute(MADE_WELD_ATTRIBUTE) === true && weld.instance.Parent) weld.instance.Destroy();
+			}
+			removed.push(`the ${joints} joints rig built before`);
+		}
+		const parts = model.GetDescendants().filter((descendant): descendant is BasePart => descendant.IsA("BasePart"));
+
+		// The root.
+		const rootPlan = plan.root as Data;
+		let root: BasePart;
+		if (typeIs(rootPlan.make, "table")) {
+			const make = rootPlan.make as Data;
+			const existing = parts.filter((part) => part.Name === ROOT_PART_NAME);
+			const made = existing.size() === 1 && existing[0].GetAttribute(MADE_ROOT_ATTRIBUTE) === true ? existing[0] : new Instance("Part");
+			made.Name = ROOT_PART_NAME;
+			const size = make.size as number[];
+			made.Size = new Vector3(size[0], size[1], size[2]);
+			made.CFrame = cframeFrom(make.cframe, "the root's CFrame");
+			made.Transparency = 1;
+			made.SetAttribute(MADE_ROOT_ATTRIBUTE, true);
+			made.Parent = model;
+			if (!parts.includes(made)) parts.push(made);
+			root = made;
+		} else {
+			root = partNamed(parts, rootPlan.name);
+		}
+		for (const part of parts) {
+			part.Anchored = part === root && plan.rootAnchored === true;
+			part.CanCollide = part === root;
+			part.Massless = part !== root;
+		}
+		model.PrimaryPart = root;
+		// Where the import's origin sits in the root, which moves with the model.
+		if (typeIs(plan.origin, "table")) model.SetAttribute(RIG_ORIGIN_ATTRIBUTE, root.CFrame.ToObjectSpace(cframeFrom(plan.origin, "the import's origin")));
+
+		// The joints, each in the part it moves, as Roblox's own rigs keep them.
+		for (const entry of plan.joints as Data[]) {
+			const part0 = partNamed(parts, entry.part0);
+			const part1 = partNamed(parts, entry.part1);
+			const motor = new Instance("Motor6D");
+			motor.Name = entry.name as string;
+			motor.C0 = cframeFrom(entry.c0, `${entry.name}'s C0`);
+			motor.C1 = cframeFrom(entry.c1, `${entry.name}'s C1`);
+			motor.Part0 = part0;
+			motor.Part1 = part1;
+			motor.Parent = part1;
+		}
+		for (const entry of plan.welds as Data[]) {
+			const part0 = partNamed(parts, entry.part0);
+			const part1 = partNamed(parts, entry.part1);
+			const weld = new Instance("WeldConstraint");
+			weld.Name = `RoqerWeld_${part0.Name}`;
+			weld.Part0 = part0;
+			weld.Part1 = part1;
+			weld.SetAttribute(MADE_WELD_ATTRIBUTE, true);
+			weld.Parent = part1;
+		}
+
+		// The controller, with its Animator.
+		const controllerPlan = plan.controller as Data;
+		const className = controllerPlan.className === "Humanoid" ? "Humanoid" : "AnimationController";
+		let controller: Humanoid | AnimationController | undefined = className === "Humanoid" ? model.FindFirstChildOfClass("Humanoid") : model.FindFirstChildOfClass("AnimationController");
+		if (!controller) {
+			controller = className === "Humanoid" ? new Instance("Humanoid") : new Instance("AnimationController");
+			controller.Parent = model;
+		}
+		if (controller.IsA("Humanoid")) {
+			controller.RigType = Enum.HumanoidRigType.R15;
+			controller.HipHeight = controllerPlan.hipHeight as number;
+			// A body without R15's neck would die at once; it keeps its joints when it does.
+			controller.RequiresNeck = false;
+			controller.BreakJointsOnDeath = false;
+			// A Humanoid finds its HumanoidRootPart once it is in the model.
+			for (let frame = 0; frame < 10 && controller.RootPart === undefined; frame++) task.wait();
+		}
+		if (!controller.FindFirstChildOfClass("Animator")) new Instance("Animator").Parent = controller;
+
+		model.SetAttribute(RIG_ATTRIBUTE, plan.declarations as string);
+		model.SetAttribute(RIG_REVISION_ATTRIBUTE, undefined);
+		const reading = readModelRig({ model, controller });
+		if ("error" in reading) error(reading.error, 0);
+		model.SetAttribute(RIG_REVISION_ATTRIBUTE, reading.revision);
+	});
+	if (!applied) {
+		finishRecording(recordingId, false);
+		return { error: `Rigging ${path} failed: ${tostring(applyError)}. Nothing was changed.` };
+	}
+	finishRecording(recordingId, true);
+
+	const target = animatedModel(path);
+	if ("error" in target) return { error: `${path} was rigged, but its rig could not be read back: ${target.error}`, errorCode: "read_back_failed", undoable: true };
+	const reading = readModelRig(target);
+	if ("error" in reading) return { error: `${path} was rigged, but its rig could not be read back: ${reading.error}`, errorCode: "read_back_failed", undoable: true };
+	const primary = model.PrimaryPart;
+	return {
+		rig: reading,
+		stamp: model.GetAttribute(RIG_REVISION_ATTRIBUTE),
+		removed,
+		primaryPart: primary ? primary.Name : false,
+		rootAnchored: primary ? primary.Anchored : false,
+		undoable: true,
+	};
+}
+
+/**
+ * Write a model's RoqerRig declarations, and change nothing else, while its rig
+ * reads at the revision core checked them against: rig's adopt form. One undo
+ * step; read back.
+ */
+function animationDeclareRig(requestData: Data) {
+	const target = animatedModel(requestData.model);
+	if ("error" in target) return { ...target, error: `${target.error} Nothing was changed.` };
+	const before = readModelRig(target);
+	if ("error" in before) return { ...before, error: `${before.error} Nothing was changed.` };
+	if (before.revision !== requestData.revision) {
+		return { error: `${before.path}'s rig has changed since it was read. Nothing was changed; call rig again.`, errorCode: "model_changed" };
+	}
+	const declarations = requestData.declarations;
+	if (!typeIs(declarations, "string") || declarations === "") return { error: "declarations must be the RoqerRig JSON text.", errorCode: "invalid_arguments" };
+	const recordingId = beginRecording(`Declare ${target.model.Name}'s rig`);
+	if (recordingId === undefined) {
+		return { error: "Studio could not start an undo step, as it cannot while a playtest runs. Nothing was changed.", errorCode: "recording_unavailable" };
+	}
+	const [applied, applyError] = pcall(() => target.model.SetAttribute(RIG_ATTRIBUTE, declarations));
+	finishRecording(recordingId, applied);
+	if (!applied) return { error: `Writing ${before.path}'s declarations failed: ${tostring(applyError)}. Nothing was changed.` };
+	const after = readModelRig(target);
+	if ("error" in after) return { error: `The declarations were written, but the rig could not be read back: ${after.error}`, errorCode: "read_back_failed", undoable: true };
+	return { rig: after, undoable: true };
+}
+
 export = {
 	previewAnimation,
+	animationReadMeshes,
+	animationReadRig,
 	buildAnimation,
 	animationRigMeshes,
 	animationPublishInfo,
 	animationReadBack,
 	animationWire,
 	animationVerify,
+	animationWireModel,
+	animationVerifyModel,
+	animationRig,
+	animationReadPieces,
+	animationBuildRig,
+	animationDeclareRig,
 };

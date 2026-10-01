@@ -458,6 +458,20 @@ export const ANIMATION_PREVIEW_TITLE = "Animation preview";
 export const ANIMATION_NAME_LABEL = "Animation";
 
 /**
+ * Metadata on an animation's preview: the rig it was drawn on, "R15", "R6" or
+ * the path of the model whose own rig it is. Previews recorded before it
+ * existed have none.
+ */
+export const ANIMATION_RIG_LABEL = "Rig";
+
+/**
+ * The title of a rig's range sheet: every joint of a creature's rig at rest and
+ * turned a little each way, which the animation tool's rig action draws. It is
+ * not an animation of the creature, and no check judged it.
+ */
+export const RIG_RANGE_SHEET_TITLE = "Rig range sheet";
+
+/**
  * Metadata on a Blender preview: the file the pictured model was written to,
  * or "scene.blend" when the job exported nothing and its scene was pictured.
  * Which previews are versions of one model is the evidence's `subject`; runs
@@ -478,9 +492,33 @@ export const ANIMATION_ALL_CHECKS_PASSED = "All passed";
 export const ANIMATION_GAIT_CHECKS_LABEL = "Gait checks";
 export const ANIMATION_CHECKED_AS_GAIT = "Checked as a gait";
 
+/**
+ * Metadata on an animation build's verification, when the pose description
+ * came from a file a Blender job baked instead of being written in the call.
+ */
+export const ANIMATION_DESCRIBED_BY_LABEL = "Described by";
+export const ANIMATION_DESCRIBED_BY_BAKE = "A file baked in Blender";
+
 /** Metadata on a playtest verification of an animation: what played, the published asset or a temporary clip. */
 export const ANIMATION_PLAYED_FROM_LABEL = "Played from";
 export const ANIMATION_PLAYED_PUBLISHED = "The published asset";
+
+/**
+ * Metadata on a model's playtest verification: what its loader played while
+ * it moved and while it stood, such as "walk 100%", and what moved it: the
+ * game's own scripts while verify watched it, or verify walking it itself.
+ */
+export const MODEL_WHILE_MOVING_LABEL = "While moving";
+export const MODEL_WHILE_STANDING_LABEL = "While standing";
+export const MODEL_MOVED_BY_LABEL = "Moved by";
+export const MODEL_MOVED_BY_GAME = "The game's own scripts";
+export const MODEL_MOVED_BY_VERIFY = "verify, walking it to a position";
+
+/** Metadata on a model's playtest verification that also checked one of its loader's states, such as "idle state". */
+export function modelStateLabel(state: string): string {
+  return `${state} state`;
+}
+export const MODEL_STATE_WIRED = "Wired";
 
 /** Metadata on a playtest verification that also checked a default Animate slot, such as "run slot". */
 export function animationSlotLabel(slot: string): string {

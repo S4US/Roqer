@@ -12,7 +12,8 @@
 //   child = parent * C0 * Transform * C1^-1
 // where C0 and C1 are the joint's frame in the parent and the child. On the
 // stock R15 body they are pure offsets; R6 joints and the weapon grip turn
-// them too. All positions are in the HumanoidRootPart's frame.
+// them too, as a model's own joints may. All positions are in the root
+// part's frame: the HumanoidRootPart's, on a character.
 
 import {
   POSE_EASING_DIRECTIONS,
@@ -24,7 +25,8 @@ import {
 import type { CFrameComponents } from './pose-compiler.js';
 
 export { easeAlpha };
-import { IDENTITY_ROTATION, R15_RIG, type Rig, type RigJoint, type Rotation, type Vec3 } from './r15-rig.js';
+import { R15_RIG } from './r15-rig.js';
+import { IDENTITY_ROTATION, jointAxes, type Rig, type RigJoint, type Rotation, type Vec3 } from './rig.js';
 
 export interface MotionPose {
   part: string;
@@ -108,22 +110,23 @@ export function jointChildFrameInverse(joint: RigJoint): Frame {
 }
 
 /**
- * A joint's Transform as a turn in its parent part's own axes, about the
- * joint: what the pose format's rotation, aim and bend describe. The same as
- * the Transform on a joint whose frame is not turned.
+ * A joint's Transform as a turn about the joint in the body's own axes at
+ * rest: what the pose format's rotation, aim and bend describe. On R15 and
+ * R6, whose parts all rest upright, those are the parent part's axes. The
+ * same as the Transform on a joint whose frame is not turned.
  */
-export function transformInParent(joint: RigJoint, transform: Frame): Frame {
-  const turn = joint.parentRotation;
+export function transformInBody(joint: RigJoint, transform: Frame): Frame {
+  const turn = jointAxes(joint);
   if (!turn) return transform;
   const frame = rotationFrame(turn);
   return multiply(multiply(frame, transform), rotationFrame(transpose(turn)));
 }
 
-/** The Transform that turns and moves a joint as `inParent` does in its parent's axes. */
-export function transformFromParent(joint: RigJoint, inParent: Frame): Frame {
-  const turn = joint.parentRotation;
-  if (!turn) return inParent;
-  return multiply(multiply(rotationFrame(transpose(turn)), inParent), rotationFrame(turn));
+/** The Transform that turns and moves a joint as `inBody` does in the body's axes at rest. */
+export function transformFromBody(joint: RigJoint, inBody: Frame): Frame {
+  const turn = jointAxes(joint);
+  if (!turn) return inBody;
+  return multiply(multiply(rotationFrame(transpose(turn)), inBody), rotationFrame(turn));
 }
 
 export function pointToWorld(frame: Frame, v: Vec3): [number, number, number] {
@@ -263,7 +266,7 @@ export function sampleTrack(keys: readonly TrackKey[] | undefined, t: number): F
 export interface RigPose {
   /** Each joint's Transform, by joint name. */
   transforms: Map<string, Frame>;
-  /** Each part's frame in the HumanoidRootPart's frame, by part name. */
+  /** Each part's frame in the root part's frame, by part name. */
   parts: Map<string, Frame>;
 }
 
@@ -280,6 +283,27 @@ export function poseRig(tracks: MotionTracks, t: number, rig: Rig = R15_RIG): Ri
     );
   }
   return { transforms, parts };
+}
+
+const restPoses = new WeakMap<Rig, ReadonlyMap<string, Frame>>();
+
+/** Each part's frame with every joint at rest, in the root part's frame. */
+export function restPose(rig: Rig): ReadonlyMap<string, Frame> {
+  let parts = restPoses.get(rig);
+  if (!parts) {
+    parts = poseRig(new Map(), 0, rig).parts;
+    restPoses.set(rig, parts);
+  }
+  return parts;
+}
+
+/**
+ * How a part is turned at rest in the body's axes, or undefined when it rests
+ * upright, as every part of R15 and R6 does.
+ */
+export function restTurn(rig: Rig, part: string): Frame['r'] | undefined {
+  const r = restPose(rig).get(part)?.r;
+  return r && !r.every((value, index) => value === IDENTITY_ROTATION[index]) ? r : undefined;
 }
 
 export function sequenceDuration(sequence: MotionSequence): number {

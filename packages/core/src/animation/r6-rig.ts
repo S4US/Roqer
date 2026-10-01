@@ -7,17 +7,21 @@
 // as where the limbs point means the same on both rigs.
 
 import {
+  ARM_FOLD,
+  CHARACTER_WORDS,
   GRIP_ROTATION,
+  HANGING,
+  LEG_FOLD,
   OFF_HAND_PART,
   PROP_DRAW_OFFSETS,
+  R15_JOINT_LIMITS,
   SHEATH_PART,
   SHEATH_ROTATION,
   SHEATH_STAND_IN_SIZE,
   WEAPON_PART,
   WEAPON_STAND_IN_SIZE,
-  type Rig,
-  type Rotation,
 } from './r15-rig.js';
+import type { Rig, Rotation } from './rig.js';
 
 /** C0 and C1 of RootJoint and Neck: X flipped, Y and Z swapped. */
 const TORSO_FRAME: Rotation = [-1, 0, 0, 0, 0, 1, 0, 1, 0];
@@ -29,6 +33,7 @@ const LEFT_FRAME: Rotation = [0, 0, -1, 0, 1, 0, 1, 0, 0];
 export const R6_RIG: Rig = {
   name: 'R6',
   rootPart: 'HumanoidRootPart',
+  rootJoint: 'Root',
   hipHeight: 0,
   // The legs hang 2 studs below a torso centred on the HumanoidRootPart.
   ground: -3,
@@ -37,11 +42,16 @@ export const R6_RIG: Rig = {
   body: 'Torso',
   // The far end of each block: the hand's end of an arm, the sole of a leg.
   limbs: {
-    LeftShoulder: { end: [0, -1, 0] },
-    RightShoulder: { end: [0, -1, 0] },
-    LeftHip: { end: [0, -1, 0] },
-    RightHip: { end: [0, -1, 0] },
+    LeftShoulder: { end: [0, -1, 0], axis: HANGING, fold: ARM_FOLD },
+    RightShoulder: { end: [0, -1, 0], axis: HANGING, fold: ARM_FOLD },
+    LeftHip: { end: [0, -1, 0], axis: HANGING, fold: LEG_FOLD },
+    RightHip: { end: [0, -1, 0], axis: HANGING, fold: LEG_FOLD },
   },
+  hinges: {},
+  // R15's limits for the joints R6 shares with it.
+  limits: Object.fromEntries(['Root', 'Neck', 'LeftShoulder', 'RightShoulder', 'LeftHip', 'RightHip', 'Weapon', 'OffHand', 'Sheath']
+    .map((joint) => [joint, R15_JOINT_LIMITS[joint]])),
+  words: CHARACTER_WORDS,
   drawOffsets: PROP_DRAW_OFFSETS,
   // Rigid legs cannot roll a foot flat, and the foot-sliding limit was
   // calibrated on Roblox's R15 animations only.

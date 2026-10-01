@@ -28,6 +28,7 @@ export function taskToolDefinition(): { name: string; description: string; input
       "Use this for work with at least three dependent stages, cross-system or destructive work, long-running work, or debugging with distinct diagnose/fix/verify milestones. Skip it for small edits and straightforward creates.",
       "Track meaningful milestones, not every inspection or tool call. Update the list when a milestone starts, finishes, or becomes blocked.",
       "Set requiredEvidence to the dimensions needed after the task's final change: runtime for executed behavior or logs, visual for rendered appearance, and interaction for a user action that must be exercised. Keep the task active until those observations are collected.",
+      "Evidence is of the place as Studio shows it. A Blender job's own preview is not, so a task that only models or animates in Blender requires none: require it of the task that brings the result into Studio.",
       "Only one task may be active at a time. Mark a task blocked instead of done when you cannot finish it.",
     ].join("\n"),
     inputSchema: {

@@ -1,7 +1,8 @@
 import request from 'supertest';
 import { TOOL_HANDLERS, createHttpServer, type RobloxStudioHttpApp } from '../http-server.js';
 import { RobloxStudioTools } from '../tools/index.js';
-import { BridgeService } from '../bridge-service.js';
+import { TOOL_CATALOG_DIGEST } from '../tools/catalog-digest.js';
+import { BridgeService, DEFAULT_REQUEST_TIMEOUT_MS, MAX_REQUEST_TIMEOUT_MS, REQUEST_TIMEOUT } from '../bridge-service.js';
 import { StudioInstanceManager } from '../studio-instance-manager.js';
 import { detectStudioPlatform } from '../studio-platform.js';
 import * as fs from 'fs';
@@ -64,6 +65,12 @@ describe('HTTP Server', () => {
         mcpServerActive: false,
         activeEventStreams: 0,
       });
+    });
+
+    test('says which tool definitions it was built from, so a client built from others can tell', async () => {
+      const response = await request(app).get('/health').expect(200);
+      expect(response.body.toolCatalogDigest).toBe(TOOL_CATALOG_DIGEST);
+      expect(TOOL_CATALOG_DIGEST).toMatch(/^[0-9a-f]{64}$/);
     });
 
     test('advertises Studio lifecycle only when manage_instance is callable', async () => {
@@ -683,6 +690,31 @@ describe('HTTP Server', () => {
       }
       expect(bridge.getPendingRequestCount()).toBe(0);
       await inspectorApp.cleanup();
+    });
+
+    test('a proxied request waits as long as its tool asked', async () => {
+      // No plugin takes it, so the primary answers with its own timeout: after
+      // the forwarded 50 ms rather than its default 30 s.
+      const started = Date.now();
+      const response = await request(app).post('/proxy').send({
+        endpoint: '/api/generate-model',
+        data: { prompt: 'wolf' },
+        targetInstanceId: 'place:test',
+        targetRole: 'edit',
+        timeoutMs: 50,
+      }).expect(500);
+      expect(response.body).toEqual({ error: REQUEST_TIMEOUT });
+      expect(Date.now() - started).toBeLessThan(DEFAULT_REQUEST_TIMEOUT_MS);
+      expect(bridge.getPendingRequestCount()).toBe(0);
+    }, 5_000);
+
+    test('a proxied wait out of range is refused before anything is queued', async () => {
+      const body = { endpoint: '/api/generate-model', data: {}, targetInstanceId: 'place:test', targetRole: 'edit' };
+      for (const timeoutMs of [0, -1, 1.5, '60000', null, MAX_REQUEST_TIMEOUT_MS + 1]) {
+        const refused = await request(app).post('/proxy').send({ ...body, timeoutMs }).expect(400);
+        expect(refused.body.error).toBe(`timeoutMs must be a whole number of milliseconds from 1 to ${MAX_REQUEST_TIMEOUT_MS}`);
+      }
+      expect(bridge.getPendingRequestCount()).toBe(0);
     });
 
     test('rejects /ready when the server has no version contract', async () => {

@@ -13,7 +13,9 @@
 
 import {
   ANIMATION_ALL_CHECKS_PASSED, ANIMATION_CHECKED_AS_GAIT, ANIMATION_GAIT_CHECKS_LABEL, ANIMATION_MOTION_CHECKS_LABEL,
-  ANIMATION_PLAYED_FROM_LABEL, ANIMATION_PLAYED_PUBLISHED, ANIMATION_PREVIEW_TITLE, animationSlotLabel, type RunEvidence,
+  ANIMATION_DESCRIBED_BY_BAKE, ANIMATION_DESCRIBED_BY_LABEL, MODEL_STATE_WIRED, modelStateLabel,
+  ANIMATION_PLAYED_FROM_LABEL, ANIMATION_PLAYED_PUBLISHED, ANIMATION_PREVIEW_TITLE, animationSlotLabel, RIG_RANGE_SHEET_TITLE, MODEL_MOVED_BY_GAME,
+  MODEL_MOVED_BY_LABEL, MODEL_WHILE_MOVING_LABEL, MODEL_WHILE_STANDING_LABEL, type RunEvidence,
 } from "../shared/run-events";
 import { connectedGroups, footprint, footprintGap, readBox } from "./footprints";
 import type { InterfaceAudit } from "./interface-audit";
@@ -71,6 +73,13 @@ export type EvalTask = {
    * task uploads its models too and is checked whenever it runs.
    */
   needsUploads?: boolean;
+  /**
+   * The oracle judges a published asset's owner against the place's, so the
+   * place must be published: one that never was, or was opened from a file
+   * rather than from Roblox, reports its CreatorId as 0 and has no owner to
+   * match. The harness checks before it spends a model run.
+   */
+  needsPublishedPlace?: boolean;
   /** An image in `eval/fixtures` attached to the prompt, as a user pastes a style reference. */
   referenceImage?: string;
   /**
@@ -80,6 +89,11 @@ export type EvalTask = {
   auditInterface?: string;
   oracle: (input: EvalOracleInput) => EvalVerdict;
 };
+
+/** Whether any task that will run judges ownership against the place's, so the place must be published. */
+export function needsPublishedPlace(tasks: readonly EvalTask[]): boolean {
+  return tasks.some((task) => task.needsPublishedPlace === true);
+}
 
 /** Whether any task that will run uploads, so the bridge must have an Open Cloud key. */
 export function needsUploadKey(tasks: readonly EvalTask[], blender: boolean): boolean {
@@ -487,6 +501,33 @@ ${SIGNATURE_LUAU}
         zones = zones,
       }
 `;
+
+/** The den, raised and apart from the other tasks' builds, with the creatures of earlier runs cleared. */
+const DEN_SEED = `
+      for _, name in ipairs({ "WorkbenchEvalWolf", "WorkbenchEvalSnake", "WorkbenchEvalDen" }) do
+        local old = workspace:FindFirstChild(name)
+        if old then old:Destroy() end
+      end
+      local den = Instance.new("Model")
+      den.Name = "WorkbenchEvalDen"
+      local ground = Instance.new("Part")
+      ground.Name = "Ground"
+      ground.Anchored = true
+      ground.Size = Vector3.new(48, 1, 48)
+      ground.Position = Vector3.new(80, 0.5, 90)
+      ground.Material = Enum.Material.Ground
+      ground.Color = Color3.fromRGB(110, 95, 75)
+      ground.Parent = den
+      local mark = Instance.new("Part")
+      mark.Name = "Den"
+      mark.Anchored = true
+      mark.CanCollide = false
+      mark.Size = Vector3.new(6, 0.2, 6)
+      mark.Position = Vector3.new(80, 1.1, 90)
+      mark.Material = Enum.Material.Slate
+      mark.Parent = den
+      den.Parent = workspace
+    `;
 
 export const EVAL_TASKS: readonly EvalTask[] = [
   {
@@ -1520,6 +1561,7 @@ ${EXTENT_LUAU}
     // so it needs the bridge's Open Cloud key. Its first run had none and could
     // only build and play a temporary clip, so the harness now checks first.
     needsUploads: true,
+    needsPublishedPlace: true,
     seed: `
       local loader = game:GetService("ServerScriptService"):FindFirstChild("RoqerAnimate")
       if loader then loader:Destroy() end
@@ -1554,7 +1596,275 @@ ${EXTENT_LUAU}
     allowedRoots: [`game.${EVAL_ROOT}`, "game.ServerScriptService.RoqerAnimate"],
     oracle: ({ probe, verified, evidence }) => judgeAnimationRun(probe, verified, evidence ?? []),
   },
+  {
+    id: "T18-npc-patrol",
+    prompt: "Add a guard NPC who walks back and forth between the two posts, with idle and walk animations of its own. "
+      + "The posts are game.Workspace.WorkbenchEvalPosts.PostA and PostB. Name the guard game.Workspace.WorkbenchEvalGuard, "
+      + "and keep its KeyframeSequences under ServerStorage.WorkbenchEval.",
+    // The creature plan's step 2 goal prompt. The posts, the guard's path and
+    // where its sequences go are added so the reset owns them, and "of its
+    // own" because rig gives a stock NPC Roblox's default animations, which a
+    // run could leave in place. It is done only when each of the plan's
+    // conditions holds, judged from Studio or from the host's own evidence:
+    // an idle and a walk this run published, owned by the place's owner, in
+    // the guard's loader, the walk with its ground speed; a playtest, after the
+    // last wiring, in which the guard's own scripts moved it and its loader
+    // played the walk while it moved and the idle while it stood; a 3D
+    // preview; and every kept build's checks passed, one of them as a gait.
+    // The walkway is raised and apart from the other tasks' builds, so the
+    // guard has ground of its own. Its first run in a place that had never
+    // been published built a patrolling guard and could still not pass, since
+    // an unpublished place has no owner; the harness now checks first.
+    needsUploads: true,
+    needsPublishedPlace: true,
+    seed: `
+      for _, name in ipairs({ "WorkbenchEvalGuard", "WorkbenchEvalPosts" }) do
+        local old = workspace:FindFirstChild(name)
+        if old then old:Destroy() end
+      end
+      local posts = Instance.new("Model")
+      posts.Name = "WorkbenchEvalPosts"
+      local walkway = Instance.new("Part")
+      walkway.Name = "Walkway"
+      walkway.Anchored = true
+      walkway.Size = Vector3.new(36, 1, 8)
+      walkway.Position = Vector3.new(0, 0.5, -80)
+      walkway.Material = Enum.Material.Slate
+      walkway.Parent = posts
+      for name, x in pairs({ PostA = -14, PostB = 14 }) do
+        local post = Instance.new("Part")
+        post.Name = name
+        post.Anchored = true
+        post.Size = Vector3.new(1, 6, 1)
+        post.Position = Vector3.new(x, 4, -80)
+        post.Material = Enum.Material.Wood
+        post.Color = Color3.fromRGB(110, 80, 50)
+        post.Parent = posts
+      end
+      posts.Parent = workspace
+    `,
+    probe: `
+      local guard = workspace:FindFirstChild("WorkbenchEvalGuard")
+      local humanoid = guard and guard:FindFirstChildOfClass("Humanoid")
+      local loader = guard and guard:FindFirstChild("RoqerModelAnimate")
+      local function asset(state)
+        local id = loader and loader:GetAttribute(state)
+        return type(id) == "string" and string.match(id, "^rbxassetid://(%d+)$") or nil
+      end
+      local function ownerOf(assetId)
+        if not assetId then return nil end
+        local ok, info = pcall(function()
+          return game:GetService("MarketplaceService"):GetProductInfo(tonumber(assetId), Enum.InfoType.Asset)
+        end)
+        if ok and type(info) == "table" and type(info.Creator) == "table" then
+          return { id = info.Creator.CreatorTargetId, type = info.Creator.CreatorType, assetType = info.AssetTypeId }
+        end
+        return nil
+      end
+      local idle, walk = asset("idle"), asset("walk")
+      local walkSpeed = loader and loader:GetAttribute("walkSpeed")
+      local sequences = 0
+      for _, item in ipairs(game:GetService("ServerStorage").WorkbenchEval:GetDescendants()) do
+        if item:IsA("KeyframeSequence") then sequences += 1 end
+      end
+      return {
+        guard = guard and guard.ClassName or false,
+        humanoid = humanoid ~= nil,
+        loader = loader and loader.ClassName or false,
+        enabled = loader ~= nil and loader:IsA("Script") and loader.Enabled,
+        idle = idle,
+        walk = walk,
+        idleOwner = ownerOf(idle),
+        walkOwner = ownerOf(walk),
+        walkGroundSpeed = type(walkSpeed) == "number" and walkSpeed or false,
+        place = { id = game.CreatorId, type = game.CreatorType.Name },
+        sequences = sequences,
+      }
+    `,
+    allowedTargets: [],
+    // The patrol script may live in the guard or in ServerScriptService, under a name of the run's choosing.
+    allowedRoots: [`game.${EVAL_ROOT}`, "game.Workspace.WorkbenchEvalGuard", "game.ServerScriptService"],
+    oracle: ({ probe, verified, evidence }) => judgeNpcPatrol(probe, verified, evidence ?? []),
+  },
+  {
+    id: "T19-creature-parts",
+    prompt: "Build a blocky four-legged dog from Parts and make it wander around the spawn, with idle and walk animations of its own. "
+      + "The spawn is game.Workspace.WorkbenchEvalYard.Spawn. Name the dog game.Workspace.WorkbenchEvalDog, "
+      + "and keep its KeyframeSequences under ServerStorage.WorkbenchEval.",
+    // The creature plan's Parts prompt (step 5). The yard, the dog's path and
+    // where its sequences go are added so the reset owns them. It is done on
+    // T18's conditions, the dog in the guard's place, and two more that only a
+    // body the run made can meet: the dog is made of Parts, and its rig is one
+    // `rig` built and nothing has edited since, declaring four feet. The yard
+    // is raised and apart from the other tasks' builds, and its spawn is a
+    // plain Part, so no other task's playtest spawns a player on it.
+    needsUploads: true,
+    needsPublishedPlace: true,
+    seed: `
+      for _, name in ipairs({ "WorkbenchEvalDog", "WorkbenchEvalYard" }) do
+        local old = workspace:FindFirstChild(name)
+        if old then old:Destroy() end
+      end
+      local yard = Instance.new("Model")
+      yard.Name = "WorkbenchEvalYard"
+      local ground = Instance.new("Part")
+      ground.Name = "Ground"
+      ground.Anchored = true
+      ground.Size = Vector3.new(48, 1, 48)
+      ground.Position = Vector3.new(0, 0.5, 90)
+      ground.Material = Enum.Material.Grass
+      ground.Color = Color3.fromRGB(90, 140, 70)
+      ground.Parent = yard
+      local spawn = Instance.new("Part")
+      spawn.Name = "Spawn"
+      spawn.Anchored = true
+      spawn.CanCollide = false
+      spawn.Size = Vector3.new(6, 0.2, 6)
+      spawn.Position = Vector3.new(0, 1.1, 90)
+      spawn.Material = Enum.Material.Neon
+      spawn.Parent = yard
+      yard.Parent = workspace
+    `,
+    probe: creatureProbe("WorkbenchEvalDog", "dog"),
+    allowedTargets: [],
+    // The wander script may live in the dog or in ServerScriptService, under a name of the run's choosing.
+    allowedRoots: [`game.${EVAL_ROOT}`, "game.Workspace.WorkbenchEvalDog", "game.ServerScriptService"],
+    oracle: ({ probe, verified, evidence }) => judgeBuiltCreature(probe, verified, evidence ?? [], DOG),
+  },
+  {
+    id: "T17-creature-blender",
+    prompt: "Model a low-poly wolf in Blender, rig it, give it idle and walk animations, and make it walk around the den. "
+      + "The den is game.Workspace.WorkbenchEvalDen.Den. Name the wolf game.Workspace.WorkbenchEvalWolf, "
+      + "and keep its KeyframeSequences under ServerStorage.WorkbenchEval.",
+    // The creature plan's Blender prompt (step 6), which the animation plan
+    // reserved T17 for. The den, the wolf's path and where its sequences go
+    // are added so the reset owns them. It is done on T19's conditions, the
+    // wolf in the dog's place, with the body's the other way round: a Blender
+    // job and an upload succeeded, and the wolf is made of the MeshParts its
+    // pieces arrived as. Its rig being one `rig` built and read back means
+    // the importer's rig was replaced and every pivot lay in its pieces. The
+    // den is raised and apart from the other tasks' builds.
+    needsBlender: true,
+    needsUploads: true,
+    needsPublishedPlace: true,
+    seed: DEN_SEED,
+    probe: creatureProbe("WorkbenchEvalWolf", "wolf"),
+    allowedTargets: [],
+    // The wander script may live in the wolf or in ServerScriptService, under a name of the run's choosing.
+    allowedRoots: [`game.${EVAL_ROOT}`, "game.Workspace.WorkbenchEvalWolf", "game.ServerScriptService"],
+    oracle: ({ probe, verified, evidence, toolCalls }) => judgeBuiltCreature(probe, verified, evidence ?? [], WOLF, toolCalls),
+  },
+  {
+    id: "T20-creature-skinned",
+    prompt: "Model a low-poly wolf in Blender as one skinned mesh, so that it bends at bones instead of turning as separate pieces. "
+      + "Rig it, give it idle and walk animations, and make it walk around the den. "
+      + "The den is game.Workspace.WorkbenchEvalDen.Den. Name the wolf game.Workspace.WorkbenchEvalWolf, "
+      + "and keep its KeyframeSequences under ServerStorage.WorkbenchEval.",
+    // The creature plan's step 7: T17's prompt and conditions, on a wolf that
+    // is one skinned mesh. In the pieces' place it must be a MeshPart Roblox
+    // reports as skinned, holding the bones of four legs and a body, and its
+    // rig must be one `rig` built around those bones and read back.
+    needsBlender: true,
+    needsUploads: true,
+    needsPublishedPlace: true,
+    seed: DEN_SEED,
+    probe: creatureProbe("WorkbenchEvalWolf", "wolf"),
+    allowedTargets: [],
+    allowedRoots: [`game.${EVAL_ROOT}`, "game.Workspace.WorkbenchEvalWolf", "game.ServerScriptService"],
+    oracle: ({ probe, verified, evidence, toolCalls }) => judgeBuiltCreature(probe, verified, evidence ?? [], WOLF, toolCalls, true),
+  },
+  {
+    id: "T21-creature-blender-animation",
+    prompt: "Model a low-poly snake in Blender as one skinned mesh, and animate it in Blender too: a looping slither on the spot, "
+      + "a wave running down its body from head to tail. Bring the snake and its slither into Studio and make the snake play it while it rests in the den. "
+      + "The den is game.Workspace.WorkbenchEvalDen.Den. Name the snake game.Workspace.WorkbenchEvalSnake, "
+      + "and keep its KeyframeSequence under ServerStorage.WorkbenchEval.",
+    // The creature plan's step 8: motion made in Blender, baked to a pose
+    // description file, and built from that file. The body is T20's, with no
+    // legs: one skinned mesh under a rig that `rig` built. The motion's own
+    // conditions are that its last build was described by the baked file and
+    // passed every check, and that the published asset played on the snake in
+    // a playtest with its idle holding it. A snake has no gait to check.
+    needsBlender: true,
+    needsUploads: true,
+    needsPublishedPlace: true,
+    seed: DEN_SEED,
+    probe: creatureProbe("WorkbenchEvalSnake", "snake"),
+    allowedTargets: [],
+    allowedRoots: [`game.${EVAL_ROOT}`, "game.Workspace.WorkbenchEvalSnake", "game.ServerScriptService"],
+    oracle: ({ probe, verified, evidence, toolCalls }) => judgeBakedCreature(probe, verified, evidence ?? [], toolCalls),
+  },
 ];
+
+/**
+ * What Studio holds of a creature a run built, rigged and animated: its loader
+ * and the animations in it, as for a guard, and its rig: who built it, how
+ * many feet it declares, and what it is made of.
+ */
+function creatureProbe(name: string, key: string): string {
+  return `
+      local dog = workspace:FindFirstChild("${name}")
+      local humanoid = dog and dog:FindFirstChildOfClass("Humanoid")
+      local loader = dog and dog:FindFirstChild("RoqerModelAnimate")
+      local function asset(state)
+        local id = loader and loader:GetAttribute(state)
+        return type(id) == "string" and string.match(id, "^rbxassetid://(%d+)$") or nil
+      end
+      local function ownerOf(assetId)
+        if not assetId then return nil end
+        local ok, info = pcall(function()
+          return game:GetService("MarketplaceService"):GetProductInfo(tonumber(assetId), Enum.InfoType.Asset)
+        end)
+        if ok and type(info) == "table" and type(info.Creator) == "table" then
+          return { id = info.Creator.CreatorTargetId, type = info.Creator.CreatorType, assetType = info.AssetTypeId }
+        end
+        return nil
+      end
+      local idle, walk = asset("idle"), asset("walk")
+      local walkSpeed = loader and loader:GetAttribute("walkSpeed")
+      local sequences = 0
+      for _, item in ipairs(game:GetService("ServerStorage").WorkbenchEval:GetDescendants()) do
+        if item:IsA("KeyframeSequence") then sequences += 1 end
+      end
+      local motors, meshParts, feet, bones, skinnedParts = 0, 0, 0, 0, 0
+      if dog and dog:IsA("Model") then
+        for _, item in ipairs(dog:GetDescendants()) do
+          if item:IsA("Motor6D") then motors += 1 end
+          if item:IsA("Bone") then bones += 1 end
+          if item:IsA("MeshPart") then
+            meshParts += 1
+            local ok, skinned = pcall(function() return item.HasSkinnedMesh end)
+            if ok and skinned == true then skinnedParts += 1 end
+          end
+        end
+        local declared = dog:GetAttribute("RoqerRig")
+        local ok, rig = pcall(function() return game:GetService("HttpService"):JSONDecode(declared) end)
+        if ok and type(rig) == "table" and type(rig.feet) == "table" then
+          for _ in pairs(rig.feet) do feet += 1 end
+        end
+      end
+      local stamp = dog and dog:GetAttribute("RoqerRigRevision")
+      return {
+        ${key} = dog and dog.ClassName or false,
+        humanoid = humanoid ~= nil,
+        loader = loader and loader.ClassName or false,
+        enabled = loader ~= nil and loader:IsA("Script") and loader.Enabled,
+        idle = idle,
+        walk = walk,
+        idleOwner = ownerOf(idle),
+        walkOwner = ownerOf(walk),
+        walkGroundSpeed = type(walkSpeed) == "number" and walkSpeed or false,
+        place = { id = game.CreatorId, type = game.CreatorType.Name },
+        sequences = sequences,
+        motors = motors,
+        meshParts = meshParts,
+        bones = bones,
+        skinnedParts = skinnedParts,
+        feet = feet,
+        rigStamp = type(stamp) == "string" and stamp or false,
+      }
+  `;
+}
 
 /** Roblox's asset type number for an Animation. */
 const ANIMATION_ASSET_TYPE = 24;
@@ -1563,15 +1873,34 @@ function metadataValue(evidence: RunEvidence, label: string): string | undefined
   return evidence.metadata?.find((entry) => entry.label === label)?.value;
 }
 
+/** The asset IDs this run published and read back from Roblox. */
+function publishedAssets(evidence: readonly RunEvidence[]): Set<string> {
+  return new Set(evidence.flatMap((item) => {
+    const id = /^rbxassetid:\/\/(\d+)$/.exec(item.title)?.[1];
+    return item.kind === "verification" && item.changeKind === "asset" && item.passed === true && id !== undefined ? [id] : [];
+  }));
+}
+
+/** Why an asset the probe described is not an Animation the place's owner owns, or undefined when it is. */
+function animationOwnershipProblem(assetId: string, owner: unknown, place: unknown): string | undefined {
+  if (isRecord(place) && place.id === 0) {
+    return `The place is not published, or was opened from a file, so it has no owner for asset ${assetId} to match: `
+      + "run the task in a published place, opened from Roblox, that the Open Cloud key's creator owns.";
+  }
+  if (!isRecord(owner) || !isRecord(place)) return `Roblox would not describe asset ${assetId}, so who owns it could not be confirmed.`;
+  if (owner.assetType !== ANIMATION_ASSET_TYPE) return `Asset ${assetId} is not an Animation.`;
+  if (owner.id !== place.id || owner.type !== place.type) {
+    return `Asset ${assetId} belongs to ${String(owner.type)} ${String(owner.id)}, not the place's owner, ${String(place.type)} ${String(place.id)}.`;
+  }
+  return undefined;
+}
+
 /**
  * The animation plan's "done" conditions, each from Studio or from evidence
  * the host recorded off a tool result. The first unmet one is the verdict.
  */
 function judgeAnimationRun(probe: unknown, verified: boolean, evidence: readonly RunEvidence[]): EvalVerdict {
-  const published = new Set(evidence.flatMap((item) => {
-    const id = /^rbxassetid:\/\/(\d+)$/.exec(item.title)?.[1];
-    return item.kind === "verification" && item.changeKind === "asset" && item.passed === true && id !== undefined ? [id] : [];
-  }));
+  const published = publishedAssets(evidence);
   if (published.size === 0) return { passed: false, detail: "No animation was published and read back from Roblox." };
 
   const loader = field(probe, "loader");
@@ -1584,15 +1913,8 @@ function judgeAnimationRun(probe: unknown, verified: boolean, evidence: readonly
     return { passed: false, detail: `The run slot holds ${assetId}, which this run did not publish.` };
   }
 
-  const owner = field(probe, "owner");
-  const place = field(probe, "place");
-  if (!isRecord(owner) || !isRecord(place)) {
-    return { passed: false, detail: `Roblox would not describe asset ${assetId}, so who owns it could not be confirmed.` };
-  }
-  if (owner.assetType !== ANIMATION_ASSET_TYPE) return { passed: false, detail: `Asset ${assetId} is not an Animation.` };
-  if (owner.id !== place.id || owner.type !== place.type) {
-    return { passed: false, detail: `Asset ${assetId} belongs to ${String(owner.type)} ${String(owner.id)}, not the place's owner, ${String(place.type)} ${String(place.id)}.` };
-  }
+  const ownership = animationOwnershipProblem(assetId, field(probe, "owner"), field(probe, "place"));
+  if (ownership) return { passed: false, detail: ownership };
 
   const played = evidence.some((item) => item.kind === "playtest" && item.passed === true &&
     metadataValue(item, ANIMATION_PLAYED_FROM_LABEL) === ANIMATION_PLAYED_PUBLISHED &&
@@ -1620,6 +1942,241 @@ function judgeAnimationRun(probe: unknown, verified: boolean, evidence: readonly
   }
   if (!verified) return { passed: false, detail: "The run finished without satisfying the completion gate." };
   return { passed: true, detail: `Animation ${assetId}, owned by the place's owner, is wired to the run slot and played in a playtest, with a 3D preview and every motion check passed.` };
+}
+
+/**
+ * The creature plan's prompts for a body the run makes: a dog built from
+ * Parts, or a wolf modelled in Blender and uploaded; rigged with `rig`; then
+ * everything a patrolling guard must show. The body's and the rig's own
+ * conditions come first, since animations on a rig that is not the tool's
+ * prove nothing about building one.
+ */
+function judgeBuiltCreature(
+  probe: unknown,
+  verified: boolean,
+  evidence: readonly RunEvidence[],
+  subject: WalkingModel,
+  toolCalls?: EvalOracleInput["toolCalls"],
+  skinned = false,
+): EvalVerdict {
+  const { noun } = subject;
+  const path = `game.Workspace.${subject.name}`;
+  if (toolCalls !== undefined) {
+    // Modelled in Blender: a job, an upload, and the pieces it arrived as.
+    const succeeded = (tool: string) => toolCalls.some((call) => call.tool === tool && call.ok);
+    if (!succeeded("run_blender_script")) return { passed: false, detail: `No Blender job succeeded; the ${noun} was not modelled.` };
+    if (!succeeded("upload_asset")) return { passed: false, detail: `The modelled ${noun} was never uploaded.` };
+  }
+  if (field(probe, subject.key) === "Model") {
+    const meshParts = Number(field(probe, "meshParts") ?? 0);
+    if (toolCalls === undefined && meshParts > 0) return { passed: false, detail: `The ${noun} has MeshParts; it was to be built from Parts.` };
+    const bones = Number(field(probe, "bones") ?? 0);
+    if (skinned && (Number(field(probe, "skinnedParts") ?? 0) !== 1 || meshParts !== 1)) {
+      return { passed: false, detail: `The ${noun} has ${meshParts} MeshParts, ${String(field(probe, "skinnedParts") ?? 0)} of them skinned; it was to be one skinned mesh.` };
+    }
+    // Four legs of an upper, a lower and a foot bone, and something for them to hang from.
+    if (skinned && bones < 13) {
+      return { passed: false, detail: `The ${noun}'s mesh holds ${bones} Bones; a four-legged body that bends needs a bone for each leg's upper, lower and foot, and one for its body.` };
+    }
+    if (toolCalls !== undefined && !skinned && meshParts < 5) {
+      return { passed: false, detail: `The ${noun} has ${meshParts} MeshParts; a body modelled as moving pieces arrives as one for its body and one or more for each leg.` };
+    }
+    if (typeof field(probe, "rigStamp") !== "string") {
+      return { passed: false, detail: `The ${noun}'s rig was not built by rig, so no pivot of it was checked: it carries no RoqerRigRevision.` };
+    }
+    // The last rig call on it is the rig it has; an edit after it would be a change the gate saw.
+    const rigs = evidence.filter((item) => item.kind === "verification" && item.changeKind === "instance" && item.title === path);
+    if (rigs.length === 0 || rigs[rigs.length - 1].passed !== true) {
+      return { passed: false, detail: rigs.length === 0 ? `No rig call built the ${noun}'s rig in this run.` : `The ${noun}'s rig did not read back from Studio as it was built.` };
+    }
+    // A skinned body's joints are its bones, with one Motor6D from the root rig made.
+    const joints = skinned ? bones : Number(field(probe, "motors") ?? 0);
+    if (Number(field(probe, "feet") ?? 0) !== 4 || joints < 5 || (skinned && Number(field(probe, "motors") ?? 0) < 1)) {
+      return { passed: false, detail: `The ${noun}'s rig declares ${String(field(probe, "feet") ?? 0)} feet on ${joints} joints; a four-legged body needs four feet, each on a leg of its own.` };
+    }
+    if (!evidence.some((item) => item.title === RIG_RANGE_SHEET_TITLE && item.subject === path && item.modelPreviewId !== undefined)) {
+      return { passed: false, detail: `No range sheet of the ${noun}'s rig, with its 3D view, was shown in the chat.` };
+    }
+  }
+  return judgeNpcPatrol(probe, verified, evidence, subject);
+}
+
+/** A snake's bones: enough of them down its length for a wave to run along. */
+const SNAKE_BONES = 4;
+
+/**
+ * The creature plan's step 8: a snake modelled as one skinned mesh and
+ * animated in Blender, the motion baked to a file and built from it. Each
+ * condition is from Studio or from evidence the host recorded off a tool
+ * result. The first unmet one is the verdict.
+ */
+function judgeBakedCreature(
+  probe: unknown,
+  verified: boolean,
+  evidence: readonly RunEvidence[],
+  toolCalls: EvalOracleInput["toolCalls"],
+): EvalVerdict {
+  const path = "game.Workspace.WorkbenchEvalSnake";
+  const succeeded = (tool: string) => toolCalls.some((call) => call.tool === tool && call.ok);
+  if (!succeeded("run_blender_script")) return { passed: false, detail: "No Blender job succeeded; the snake was neither modelled nor animated." };
+  if (!succeeded("upload_asset")) return { passed: false, detail: "The modelled snake was never uploaded." };
+
+  if (field(probe, "snake") !== "Model") {
+    return { passed: false, detail: field(probe, "snake") === false ? "There is no WorkbenchEvalSnake in Workspace." : "WorkbenchEvalSnake is not a Model." };
+  }
+  const meshParts = Number(field(probe, "meshParts") ?? 0);
+  const skinnedParts = Number(field(probe, "skinnedParts") ?? 0);
+  if (skinnedParts !== 1 || meshParts !== 1) {
+    return { passed: false, detail: `The snake has ${meshParts} MeshParts, ${skinnedParts} of them skinned; it was to be one skinned mesh.` };
+  }
+  const bones = Number(field(probe, "bones") ?? 0);
+  if (bones < SNAKE_BONES) {
+    return { passed: false, detail: `The snake's mesh holds ${bones} Bones; a wave down its body needs at least ${SNAKE_BONES}.` };
+  }
+  if (typeof field(probe, "rigStamp") !== "string" || Number(field(probe, "motors") ?? 0) < 1) {
+    return { passed: false, detail: "The snake's rig was not built by rig around its bones: it carries no RoqerRigRevision, or no root joins its mesh." };
+  }
+  const rigs = evidence.filter((item) => item.kind === "verification" && item.changeKind === "instance" && item.title === path);
+  if (rigs.length === 0 || rigs[rigs.length - 1].passed !== true) {
+    return { passed: false, detail: rigs.length === 0 ? "No rig call built the snake's rig in this run." : "The snake's rig did not read back from Studio as it was built." };
+  }
+
+  // The last build of each sequence is the one kept; one of them must be the bake.
+  const kept = new Map<string, RunEvidence>();
+  for (const item of evidence) {
+    if (item.kind === "verification" && item.changeKind === "instance" && metadataValue(item, ANIMATION_MOTION_CHECKS_LABEL) !== undefined) {
+      kept.set(item.title, item);
+    }
+  }
+  if (kept.size === 0) return { passed: false, detail: "No animation was built in Studio." };
+  const baked = [...kept].filter(([, build]) => metadataValue(build, ANIMATION_DESCRIBED_BY_LABEL) === ANIMATION_DESCRIBED_BY_BAKE);
+  if (baked.length === 0) {
+    return { passed: false, detail: "No animation kept in Studio was built from a file baked in Blender; the slither was written as poses instead." };
+  }
+  for (const [sequence, build] of baked) {
+    if (build.passed !== true) return { passed: false, detail: `The last build of ${sequence} did not play or read back as it was checked.` };
+    const checks = metadataValue(build, ANIMATION_MOTION_CHECKS_LABEL);
+    if (checks !== ANIMATION_ALL_CHECKS_PASSED) return { passed: false, detail: `The last build of ${sequence}: ${checks}; none may be left failing.` };
+  }
+  if (!evidence.some((item) => item.title === ANIMATION_PREVIEW_TITLE && item.modelPreviewId !== undefined)) {
+    return { passed: false, detail: "No 3D preview of the motion was shown in the chat." };
+  }
+  if (Number(field(probe, "sequences") ?? 0) < 1) {
+    return { passed: false, detail: "No KeyframeSequence was kept under ServerStorage.WorkbenchEval." };
+  }
+
+  const published = publishedAssets(evidence);
+  if (published.size === 0) return { passed: false, detail: "No animation was published and read back from Roblox." };
+  const loader = field(probe, "loader");
+  if (loader !== "Script" || field(probe, "enabled") !== true) {
+    return { passed: false, detail: loader === false ? "The snake has no RoqerModelAnimate loader, so nothing animates it." : "The snake's RoqerModelAnimate is not an enabled Script." };
+  }
+  const idle = field(probe, "idle");
+  if (typeof idle !== "string") return { passed: false, detail: "The snake's idle is not wired, so nothing plays while it rests." };
+  if (!published.has(idle)) return { passed: false, detail: `The snake's idle holds ${idle}, which this run did not publish.` };
+  const ownership = animationOwnershipProblem(idle, field(probe, "idleOwner"), field(probe, "place"));
+  if (ownership) return { passed: false, detail: ownership };
+
+  // Played after the last wiring, so the state it saw holding the asset is the one wired now.
+  const loaderPath = `${path}.RoqerModelAnimate`;
+  const lastWire = evidence.reduce((last, item, index) => item.kind === "verification" && item.title === loaderPath ? index : last, -1);
+  const played = evidence.some((item, index) => index > lastWire && item.kind === "playtest" && item.passed === true &&
+    item.title === `${path} in the playtest` &&
+    metadataValue(item, ANIMATION_PLAYED_FROM_LABEL) === ANIMATION_PLAYED_PUBLISHED &&
+    metadataValue(item, modelStateLabel("idle")) === MODEL_STATE_WIRED);
+  if (!played) {
+    return { passed: false, detail: "No playtest after the last wiring showed the published slither playing on the snake as it was checked, with its idle holding it." };
+  }
+  if (!verified) return { passed: false, detail: "The run finished without satisfying the completion gate." };
+  return {
+    passed: true,
+    detail: `The snake's slither ${idle}, baked in Blender and owned by the place's owner, played on its ${bones} bones in a playtest, with a 3D preview and every motion check passed.`,
+  };
+}
+
+interface WalkingModel { /** The probe field holding its class. */ key: string; name: string; noun: string }
+const GUARD: WalkingModel = { key: "guard", name: "WorkbenchEvalGuard", noun: "guard" };
+const DOG: WalkingModel = { key: "dog", name: "WorkbenchEvalDog", noun: "dog" };
+const WOLF: WalkingModel = { key: "wolf", name: "WorkbenchEvalWolf", noun: "wolf" };
+
+/**
+ * The creature plan's step 2 "done" conditions for the guard, each from
+ * Studio or from evidence the host recorded off a tool result. The first
+ * unmet one is the verdict.
+ */
+function judgeNpcPatrol(probe: unknown, verified: boolean, evidence: readonly RunEvidence[], subject: WalkingModel = GUARD): EvalVerdict {
+  const { name, noun } = subject;
+  const modelPath = `game.Workspace.${name}`;
+  const published = publishedAssets(evidence);
+  if (published.size === 0) return { passed: false, detail: "No animation was published and read back from Roblox." };
+
+  const guard = field(probe, subject.key);
+  if (guard !== "Model" || field(probe, "humanoid") !== true) {
+    return { passed: false, detail: guard === false ? `There is no ${name} in Workspace.` : `${name} is not a Model with a Humanoid.` };
+  }
+  const loader = field(probe, "loader");
+  if (loader !== "Script" || field(probe, "enabled") !== true) {
+    return {
+      passed: false,
+      detail: loader === false ? `The ${noun} has no RoqerModelAnimate loader, so nothing animates it.` : `The ${noun}'s RoqerModelAnimate is not an enabled Script.`,
+    };
+  }
+  for (const state of ["idle", "walk"] as const) {
+    const assetId = field(probe, state);
+    if (typeof assetId !== "string") return { passed: false, detail: `The ${noun}'s ${state} is not wired.` };
+    if (!published.has(assetId)) {
+      return { passed: false, detail: `The ${noun}'s ${state} holds ${assetId}, which this run did not publish.` };
+    }
+    const ownership = animationOwnershipProblem(assetId, field(probe, `${state}Owner`), field(probe, "place"));
+    if (ownership) return { passed: false, detail: ownership };
+  }
+  if (typeof field(probe, "walkGroundSpeed") !== "number") {
+    return { passed: false, detail: `The ${noun}'s walk was wired without its ground speed, so its loader cannot pace it and its feet slide.` };
+  }
+
+  // Watched after the last wiring, so the states it saw are the ones wired now,
+  // and moved by the guard's own scripts, so the patrol is the game's.
+  const loaderPath = `${modelPath}.RoqerModelAnimate`;
+  const lastWire = evidence.reduce((last, item, index) => item.kind === "verification" && item.title === loaderPath ? index : last, -1);
+  const watched = evidence.some((item, index) => index > lastWire && item.kind === "playtest" && item.passed === true &&
+    item.title === `${modelPath} in the playtest` &&
+    metadataValue(item, MODEL_MOVED_BY_LABEL) === MODEL_MOVED_BY_GAME &&
+    (metadataValue(item, MODEL_WHILE_MOVING_LABEL) ?? "").startsWith("walk ") &&
+    (metadataValue(item, MODEL_WHILE_STANDING_LABEL) ?? "").startsWith("idle "));
+  if (!watched) {
+    return {
+      passed: false,
+      detail: `No playtest after the last wiring watched the ${noun}'s own ${noun === "guard" ? "patrol" : "wandering"} and saw its walk play while it moved and its idle while it stood.`,
+    };
+  }
+
+  if (!evidence.some((item) => item.title === ANIMATION_PREVIEW_TITLE && item.modelPreviewId !== undefined)) {
+    return { passed: false, detail: "No 3D preview of the motion was shown in the chat." };
+  }
+  // The last build of each sequence is the one kept.
+  const kept = new Map<string, RunEvidence>();
+  for (const item of evidence) {
+    if (item.kind === "verification" && item.changeKind === "instance" && metadataValue(item, ANIMATION_MOTION_CHECKS_LABEL) !== undefined) {
+      kept.set(item.title, item);
+    }
+  }
+  if (kept.size < 2) return { passed: false, detail: `${kept.size === 0 ? "No animation was" : "Only one animation was"} built in Studio; the ${noun} needs an idle and a walk.` };
+  for (const [path, build] of kept) {
+    if (build.passed !== true) return { passed: false, detail: `The last build of ${path} did not play or read back as it was checked.` };
+    const checks = metadataValue(build, ANIMATION_MOTION_CHECKS_LABEL);
+    if (checks !== ANIMATION_ALL_CHECKS_PASSED) return { passed: false, detail: `The last build of ${path}: ${checks}; none may be left failing.` };
+  }
+  if (![...kept.values()].some((build) => metadataValue(build, ANIMATION_GAIT_CHECKS_LABEL) === ANIMATION_CHECKED_AS_GAIT)) {
+    return { passed: false, detail: "No build was checked as a gait, so the walk's feet were never checked." };
+  }
+  if (Number(field(probe, "sequences") ?? 0) < 2) {
+    return { passed: false, detail: "The idle's and the walk's KeyframeSequences are not both kept under ServerStorage.WorkbenchEval." };
+  }
+  if (!verified) return { passed: false, detail: "The run finished without satisfying the completion gate." };
+  return {
+    passed: true,
+    detail: `The ${noun}'s idle ${String(field(probe, "idle"))} and walk ${String(field(probe, "walk"))}, owned by the place's owner, played in a playtest of its own ${noun === "guard" ? "patrol" : "wandering"}, with a 3D preview and every motion check passed.`,
+  };
 }
 
 /** A plateau is a real height change, not a kerb: the lowest and highest standing levels this far apart. */

@@ -208,7 +208,7 @@ describe('compilePoseAnimation', () => {
       ],
     });
     expect(problems).toEqual([
-      'animation: unknown field "speed"; expected name, rig, loop, priority, easing, keyframes',
+      'animation: unknown field "speed"; expected name, rig, loop, priority, easing, keyframes, duration, waves, gait, skeleton',
       'name: must be a non-empty string',
       'loop: must be true or false',
       'priority: must be one of Core, Idle, Movement, Action, Action2, Action3, Action4',
@@ -579,7 +579,7 @@ describe('compilePoseAnimation', () => {
 
   test('refuses rigs it does not know, including inherited object keys', () => {
     for (const rig of ['R16', 'r6', 'toString', '__proto__', undefined]) {
-      expect(errors(swing({ rig }))).toEqual(['rig: must be one of R15, R6']);
+      expect(errors(swing({ rig }))).toEqual(['rig: must be R15 or R6, or the path of a rigged Model in Studio']);
     }
   });
 

@@ -1,5 +1,5 @@
 import { StudioHttpClient } from './studio-client.js';
-import { BridgeService, RoutingFailure, type PublicPluginInstance } from '../bridge-service.js';
+import { BridgeService, MAX_REQUEST_TIMEOUT_MS, RoutingFailure, type PublicPluginInstance } from '../bridge-service.js';
 import {
   OpenCloudClient,
   type AssetOperationResponse,
@@ -25,23 +25,36 @@ import { createUISnapshot, normalizeUIInspection } from '../ui-semantics.js';
 import { auditUI } from '../ui-audit.js';
 import {
   ANIMATE_SLOTS,
+  MAX_GROUND_SPEED,
+  MODEL_STATES,
   choosePublisher,
   compactChecks,
   describeAnimation,
+  describeRig,
   expectedCounts,
+  judgeMovement,
   normalizeAnimationId,
   prepareAnimation,
   previewProps,
   previewSampleTimes,
+  RANGE_SHEET_TURN,
+  rangeSheetAnimation,
   verifyLivePlayback,
   verifyPlayback,
   type AnimateSlot,
+  type LoaderStates,
+  type ModelState,
 } from '../animation/animation-tool.js';
 import { compilePoseAnimation, type KeyframeSequenceDescription } from '../animation/pose-compiler.js';
 import { renderContactSheet } from '../animation/contact-sheet.js';
 import { renderRigGlb } from '../animation/rig-glb.js';
-import { rigFor } from '../animation/rigs.js';
-import { cachedRigMeshes, currentRigMeshes, storeRigMeshes } from '../animation/rig-meshes.js';
+import { rigFromModel, type ModelRigReading } from '../animation/model-rig.js';
+import { BODY_PLANS } from '../animation/body-plans.js';
+import { builtRigMismatches, isBodyPlan, parseBuildJoints, planRigAdopt, planRigBuild, type PiecesReading } from '../animation/rig-build.js';
+import type { Rig } from '../animation/rig.js';
+import { RIGS, rigFor } from '../animation/rigs.js';
+import { cachedRigMeshes, currentRigMeshes, modelRigMeshes, rigMeshCacheDirectory, storeRigMeshes, type BoxedMeshPart } from '../animation/rig-meshes.js';
+import { MAX_MESHES_PER_READ, meshesToRead, storeModelMesh } from '../animation/model-meshes.js';
 import * as fs from 'fs';
 import * as path from 'path';
 
@@ -224,10 +237,71 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+/** What a pose description's file is named, and the most it may hold: Roqer's Blender worker writes them. */
+const ANIMATION_FILE_SUFFIX = '.animation.json';
+const MAX_ANIMATION_FILE_BYTES = 2 * 1024 * 1024;
+
+/**
+ * A pose description read from a file on this machine, as a Blender job
+ * bakes one: only a file named as those are, of a bounded size, holding one
+ * JSON object. It is then checked as a description given inline is.
+ */
+function readAnimationFile(value: unknown): Record<string, unknown> {
+  if (typeof value !== 'string' || !path.isAbsolute(value) || !value.toLowerCase().endsWith(ANIMATION_FILE_SUFFIX)) {
+    throw new Error(`animation_file must be the absolute path of a pose description named *${ANIMATION_FILE_SUFFIX}, as a Blender job writes one`);
+  }
+  let text: string;
+  try {
+    if (fs.statSync(value).size > MAX_ANIMATION_FILE_BYTES) throw new Error('too large');
+    text = fs.readFileSync(value, 'utf8');
+  } catch (error) {
+    throw new Error(error instanceof Error && error.message === 'too large'
+      ? `animation_file is larger than ${MAX_ANIMATION_FILE_BYTES / 1024 / 1024} MB; bake a shorter animation`
+      : `animation_file could not be read: no file at ${value}`);
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    throw new Error('animation_file does not hold JSON');
+  }
+  const record = asRecord(parsed);
+  if (!record) throw new Error('animation_file must hold one pose description, a JSON object');
+  return record;
+}
+
+/**
+ * How a preview drew the parts that hold bones: bent by them, where the
+ * mesh's skin was read, or rigid, where it was not and the bones' motion does
+ * not show.
+ */
+function describeSkin(rig: Rig, drawn: ReadonlyMap<string, { skin?: { bones: string[] } }>): string {
+  const bones = new Set(rig.bones ?? []);
+  const holders = [...new Set(rig.joints.filter((joint) => bones.has(joint.childPart) && !bones.has(joint.parentPart)).map((joint) => joint.parentPart))];
+  const bent = holders.filter((part) => drawn.get(part)?.skin);
+  const rigid = holders.filter((part) => !drawn.get(part)?.skin);
+  return [
+    ...(bent.length > 0 ? [`${bent.join(', ')} bent by ${bent.length === 1 ? 'its' : 'their'} bones, as Studio skins ${bent.length === 1 ? 'it' : 'them'}`] : []),
+    ...(rigid.length > 0 ? [`${rigid.join(', ')} drawn rigid, ${rigid.length === 1 ? 'its' : 'their'} skin not read, so what the bones do does not show here: judge by the checks and by Studio`] : []),
+  ].join('; ');
+}
+
+/** Which MeshParts a preview drew as their boxes, and why, the first few by name. */
+function describeBoxes(boxes: readonly BoxedMeshPart[]): string {
+  const named = boxes.slice(0, 6).map((box) => `${box.part} (${box.reason})`);
+  const more = boxes.length > named.length ? `, and ${boxes.length - named.length} more` : '';
+  return `MeshParts drawn as their boxes: ${named.join(', ')}${more}`;
+}
+
 function asRecord(value: unknown): Record<string, unknown> | undefined {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
     ? value as Record<string, unknown>
     : undefined;
+}
+
+/** A point as [x, y, z]: three finite numbers. */
+function isPoint(value: unknown): value is [number, number, number] {
+  return Array.isArray(value) && value.length === 3 && value.every((item) => typeof item === 'number' && Number.isFinite(item));
 }
 
 function asRows(value: unknown): Record<string, unknown>[] {
@@ -1719,26 +1793,56 @@ export class RobloxStudioTools {
    * animation. Arguments arrive as the tool's own object, since each action
    * reads a different few of them.
    */
-  async animation(args: Record<string, unknown>, instance_id?: string) {
-    const action = args?.action;
+  async animation(input: Record<string, unknown>, instance_id?: string) {
+    const action = input?.action;
+    let args = input;
+    if (input?.animation_file !== undefined) {
+      if (action !== 'check' && action !== 'build' && action !== 'verify') throw new Error('animation_file goes with check, build or verify: it is the pose description they take');
+      if (input.animation !== undefined) throw new Error('give animation or animation_file, not both');
+      args = { ...input, animation: readAnimationFile(input.animation_file) };
+      delete args.animation_file;
+    }
     if (action === 'check' || action === 'build') return this._animationBuild(action, args, instance_id);
     if (action === 'publish') return this._animationPublish(args, instance_id);
     if (action === 'wire') return this._animationWire(args, instance_id);
     if (action === 'verify') return this._animationVerify(args, instance_id);
-    throw new Error('animation action must be check, build, publish, wire or verify');
+    if (action === 'rig') return this._animationRig(args, instance_id);
+    throw new Error('animation action must be check, build, publish, wire, verify or rig');
+  }
+
+  /**
+   * The rig an animation names when it names neither R15 nor R6: the model at
+   * that path, read from Studio and described as R15 and R6 are. The
+   * animation comes back naming the model as Studio does, which is how its
+   * compiled sequence and the rig find each other.
+   */
+  private async _modelRigFor(animation: unknown, instance_id?: string): Promise<
+    { ok: true; animation: unknown; model?: { rig: Rig; notes: string[] } } | { ok: false; refusal: Record<string, unknown> }
+  > {
+    const named = asRecord(animation)?.rig;
+    if (typeof named !== 'string' || named.trim() === '' || RIGS.has(named)) return { ok: true, animation };
+    const reading = await this._callSingle('/api/animation-read-rig', { model: named }, undefined, instance_id);
+    if (typeof reading?.error === 'string') {
+      return { ok: false, refusal: { error: `${named}'s rig could not be read: ${reading.error}`, ...(reading.errorCode ? { errorCode: reading.errorCode } : {}) } };
+    }
+    const read = rigFromModel(reading);
+    if (!read.ok) return { ok: false, refusal: { error: `${named}'s rig cannot be animated as it is.`, errorCode: 'invalid_rig', errors: read.errors } };
+    return { ok: true, animation: { ...(animation as Record<string, unknown>), rig: read.rig.name }, model: { rig: read.rig, notes: read.notes } };
   }
 
   /**
    * Check a pose description, or build it as a KeyframeSequence in Studio.
    *
-   * Both compile the description and run the motion checks here, without
-   * Studio. `build` then refuses unless every check passed or was waived, has
-   * the plugin preview the sequence on a temporary dummy, and writes it only if
-   * Studio played it as the checks measured it. The write is one undo step and
-   * is read back; replacing a sequence needs the revision its build returned.
+   * Both compile the description and run the motion checks here; for R15 and
+   * R6 without Studio, and for a model's own rig once it is read from Studio.
+   * `build` then refuses unless every check passed or was waived, has the
+   * plugin preview the sequence on a temporary dummy, or on a copy of the
+   * model while its rig is as it was read, and writes it only if Studio played
+   * it as the checks measured it. The write is one undo step and is read back;
+   * replacing a sequence needs the revision its build returned.
    */
   private async _animationBuild(action: 'check' | 'build', args: Record<string, unknown>, instance_id?: string) {
-    const { animation, parent, expected_revision, waive, locomotion, grounded } = args;
+    const { parent, expected_revision, waive, locomotion, grounded } = args;
     if (action === 'build' && (typeof parent !== 'string' || parent.trim() === '')) {
       throw new Error('parent (the instance the KeyframeSequence goes in) is required to build an animation');
     }
@@ -1746,41 +1850,61 @@ export class RobloxStudioTools {
       throw new Error('expected_revision must be the revision string a previous build returned');
     }
 
-    const prepared = prepareAnimation(animation, { locomotion, grounded, waive });
+    const resolved = await this._modelRigFor(args.animation, instance_id);
+    if (!resolved.ok) {
+      return this._textResult(action === 'check'
+        ? { valid: false, ...resolved.refusal }
+        : { ...resolved.refusal, error: `${resolved.refusal.error} Nothing was built.` });
+    }
+    const { animation, model } = resolved;
+    const prepared = prepareAnimation(animation, { locomotion, grounded, waive }, model?.rig);
     if (!prepared.ok) {
       return this._textResult({
         ...(action === 'check' ? { valid: false } : { error: 'The animation is not valid; nothing was built.' }),
         errors: prepared.errors,
+        // The joints a pose may key, which a model's own rig names.
+        ...(model ? { rig: describeRig(model.rig, model.notes) } : {}),
       });
     }
     const { sequence, report, failing, waived } = prepared.value;
+    if (model) await this._fetchModelMeshes(model.rig, instance_id);
     const checks = {
       passed: failing.length === 0,
       results: compactChecks(report),
       ...(waived.length > 0 ? { waived } : {}),
     };
+    // A gait's pace, which wire hands to a model's loader so its feet keep up.
+    const groundSpeed = report.groundSpeed === undefined ? {} : { groundSpeed: report.groundSpeed };
     if (action === 'check') {
-      return this._animationResult({ valid: true, animation: describeAnimation(sequence), checks }, sequence, locomotion === true);
+      return this._animationResult({ valid: true, animation: describeAnimation(sequence), ...groundSpeed, checks }, sequence, locomotion === true, model);
     }
     if (failing.length > 0) {
       return this._animationResult({
         error: `${failing.length === 1 ? 'A motion check' : `${failing.length} motion checks`} failed (${failing.join(', ')}); nothing was built. Fix the motion, or waive a failure you intend.`,
         checks,
-      }, sequence, locomotion === true);
+      }, sequence, locomotion === true, model);
     }
 
-    await this._fetchRigMeshes(instance_id);
+    if (!model) await this._fetchRigMeshes(instance_id);
     const payload = { name: sequence.name, rig: sequence.rig, loop: sequence.loop, priority: sequence.priority, keyframes: sequence.keyframes };
     const preview = await this._callSingle(
       '/api/preview-animation',
-      { sequence: payload, sampleTimes: previewSampleTimes(sequence), props: previewProps(sequence) },
+      {
+        sequence: payload,
+        sampleTimes: previewSampleTimes(sequence),
+        // A model's rig is previewed on a copy of it, only while it is the rig the checks used.
+        ...(model ? { model: { path: model.rig.name, revision: model.rig.revision } } : { props: previewProps(sequence) }),
+      },
       undefined,
       instance_id,
     );
     if (preview?.error) {
-      return this._textResult({ error: `Studio could not preview the animation: ${preview.error} Nothing was built.` });
+      return this._textResult({
+        error: `Studio could not preview the animation: ${preview.error} Nothing was built.`,
+        ...(preview.errorCode ? { errorCode: preview.errorCode } : {}),
+      });
     }
-    const playback = verifyPlayback(sequence, preview?.samples);
+    const playback = verifyPlayback(sequence, preview?.samples, model?.rig ?? rigFor(sequence.rig));
     if (!playback.verified) {
       return this._textResult({ error: `The preview did not play as checked: ${playback.reason}. Nothing was built.`, playback });
     }
@@ -1802,6 +1926,7 @@ export class RobloxStudioTools {
       replaced: written.replaced === true,
       undoable: written.undoable !== false,
       animation: describeAnimation(sequence),
+      ...groundSpeed,
       readBack: {
         keyframes: written.keyframes,
         poses: written.poses,
@@ -1814,7 +1939,7 @@ export class RobloxStudioTools {
       },
       playback,
       checks,
-    }, sequence, locomotion === true);
+    }, sequence, locomotion === true, model);
   }
 
   /**
@@ -1841,9 +1966,43 @@ export class RobloxStudioTools {
     }
   }
 
-  private _animationResult(body: Record<string, unknown>, sequence: KeyframeSequenceDescription, locomotion: boolean) {
-    const rig = rigFor(sequence.rig);
-    const meshes = currentRigMeshes(rig);
+  /**
+   * Read the meshes of a model's MeshParts from Studio that no earlier call
+   * has, at most MAX_MESH_READS a call, so previews draw them; each is kept by
+   * its mesh ID. A mesh Studio will not hand over is drawn as its box, and a
+   * failed read leaves the rest to a later call.
+   */
+  private async _fetchModelMeshes(rig: Rig, instance_id?: string): Promise<void> {
+    const directory = rigMeshCacheDirectory();
+    const wanted = meshesToRead(rig, directory).slice(0, RobloxStudioTools.MAX_MESH_READS);
+    for (let start = 0; start < wanted.length; start += MAX_MESHES_PER_READ) {
+      const batch = wanted.slice(start, start + MAX_MESHES_PER_READ);
+      let answer: { error?: unknown; meshes?: Record<string, unknown> } | undefined;
+      try {
+        answer = await this._callSingle('/api/animation-read-meshes', { meshes: batch }, undefined, instance_id);
+      } catch {
+        return;
+      }
+      if (typeof answer?.error === 'string' || typeof answer?.meshes !== 'object' || answer.meshes === null) return;
+      for (const id of batch) storeModelMesh(id, answer.meshes[id] ?? { error: 'Studio did not answer for it' }, directory);
+    }
+  }
+
+  /** The most meshes one check or build reads from Studio; the rest wait for a later call. */
+  private static readonly MAX_MESH_READS = 64;
+
+  private _animationResult(
+    body: Record<string, unknown>,
+    sequence: KeyframeSequenceDescription,
+    locomotion: boolean,
+    model?: { rig: Rig; notes: string[] },
+    kind: 'sheet' | 'rangeSheet' = 'sheet',
+  ) {
+    const rig = model?.rig ?? rigFor(sequence.rig);
+    const drawn: { meshes: ReturnType<typeof currentRigMeshes>; boxes: BoxedMeshPart[] } = model
+      ? modelRigMeshes(rig)
+      : { meshes: currentRigMeshes(rig), boxes: [] };
+    const { meshes, boxes } = drawn;
     const sheet = renderContactSheet(sequence, meshes, { locomotion, rig });
     const preview = renderRigGlb(sequence, sequence.name, meshes, rig);
     return {
@@ -1852,17 +2011,24 @@ export class RobloxStudioTools {
           type: 'text',
           text: JSON.stringify({
             ...body,
-            sheet: {
+            ...(model ? { rig: describeRig(model.rig, model.notes) } : {}),
+            [kind]: {
               times: sheet.times.map((time) => Math.round(time * 1000) / 1000),
               // What each column is, beside the even steps: its keyframe name, marker, or the fastest instant.
               ...(sheet.labels.some((label) => label !== '') ? { shows: sheet.labels } : {}),
-              rig: rig.name === 'R6'
-                ? 'the R6 rig, whose parts are blocks'
-                : meshes.source === 'studio' ? 'the stock R15 rig' : 'a stand-in block rig, until a build reads the stock rig from Studio',
-              ...(previewProps(sequence).length > 0
+              rig: model
+                ? `${rig.name}'s own parts, each drawn as its shape, a block, wedge, cylinder or ball, or as its MeshPart's mesh, with the parts welded to it`
+                : rig.name === 'R6'
+                  ? 'the R6 rig, whose parts are blocks'
+                  : meshes.source === 'studio' ? 'the stock R15 rig' : 'a stand-in block rig, until a build reads the stock rig from Studio',
+              ...(boxes.length > 0 ? { boxes: describeBoxes(boxes) } : {}),
+              ...(model && rig.bones ? { skin: describeSkin(rig, meshes.parts) } : {}),
+              ...(previewProps(sequence, rig).length > 0
                 ? { props: 'stand-ins: a 4-stud blade along each hand prop\'s +Y, a 3.8-stud sheath along SheathAttach\'s +Y' }
                 : {}),
-              reading: `One column per time, the key moments named in shows. Top row from the front three-quarter, bottom row ${locomotion ? 'from its right side facing right' : 'straight at its front, its right hand on the left'}; the shadow marks the ground under the body.`,
+              reading: kind === 'rangeSheet'
+                ? `Each column a moment named in shows: at rest, then every joint but the root's turned ${RANGE_SHEET_TURN}° each way about X and about Z. Top row from the front three-quarter, bottom row straight at its front, its right side on the left.`
+                : `One column per time, the key moments named in shows. Top row from the front three-quarter, bottom row ${locomotion ? 'from its right side facing right' : `straight at its front, its right ${model ? 'side' : 'hand'} on the left`}; the shadow marks the ground under the body.`,
             },
           }),
         },
@@ -1971,6 +2137,7 @@ export class RobloxStudioTools {
    * one, so an ID changed by anyone else is never overwritten.
    */
   private async _animationWire(args: Record<string, unknown>, instance_id?: string) {
+    if (args.model !== undefined) return this._animationWireModel(args, instance_id);
     const slot = args.slot;
     if (typeof slot !== 'string' || !ANIMATE_SLOTS.includes(slot as AnimateSlot)) {
       throw new Error(`slot must be one of ${ANIMATE_SLOTS.join(', ')}`);
@@ -1986,15 +2153,231 @@ export class RobloxStudioTools {
   }
 
   /**
+   * Set one state of a model's loader to a published animation: the Script
+   * this tool keeps inside an NPC or creature, which plays its idle, walk and
+   * run by how fast it moves. Its code never changes; each state's ID, and a
+   * gait's ground speed, which paces it, are its attributes. As with the
+   * character loader, an ID is replaced only when the caller names the current one.
+   */
+  private async _animationWireModel(args: Record<string, unknown>, instance_id?: string) {
+    const model = args.model;
+    if (typeof model !== 'string' || model.trim() === '') throw new Error('model must be the path of the NPC or creature Model to wire');
+    const slot = args.slot;
+    if (typeof slot !== 'string' || !MODEL_STATES.includes(slot as ModelState)) {
+      throw new Error(`with model, slot must be one of ${MODEL_STATES.join(', ')}: the states its loader plays by how fast it moves`);
+    }
+    const animationId = normalizeAnimationId(args.animation_id);
+    if (!animationId) throw new Error('animation_id must be a published asset ID, such as rbxassetid://123');
+    const expectedId = args.expected_id === undefined ? undefined : normalizeAnimationId(args.expected_id);
+    if (args.expected_id !== undefined && !expectedId) {
+      throw new Error(`expected_id must be the asset ID the model's ${slot} holds now, such as rbxassetid://123`);
+    }
+    const groundSpeed = args.ground_speed;
+    if (groundSpeed !== undefined) {
+      if (slot === 'idle') throw new Error('ground_speed is for walk and run: an idle does not move');
+      if (typeof groundSpeed !== 'number' || !(groundSpeed > 0 && groundSpeed <= MAX_GROUND_SPEED)) {
+        throw new Error(`ground_speed must be the groundSpeed its check reported: above 0 and at most ${MAX_GROUND_SPEED} studs a second`);
+      }
+    }
+    const response = await this._callSingle(
+      '/api/animation-wire-model',
+      { model, state: slot, animationId, expectedId, groundSpeed },
+      undefined,
+      instance_id,
+    );
+    if (response?.error) return this._textResult(response);
+    return this._textResult({
+      wired: true,
+      ...response,
+      ...(slot !== 'idle' && groundSpeed === undefined
+        ? { note: `The loader plays this ${slot} at its own pace whatever the model's speed, so its feet may slide. Wire it again with ground_speed, the groundSpeed its check reported, to pace it.` }
+        : {}),
+    });
+  }
+
+  /**
+   * Make a stock R15 or R6 NPC body at a path that names nothing yet, with its
+   * feet at position (the origin by default). The model loader stands in for
+   * the body's Animate script, which runs only under a player, and plays the
+   * idle, walk and run Animate carried. One undo step, read back.
+   */
+  private async _animationRig(args: Record<string, unknown>, instance_id?: string) {
+    const model = args.model;
+    if (typeof model !== 'string' || model.trim() === '') throw new Error('model must be the path of the model to rig, such as game.Workspace.Dog');
+    const stock = args.stock;
+    if (stock === undefined) {
+      if (args.position !== undefined) throw new Error('position goes with stock: it is where a stock NPC\'s feet stand');
+      // With joints, or with a controller for a skinned mesh whose bones are its joints, rig builds; otherwise it adopts.
+      return args.joints === undefined && args.controller === undefined
+        ? this._animationAdoptRig(model, args, instance_id)
+        : this._animationBuildRig(model, args, instance_id);
+    }
+    for (const key of ['joints', 'controller', 'plan', 'declarations', 'replace', 'pivot_space']) {
+      if (args[key] !== undefined) throw new Error(`${key} is for rigging a model's own pieces; a stock NPC takes model, stock and position`);
+    }
+    if (stock !== 'R15' && stock !== 'R6') throw new Error('stock must be R15 or R6');
+    const position = args.position;
+    if (position !== undefined && !isPoint(position)) throw new Error('position must be [x, y, z]: where the NPC\'s feet stand');
+    const response = await this._callSingle(
+      '/api/animation-rig',
+      { model, stock, ...(position !== undefined ? { position } : {}) },
+      undefined,
+      instance_id,
+    );
+    if (response?.error) return this._textResult(response);
+    const states = asRecord(response?.states) ?? {};
+    const held = MODEL_STATES.filter((state) => typeof states[state] === 'string');
+    return this._textResult({
+      rigged: true,
+      ...response,
+      note: held.length > 0
+        ? `states holds Roblox's default ${held.join(', ')}. Their ground speed is unknown, so the loader plays a gait at its own pace and the feet may slide. `
+          + 'For its own, check each (a gait with locomotion), build and publish it, then wire it with model, expected_id the default it replaces and, for a gait, ground_speed.'
+        : 'Its body carried no default animations, so its loader holds none yet: wire its idle, walk and run with model.',
+    });
+  }
+
+  /** The plan and declarations a rig call names, checked for shape. */
+  private _rigDeclarationArgs(args: Record<string, unknown>) {
+    const plan = args.plan ?? 'custom';
+    if (!isBodyPlan(plan)) throw new Error(`plan must be one of ${BODY_PLANS.join(', ')}`);
+    const declarations = args.declarations;
+    if (declarations !== undefined && asRecord(declarations) === undefined) {
+      throw new Error('declarations must be a RoqerRig object: { feet?, hips?, limbs?, hinges?, limits? }');
+    }
+    const expected = args.expected_revision;
+    if (expected !== undefined && (typeof expected !== 'string' || expected === '')) throw new Error('expected_revision must be the rig\'s revision, as rig or check returned it');
+    return { plan, declarations: asRecord(declarations), expectedRevision: expected as string | undefined };
+  }
+
+  /**
+   * Join a model's pieces into a rig at the pivots given: read its pieces,
+   * plan every change here, and have Studio make them in one undo step while
+   * the model is as read. The result reads the rig back and draws its range
+   * sheet, every joint turned a little each way.
+   */
+  private async _animationBuildRig(model: string, args: Record<string, unknown>, instance_id?: string) {
+    // No joints with a controller: a skinned mesh, whose Bones are its joints; the plan refuses any other model.
+    const joints = args.joints === undefined ? { ok: true as const, joints: [] } : parseBuildJoints(args.joints);
+    if (!joints.ok) return this._textResult({ error: 'The joints are not valid; nothing was changed.', errorCode: 'invalid_arguments', errors: joints.errors });
+    const controller = args.controller;
+    if (controller !== 'Humanoid' && controller !== 'AnimationController') {
+      throw new Error('controller must be Humanoid, for a body that walks, or AnimationController, for one that swims, flies, slithers or stays put');
+    }
+    if (args.replace !== undefined && args.replace !== 'importer') throw new Error('replace must be "importer": the rig an upload or a generated model arrived with');
+    if (args.pivot_space !== undefined && args.pivot_space !== 'world' && args.pivot_space !== 'import') {
+      throw new Error('pivot_space must be world, or import for pivots measured from an upload\'s own origin, as the Blender inspection gives them');
+    }
+    const { plan, declarations, expectedRevision } = this._rigDeclarationArgs(args);
+
+    const reading = await this._callSingle('/api/animation-read-pieces', { model }, undefined, instance_id);
+    if (typeof reading?.error === 'string') return this._textResult({ ...reading, error: `${reading.error} Nothing was changed.` });
+    const planned = planRigBuild(reading as PiecesReading, {
+      joints: joints.joints,
+      controller,
+      plan,
+      ...(declarations ? { declarations } : {}),
+      replaceImporter: args.replace === 'importer',
+      pivotSpace: args.pivot_space === 'import' ? 'import' : 'world',
+      ...(expectedRevision !== undefined ? { expectedRevision } : {}),
+    });
+    if (!planned.ok) {
+      return this._textResult({ error: `${model} was not rigged; nothing was changed.`, errorCode: planned.errorCode, errors: planned.errors });
+    }
+    const built = await this._callSingle('/api/animation-build-rig', { plan: planned.plan }, undefined, instance_id);
+    if (typeof built?.error === 'string') return this._textResult(built);
+    const read = rigFromModel(built.rig);
+    const mismatches = builtRigMismatches(planned.expected, built.rig as ModelRigReading);
+    if (!read.ok) {
+      return this._textResult({ rigged: true, undoable: true, error: `${model} was rigged, but its rig does not read back as a rig: undo it and call rig again.`, errors: read.errors, readBack: { matches: false, mismatches } });
+    }
+    await this._fetchModelMeshes(read.rig, instance_id);
+    return this._rigResult({
+      rigged: true,
+      model: read.rig.name,
+      revision: read.rig.revision,
+      plan,
+      controller,
+      ...(controller === 'Humanoid' ? { hipHeight: planned.plan.controller.hipHeight } : {}),
+      root: {
+        part: planned.plan.root.name,
+        made: planned.plan.root.make !== undefined,
+        anchored: built.rootAnchored === true,
+      },
+      ...(Array.isArray(built.removed) && built.removed.length > 0 ? { removed: built.removed } : {}),
+      readBack: { matches: mismatches.length === 0, ...(mismatches.length > 0 ? { mismatches } : {}) },
+      undoable: built.undoable !== false,
+      note: 'Animate it with check and build, rig set to its path; pass revision as expected_revision to rig it again. '
+        + 'Look at the range sheet: a piece that swings off the body rather than about its end has its pivot in the wrong place.',
+    }, { rig: read.rig, notes: [...planned.notes, ...read.notes] });
+  }
+
+  /**
+   * Declare what a model rigged some other way is, from a plan and the
+   * declarations given, and change no joint: rig's adopt form. With neither,
+   * only read the rig and draw its range sheet.
+   */
+  private async _animationAdoptRig(model: string, args: Record<string, unknown>, instance_id?: string) {
+    for (const key of ['replace', 'pivot_space']) {
+      if (args[key] !== undefined) throw new Error(`${key} goes with joints or a controller: rig with neither adopts the model's own joints and changes none of them`);
+    }
+    const { plan, declarations, expectedRevision } = this._rigDeclarationArgs(args);
+    const reading = await this._callSingle('/api/animation-read-rig', { model }, undefined, instance_id);
+    if (typeof reading?.error === 'string') {
+      return this._textResult({ ...reading, error: `${model}'s rig could not be read: ${reading.error} To join its pieces into a rig, pass joints.` });
+    }
+    const declaring = args.plan !== undefined || declarations !== undefined;
+    if (!declaring) {
+      const read = rigFromModel(reading);
+      if (!read.ok) return this._textResult({ error: `${model}'s rig cannot be animated as it is.`, errorCode: 'invalid_rig', errors: read.errors });
+      await this._fetchModelMeshes(read.rig, instance_id);
+      return this._rigResult({
+        declared: false,
+        model: read.rig.name,
+        revision: read.rig.revision,
+        note: 'Nothing was written. To declare its feet, limbs and ranges, call rig again with plan or declarations.',
+      }, { rig: read.rig, notes: read.notes });
+    }
+    const adopted = planRigAdopt(reading as ModelRigReading, { plan, ...(declarations ? { declarations } : {}), ...(expectedRevision !== undefined ? { expectedRevision } : {}) });
+    if (!adopted.ok) return this._textResult({ error: `${model}'s declarations were not written; nothing was changed.`, errorCode: adopted.errorCode, errors: adopted.errors });
+    const written = await this._callSingle('/api/animation-declare-rig', { model, revision: reading.revision, declarations: adopted.declarations }, undefined, instance_id);
+    if (typeof written?.error === 'string') return this._textResult(written);
+    const read = rigFromModel(written.rig);
+    if (!read.ok) return this._textResult({ declared: true, undoable: true, error: `${model}'s declarations were written, but its rig does not read back as a rig: undo it.`, errors: read.errors });
+    await this._fetchModelMeshes(read.rig, instance_id);
+    return this._rigResult({
+      declared: true,
+      model: read.rig.name,
+      revision: read.rig.revision,
+      plan,
+      readBack: { matches: written.rig?.declarations === adopted.declarations },
+      undoable: written.undoable !== false,
+      note: 'No joint was changed. Animate it with check and build, rig set to its path.',
+    }, { rig: read.rig, notes: [...adopted.notes, ...read.notes] });
+  }
+
+  /** A rig result with its summary, its range sheet and a 3D preview of it. */
+  private _rigResult(body: Record<string, unknown>, model: { rig: Rig; notes: string[] }) {
+    const compiled = compilePoseAnimation(rangeSheetAnimation(model.rig), model.rig);
+    if (!compiled.ok) return this._textResult({ ...body, rig: describeRig(model.rig, model.notes), rangeSheet: `not drawn: ${compiled.errors.join('; ')}` });
+    return this._animationResult(body, compiled.sequence, false, model, 'rangeSheet');
+  }
+
+  /**
    * Play the animation on the character in a running playtest, as the player
    * sees it, and compare its joints with the checked model. Given a slot, also
    * confirm the wired ID reached the character's Animate script.
    */
   private async _animationVerify(args: Record<string, unknown>, instance_id?: string) {
+    if (args.model !== undefined) return this._animationVerifyModel(args, instance_id);
     // The comparison is against the checked motion, so a built sequence's path
     // alone gives nothing to compare with; say so rather than "must be an object".
     if (args.animation === undefined) {
       return this._textResult({ error: 'verify compares the playtest with the checked motion: pass the same animation you checked and built, not only its path. Nothing was verified.' });
+    }
+    const named = asRecord(args.animation)?.rig;
+    if (typeof named === 'string' && named.trim() !== '' && !RIGS.has(named)) {
+      return this._textResult({ error: `This animation is for ${named}'s own rig, not a player's character; verify it on that model, with model. Nothing was verified.`, errorCode: 'rig_mismatch' });
     }
     const compiled = compilePoseAnimation(args.animation);
     if (!compiled.ok) return this._textResult({ error: 'The animation is not valid; nothing was verified.', errors: compiled.errors });
@@ -2047,6 +2430,94 @@ export class RobloxStudioTools {
       verified: playback.verified && (wiring === undefined || wiring.matches),
       played: { source: animationId ? 'published' : 'temporary clip', length: response.length, ...playback },
       ...(wiring ? { wiring } : {}),
+    });
+  }
+
+  /**
+   * Check an NPC or creature in a running playtest, on the server, where its
+   * loader runs. Given the checked animation, play it on the model and compare
+   * its joints with the checked motion; given a slot, read the ID its loader
+   * holds there. Given a position, walk the model's Humanoid there; given none
+   * of these, watch the model while the game moves it, until it has been seen
+   * moving and standing or for twenty seconds at most. Walked or watched, judge
+   * whether the loader played the walk while it moved, the idle while it
+   * stood, and the gait at the model's pace.
+   */
+  private async _animationVerifyModel(args: Record<string, unknown>, instance_id?: string) {
+    const model = args.model;
+    if (typeof model !== 'string' || model.trim() === '') throw new Error('model must be the path of the NPC or creature Model to verify');
+    let sequence: KeyframeSequenceDescription | undefined;
+    let ownRig: Rig | undefined;
+    if (args.animation !== undefined) {
+      // An animation for a model's own rig is compared with that rig, read from Studio.
+      const resolved = await this._modelRigFor(args.animation, instance_id);
+      if (!resolved.ok) return this._textResult({ ...resolved.refusal, error: `${resolved.refusal.error} Nothing was verified.` });
+      ownRig = resolved.model?.rig;
+      const compiled = compilePoseAnimation(resolved.animation, ownRig);
+      if (!compiled.ok) return this._textResult({ error: 'The animation is not valid; nothing was verified.', errors: compiled.errors });
+      sequence = compiled.sequence;
+    }
+    const animationId = args.animation_id === undefined ? undefined : normalizeAnimationId(args.animation_id);
+    if (args.animation_id !== undefined && !animationId) throw new Error('animation_id must be a published asset ID, such as rbxassetid://123');
+    const slot = args.slot;
+    if (slot !== undefined && (typeof slot !== 'string' || !MODEL_STATES.includes(slot as ModelState))) {
+      throw new Error(`with model, slot must be one of ${MODEL_STATES.join(', ')}: the states its loader plays by how fast it moves`);
+    }
+    if (slot !== undefined && !animationId) throw new Error('animation_id is required with slot: it is the ID the model\'s state should hold');
+    const position = args.position;
+    if (position !== undefined && !isPoint(position)) throw new Error('position must be [x, y, z]: where to walk the model');
+    // The animation or a slot alone asks only for joints or wiring; otherwise the model is walked, or watched.
+    const observe = position !== undefined ? 'walk' : sequence === undefined && slot === undefined ? 'watch' : undefined;
+
+    let response: Record<string, unknown>;
+    try {
+      response = await this._callSingle(
+        '/api/animation-verify-model',
+        {
+          model,
+          ...(sequence
+            ? animationId
+              ? { animationId }
+              : { sequence: { name: sequence.name, rig: sequence.rig, loop: sequence.loop, priority: sequence.priority, keyframes: sequence.keyframes } }
+            : {}),
+          ...(observe ? { observe } : {}),
+          ...(position !== undefined ? { target: position } : {}),
+        },
+        'server',
+        instance_id,
+        60_000,
+      );
+    } catch (error) {
+      if (error instanceof RoutingFailure) {
+        return this._textResult({ error: 'No playtest server is running; start one with solo_playtest {action: "start", mode: "play"} first. Nothing was verified.', errorCode: 'no_playtest' });
+      }
+      throw error;
+    }
+    if (typeof response?.error === 'string') return this._textResult({ ...response, error: `${response.error} Nothing was verified.` });
+    if (sequence && !ownRig && typeof response.rigType === 'string' && response.rigType !== sequence.rig) {
+      return this._textResult({
+        error: `${model} is ${response.rigType}, but the animation is for ${sequence.rig}, so it cannot play on it. Nothing was verified.`,
+        errorCode: 'rig_mismatch',
+        modelRig: response.rigType,
+      });
+    }
+
+    const loader = typeof response.loader === 'object' && response.loader !== null ? response.loader as LoaderStates : undefined;
+    const playback = sequence ? verifyLivePlayback(sequence, response.samples, ownRig ?? rigFor(sequence.rig)) : undefined;
+    const held = slot === undefined ? undefined : loader?.ids?.[slot as ModelState];
+    const wiring = slot === undefined ? undefined : { slot, animationId: held ?? false, matches: held !== undefined && normalizeAnimationId(held) === animationId };
+    const movement = observe ? judgeMovement(response.observation, loader) : undefined;
+    return this._textResult({
+      verified: (playback?.verified ?? true) && (wiring?.matches ?? true) && (movement?.verified ?? true),
+      model,
+      loader: loader ? { unchanged: loader.unchanged === true, states: loader.ids ?? {}, groundSpeeds: loader.speeds ?? {} } : false,
+      ...(playback ? { played: { source: animationId ? 'published' : 'temporary clip', length: response.length, ...playback } } : {}),
+      ...(wiring ? { wiring } : {}),
+      ...(movement ? { movement } : {}),
+      // Wiring alone passes on what the loader holds; say so, since how the asset plays was never looked at.
+      ...(wiring && !playback && !movement
+        ? { unchecked: 'how it plays: add animation or animation_file to play the asset on the model and compare its joints' }
+        : {}),
     });
   }
 
@@ -4479,8 +4950,8 @@ export class RobloxStudioTools {
     const timeoutMs = request.timeout_ms !== undefined
       ? this._optionalPositiveInteger(request.timeout_ms, 'timeout_ms')
       : 120000;
-    if (timeoutMs !== undefined && timeoutMs > 300000) {
-      throw new Error('timeout_ms must be 300000 or less.');
+    if (timeoutMs !== undefined && timeoutMs > MAX_REQUEST_TIMEOUT_MS) {
+      throw new Error(`timeout_ms must be ${MAX_REQUEST_TIMEOUT_MS} or less.`);
     }
 
     const payload: Record<string, unknown> = {

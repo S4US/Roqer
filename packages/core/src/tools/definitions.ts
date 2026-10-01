@@ -2,7 +2,8 @@ import type { ToolAnnotations } from '@modelcontextprotocol/server';
 import { MAX_PNG_BASE64_CHARACTERS } from '../image-decode.js';
 import { ANIMATION_PRIORITIES } from '../animation/pose-compiler.js';
 import { ANIMATE_SLOTS, MOTION_CHECK_IDS } from '../animation/animation-tool.js';
-import { RIG_NAMES } from '../animation/rigs.js';
+import { BODY_PLANS } from '../animation/body-plans.js';
+import { GAIT_PATTERNS } from '../animation/gait.js';
 
 // Styles and directions are listed in the tool guide and in the compiler's
 // errors; spelling the enums out twice here would cost more than they save.
@@ -153,21 +154,21 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
   {
     name: 'animation',
     category: 'write',
-    description: 'Use to check, build, publish, wire, or verify an R15 or R6 character animation.',
+    description: 'Use to check, build, publish, wire, or verify animations for R15, R6 or a model, or rig one.',
     inputSchema: {
       type: 'object',
       properties: {
         action: {
           type: 'string',
-          enum: ['check', 'build', 'publish', 'wire', 'verify'],
-          description: 'check needs no Studio; verify needs a running playtest and the checked animation.'
+          enum: ['check', 'build', 'publish', 'wire', 'verify', 'rig'],
+          description: 'check needs Studio only for a model rig; verify needs a running playtest, and the checked animation unless given model.'
         },
         animation: {
           type: 'object',
-          description: 'Pose description for an R15 or R6 rig.',
+          description: 'Pose description for R15, R6, or a rigged model.',
           properties: {
             name: { type: 'string', description: 'KeyframeSequence name.' },
-            rig: { type: 'string', enum: [...RIG_NAMES], description: 'Rig type.' },
+            rig: { type: 'string', description: 'R15, R6, or a rigged model path.' },
             loop: { type: 'boolean', description: 'Default false.' },
             priority: { type: 'string', enum: [...ANIMATION_PRIORITIES], description: 'Default Action.' },
             easing: POSE_EASING_SCHEMA,
@@ -193,8 +194,18 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
                 required: ['time', 'joints'],
               },
             },
+            waves: {
+              type: 'array',
+              description: 'Sines down joint chains: [{joints, axis, amplitude, cycles?, lag?, offset?, phase?}].',
+              items: { type: 'object' },
+            },
+            gait: {
+              type: 'object',
+              description: `Steps the legs: {pattern: ${GAIT_PATTERNS.join('|')}, stride}.`,
+            },
+            duration: { type: 'number', description: 'With waves or gait: seconds; keyframes may be left out.' },
           },
-          required: ['name', 'rig', 'keyframes'],
+          required: ['name', 'rig'],
         },
         locomotion: {
           type: 'boolean',
@@ -210,7 +221,7 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
         },
         expected_revision: {
           type: 'string',
-          description: 'Build: revision its last build returned; required to replace it.'
+          description: 'Build/rig: revision last returned; required to replace it.'
         },
         waive: {
           type: 'array',
@@ -228,7 +239,7 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
         slot: {
           type: 'string',
           enum: [...ANIMATE_SLOTS],
-          description: 'Wire/verify: default Animate slot.'
+          description: "Wire/verify: Animate slot, or with model its state."
         },
         animation_id: {
           type: 'string',
@@ -237,6 +248,57 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
         expected_id: {
           type: 'string',
           description: 'Wire: ID the slot holds now; required to replace it.'
+        },
+        model: {
+          type: 'string',
+          description: 'Rig/wire/verify: an NPC or creature Model, not a character.'
+        },
+        ground_speed: {
+          type: 'number',
+          description: 'Wire walk/run: the groundSpeed its check reported.'
+        },
+        stock: {
+          type: 'string',
+          enum: ['R15', 'R6'],
+          description: 'Rig: make a stock NPC body of this rig type at model.'
+        },
+        animation_file: {
+          type: 'string',
+          description: 'A baked *.animation.json, in place of animation.'
+        },
+        joints: {
+          type: 'array',
+          items: { type: 'object' },
+          description: 'Rig: [{part, parent, pivot, name?, with?}]; pivot is [x,y,z].'
+        },
+        controller: {
+          type: 'string',
+          enum: ['Humanoid', 'AnimationController'],
+          description: 'Rig: Humanoid for a walker. No joints: a skinned mesh.'
+        },
+        plan: {
+          type: 'string',
+          enum: [...BODY_PLANS],
+          description: 'Rig: body plan declaring limbs from part names.'
+        },
+        declarations: {
+          type: 'object',
+          description: 'Rig: RoqerRig {feet, hips, limbs, hinges, limits}.'
+        },
+        replace: {
+          type: 'string',
+          enum: ['importer'],
+          description: "Rig: replace the rig an upload arrived with."
+        },
+        pivot_space: {
+          type: 'string',
+          enum: ['world', 'import'],
+          description: "Rig: import = pivots from an upload's own origin."
+        },
+        position: {
+          type: 'array',
+          items: { type: 'number' },
+          description: '[x, y, z]. Rig: where its feet stand; verify: walk it there.'
         },
         instance_id: {
           type: 'string',

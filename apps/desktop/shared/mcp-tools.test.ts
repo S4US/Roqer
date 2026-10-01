@@ -112,6 +112,85 @@ test("mcp-tools - publishing and wiring are summarised by what they change", () 
     summarizeToolCall("animation", { action: "wire", slot: "run", animation_id: "rbxassetid://555", expected_id: "rbxassetid://554" }),
     "animation · wire rbxassetid://555 to the run slot of every character, replacing rbxassetid://554",
   );
+  assert.strictEqual(
+    summarizeToolCall("animation", {
+      action: "wire", model: "game.Workspace.Guard", slot: "walk", animation_id: "rbxassetid://555", ground_speed: 2.2, expected_id: "rbxassetid://554",
+    }),
+    "animation · wire rbxassetid://555 as the walk of game.Workspace.Guard, paced for 2.2 studs a second, replacing rbxassetid://554",
+  );
+  assert.strictEqual(
+    summarizeToolCall("animation", { action: "wire", model: "game.Workspace.Guard", slot: "idle", animation_id: "rbxassetid://556", ground_speed: "fast" }),
+    "animation · wire rbxassetid://556 as the idle of game.Workspace.Guard",
+  );
+  assert.strictEqual(riskForTool("animation", { action: "wire", model: "game.Workspace.Guard", slot: "walk", animation_id: "rbxassetid://1" }), "mutation");
+});
+
+test("mcp-tools - rigging an NPC says what it makes and where, and is a mutation", () => {
+  assert.strictEqual(
+    summarizeToolCall("animation", { action: "rig", model: "game.Workspace.Guard", stock: "R15", position: [4.04, 0, -2] }),
+    "animation · rig a stock R15 NPC at game.Workspace.Guard, its feet at [4, 0, -2], animated by a loader script",
+  );
+  assert.strictEqual(
+    summarizeToolCall("animation", { action: "rig", model: "game.Workspace.Guard", stock: "R6" }),
+    "animation · rig a stock R6 NPC at game.Workspace.Guard, its feet at the origin, animated by a loader script",
+  );
+  assert.strictEqual(riskForTool("animation", { action: "rig", model: "game.Workspace.Guard", stock: "R15" }), "mutation");
+});
+
+test("mcp-tools - rigging a creature says what it joins, what it declares and what it replaces", () => {
+  const joints = [{ part: "Head", parent: "Body", pivot: [0, 1, -2] }, { part: "Tail", parent: "Body", pivot: [0, 1, 2] }];
+  assert.strictEqual(
+    summarizeToolCall("animation", { action: "rig", model: "game.Workspace.Dog", joints, controller: "Humanoid", plan: "quadruped" }),
+    "animation · rig game.Workspace.Dog: 2 joints, a quadruped, Humanoid",
+  );
+  assert.strictEqual(
+    summarizeToolCall("animation", { action: "rig", model: "game.Workspace.Wolf", joints, controller: "AnimationController", replace: "importer" }),
+    "animation · rig game.Workspace.Wolf: 2 joints, AnimationController, replacing the rig it was imported with",
+  );
+  // A description baked in Blender is named by its file.
+  assert.strictEqual(
+    summarizeToolCall("animation", { action: "build", animation_file: "C:\\jobs\\2026-x\\output\\Slither.animation.json", parent: "game.ServerStorage.Animations" }),
+    "animation · build the animation baked in Slither.animation.json in game.ServerStorage.Animations",
+  );
+  assert.strictEqual(riskForTool("animation", { action: "check", animation_file: "C:\\jobs\\Slither.animation.json" }), "read");
+  // A controller with no joints builds around a skinned mesh's bones.
+  assert.strictEqual(
+    summarizeToolCall("animation", { action: "rig", model: "game.Workspace.Wolf", controller: "Humanoid", plan: "quadruped", replace: "importer" }),
+    "animation · rig game.Workspace.Wolf around its bones, a quadruped, Humanoid, replacing the rig it was imported with",
+  );
+  assert.strictEqual(
+    summarizeToolCall("animation", { action: "rig", model: "game.Workspace.Dog", joints, controller: "Humanoid", expected_revision: "rr1:a" }),
+    "animation · rig game.Workspace.Dog: 2 joints, Humanoid, replacing the rig rig built before",
+  );
+  assert.strictEqual(
+    summarizeToolCall("animation", { action: "rig", model: "game.Workspace.Dog", plan: "quadruped" }),
+    "animation · declare game.Workspace.Dog's rig as a quadruped, changing none of its joints",
+  );
+  assert.strictEqual(
+    summarizeToolCall("animation", { action: "rig", model: "game.Workspace.Dog" }),
+    "animation · read game.Workspace.Dog's rig and draw its range sheet",
+  );
+  assert.strictEqual(riskForTool("animation", { action: "rig", model: "game.Workspace.Dog", joints, controller: "Humanoid" }), "mutation");
+});
+
+test("mcp-tools - verifying a model says what it will do to it, and is a read", () => {
+  assert.strictEqual(
+    summarizeToolCall("animation", { action: "verify", model: "game.Workspace.Guard", position: [10.04, 0, -3] }),
+    "animation · verify game.Workspace.Guard in the playtest, walking it to [10, 0, -3]",
+  );
+  assert.strictEqual(
+    summarizeToolCall("animation", { action: "verify", model: "game.Workspace.Guard", animation: { name: "Walk" } }),
+    "animation · verify game.Workspace.Guard in the playtest, playing Walk on it",
+  );
+  assert.strictEqual(
+    summarizeToolCall("animation", { action: "verify", model: "game.Workspace.Guard" }),
+    "animation · verify game.Workspace.Guard in the playtest, watching it move",
+  );
+  assert.strictEqual(
+    summarizeToolCall("animation", { action: "verify", model: "game.Workspace.Guard", slot: "walk", animation_id: "rbxassetid://2" }),
+    "animation · verify game.Workspace.Guard in the playtest, checking its walk",
+  );
+  assert.strictEqual(riskForTool("animation", { action: "verify", model: "game.Workspace.Guard", position: [1, 2, 3] }), "read");
 });
 
 test("mcp-tools - an animation call is summarised in words, not as its pose JSON", () => {
@@ -129,6 +208,31 @@ test("mcp-tools - an animation call is summarised in words, not as its pose JSON
     "animation · build Run in game.ServerStorage.Animations: 2 keyframes, 0.3 s, loops, moves 3 joints, replacing its last build, accepting failed rootDrift",
   );
   assert.strictEqual(summarizeToolCall("animation", { action: "check", animation }), "animation · check Run: 2 keyframes, 0.3 s, loops, moves 3 joints");
+  // A rig other than R15 is named: R6, or the model whose own rig it is.
+  assert.strictEqual(
+    summarizeToolCall("animation", { action: "check", animation: { ...animation, rig: "game.Workspace.Dog" } }),
+    "animation · check Run for game.Workspace.Dog: 2 keyframes, 0.3 s, loops, moves 3 joints",
+  );
+  assert.strictEqual(riskForTool("animation", { action: "check", animation: { ...animation, rig: "game.Workspace.Dog" } }), "read");
+  // Waves are counted with the joints they drive, and may be the whole animation.
+  const waves = [{ joints: ["Tail", "Tail2", "Tail3"], axis: "Y", amplitude: 20 }, { joints: ["Tail"], axis: "X", amplitude: 5 }];
+  assert.strictEqual(
+    summarizeToolCall("animation", { action: "check", animation: { name: "Sway", rig: "game.Workspace.Cat", loop: true, duration: 2, waves } }),
+    "animation · check Sway for game.Workspace.Cat: 2 waves, 2 s, loops, moves 3 joints",
+  );
+  assert.strictEqual(
+    summarizeToolCall("animation", { action: "check", animation: { ...animation, duration: 0.6, waves: [{ joints: ["Neck"], axis: "X", amplitude: "wide" }] } }),
+    "animation · check Run: 2 keyframes, 1 wave, 0.6 s, loops, moves 4 joints",
+  );
+  // A gait is named by its pattern, never by raw text.
+  assert.strictEqual(
+    summarizeToolCall("animation", { action: "build", animation: { name: "Trot", rig: "game.Workspace.Dog", loop: true, duration: 0.6, gait: { pattern: "trot", stride: 1.4 }, waves: [waves[0]] } }),
+    "animation · build Trot for game.Workspace.Dog: a trot gait, 1 wave, 0.6 s, loops, moves 3 joints",
+  );
+  assert.strictEqual(
+    summarizeToolCall("animation", { action: "check", animation: { name: "Odd", rig: "R15", duration: 1, gait: { pattern: "{\"x\":1}" } } }),
+    "animation · check Odd: a gait, 1 s",
+  );
   // Whatever the model sent, the summary never throws and never shows raw JSON.
   assert.strictEqual(summarizeToolCall("animation", { action: "build", animation: "not an object" }), "animation · build an animation: 0 keyframes");
 });

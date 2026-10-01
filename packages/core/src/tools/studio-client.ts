@@ -16,6 +16,16 @@ export class StudioHttpClient {
   ): Promise<any> {
     try {
       const response = await this.bridge.sendRequest(endpoint, data, targetInstanceId, targetRole, timeoutMs);
+      // A plugin built before this server added an endpoint has no handler
+      // for it, and says only "Unknown endpoint". Said plainly, so neither the
+      // agent nor the user takes it for a fault in the place and works round it.
+      if (response?.error === `Unknown endpoint: ${endpoint}`) {
+        return {
+          error: `The Studio plugin is older than this MCP server: it has no ${endpoint}, so nothing was done. `
+            + 'Reinstall the plugin from this server\'s build, restart Studio, and try again.',
+          errorCode: 'plugin_outdated',
+        };
+      }
       return response;
     } catch (error) {
       // Checked by content rather than equality: a proxy-mode server receives

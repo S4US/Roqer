@@ -13,8 +13,10 @@ import {
 import { boundedCode, diffDeletedRange, diffText, normalizeNewlines } from "../shared/text-diff";
 import {
   ANIMATION_ALL_CHECKS_PASSED, ANIMATION_CHECKED_AS_GAIT, ANIMATION_GAIT_CHECKS_LABEL, ANIMATION_MOTION_CHECKS_LABEL,
-  ANIMATION_NAME_LABEL, ANIMATION_PLAYED_FROM_LABEL, ANIMATION_PLAYED_PUBLISHED, ANIMATION_PREVIEW_TITLE, animationSlotLabel,
-  BLENDER_MODEL_LABEL, BLENDER_PREVIEW_TITLE, MAX_EVIDENCE_SUBJECT_CHARS, SCREENSHOT_VIEW_LABEL, SCREENSHOT_VIEW_PLAYTEST,
+  ANIMATION_DESCRIBED_BY_BAKE, ANIMATION_DESCRIBED_BY_LABEL, MODEL_STATE_WIRED, modelStateLabel,
+  ANIMATION_NAME_LABEL, ANIMATION_PLAYED_FROM_LABEL, ANIMATION_PLAYED_PUBLISHED, ANIMATION_PREVIEW_TITLE, ANIMATION_RIG_LABEL, animationSlotLabel, RIG_RANGE_SHEET_TITLE,
+  BLENDER_MODEL_LABEL, BLENDER_PREVIEW_TITLE, MAX_EVIDENCE_SUBJECT_CHARS, MODEL_MOVED_BY_GAME, MODEL_MOVED_BY_LABEL,
+  MODEL_MOVED_BY_VERIFY, MODEL_WHILE_MOVING_LABEL, MODEL_WHILE_STANDING_LABEL, SCREENSHOT_VIEW_LABEL, SCREENSHOT_VIEW_PLAYTEST,
   type RunChange, type RunEvidence, type RunMetadata,
 } from "../shared/run-events";
 import {
@@ -142,7 +144,8 @@ const DOCUMENTED_OPERATIONS = [
   "delete_script_lines",
   "set_properties",
   "build_instances",
-  "animation",
+  // Not `animation`: its guide below names each action's arguments where they
+  // are used, which the bare signature of its many optional ones did not.
   "insert_asset",
   "solo_playtest",
   "get_runtime_logs",
@@ -176,7 +179,7 @@ export function studioToolDescription(): string {
     // text over button edges and a row past the end of its scroll.
     "After creating or changing interface (anything under StarterGui), start a playtest and call inspect_ui {mode: 'audit'} on the client. Roqer does not verify the run until an audit after the last interface change reports no problems: fix what it names (text_obscured, text_straddles_edge, content_beyond_scroll, text_overflow) and audit again.",
     "To aim a screenshot, call selection {action: 'view', path, from, angleY, padding} before capture_screenshot (from: azimuth degrees, 0 = +X, 90 = +Z; angleY: elevation, -89 to 89; padding: distance scale, above 0, at most 10); it is a read needing no approval. Do not move the camera with execute_luau. For comparable before and after views, frame the same stable container (the zone or build root, not the part being changed, whose bounds move) with the same from, angleY and padding.",
-    "Animate characters with animation, never a KeyframeSequence in execute_luau; first load_skill {name: 'roblox-animation-vfx', resource: 'references/character-animation.md'} and adapt its tested recipes. animation: {name, rig: 'R15', loop?, priority?, easing?, keyframes: [{time, easing?, joints}]}, first at time 0; joints maps Root, Waist, Neck, Left/Right Shoulder, Elbow, Wrist, Hip, Knee, Ankle to one of aim: [right, up, forward] + bendToward? (shoulders, hips), bend: degrees (elbows, knees), rotation: [x, y, z] degrees about the parent part; position? (Root, studs). Key moved joints at time 0; a joint turns at most 90° between keys. easing: {style: Linear|Constant|CubicV2|Bounce|Elastic, direction: In|Out|InOut}. Flow: check (free; locomotion: true for gaits; fix what fails) → build {parent} → publish {path} (asks first; place owner only) → wire {slot, animation_id} (expected_id to replace) → playtest → verify {animation, animation_id, slot}. With no Open Cloud key, verify with just animation and say publishing needs a key. Rebuild with expected_revision; waive only intended failures.",
+    "Animate characters with animation, never a KeyframeSequence in execute_luau; first load_skill {name: 'roblox-animation-vfx', resource: 'references/character-animation.md'} and adapt its tested recipes. animation: {name, rig: 'R15' or a Model's path, loop?, priority?, easing?, keyframes: [{time, easing?, joints}]}, first at time 0; joints maps Root, Waist, Neck, Left/Right Shoulder, Elbow, Wrist, Hip, Knee, Ankle to one of aim: [right, up, forward] + bendToward? (shoulders, hips), bend: degrees (elbows, knees), rotation: [x, y, z] degrees about the parent part; position? (Root, studs). Key moved joints at time 0; a joint turns at most 90° between keys. Flow: check {animation, locomotion?: true for gaits, grounded?} (free; fix what fails) → build {animation, parent} → publish {path, display_name?} (asks first; place owner only) → wire {slot, animation_id} (expected_id to replace) → playtest → verify {animation, animation_id?, slot?}. An NPC's or creature's Model plays its own: rig {model, stock: R15|R6, position?} makes a stock NPC whose loader holds Roblox's defaults; wire {model, slot: idle|walk|run, animation_id, expected_id?, ground_speed: the gait's check groundSpeed}; in a playtest, verify {model} watches its script move it, and position walks it there. With no Open Cloud key, verify with just animation and say publishing needs a key. Rebuild with expected_revision; waive only intended failures.",
     "For seeded bulk placement, build_instances accepts one sole step {op:'scatter', name, zone:{min:[x,z],max:[x,z]}, density:countPer10000SquareStuds, seed, templates:[{source,weight,kit?}], ground:[path], raycast:{top,bottom}, rotation?:[minYaw,maxYaw], scale?:[min,max], spacing?, avoid?:[{tag,distance}], maxSlope?, replace?, parent?, tags?, attributes?, id?}. Ground and templates must already exist. The named scatter group is replaced only with replace:true and matching ownership; the entire replacement is undoable. Requested count is floor(area*density/10000), limited to 1-1000. Footprints stay inside the rectangle and clear of tagged bounds. Inspect returned scatter.requested/placed/attempts: blocked ground can produce fewer placements. Same seed reproduces only with unchanged inputs and scene. Load roblox-building references/scatter.md for details.",
   ].join("\n");
 }
@@ -1103,6 +1106,7 @@ async function recordAnimationPreview(context: PlannerContext, outcome: McpToolO
   const animation = isRecord(data.animation) ? data.animation : {};
   const checks = isRecord(data.checks) ? data.checks : {};
   const name = stringField(animation, "name") ?? "The animation";
+  const rig = stringField(animation, "rig");
   const duration = numberField(animation, "duration");
   const keyframes = numberField(animation, "keyframes");
   context.recordEvidence({
@@ -1114,6 +1118,7 @@ async function recordAnimationPreview(context: PlannerContext, outcome: McpToolO
     ...(isModelPreviewId(modelPreviewId) ? { modelPreviewId } : {}),
     metadata: [
       { label: ANIMATION_NAME_LABEL, value: name },
+      ...(rig === undefined ? [] : [{ label: ANIMATION_RIG_LABEL, value: rig }]),
       ...(keyframes === undefined ? [] : [{ label: "Keyframes", value: String(keyframes) }]),
       ...(duration === undefined ? [] : [{ label: "Length", value: `${duration} s${animation.loop === true ? ", looping" : ""}` }]),
     ],
@@ -1125,7 +1130,7 @@ async function recordAnimationPreview(context: PlannerContext, outcome: McpToolO
  * passes only when Studio's read-back matched what was compiled and its
  * preview played as the checks measured; the MCP result carries both.
  */
-function recordAnimationBuild(context: PlannerContext, outcome: McpToolOutcome): void {
+function recordAnimationBuild(context: PlannerContext, args: JsonRecord, outcome: McpToolOutcome): void {
   const data = isRecord(outcome.data) ? outcome.data : {};
   const path = stringField(data, "path");
   if (path === undefined || data.built !== true) return;
@@ -1167,6 +1172,8 @@ function recordAnimationBuild(context: PlannerContext, outcome: McpToolOutcome):
     metadata: [
       { label: ANIMATION_MOTION_CHECKS_LABEL, value: waived.length > 0 ? `Passed, with ${waived.join(", ")} waived` : ANIMATION_ALL_CHECKS_PASSED },
       ...(gaitChecked === undefined ? [] : [{ label: ANIMATION_GAIT_CHECKS_LABEL, value: gaitChecked ? ANIMATION_CHECKED_AS_GAIT : "Not checked as a gait" }]),
+      // The bridge read the description from the file the call named; only a Blender job's bake is named so.
+      ...(typeof args.animation_file === "string" ? [{ label: ANIMATION_DESCRIBED_BY_LABEL, value: ANIMATION_DESCRIBED_BY_BAKE }] : []),
       ...(maxDegrees === undefined ? [] : [{ label: "Preview", value: `Within ${maxDegrees}° of the checked model` }]),
       { label: "Read back", value: readBack.matchesCompiled === true ? "Matches what was compiled" : "Differs from what was compiled" },
       { label: "Undo", value: data.undoable !== false ? "One Studio undo step" : "Not recorded in Studio's undo history" },
@@ -1207,7 +1214,7 @@ function recordAnimationPublish(context: PlannerContext, outcome: McpToolOutcome
   });
 }
 
-/** A wired slot as a change to the loader that carries it. */
+/** A wired slot, or a model's wired state, as a change to the loader that carries it. */
 function recordAnimationWire(context: PlannerContext, outcome: McpToolOutcome): void {
   const data = isRecord(outcome.data) ? outcome.data : {};
   const loader = stringField(data, "loader");
@@ -1215,19 +1222,208 @@ function recordAnimationWire(context: PlannerContext, outcome: McpToolOutcome): 
   const animationId = stringField(data, "animationId");
   if (data.wired !== true || !loader || !slot || !animationId) return;
   const previous = stringField(data, "previousId");
+  const model = stringField(data, "model");
+  const groundSpeed = numberField(data, "groundSpeed");
+  const pace = groundSpeed === undefined ? "" : ` (paced for ${groundSpeed} studs a second)`;
   context.recordChange({
     kind: "instance",
     target: loader,
     instanceId: context.instanceId ?? undefined,
-    summary: `${data.installed === true ? "Installed the animation loader and set" : "Set"} the ${slot} slot to ${animationId}${previous ? `, replacing ${previous}` : ""}, in one undoable step.`,
+    summary: model
+      ? `${data.installed === true ? `Installed the animation loader in ${model} and set its` : `Set ${model}'s`} ${slot} to ${animationId}${pace}${previous ? `, replacing ${previous}` : ""}, in one undoable step.`
+      : `${data.installed === true ? "Installed the animation loader and set" : "Set"} the ${slot} slot to ${animationId}${previous ? `, replacing ${previous}` : ""}, in one undoable step.`,
   });
+  const matches = data.readBackMatches === true;
   context.recordEvidence({
     kind: "verification",
     changeKind: "instance",
     title: loader,
-    passed: data.readBackMatches === true,
-    detail: "Studio read the loader back: its code is the fixed loader, and the slot holds the new ID. Every character spawned from now on gets it.",
+    passed: matches,
+    detail: !matches
+      ? `Studio read the loader back, and it does not hold what was wired: its code, or the ${model ? slot : `${slot} slot`}'s ID${model && slot !== "idle" ? " or pace" : ""}, differs.`
+      : model
+        ? `Studio read the loader back: its code is the fixed loader, and its ${slot} holds the new ID. Every copy of the model plays it.`
+        : "Studio read the loader back: its code is the fixed loader, and the slot holds the new ID. Every character spawned from now on gets it.",
     metadata: [{ label: "Undo", value: data.undoable !== false ? "One Studio undo step" : "Not recorded in Studio's undo history" }],
+  });
+}
+
+/** Items in words: "idle", "idle and walk", "idle, walk and run". */
+function inWords(items: string[]): string {
+  return items.length <= 1 ? items.join("") : `${items.slice(0, -1).join(", ")} and ${items[items.length - 1]}`;
+}
+
+/** A stock NPC made by rig, as a change to the place and the read-back that confirms it. */
+function recordAnimationRig(context: PlannerContext, outcome: McpToolOutcome): void {
+  const data = isRecord(outcome.data) ? outcome.data : {};
+  const model = stringField(data, "model");
+  if (data.rigged !== true || !model) return;
+  const rigType = stringField(data, "rigType") ?? "stock";
+  const feet = Array.isArray(data.feet) && data.feet.length === 3 && data.feet.every((value) => typeof value === "number")
+    ? `[${data.feet.join(", ")}]`
+    : undefined;
+  const states = isRecord(data.states) ? Object.keys(data.states).filter((state) => typeof (data.states as JsonRecord)[state] === "string") : [];
+  const missing = Array.isArray(data.missingStates) ? data.missingStates.filter((state): state is string => typeof state === "string") : [];
+  const parts = numberField(data, "parts");
+  const joints = numberField(data, "joints");
+  const height = numberField(data, "height");
+  const walkSpeed = numberField(data, "walkSpeed");
+  context.recordChange({
+    kind: "instance",
+    target: model,
+    instanceId: context.instanceId ?? undefined,
+    summary: `Made a stock ${rigType} NPC at ${model}${feet ? `, its feet at ${feet}` : ""}, with the animation loader in place of its Animate script, in one undoable step.`,
+  });
+  const matches = data.readBackMatches === true;
+  const mismatches = Array.isArray(data.mismatches) ? data.mismatches.filter((reason): reason is string => typeof reason === "string") : [];
+  const body = [
+    parts === undefined ? undefined : `${parts} parts`,
+    joints === undefined ? undefined : `${joints} joints`,
+  ].filter((fact): fact is string => fact !== undefined);
+  context.recordEvidence({
+    kind: "verification",
+    changeKind: "instance",
+    title: model,
+    passed: matches,
+    detail: !matches
+      ? `Studio read the NPC back, and it is not what was made: ${mismatches.length > 0 ? mismatches.join("; ") : "its rig, its place, its loader or the loader's states differ"}.`
+      : `Studio read the NPC back: ${rigType === "R15" || rigType === "R6" ? `an ${rigType}` : "a stock"} body${body.length > 0 ? ` of ${inWords(body)}` : ""}${height === undefined ? "" : `, ${height} studs tall`}${feet ? `, its feet at ${feet}` : ""}, `
+        + (states.length > 0 ? `whose loader plays Roblox's default ${inWords(states)}.` : "whose loader holds no animation yet."),
+    metadata: [
+      { label: "Undo", value: data.undoable !== false ? "One Studio undo step" : "Not recorded in Studio's undo history" },
+      ...(walkSpeed === undefined ? [] : [{ label: "WalkSpeed", value: `${walkSpeed} studs a second` }]),
+      ...(missing.length > 0 ? [{ label: "No default", value: inWords(missing) }] : []),
+    ],
+  });
+}
+
+/**
+ * A creature's rig built or declared by rig: the change to the place, the
+ * read-back that confirms it, and its range sheet with its 3D view. A call
+ * that only read the rig records the range sheet alone.
+ */
+async function recordModelRig(context: PlannerContext, outcome: McpToolOutcome): Promise<void> {
+  const data = isRecord(outcome.data) ? outcome.data : {};
+  const model = stringField(data, "model");
+  if (!model || (data.rigged !== true && data.declared !== true && data.declared !== false)) return;
+  const rig = isRecord(data.rig) ? data.rig : {};
+  const joints = Array.isArray(rig.joints) ? rig.joints.length : undefined;
+  const plan = stringField(data, "plan");
+  const readBack = isRecord(data.readBack) ? data.readBack : {};
+  const mismatches = Array.isArray(readBack.mismatches) ? readBack.mismatches.filter((reason): reason is string => typeof reason === "string") : [];
+  const undo = { label: "Undo", value: data.undoable !== false ? "One Studio undo step" : "Not recorded in Studio's undo history" };
+  if (data.rigged === true) {
+    const controller = stringField(data, "controller") ?? "a controller";
+    const removed = Array.isArray(data.removed) ? data.removed.filter((item): item is string => typeof item === "string") : [];
+    context.recordChange({
+      kind: "instance",
+      target: model,
+      instanceId: context.instanceId ?? undefined,
+      summary: `Rigged ${model}${joints === undefined ? "" : ` with ${joints} joints`} under ${controller === "Humanoid" ? "a Humanoid" : `an ${controller}`}${plan && plan !== "custom" ? ` as a ${plan}` : ""}${removed.length > 0 ? `, taking out ${inWords(removed)}` : ""}, in one undoable step.`,
+    });
+    context.recordEvidence({
+      kind: "verification",
+      changeKind: "instance",
+      title: model,
+      passed: readBack.matches === true,
+      detail: readBack.matches === true
+        ? `Studio read the rig back as built: ${joints === undefined ? "its joints" : `${joints} joints`}, each at its pivot, and its declarations.`
+        : `Studio read the rig back, and it is not what was built: ${mismatches.length > 0 ? mismatches.join("; ") : "its joints, controller or declarations differ"}.`,
+      metadata: [undo],
+    });
+  } else if (data.declared === true) {
+    context.recordChange({
+      kind: "instance",
+      target: model,
+      instanceId: context.instanceId ?? undefined,
+      summary: `Declared ${model}'s rig${plan && plan !== "custom" ? ` as a ${plan}` : ""} in its RoqerRig attribute, changing none of its joints, in one undoable step.`,
+    });
+    context.recordEvidence({
+      kind: "verification",
+      changeKind: "instance",
+      title: model,
+      passed: readBack.matches === true,
+      detail: readBack.matches === true ? "Studio read the declarations back as written." : "Studio read the rig back, and its declarations are not the ones written.",
+      metadata: [undo],
+    });
+  }
+  const imageDataUrl = await evidencePreview(context, outcome);
+  if (imageDataUrl === undefined) return;
+  let modelPreviewId: string | undefined;
+  if (outcome.modelFile !== undefined && context.storeModelPreview !== undefined) {
+    modelPreviewId = await context.storeModelPreview(outcome.modelFile).catch(() => undefined);
+  }
+  context.recordEvidence({
+    kind: "inspection",
+    title: RIG_RANGE_SHEET_TITLE,
+    subject: model,
+    detail: `${model}'s joints at rest and turned a little each way, to show where each piece turns. No check judged it.`,
+    imageDataUrl,
+    ...(isModelPreviewId(modelPreviewId) ? { modelPreviewId } : {}),
+    metadata: [
+      { label: ANIMATION_RIG_LABEL, value: model },
+      ...(joints === undefined ? [] : [{ label: "Joints", value: String(joints) }]),
+    ],
+  });
+}
+/** How many of a phase's judging samples played which of the loader's states. */
+function playedTally(played: unknown): string {
+  if (!isRecord(played)) return "Nothing sampled";
+  const entries = Object.entries(played).filter((entry): entry is [string, number] => typeof entry[1] === "number");
+  const total = entries.reduce((sum, [, count]) => sum + count, 0);
+  if (total === 0) return "Nothing sampled";
+  return entries.sort((a, b) => b[1] - a[1]).map(([state, count]) => `${state} ${Math.round((count / total) * 100)}%`).join(", ");
+}
+
+/**
+ * A model's playtest verification as evidence: what its loader played while it
+ * moved and while it stood, at what pace, and how a checked animation played on it.
+ */
+function recordModelVerify(context: PlannerContext, args: JsonRecord, data: JsonRecord): void {
+  const model = stringField(data, "model") ?? String(args.model);
+  const played = isRecord(data.played) ? data.played : undefined;
+  const wiring = isRecord(data.wiring) ? data.wiring : undefined;
+  const movement = isRecord(data.movement) ? data.movement : undefined;
+  const pace = movement && isRecord(movement.pace) ? movement.pace : undefined;
+  const name = isRecord(args.animation) && typeof args.animation.name === "string" ? args.animation.name : undefined;
+  const reasons = [
+    ...(played && played.verified !== true ? [stringField(played, "reason") ?? "the animation did not play as checked"] : []),
+    ...(wiring && wiring.matches !== true ? [`its ${String(wiring.slot)} does not hold the wired ID`] : []),
+    ...(movement && movement.verified !== true ? [stringField(movement, "reason") ?? "its loader did not play as it moved and stood"] : []),
+  ];
+  // What most of each phase's samples played, as the judge counted them.
+  const mostPlayed = (phase: unknown) => {
+    const tally = isRecord(phase) && isRecord(phase.played) ? Object.entries(phase.played) : [];
+    const [top] = tally.filter((entry): entry is [string, number] => typeof entry[1] === "number").sort((a, b) => b[1] - a[1]);
+    return top?.[0];
+  };
+  const moving = movement ? mostPlayed(movement.moving) : undefined;
+  const standing = movement ? mostPlayed(movement.standing) : undefined;
+  const facts = [
+    ...(movement && moving
+      ? [`its loader played its ${moving} while it moved, and ${standing === undefined || standing === "nothing" ? "nothing while it stood, leaving its rest pose" : `its ${standing} while it stood`}`]
+      : []),
+    ...(played ? [`${name ?? "the animation"} played on it as checked`] : []),
+    ...(wiring ? [`its ${String(wiring.slot)} holds ${String(wiring.animationId)}${played ? "" : ", though how it plays was not compared"}`] : []),
+  ];
+  context.recordEvidence({
+    kind: "playtest",
+    title: `${model} in the playtest`,
+    passed: data.verified === true,
+    detail: data.verified === true
+      ? `On the playtest server, ${facts.join(", and ")}.`
+      : `Not verified: ${reasons.join("; ") || "the playtest did not show what was asked"}.`,
+    metadata: [
+      ...(movement ? [{ label: MODEL_MOVED_BY_LABEL, value: movement.mode === "watched" ? MODEL_MOVED_BY_GAME : MODEL_MOVED_BY_VERIFY }] : []),
+      ...(movement && isRecord(movement.moving) ? [{ label: MODEL_WHILE_MOVING_LABEL, value: playedTally(movement.moving.played) }] : []),
+      ...(movement && isRecord(movement.standing) ? [{ label: MODEL_WHILE_STANDING_LABEL, value: playedTally(movement.standing.played) }] : []),
+      ...(pace ? [{
+        label: "Pace",
+        value: `${String(pace.state)} at ${String(pace.played)}× for ${String(pace.averageSpeed)} studs a second; written for ${String(pace.groundSpeed)}`,
+      }] : []),
+      ...(played ? [{ label: ANIMATION_PLAYED_FROM_LABEL, value: played.source === "published" ? ANIMATION_PLAYED_PUBLISHED : "A temporary clip" }] : []),
+      ...(wiring ? [{ label: modelStateLabel(String(wiring.slot)), value: wiring.matches === true ? MODEL_STATE_WIRED : "Not wired" }] : []),
+    ],
   });
 }
 
@@ -1235,6 +1431,10 @@ function recordAnimationWire(context: PlannerContext, outcome: McpToolOutcome): 
 function recordAnimationVerify(context: PlannerContext, args: JsonRecord, outcome: McpToolOutcome): void {
   const data = isRecord(outcome.data) ? outcome.data : {};
   if (typeof data.verified !== "boolean") return;
+  if (typeof args.model === "string" && args.model !== "") {
+    recordModelVerify(context, args, data);
+    return;
+  }
   const played = isRecord(data.played) ? data.played : {};
   const wiring = isRecord(data.wiring) ? data.wiring : undefined;
   const name = isRecord(args.animation) && typeof args.animation.name === "string" ? args.animation.name : "The animation";
@@ -1564,10 +1764,12 @@ export function createStudioToolRunner(context: PlannerContext): StudioToolRunne
 
     if (outcome.ok && !refused && operation === "animation") {
       if (args.action === "check" || args.action === "build") await recordAnimationPreview(context, outcome);
-      if (args.action === "build") recordAnimationBuild(context, outcome);
+      if (args.action === "build") recordAnimationBuild(context, args, outcome);
       else if (args.action === "publish") recordAnimationPublish(context, outcome);
       else if (args.action === "wire") recordAnimationWire(context, outcome);
       else if (args.action === "verify") recordAnimationVerify(context, args, outcome);
+      else if (args.action === "rig" && args.stock !== undefined) recordAnimationRig(context, outcome);
+      else if (args.action === "rig") await recordModelRig(context, outcome);
     }
 
     if (operation === "upload_asset") {

@@ -1,0 +1,182 @@
+{
+  "recipe Wave": {
+    "sequence": "aa04f14913944d27",
+    "checks": "5acf044d72e83b27",
+    "grounded": "18d29c929c9e3e4b",
+    "locomotion": "cad2801d8cb3a337",
+    "sheet": "5d42132b895be040",
+    "glb": "091fbffff759b693"
+  },
+  "recipe Idle": {
+    "sequence": "0029771c647d9996",
+    "checks": "2ab25c46180303ab",
+    "grounded": "1e3e3259e6619162",
+    "locomotion": "dc9b98e9cb82dead",
+    "sheet": "dc779ce16684198d",
+    "glb": "0b46603539960edd"
+  },
+  "recipe Walk": {
+    "sequence": "ed851dfb8f68ce1e",
+    "checks": "068e28341f420fe2",
+    "grounded": "9c50535fe1c1af05",
+    "locomotion": "77c5b4e30d436b19",
+    "sheet": "718a761734f50083",
+    "glb": "b4c8d91ee2791906"
+  },
+  "recipe Run": {
+    "sequence": "29f58e4cf7a43014",
+    "checks": "35f5d986f8779431",
+    "grounded": "8b26d8721ab5b2b5",
+    "locomotion": "2d0b6acc1138b64d",
+    "sheet": "c6aab260fadbb2b8",
+    "glb": "e47c03c66bdd9b92"
+  },
+  "recipe Jump": {
+    "sequence": "2ac5cabd37b82bce",
+    "checks": "0cf36a13e5c9887a",
+    "grounded": "fc036ee71f91b513",
+    "locomotion": "ee83ed426d661de7",
+    "sheet": "f9d04e9ae0216932",
+    "glb": "08c3a9f01dd2b6f8"
+  },
+  "recipe Lunge": {
+    "sequence": "24020a949efd4b1c",
+    "checks": "b5fd4a8cae3d23cd",
+    "grounded": "0bcc790c05d667e4",
+    "locomotion": "62f30405cf969537",
+    "sheet": "6e7184ab45d96d5d",
+    "glb": "ff1bb2cd7c6c44c0"
+  },
+  "recipe Slash": {
+    "sequence": "590c414dfd800d58",
+    "checks": "dbc105b5662f0fac",
+    "grounded": "a8d5178ee5e6fda3",
+    "locomotion": "ec14c056edd96716",
+    "sheet": "386ca57903422dcd",
+    "glb": "e08ae88d9a96d359"
+  },
+  "recipe WalkR6": {
+    "sequence": "584835051f865ca9",
+    "checks": "b5ac628ef7c75a83",
+    "grounded": "9f1321bf3cb59877",
+    "locomotion": "ac0b846d5aa9b919",
+    "sheet": "540f9ff1a0029907",
+    "glb": "11906c4e5b5e5e86"
+  },
+  "recipe WaveR6": {
+    "sequence": "99be8b93e79de597",
+    "checks": "a284cf3a009dc616",
+    "grounded": "0c0181a499d97983",
+    "locomotion": "66da579d7155c263",
+    "sheet": "550c318188437148",
+    "glb": "5e330ce3535526d6"
+  },
+  "live Wave": {
+    "sequence": "fa9b983f93ff7800",
+    "checks": "8cd68fa45e0bf01b",
+    "grounded": "34c5a95e8b6ad913",
+    "locomotion": "6cf3c7ec7a2ac363",
+    "sheet": "03ca84c0c0fed8d2",
+    "glb": "3eb2e4530fa2629c"
+  },
+  "live AimWave": {
+    "sequence": "b0a4bcff6f838abe",
+    "checks": "5acf044d72e83b27",
+    "grounded": "18d29c929c9e3e4b",
+    "locomotion": "cad2801d8cb3a337",
+    "sheet": "5d42132b895be040",
+    "glb": "80b3ae29765cdf41"
+  },
+  "live Swung": {
+    "sequence": "73ef5ae343fd4096",
+    "checks": "4bd9c8dee17b998c",
+    "grounded": "b9caf0712dd11672",
+    "locomotion": "fced56976ae42e34",
+    "sheet": "1cde61d595c7f845",
+    "glb": "d6fe787724d2688b"
+  },
+  "live Flick": {
+    "sequence": "8be93bb49ab2a1d7",
+    "checks": "062d33ca865217d8",
+    "grounded": "af6459c575ec6843",
+    "locomotion": "a41781bd3d4c90a7",
+    "sheet": "6108bc5a741d7d46",
+    "glb": "752d7b16ca2134c0"
+  },
+  "live DrawR6": {
+    "sequence": "7381d34d9a2b754e",
+    "checks": "25da213a7956d754",
+    "grounded": "cc704acd0611f96e",
+    "locomotion": "e4069ad5d91b280b",
+    "sheet": "4ef00297056ed3c9",
+    "glb": "52ae105728c99e5e"
+  },
+  "live MarchR6": {
+    "sequence": "601f865b18a2762a",
+    "checks": "85c05c729f5c73f1",
+    "grounded": "e1e758e6a26260b9",
+    "locomotion": "7f8ec0335a3f94e8",
+    "sheet": "d854b4dc246992ff",
+    "glb": "2c873a46b19f5d0c"
+  },
+  "live Planted": {
+    "sequence": "8dd3ec7f4aba5473",
+    "checks": "aaf99e0a39149c24",
+    "grounded": "ba0fa5e825d5d6f6",
+    "locomotion": "7caa58fc0233680c",
+    "sheet": "b0125f46ae8646d0",
+    "glb": "43087b8b0f37307a"
+  },
+  "live TwoHanded": {
+    "sequence": "c9dfec6751a04d42",
+    "checks": "6c19e3ec0996fb9e",
+    "grounded": "262805b4ca45092b",
+    "locomotion": "a351278702d6517d",
+    "sheet": "b5880c501a699ef3",
+    "glb": "d26f634fffd96bf9"
+  },
+  "live Marked": {
+    "sequence": "f08d75871acc0834",
+    "checks": "c4e1f5270c2b0e0d",
+    "grounded": "68334f30cea9fdf1",
+    "locomotion": "13b66752c730c244",
+    "sheet": "0eac9d665bf85232",
+    "glb": "807cb8d6e0a53d67"
+  },
+  "refused unknown joint": {
+    "errors": "79b25b2e6e8c9294"
+  },
+  "refused R6 elbow": {
+    "errors": "7ed68fdaa2287b63"
+  },
+  "refused part name": {
+    "errors": "a373b74553c57310"
+  },
+  "refused aim on a neck": {
+    "errors": "2e8da3dea6d4e0a4"
+  },
+  "refused bend on a neck": {
+    "errors": "5542eb4761dacc16"
+  },
+  "refused aimAt on a waist": {
+    "errors": "b2dd2216809ec1e2"
+  },
+  "refused position on a neck": {
+    "errors": "2e697e6abcc2c383"
+  },
+  "refused grip on the right": {
+    "errors": "b007cb1f3b80565b"
+  },
+  "refused R6 grip": {
+    "errors": "cfc809a33fa3296a"
+  },
+  "refused aimAt out of reach": {
+    "errors": "15d2083417d58c42"
+  },
+  "refused R6 aimAt out of reach": {
+    "errors": "5323592d12307c49"
+  },
+  "refused a late key": {
+    "errors": "9c7796e265decb63"
+  }
+}

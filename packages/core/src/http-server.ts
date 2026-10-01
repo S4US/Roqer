@@ -3,9 +3,10 @@ import type { Express } from 'express';
 import http from 'http';
 import { toNodeHandler } from '@modelcontextprotocol/node';
 import { RobloxStudioTools } from './tools/index.js';
-import { BridgeService, RoutingFailure, toPublic } from './bridge-service.js';
+import { BridgeService, MAX_REQUEST_TIMEOUT_MS, RoutingFailure, toPublic } from './bridge-service.js';
 import type { RegisterInstanceResult } from './bridge-service.js';
 import type { ToolDefinition } from './tools/definitions.js';
+import { TOOL_CATALOG_DIGEST } from './tools/catalog-digest.js';
 import { createToolHttpHandler, normalizeToolResult, publicToolErrorBody } from './mcp-runtime.js';
 import { tokensMatch } from './auth.js';
 import { StudioLaunchPreDispatchError } from './studio-instance-manager.js';
@@ -416,6 +417,7 @@ export function createHttpServer(tools: RobloxStudioTools, bridge: BridgeService
       serverName: serverConfig?.name ?? 'robloxstudio-mcp',
       version: serverConfig?.version,
       serverVersion: serverConfig?.version,
+      toolCatalogDigest: TOOL_CATALOG_DIGEST,
       capabilities: studioLifecycleCallable ? {
         studioLifecycle: {
           protocolVersion: 3,
@@ -755,10 +757,19 @@ export function createHttpServer(tools: RobloxStudioTools, bridge: BridgeService
 
 
   app.post('/proxy', async (req, res) => {
-    const { endpoint, data, targetInstanceId, targetRole, proxyInstanceId, pluginVariant } = req.body;
+    const { endpoint, data, targetInstanceId, targetRole, proxyInstanceId, pluginVariant, timeoutMs } = req.body;
 
     if (!endpoint || !targetInstanceId || !targetRole) {
       res.status(400).json({ error: 'endpoint, targetInstanceId, and targetRole are required' });
+      return;
+    }
+    // The wait the proxy's tool asked for, such as generate_model's, so a slow
+    // call gets as long through a proxy as on the primary.
+    if (
+      timeoutMs !== undefined
+      && !(Number.isSafeInteger(timeoutMs) && timeoutMs >= 1 && timeoutMs <= MAX_REQUEST_TIMEOUT_MS)
+    ) {
+      res.status(400).json({ error: `timeoutMs must be a whole number of milliseconds from 1 to ${MAX_REQUEST_TIMEOUT_MS}` });
       return;
     }
     // A proxy forwards raw plugin endpoints, past this server's own tool list.
@@ -781,7 +792,7 @@ export function createHttpServer(tools: RobloxStudioTools, bridge: BridgeService
     }
 
     try {
-      const response = await bridge.sendRequest(endpoint, data, targetInstanceId, targetRole);
+      const response = await bridge.sendRequest(endpoint, data, targetInstanceId, targetRole, timeoutMs);
       res.json({ response });
     } catch (err: any) {
       res.status(500).json({ error: err.message || 'Proxy request failed' });

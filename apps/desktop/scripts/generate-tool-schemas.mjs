@@ -173,10 +173,20 @@ const { TOOL_DEFINITIONS } = await import(pathToFileURL(definitionsPath).href);
 
 const tools = [...TOOL_DEFINITIONS].sort((left, right) => left.name.localeCompare(right.name));
 
+/**
+ * The digest a bridge built from these definitions reports on `/health`, the
+ * same sha256 of them as JSON that `packages/core/src/tools/catalog-digest.ts`
+ * takes, so the eval can refuse a bridge built from other ones.
+ */
+const catalogDigest = createHash("sha256").update(JSON.stringify(TOOL_DEFINITIONS), "utf8").digest("hex");
+
 const lines = [HEADER];
 lines.push(
   "/** sha256 of `packages/core/src/tools/definitions.ts` with LF newlines. */",
   `export const TOOL_DEFINITIONS_DIGEST = ${literal(digestOfDefinitions(source))};`,
+  "",
+  "/** What a bridge built from these definitions reports as `toolCatalogDigest` on `/health`. */",
+  `export const TOOL_CATALOG_DIGEST = ${literal(catalogDigest)};`,
   "",
   "export const TOOL_SCHEMAS: Readonly<Record<string, ToolSchema>> = {",
 );

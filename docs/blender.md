@@ -79,6 +79,68 @@ the tool away again.
 A job stops after two minutes by default, and never runs longer than 200
 seconds. Stopping the run stops Blender.
 
+## Creatures that move
+
+A creature that will be animated, for "Model a low-poly wolf, rig it and make
+it walk", is modelled as separate pieces: a body, a head, a tail, and each leg
+as an upper and a lower piece. Each piece is its own object, parented to the
+piece it hangs from, with its origin at the joint it turns about.
+
+Roblox keeps where each piece is when the model is uploaded, but not where it
+turns: every piece arrives hung from one root at its own middle. So Roqer's
+check of the exported file reads the pivots while they still exist:
+
+- It lists the pieces as a tree, and gives the agent the joints to rig them
+  with: each piece, the piece it hangs from, and its pivot.
+- It points out what would rig badly, while the model can still be changed:
+  an origin left at a piece's middle or outside both pieces it joins, left and
+  right pivots that do not mirror, a mesh named apart from its object (Roblox
+  names the part after the mesh), a piece with two materials, and a piece
+  parented to nothing.
+- Pieces passing into each other at their joints are not reported as
+  overlaps, since they are meant to, so a turn opens no gap.
+
+After the upload, the agent rigs the inserted model with those joints
+(see [Rigging a model](animation.md#rigging-a-model)). The pivots are measured
+from the model's own origin, so they hold wherever it was inserted.
+
+### Creatures that bend
+
+Pieces turn rigidly. A body that must bend along its length, for "Model a
+snake and make it slither" or a creature with a long tail, is modelled as one
+mesh skinned to bones instead. Roblox keeps the bones and the skin's weights
+when such a model is uploaded, so it arrives ready to animate.
+
+Roqer's check of the exported file reads the armature and the weights, and
+points out what Roblox would not keep, while the model can still be changed:
+
+- a vertex that follows no bone, which would stay behind;
+- a vertex that follows more than four bones, since Roblox keeps the four
+  largest;
+- more than one mesh on the armature, or more than one armature;
+- more than 63 bones, which is as many as Roqer animates;
+- a leg with no foot bone, or a foot bone above the ground.
+
+After the upload, the agent has Roqer build the rig around the mesh's bones
+(see [Skinned creatures](animation.md#skinned-creatures)).
+
+### Animating in Blender
+
+Most motion is written for Roqer's animation tool directly. For motion that
+Blender's own tools make, such as a tail pulled toward a moving target by
+inverse kinematics or a head made to track a point, the agent animates the
+creature in the scene it was exported from and has Roqer bake it:
+
+- Roqer samples the scene frame by frame, with constraints and inverse
+  kinematics applied, and keeps only the keys each joint needs to stay within
+  a quarter of a degree of what was sampled.
+- The result is an animation file for Roqer's animation tool, which checks,
+  previews, builds and publishes it like any other
+  ([Animations made in Blender](animation.md#animations-made-in-blender)).
+- It works for a skinned creature's armature and for a creature of pieces.
+  Only the body as a whole can travel; any other bone or piece only turns.
+- At most 60 seconds, sampled as up to 240 keyframes.
+
 ## Safety
 
 A Blender script is a program, and it runs with your permissions. That is why
@@ -112,6 +174,7 @@ Both live in Roqer's data folder:
   reads the stored values as sRGB, where glTF and Blender mean them as linear.
   The 3D view shows them as Studio will; the still picture shows them as
   Blender does.
-- Rigging, skinning and UGC accessories are not supported yet, and Blender
-  does not animate. Character animations are made in Studio instead; see
+- A creature is rigged in Studio from rigid pieces modelled in Blender.
+  Skinning (a mesh that bends) and UGC accessories are not supported yet, and
+  Blender does not animate. Animations are made in Studio instead; see
   [Character animation](animation.md).

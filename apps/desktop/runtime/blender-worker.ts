@@ -9,6 +9,9 @@ import {
   MAX_BLENDER_JOB_SECONDS,
   MAX_BLENDER_SCRIPT_CHARACTERS,
 } from "../shared/blender";
+import { articulationOf, describeArticulation, MAX_LISTED_OBJECTS, parseObjects, type Articulation, type InspectedObject } from "./blender-articulation";
+import { ANIMATION_SUFFIX, BAKE_SUFFIX, describeBake, describeBakedFile, parseBake } from "./blender-animation";
+import { describeSkins, parseSkins, type InspectedSkin } from "./blender-skin";
 import type { McpCallOptions, McpToolImage, McpToolOutcome } from "./mcp-types";
 import { isViewableGlb, JOB_RETENTION_MS, MAX_KEPT_JOBS, modelPreviewFileName, pruneJobFolders } from "./model-preview";
 import { modelPreviewId } from "../shared/model-preview";
@@ -239,6 +242,297 @@ def join(name, objects):
     first.data.polygons.foreach_set("use_smooth", [False] * len(first.data.polygons))
     first.data.update()
     return first
+
+
+def piece(obj, pivot, parent=None):
+    """Make an object a moving piece of a creature or a machine, to be rigged in Studio.
+
+    Its origin moves to pivot, the point it turns about (a leg's hip, a jaw's hinge), without
+    moving its shape; its mesh is named after it, as Roblox names the MeshPart; and, given
+    parent, it hangs from that piece, staying where it is. Call it after join, once per piece.
+    """
+    from mathutils import Matrix
+    pivot = _vector(pivot, "pivot")
+    world = obj.matrix_world.copy()
+    local = world.inverted() @ pivot
+    obj.data.transform(Matrix.Translation(-local))
+    obj.data.update()
+    placed = world @ Matrix.Translation(local)
+    obj.data.name = obj.name
+    if parent is not None:
+        if parent is obj:
+            raise ValueError(f"{obj.name} cannot hang from itself")
+        bpy.context.view_layer.update()
+        obj.parent = parent
+        obj.matrix_parent_inverse = parent.matrix_world.inverted()
+    obj.matrix_world = placed
+    bpy.context.view_layer.update()
+    return obj
+
+
+def _quaternion(q):
+    """A Blender rotation as [x, y, z, w] in Roblox's axes: a point at (x, y, z) arrives at (-x, z, y)."""
+    return [round(-q.x, 6), round(q.z, 6), round(q.y, 6), round(q.w, 6)]
+
+
+def _studs(vector):
+    return [round(-vector.x, 4), round(vector.z, 4), round(vector.y, 4)]
+
+
+def _joint_name(piece):
+    """The joint rig makes for a piece, as Roqer's inspection names them: a leg's for the leg, its knee and ankle after it."""
+    if piece == "Head":
+        return "Neck"
+    for suffix, joint in (("Upper", ""), ("Lower", "Knee"), ("Foot", "Ankle")):
+        if piece.endswith(suffix) and len(piece) > len(suffix):
+            return piece[:-len(suffix)] + joint
+    return piece
+
+
+_MAX_SAMPLES = 240
+_MAX_SECONDS = 60
+
+
+def export_animation(name, source, rig, start=None, end=None, loop=True, rest_frame=None, root_joint="Root"):
+    """Bake what a creature does between two frames into an animation for Studio's animation tool.
+
+    source is the armature of a skinned creature, or the body piece of a creature of moving
+    pieces. rig is the path its model has in Studio, such as "game.Workspace.Wolf". Every frame
+    from start to end (the scene's own by default) is sampled with constraints and inverse
+    kinematics applied, so animate however Blender makes easy. For a loop, make the last frame
+    the same pose as the first. A creature of pieces is at rest at rest_frame (start by default);
+    an armature's rest is its own. The result names a file to pass to animation as animation_file.
+    """
+    import json, math, os
+    from mathutils import Matrix, Vector
+    if not isinstance(name, str) or not name or any(c in name for c in '/\\:*?"<>|'):
+        raise ValueError(f"name must be the animation's name, usable as a file name, got {name!r}")
+    if not isinstance(rig, str) or not rig.startswith("game."):
+        raise ValueError("rig must be the model's path in Studio, such as game.Workspace.Wolf")
+    scene = bpy.context.scene
+    start = scene.frame_start if start is None else int(start)
+    end = scene.frame_end if end is None else int(end)
+    if end <= start:
+        raise ValueError(f"end ({end}) must be after start ({start})")
+    fps = scene.render.fps / scene.render.fps_base
+    if (end - start) / fps > _MAX_SECONDS:
+        raise ValueError(f"frames {start} to {end} last {(end - start) / fps:.1f} s; an animation lasts at most {_MAX_SECONDS}")
+    step = max(1, math.ceil((end - start) / (_MAX_SAMPLES - 1)))
+    frames = list(range(start, end, step)) + [end]
+
+    def sample(frame):
+        scene.frame_set(frame)
+        bpy.context.view_layer.update()
+        return bpy.context.evaluated_depsgraph_get()
+
+    joints, baked, ignored = [], [], set()
+    if source.type == "ARMATURE":
+        world = source.matrix_world.copy()
+        bones = list(source.data.bones)
+        tops = [bone for bone in bones if bone.parent is None]
+        rest_world = {bone.name: (world @ bone.matrix_local).to_quaternion() for bone in bones}
+        rest_local = {bone.name: (bone.parent.matrix_local.inverted() @ bone.matrix_local) if bone.parent else bone.matrix_local.copy() for bone in bones}
+        for bone in bones:
+            entry = {"name": bone.name}
+            if bone.parent is not None:
+                entry["parent"] = bone.parent.name
+                entry["offset"] = _studs(world @ bone.head_local - world @ bone.parent.head_local)
+            joints.append(entry)
+        for frame in frames:
+            posed = source.evaluated_get(sample(frame)).pose.bones
+            rotations = {}
+            for bone in bones:
+                pose = posed[bone.name]
+                local = (pose.parent.matrix.inverted() @ pose.matrix) if pose.parent else pose.matrix
+                basis = rest_local[bone.name].inverted() @ local
+                turn = rest_world[bone.name] @ basis.to_quaternion() @ rest_world[bone.name].inverted()
+                rotations[bone.name] = _quaternion(turn)
+                if bone.parent is not None and basis.to_translation().length > 1e-3:
+                    ignored.add(bone.name)
+            entry = {"time": round((frame - start) / fps, 5), "rotations": rotations}
+            if len(tops) == 1:
+                entry["travel"] = _studs(world @ posed[tops[0].name].matrix.to_translation() - world @ tops[0].matrix_local.to_translation())
+            baked.append(entry)
+    elif source.type == "MESH":
+        pieces = []
+
+        def gather(item, parent):
+            piece = item if item.type == "MESH" else None
+            if piece is not None:
+                pieces.append((piece, parent))
+            for child in item.children:
+                gather(child, piece or parent)
+
+        gather(source, None)
+        rest = {piece.name: piece.evaluated_get(sample(start if rest_frame is None else int(rest_frame))).matrix_world.copy() for piece, _ in pieces}
+        centre = sum((Vector(corner) for corner in source.bound_box), Vector()) / 8
+        body_at = rest[source.name] @ centre
+        named = {piece.name: (root_joint if parent is None else _joint_name(piece.data.name)) for piece, parent in pieces}
+        for piece, parent in pieces:
+            entry = {"name": named[piece.name]}
+            if parent is not None:
+                entry["parent"] = named[parent.name]
+                entry["offset"] = _studs(rest[piece.name].to_translation() - (body_at if parent is source else rest[parent.name].to_translation()))
+            joints.append(entry)
+        for frame in frames:
+            depsgraph = sample(frame)
+            now = {piece.name: piece.evaluated_get(depsgraph).matrix_world.copy() for piece, _ in pieces}
+            rotations = {}
+            for piece, parent in pieces:
+                turned, rested = now[piece.name].to_quaternion(), rest[piece.name].to_quaternion()
+                if parent is None:
+                    turn = turned @ rested.inverted()
+                else:
+                    above = rest[parent.name].to_quaternion()
+                    turn = above @ now[parent.name].to_quaternion().inverted() @ turned @ rested.inverted()
+                    slid = (now[parent.name].inverted() @ now[piece.name]).to_translation() - (rest[parent.name].inverted() @ rest[piece.name]).to_translation()
+                    if slid.length > 1e-3:
+                        ignored.add(piece.name)
+                rotations[named[piece.name]] = _quaternion(turn)
+            travel = now[source.name] @ centre - body_at
+            baked.append({"time": round((frame - start) / fps, 5), "rotations": rotations, "travel": _studs(travel)})
+    else:
+        raise ValueError(f"{source.name} is a {source.type.lower()}; export_animation takes an armature, or a creature's body piece")
+    scene.frame_set(start)
+
+    path = os.path.join(_OUTPUT_DIR, name + ".bake.json")
+    with open(path, "w", encoding="utf-8") as handle:
+        json.dump({"name": name, "rig": rig, "loop": bool(loop), "rootJoint": root_joint, "joints": joints, "frames": baked,
+                   "ignoredTravel": sorted(ignored)[:16]}, handle)
+    return path
+
+
+_MAX_INFLUENCES = 4
+# The share of a chain's first bone, either side of its head, over which a part's weight passes to the bone above.
+_ROOT_BLEND = 0.25
+
+
+def bind(obj, bones):
+    """Say which bones a part follows, before it is joined and skinned.
+
+    bones is one bone's name, for a part that moves rigidly with it (a paw with its foot bone),
+    or a list of names, for a part that bends between them (a tail along its tail bones).
+    roqer.skin weights each of its vertices among those bones only. A part that is not bound
+    is weighted among every bone, by which lie nearest.
+    """
+    names = [bones] if isinstance(bones, str) else list(bones)
+    if not names or not all(isinstance(name, str) and name for name in names):
+        raise ValueError(f"bones must be a bone's name or a list of names, got {bones!r}")
+    indices = [vertex.index for vertex in obj.data.vertices]
+    for name in names:
+        group = obj.vertex_groups.get(name) or obj.vertex_groups.new(name=name)
+        group.add(indices, 1.0, "REPLACE")
+    return obj
+
+
+def _segment_distance(point, head, tail):
+    along = tail - head
+    length = along.length_squared
+    share = 0.0 if length < 1e-12 else max(0.0, min(1.0, (point - head).dot(along) / length))
+    return (point - (head + along * share)).length
+
+
+def skin(obj, bones, name="Armature"):
+    """Skin one mesh to an armature, so it bends at its bones when animated in Studio.
+
+    bones lists (name, head, tail) or (name, head, tail, parent): each bone runs from head to
+    tail in studs, a parent before its children. obj is the whole creature as one object, joined
+    with roqer.join. Every vertex is weighted to the bones nearest it, blending where two meet,
+    at most four a vertex and summing to 1; a part bound with roqer.bind keeps to its own bones.
+    Returns the armature. Export both: the upload keeps the bones and the weights.
+    """
+    if obj.type != "MESH":
+        raise ValueError(f"{obj.name} is a {obj.type.lower()}, not a mesh")
+    entries = []
+    seen = set()
+    for entry in bones:
+        if len(entry) not in (3, 4):
+            raise ValueError(f"a bone is (name, head, tail) or (name, head, tail, parent), got {entry!r}")
+        bone_name, head, tail = entry[0], _vector(entry[1], "head"), _vector(entry[2], "tail")
+        parent = entry[3] if len(entry) == 4 else None
+        if not isinstance(bone_name, str) or not bone_name or bone_name in seen:
+            raise ValueError(f"each bone needs a name of its own, got {bone_name!r}")
+        if (tail - head).length < 1e-4:
+            raise ValueError(f"{bone_name}'s head and tail are the same point")
+        if parent is not None and parent not in seen:
+            raise ValueError(f"{bone_name}'s parent {parent!r} must come before it in the list")
+        seen.add(bone_name)
+        entries.append((bone_name, head, tail, parent))
+    if not entries:
+        raise ValueError("skin needs at least one bone")
+    unknown = sorted(group.name for group in obj.vertex_groups if group.name not in seen)
+    if unknown:
+        raise ValueError(f"parts are bound to bones that are not in the list: {', '.join(unknown)}")
+
+    data = bpy.data.armatures.new(name)
+    armature = bpy.data.objects.new(name, data)
+    bpy.context.scene.collection.objects.link(armature)
+    bpy.context.view_layer.objects.active = armature
+    with bpy.context.temp_override(active_object=armature, object=armature, selected_objects=[armature], selected_editable_objects=[armature]):
+        bpy.ops.object.mode_set(mode="EDIT")
+        made = {}
+        for bone_name, head, tail, parent in entries:
+            bone = data.edit_bones.new(bone_name)
+            bone.head, bone.tail = head, tail
+            if parent is not None:
+                bone.parent = made[parent]
+            made[bone_name] = bone
+        bpy.ops.object.mode_set(mode="OBJECT")
+
+    # Which bones each vertex may follow: those its part was bound to, or all of them.
+    bound = {}
+    for vertex in obj.data.vertices:
+        names = [obj.vertex_groups[item.group].name for item in vertex.groups if item.weight > 0]
+        if names:
+            bound[vertex.index] = set(names)
+    for group in list(obj.vertex_groups):
+        obj.vertex_groups.remove(group)
+    groups = {bone_name: obj.vertex_groups.new(name=bone_name) for bone_name, _, _, _ in entries}
+    world = obj.matrix_world
+    for vertex in obj.data.vertices:
+        point = world @ vertex.co
+        allowed = bound.get(vertex.index)
+        near = sorted(
+            (_segment_distance(point, head, tail), bone_name)
+            for bone_name, head, tail, _ in entries if allowed is None or bone_name in allowed
+        )[:_MAX_INFLUENCES]
+        # Nearness to the fourth power: a vertex midway between two bones is shared, one
+        # beside a bone is almost wholly its own.
+        raw = [(1.0 / max(distance, 1e-4) ** 4, bone_name) for distance, bone_name in near]
+        most = max(weight for weight, _ in raw)
+        kept = [(weight, bone_name) for weight, bone_name in raw if weight >= most * 0.05]
+        total = sum(weight for weight, _ in kept)
+        shares = {bone_name: weight / total for weight, bone_name in kept}
+        # Where a part that bends along several bones runs up into what it hangs from, as a
+        # thigh into the rump or a tail's root into the back, it stays with that: around the
+        # first bone's head its weight passes to that bone's parent, so the top of a leg does
+        # not swing out of the body as the leg turns. A part bound to one bone stays rigid.
+        if allowed is not None and len(allowed) > 1:
+            for bone_name, head, tail, parent in entries:
+                if bone_name not in shares or parent is None or parent in allowed:
+                    continue
+                along = (tail - head).normalized()
+                margin = _ROOT_BLEND * (tail - head).length
+                up = max(0.0, min(1.0, 0.5 - (point - head).dot(along) / (2 * margin)))
+                if up > 0:
+                    shares[parent] = shares.get(parent, 0.0) + shares[bone_name] * up
+                    shares[bone_name] *= 1 - up
+            ranked = sorted(((weight, bone_name) for bone_name, weight in shares.items() if weight > 1e-4), reverse=True)[:_MAX_INFLUENCES]
+            total = sum(weight for weight, _ in ranked)
+            shares = {bone_name: weight / total for weight, bone_name in ranked}
+        for bone_name, weight in shares.items():
+            if weight > 0:
+                groups[bone_name].add([vertex.index], weight, "REPLACE")
+
+    for modifier in list(obj.modifiers):
+        if modifier.type == "ARMATURE":
+            obj.modifiers.remove(modifier)
+    obj.modifiers.new(name, "ARMATURE").object = armature
+    obj.parent = armature
+    obj.matrix_parent_inverse = armature.matrix_world.inverted()
+    obj.data.name = obj.name
+    bpy.context.view_layer.update()
+    return armature
 `;
 
 /**
@@ -274,7 +568,7 @@ except BaseException:
 script_path = os.path.join(job_dir, "script.py")
 with open(script_path, "r", encoding="utf-8") as handle:
     source = handle.read()
-helpers = {"__name__": "roqer"}
+helpers = {"__name__": "roqer", "_OUTPUT_DIR": OUTPUT_DIR}
 with open(os.path.join(job_dir, "roqer_helpers.py"), "r", encoding="utf-8") as handle:
     exec(compile(handle.read(), "roqer_helpers.py", "exec"), helpers)
 roqer = types.SimpleNamespace(**{name: value for name, value in helpers.items()
@@ -416,6 +710,12 @@ else:
         bpy.ops.wm.obj_import(filepath=model_path)
 
 scene = bpy.context.scene
+# The glTF importer draws each bone as a shape object of its own, which is no part of the model.
+armatures = [item for item in scene.objects if item.type == "ARMATURE"]
+for shape in {bone.custom_shape for item in armatures for bone in item.pose.bones if bone.custom_shape is not None}:
+    for bone in [bone for item in armatures for bone in item.pose.bones if bone.custom_shape is shape]:
+        bone.custom_shape = None
+    bpy.data.objects.remove(shape, do_unlink=True)
 meshes = [item for item in scene.objects if item.type == "MESH" and not item.hide_render]
 depsgraph = bpy.context.evaluated_depsgraph_get()
 triangles = 0
@@ -449,14 +749,63 @@ color_source = "vertex" if vertex_colored else "texture" if textured else "mater
 # Each object's own name and size, so a kit set exported as one file can be told
 # apart after upload: Roblox keeps one MeshPart per object, named after it.
 objects = []
-for item in meshes[:16]:
+mesh_set = set(meshes)
+r3 = lambda vector: [round(vector.x, 3), round(vector.y, 3), round(vector.z, 3)]
+for item in meshes[:48]:
     corners = [item.matrix_world @ Vector(corner) for corner in item.bound_box]
     lo = Vector(map(min, *corners))
     hi = Vector(map(max, *corners))
     # Roblox axes: X, then Blender's up (Z) as Y, then Blender's Y as Z.
-    objects.append({"name": item.name, "size": [round(hi.x - lo.x, 2), round(hi.z - lo.z, 2), round(hi.y - lo.y, 2)]})
+    entry = {"name": item.name, "size": [round(hi.x - lo.x, 2), round(hi.z - lo.z, 2), round(hi.y - lo.y, 2)]}
+    # For a model of moving pieces: where the object's origin is, which is
+    # where it turns; its box; the mesh object it hangs from; and its mesh's
+    # own name, which is what Roblox names the MeshPart. In Blender coordinates.
+    entry["origin"] = r3(item.matrix_world.translation)
+    entry["low"], entry["high"] = r3(lo), r3(hi)
+    entry["mesh"] = item.data.name
+    entry["materials"] = sum(1 for slot in item.material_slots if slot.material is not None)
+    parent = item.parent
+    while parent is not None and parent not in mesh_set:
+        parent = parent.parent
+    if parent is not None:
+        entry["parent"] = parent.name
+    objects.append(entry)
 stats = {"meshes": len(meshes), "triangles": triangles, "materials": sorted(materials)[:32], "preview": False,
          "colorSource": color_source, "objects": objects}
+
+# Skins: each armature's bones, head and tail in Blender coordinates, and for
+# each mesh that follows it how its vertices are weighted, which is what Roblox
+# keeps of it: a vertex no bone holds stays behind, and one held by more than
+# four keeps the four largest.
+skins = []
+for armature in armatures[:4]:
+    names = {bone.name for bone in armature.data.bones}
+    entry = {"armature": armature.name, "boneCount": len(armature.data.bones), "bones": [], "meshes": []}
+    for bone in list(armature.data.bones)[:96]:
+        listed = {"name": bone.name, "head": r3(armature.matrix_world @ bone.head_local), "tail": r3(armature.matrix_world @ bone.tail_local)}
+        if bone.parent is not None:
+            listed["parent"] = bone.parent.name
+        entry["bones"].append(listed)
+    for item in meshes:
+        # A saved scene's modifiers were baked away above; there the mesh is still the armature's child.
+        follows = any(modifier.type == "ARMATURE" and modifier.object is armature for modifier in item.modifiers)
+        if not follows and not (item.parent is armature and len(item.vertex_groups) > 0):
+            continue
+        group_names = {group.index: group.name for group in item.vertex_groups}
+        unweighted = over = most = 0
+        for vertex in item.data.vertices:
+            held = sum(1 for group in vertex.groups if group.weight > 1e-4 and group_names.get(group.group) in names)
+            most = max(most, held)
+            if held == 0:
+                unweighted += 1
+            elif held > 4:
+                over += 1
+        entry["meshes"].append({"name": item.name, "mesh": item.data.name, "vertices": len(item.data.vertices),
+                                "unweighted": unweighted, "overFour": over, "mostInfluences": most,
+                                "materials": sum(1 for slot in item.material_slots if slot.material is not None)})
+    skins.append(entry)
+if skins:
+    stats["skins"] = skins
 
 # Smooth shading across hard edges: a corner whose normal leans far from its
 # face's is shaded as if the edge were rounded, which makes boxes and panels
@@ -857,7 +1206,11 @@ export type InspectedFile = Readonly<{
    */
   colorSource?: "texture" | "vertex" | "material";
   /** Each mesh object's name and size in studs (Roblox axes), for splitting a kit set. */
-  objects?: ReadonlyArray<Readonly<{ name: string; size: readonly number[] }>>;
+  objects?: readonly InspectedObject[];
+  /** For a model whose objects hang from one another: its pieces as `rig` joints, and what would rig badly. */
+  articulation?: Articulation;
+  /** For a skinned model: its armature's bones and how each mesh that follows them is weighted. */
+  skins?: readonly InspectedSkin[];
   /** Where the model's lowest point sits, in Blender units: 0 stands it on the ground. */
   bottom?: number;
   /** How the model's pieces sit against each other, in the script's Blender coordinates. */
@@ -1131,7 +1484,12 @@ export class BlenderWorker {
     }
     const models = entries.filter((name) => MODEL_EXTENSIONS.has(path.extname(name).toLowerCase()));
     const renders = entries.filter((name) => path.extname(name).toLowerCase() === ".png");
-    const others = entries.filter((name) => !models.includes(name) && !renders.includes(name));
+    // Animations roqer.export_animation baked: each becomes a pose description beside it.
+    const animations: BakedAnimation[] = [];
+    for (const name of entries.filter((entry) => entry.toLowerCase().endsWith(BAKE_SUFFIX)).slice(0, MAX_BAKED_ANIMATIONS)) {
+      animations.push(await convertBake(outputDirectory, name));
+    }
+    const others = entries.filter((name) => !models.includes(name) && !renders.includes(name) && !name.toLowerCase().endsWith(BAKE_SUFFIX));
     if (models.length === 0 && renders.length === 0 && !sceneSaved) {
       return failure(
         `${beforeFailure}The script finished but left no model (.glb, .gltf, .fbx or .obj) or PNG image in OUTPUT_DIR. Export the model there, for example bpy.ops.export_scene.gltf(filepath=os.path.join(OUTPUT_DIR, "model.glb"), export_format="GLB", export_apply=True, use_visible=True), or render the image there.${others.length > 0 ? ` It left: ${others.join(", ")}.` : ""}`,
@@ -1203,12 +1561,9 @@ export class BlenderWorker {
         materials: Array.isArray(stats.materials) ? stats.materials.filter((entry): entry is string => typeof entry === "string") : undefined,
         size: Array.isArray(stats.size) ? stats.size.filter((entry): entry is number => typeof entry === "number") : undefined,
         colorSource: stats.colorSource === "texture" || stats.colorSource === "vertex" || stats.colorSource === "material" ? stats.colorSource : undefined,
-        objects: Array.isArray(stats.objects) ? stats.objects.flatMap((entry: unknown) => {
-          const object = entry as { name?: unknown; size?: unknown };
-          return typeof object.name === "string" && Array.isArray(object.size) && object.size.every((value) => typeof value === "number")
-            ? [{ name: object.name, size: object.size as number[] }]
-            : [];
-        }) : undefined,
+        objects: parseObjects(stats.objects),
+        articulation: articulationOf(parseObjects(stats.objects) ?? []),
+        skins: parseSkins(stats.skins),
         bottom: Array.isArray(stats.min) && typeof stats.min[2] === "number" ? stats.min[2] : undefined,
         layout: parseLayout(stats.layout),
         smoothShaded: Array.isArray(stats.smoothShaded)
@@ -1265,6 +1620,15 @@ export class BlenderWorker {
         "To use an image in UI: upload_asset {action: 'upload', filePath: <its path>, assetType: 'Decal', displayName}, then set ImageLabel.Image to rbxassetid://<imageId from that result>. The decalId does not display in an ImageLabel; if imageId is null, check the upload again with action 'status'.",
       );
     }
+    if (animations.length > 0) {
+      lines.push(
+        "Animations it baked, each sampled frame by frame and kept as the keys its joints need:",
+        ...animations.map((animation) => animation.line),
+        ...(animations.some((animation) => animation.path !== undefined)
+          ? ["To use one: animation {action: 'check', animation_file: <its path>}, with locomotion: true for a gait, then build with the same animation_file and a parent. Its rig is the model path the script gave; the model must be rigged in Studio first, and be the one this scene was uploaded as."]
+          : []),
+      );
+    }
     lines.push(...describeScene(jobId, continueFrom, contents, sceneSaved, inspectScene));
     return {
       ok: true,
@@ -1272,6 +1636,7 @@ export class BlenderWorker {
         jobId,
         ...(continueFrom === undefined ? {} : { continuedFrom: continueFrom }),
         jobDirectory, outputDirectory, files, images: rendered, otherFiles: others, log,
+        ...(animations.length > 0 ? { animations: animations.flatMap((animation) => animation.path === undefined ? [] : [{ name: animation.name, path: animation.path }]) } : {}),
         scene: sceneSaved ? { path: sceneFile, ...(contents === undefined ? {} : { contents }) } : null,
       },
       text: lines.join("\n"),
@@ -1335,6 +1700,39 @@ export class BlenderWorker {
   }
 }
 
+const MAX_BAKED_ANIMATIONS = 8;
+const MAX_BAKE_BYTES = 16 * 1024 * 1024;
+
+type BakedAnimation = Readonly<{ name: string; line: string; path?: string }>;
+
+/**
+ * One bake the script left in its output folder, turned into a pose
+ * description beside it. The bake is removed either way: it is only the
+ * script's samples, and the description is what the animation tool takes.
+ */
+async function convertBake(directory: string, file: string): Promise<BakedAnimation> {
+  const source = path.join(directory, file);
+  const name = file.slice(0, -BAKE_SUFFIX.length);
+  const refuse = (why: string): BakedAnimation => ({ name, line: `- ${name} could not be used: ${why}.` });
+  try {
+    if ((await fs.stat(source)).size > MAX_BAKE_BYTES) return refuse("its bake is too large");
+    const raw: unknown = JSON.parse(await fs.readFile(source, "utf8"));
+    const bake = parseBake(raw);
+    if (typeof bake === "string") return refuse(bake);
+    const baked = describeBake(bake);
+    if (baked.joints === 0) return refuse("nothing moves between its first frame and its last");
+    const target = path.join(directory, `${name}${ANIMATION_SUFFIX}`);
+    await fs.writeFile(target, JSON.stringify(baked.description));
+    const ignored = isRecord(raw) && Array.isArray(raw.ignoredTravel) ? raw.ignoredTravel.filter((entry): entry is string => typeof entry === "string").slice(0, 8) : [];
+    const note = ignored.length > 0 ? `; ${ignored.join(", ")} also slid from ${ignored.length === 1 ? "its" : "their"} joint, which only the body's own joint can do, so that part was left out` : "";
+    return { name, path: target, line: `${describeBakedFile(target, baked)}${note}` };
+  } catch (error) {
+    return refuse(error instanceof Error ? error.message : String(error));
+  } finally {
+    await fs.rm(source, { force: true }).catch(() => undefined);
+  }
+}
+
 const COLOR_SOURCE_NOTES: Readonly<Record<NonNullable<InspectedFile["colorSource"]>, string>> = {
   vertex: "coloured by vertex colours, which Roblox keeps: leave the MeshParts' Color white",
   texture: "coloured by a packed texture, which Roblox keeps as TextureID: leave the MeshParts' Color white",
@@ -1346,14 +1744,16 @@ function describeFile(file: InspectedFile): string {
   const facts = file.inspectionError !== undefined
     ? file.inspectionError
     : `${file.triangles ?? "?"} triangles, ${file.meshes ?? "?"} mesh${file.meshes === 1 ? "" : "es"}, ${file.materials?.length ?? 0} material${file.materials?.length === 1 ? "" : "s"}${size}`;
+  const listed = file.objects?.slice(0, MAX_LISTED_OBJECTS) ?? [];
   const pieces = file.objects !== undefined && file.objects.length > 1
-    ? `\n  objects, each arriving as its own MeshPart named after it: ${file.objects.map((object) => `${object.name} ${object.size.map((value) => value.toFixed(2)).join(" × ")}`).join("; ")}`
+    ? `\n  objects, each arriving as its own MeshPart named after it: ${listed.map((object) => `${object.name} ${object.size.map((value) => value.toFixed(2)).join(" × ")}`).join("; ")}${more(listed.length, file.objects.length)}`
     : "";
-  const layout = file.inspectionError === undefined ? describeLayout(file.layout, file.bottom) : "";
+  const articulated = file.inspectionError === undefined ? `${describeArticulation(file.articulation)}${describeSkins(file.skins, file.bottom)}` : "";
+  const layout = file.inspectionError === undefined ? describeLayout(file.layout, file.bottom, file.articulation) : "";
   const shading = file.smoothShaded !== undefined && file.smoothShaded.length > 0
     ? `\n  shading: smooth across hard edges on ${file.smoothShaded.map((entry) => `${entry.object} (${Math.round(entry.share * 100)}% of corners)`).join(", ")}, which makes boxes and panels look puffy in Roblox. Unless the object is meant to look rounded, remove shade_smooth; roqer.join keeps what it joins flat.`
     : "";
-  return `- ${file.path} (${Math.max(1, Math.round(file.bytes / 1024))} KB): ${facts}${file.colorSource === undefined ? "" : `; ${COLOR_SOURCE_NOTES[file.colorSource]}`}${pieces}${layout}${shading}`;
+  return `- ${file.path} (${Math.max(1, Math.round(file.bytes / 1024))} KB): ${facts}${file.colorSource === undefined ? "" : `; ${COLOR_SOURCE_NOTES[file.colorSource]}`}${pieces}${layout}${shading}${articulated}`;
 }
 
 const MAX_LAYOUT_ENTRIES = 8;
@@ -1411,7 +1811,15 @@ const more = (shown: number, total: number) => total > shown ? `; and ${total - 
  * line that placed the piece. Facts, not verdicts: a kit set is meant to be
  * apart, and a piece may be meant to sit inside another.
  */
-function describeLayout(layout: LayoutFacts | undefined, bottom: number | undefined): string {
+function describeLayout(layout: LayoutFacts | undefined, bottom: number | undefined, articulation?: Articulation): string {
+  // A moving piece is meant to pass into the piece it hangs from, at their
+  // joint, so that a turn opens no gap: those overlaps are not findings.
+  const jointed = new Set((articulation?.joints ?? []).flatMap((joint) => [`${joint.part}\n${joint.parent}`, `${joint.parent}\n${joint.part}`]));
+  if (layout !== undefined && jointed.size > 0) {
+    const kept = layout.overlaps.filter((entry) => !jointed.has(entry.objects.join("\n")));
+    // Past the listed ones nothing is known, so only what was listed is taken off the count.
+    layout = { ...layout, overlaps: kept, overlapCount: layout.overlapCount - (layout.overlaps.length - kept.length) };
+  }
   const lines: string[] = [];
   if (bottom !== undefined) lines.push(`lowest point at Z ${studs(bottom)}${Math.abs(bottom) > 0.05 ? "; 0 stands it on the ground" : ""}`);
   if (layout !== undefined && layout.skipped !== undefined) {
@@ -1434,7 +1842,9 @@ function describeLayout(layout: LayoutFacts | undefined, bottom: number | undefi
         .join("; ")}${more(layout.overlaps.length, layout.overlapCount)}`);
     }
     if (layout.looseCount === 0 && layout.isolatedCount === 0 && layout.overlapCount === 0) {
-      lines.push(layout.pieces === 1 ? "one piece" : `all ${layout.pieces} pieces connected, and no separate objects pass into each other`);
+      lines.push(layout.pieces === 1 ? "one piece" : jointed.size > 0
+        ? `all ${layout.pieces} pieces connected, and separate objects pass into each other only where one hangs from the other`
+        : `all ${layout.pieces} pieces connected, and no separate objects pass into each other`);
     }
     if (layout.complete === false) lines.push("the comparison stopped at its time limit, so pieces may be missing from these facts");
   }

@@ -1,8 +1,11 @@
 # Animation and 3D preview plan
 
-Status as of 2026-09-28. Steps 1 to 10 are the adopted plan, and all of them
-have landed. Steps 11 to 14 are proposed next and not yet scheduled. Update each
-step's status here as it lands.
+Status as of 2026-09-30. Steps 1 to 10 are the adopted plan, and all of them
+have landed. Step 11, R6, has landed too, apart from what it lists as not done.
+Steps 12 to 14 are planned in more detail, with NPCs added, in the [creature
+plan](creature-plan.md), whose first three steps, a spike, NPCs on stock rigs
+and rigs read from Studio, are done. Update each step's status here as it
+lands.
 
 ## Goal
 
@@ -531,6 +534,10 @@ The steps are ordered so that each rests on the one before:
 As in step 2, every step starts with a live test of what Roblox actually does.
 Nothing is built on an unconfirmed assumption.
 
+Steps 2 to 4 of that order, steps 12 to 14 below, are now planned in the
+[creature plan](creature-plan.md). It puts NPCs on stock rigs first, then moves
+every rig, R15 and R6 included, onto one description read from the model.
+
 ### 11. R6 characters — implemented and live-verified 2026-09-29
 
 Built ahead of its live test, from the Motor6D C0 and C1 values every R6
@@ -679,116 +686,25 @@ Markers were built and read back as `KeyframeMarker`s at their keyframe's
 time, and a published build was read back from Roblox and played as checked.
 The prop builds differ most, still well inside the 1.5° playback limit.
 
-### 12. Creatures made of rigid parts — proposed
+### 12. Creatures made of rigid parts — planned in the creature plan
 
-Animals and monsters that Blender models as separate pieces (a body, a head,
-four legs, a tail), hinged at joints in Studio. Many Roblox creatures are built
-this way. It needs no skinning, and it suits the low-poly style that Blender
-modeling already makes.
+Animals and monsters made of separate pieces, hinged at joints in Studio. The
+[creature plan](creature-plan.md) carries everything this step proposed and
+splits it into its steps 1 to 6: a live test first, NPCs on stock rigs, rigs
+read from Studio, a `rig` action that builds them, generators for any number of
+legs and for chains, and Blender-modelled creatures. T17 keeps the wolf prompt
+this step gave it.
 
-**Work.**
+### 13. Skinned creatures — planned in the creature plan
 
-- **Live test first.**
-  - Check whether an uploaded Blender model keeps each piece's name and pivot.
-    The joints go at the pivots.
-  - Check that a sequence keyed by part name drives `Motor6D` joints the tool
-    creates, on a model with a `Humanoid` and on one with an
-    `AnimationController`.
-- **Rigging.**
-  - The Blender recipe names each piece and puts its origin at its joint.
-  - A new build step joins the inserted pieces with `Motor6D` joints under a
-    root part, adds an `Animator` (under a `Humanoid` for a creature that walks
-    with Humanoid movement, otherwise an `AnimationController`), and reads the
-    joint tree back.
-  - It is one undoable step, like `build`.
-- **A compiler for any rig.**
-  - The rig is read from Studio instead of a fixed table: its parts, joints and
-    rest offsets.
-  - Poses give `rotation` by joint name.
-  - `aim` and `bend` need to know which joints make a limb, so a rig declares
-    its limbs (hip, knee and foot chains) and its feet. A rig with no
-    declarations takes rotations only.
-- **Checks.**
-  - Joint ranges come from the rig's declarations. A joint without one is
-    reported as not checked, never as passed.
-  - Ground contact and foot sliding use the declared feet.
-  - Gait symmetry becomes a declared pattern of leg phases, because two legs
-    are no longer the only case:
-    - a four-legged walk or trot moves diagonal pairs together;
-    - a gallop does not.
-- **Preview.** The contact sheet and the 3D viewer draw the creature's own
-  meshes from the Blender export, posed by the compiled data.
-- **Wiring.** A creature has no default `Animate` script. Wiring puts a small
-  fixed loader on the model, with one attribute per state (idle, walk, run,
-  attack):
-  - speed picks between idle, walk and run;
-  - an attribute or event plays a one-shot action such as an attack;
-  - the loader's source is fixed and read back, like `RoqerAnimate`.
-- **Verify.**
-  - Play each animation on the creature in a playtest.
-  - Move the creature (`Humanoid:MoveTo`) and confirm the loader switches to
-    the walk and the run. T15 could not check this for players.
-- **Eval.** T17 asks: "Model a low-poly wolf in Blender, rig it, give it idle
-  and walk animations, and make it walk around." It needs `--blender`.
+Creatures that bend along their skin: a snake, a tentacle, a dragon's neck.
+Now step 7 of the [creature plan](creature-plan.md), with the same unknowns to
+test live before any code.
 
-**Done when** T17 passes, including the loader switching tracks as the wolf
-moves.
+### 14. Animating in Blender — planned in the creature plan
 
-### 13. Skinned creatures — proposed
-
-Some creatures bend along their skin instead of hinging between pieces: a
-snake, a tentacle, a dragon's neck. That needs a Blender armature with skin
-weights. The model is exported as a skinned mesh, which Roblox imports as a
-`MeshPart` with `Bone` instances, and it is animated by poses keyed by bone
-name.
-
-**Unknowns to test live before any code:**
-
-- whether an Open Cloud Model upload keeps the armature, bones and weights, or
-  only Studio's own importer does;
-- Roblox's limits on bones and on influences per vertex, and what happens past
-  them;
-- whether a `KeyframeSequence` the tool builds, keyed by bone name, drives the
-  bones as the part-name one drives joints;
-- how Blender's bone axes (Z-up, with a rest orientation per bone) convert to
-  Roblox bone frames.
-
-**Work, once those are answered.**
-
-- **A Blender rigging recipe.**
-  - An armature from a template per body plan: biped, four-legged, snake,
-    winged.
-  - Automatic weights.
-  - The worker checks the weights itself rather than taking the script's word:
-    every vertex weighted, within Roblox's influence limit.
-- **The rig.** The rig read from Studio is the bone tree. The rest of step 12
-  applies to it: declared limbs and feet, checks, the loader, verify.
-- **Preview.** The viewer plays a GLB with the skin. For the contact sheet,
-  there are two options, to decide at the time:
-  - a Blender render;
-  - a skinned renderer in core.
-
-**Done when** a skinned creature passes T17's checks.
-
-### 14. Animating in Blender — proposed
-
-This is for motion that is easier to make with Blender's tools (inverse
-kinematics, constraints, the creature's own armature) than to write as poses.
-
-- Blender bakes the action, and a worker script exports it as a pose
-  description.
-- `animation` then checks, builds, publishes and wires it like any other.
-  Studio keeps one path in, whether the model writes the poses or Blender does.
-- It covers R15, R6 and the custom rigs of steps 12 and 13, since the export
-  goes through the same rig description.
-
-What that needs:
-
-- converting Blender's bone rotations into joint rotations for each rig;
-- reducing keyframes, since a 30 fps bake reaches the 240-keyframe limit at
-  8 seconds;
-- a refusal when the Blender rig's joints do not match the Studio rig's;
-- the easing measured in step 6, to convert Blender's interpolation.
+Motion baked in Blender and exported as a pose description for any rig. Now
+step 8 of the [creature plan](creature-plan.md), unchanged in substance.
 
 ## Deferred
 

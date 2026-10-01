@@ -416,7 +416,7 @@ For large NPC counts, keep a rotating work cursor or queue so not all NPCs think
 
 ## Common Mistakes
 
-- **Client-side NPC logic**: ALL NPC behavior must run on the server. Client only handles animations/visuals.
+- **Client-side NPC logic**: ALL NPC behavior must run on the server. Client code handles only presentation. An NPC's own idle, walk and run play from the server and reach every client: make it with the `animation` tool's `rig` and wire its animations to its loader (load `roblox-animation-vfx` `references/character-animation.md`, section NPCs).
 - **No path blocked handling**: Paths go stale when the world changes. Always connect `path.Blocked` and recompute with bounded retries.
 - **ComputeAsync with no fallback**: If path computation fails (`Status ~= Success`), don't freeze. Fall back to direct movement or idle.
 - **Tight detection loops**: Don't check every NPC against every player every frame. Distance checks are O(n*m); throttle and batch based on profiler evidence.

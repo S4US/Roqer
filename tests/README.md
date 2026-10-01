@@ -267,11 +267,118 @@ It builds core first, because it imports the checks from
 `tmp/animation-calibration/`, which is not committed; only derived numbers go in
 the plan.
 
+## Creature spike
+
+`tests/creature-spike.mjs` is step 1 of the [creature plan](../docs/creature-plan.md).
+Like the animation spike, it is a research probe in neither runner profile. It
+asks what Roblox does with a rig that is not a character:
+
+1. Does a sequence keyed by part names drive `Motor6D`s made on a model that is
+   not a character, under a `Humanoid` and under an `AnimationController`, in
+   edit mode and in a playtest? Does a client see what the server plays, and
+   can a client play on the model itself?
+2. Under an `AnimationController`, must the top pose be named
+   `HumanoidRootPart`, or does the root part's own name work?
+3. How deep a chain (24, 64 and 128 joints), and how many joints in one
+   keyframe (48, 128 and 256), does a sequence drive?
+4. Does a copy of a model, made as a preview would make it, play as checked?
+   Is a part that cannot be archived left out of the copy?
+5. Does an NPC made with `CreateHumanoidModelFromDescription` carry an
+   `Animate` script, and does it play anything outside a player's character?
+6. Does `Humanoid:MoveTo` walk a four-legged Humanoid rig steadily at 8 and 16
+   studs a second, and does `Running` report its speed?
+7. With the upload on: how does an articulated creature uploaded as one GLB
+   arrive? The spike writes the GLB itself (`tests/lib/creature-glb.mjs`), each
+   piece a node with its origin at its joint, as Blender exports one, and
+   inserts it twice: with no position, and with one, since the kit probe's lost
+   layout may have been `insert_asset`'s doing. It lists the joints, bones and
+   controllers the import came with, and whether the joints join the pieces as
+   modelled, at their node origins, and it reads where the values in the
+   importer's `InitialPoses` folder put their frames, in case those keep the
+   pivots the joints lost. It reads the meshes back through
+   `EditableMesh`, and publishes the dog's test animation, so question 1 can
+   see a published animation reach the client.
+8. With `ROQER_SPIKE_GENERATE=1`: does `generate_model`, given
+   `schema_groups`, return a creature's pieces as separate, named parts? It
+   also reports how they are jointed, which way the creature faces, and how
+   far its pieces reach.
+
+```bash
+npm run test:spike:creature
+
+# Also upload a test model and a test animation to your account (question 7)
+ROQER_SPIKE_UPLOAD=1 ROBLOX_OPEN_CLOUD_API_KEY=... ROBLOX_CREATOR_USER_ID=... \
+  npm run test:spike:creature
+
+# Also try Roblox's model generator (question 8)
+ROQER_SPIKE_GENERATE=1 npm run test:spike:creature
+```
+
+Type the key at a prompt rather than on the command line, where the shell's
+history keeps it. In bash:
+
+```bash
+read -rs ROBLOX_OPEN_CLOUD_API_KEY && export ROBLOX_OPEN_CLOUD_API_KEY
+```
+
+In PowerShell:
+
+```powershell
+$env:ROBLOX_OPEN_CLOUD_API_KEY = [Net.NetworkCredential]::new('', (Read-Host -AsSecureString)).Password
+```
+
+The answers are findings, not assertions: a "no" still exits 0. The spike fails
+when a question could not be asked, because a probe errored, for example, or
+when it cannot clean up. It works in temporary `__RoqerCreatureSpike` folders in
+Workspace and ServerStorage, which it removes on every path, and stops the
+playtest it starts. It also removes every model `generate_model` made under the
+spike's name, even one that landed after its call failed, since Studio keeps
+generating after a caller gives up; one still generating when the spike ends
+lands afterwards. The uploads are named
+"Roqer creature spike: model" and "Roqer creature spike: dog hold" and can be
+archived afterwards in the Creator Dashboard. The report and the GLB go to
+`tmp/creature-spike/`.
+
+## Skinned spike
+
+`tests/skinned-spike.mjs` opens step 7 of the [creature plan](../docs/creature-plan.md).
+Like the creature spike, it is a research probe in neither runner profile. It
+asks what Roblox does with a skinned mesh uploaded through Open Cloud:
+
+1. Does a Model upload keep the armature, the bones and the weights, and how
+   does it arrive: what parts, what bones under what, with what joints and
+   controller?
+2. How do a Blender bone's axes, +Y along the bone, arrive in a `Bone`?
+3. How must a `KeyframeSequence`'s poses be named and nested to drive bones,
+   in edit mode and on a playtest's server? This one is also asked, with no
+   upload, of `Bone`s the spike makes under a plain Part.
+4. Does `EditableMesh` hand over the bones and each vertex's weights?
+5. What happens past the limits: a chain of 300 bones, and a mesh whose every
+   vertex is weighted to eight bones? A refused upload is an answer here.
+
+The spike writes the GLBs itself (`tests/lib/skinned-glb.mjs`): a snake, one
+mesh skinned to a chain of bones the way Blender exports an armature.
+
+```bash
+npm run test:spike:skinned
+
+# Also upload three test models to your account (every question but the made bones)
+ROQER_SPIKE_UPLOAD=1 ROBLOX_OPEN_CLOUD_API_KEY=... ROBLOX_CREATOR_USER_ID=... \
+  npm run test:spike:skinned
+```
+
+Set the key as the creature spike's section says. The answers are findings,
+not assertions. The spike works in a temporary `__RoqerSkinnedSpike` folder in
+Workspace, which it removes on every path, and stops the playtest it starts.
+The uploads are named "Roqer skinned spike: base", "many-bones" and
+"many-influences" and can be archived afterwards in the Creator Dashboard.
+The report and the GLBs go to `tmp/skinned-spike/`.
+
 ## What each test exercises
 
 | File | What it checks |
 |---|---|
-| `animation-tool.mjs` | `animation` checks a pose description without Studio, then builds it in a temporary ServerStorage folder: the preview plays as checked and leaves nothing in Workspace, the write reads back and is one undo step, a rebuild needs the current revision, a sequence edited after its build or not built by the tool is never replaced, and a failing motion check changes nothing. The guidance's wave, posed with `aim` and `bend`, builds and plays as checked, and its contact sheet looks at the front. It then checks the combat features against Studio: a swing split into in-betweens, keyframe markers built as `KeyframeMarker`s, the rig tables' grip attachments and an R6 dummy's `Motor6D`s, a weapon, sheath and off-hand animation on their stand-in motors, an R6 animation on an R6 dummy, a planted lunge (`aimAt`) and a two-handed swing (`grip`), each playing as checked. It wires Roblox's wave animation to the idle slot (a missing or changed current ID, or an edited loader, is refused), then verifies in a playtest that the built animation plays on the character as checked and that the idle slot holds and plays the wired ID. Publishing is refused without an Open Cloud key; with `ROQER_ANIMATION_UPLOAD=1` and a key it uploads one real test animation, reads it back, and verifies the published copy. It is in the managed runner, not the `test:e2e` smoke gate: run it alone with `npm run test:studio:animation` |
+| `animation-tool.mjs` | `animation` checks a pose description without Studio, then builds it in a temporary ServerStorage folder: the preview plays as checked and leaves nothing in Workspace, the write reads back and is one undo step, a rebuild needs the current revision, a sequence edited after its build or not built by the tool is never replaced, and a failing motion check changes nothing. The guidance's wave, posed with `aim` and `bend`, builds and plays as checked, and its contact sheet looks at the front. It then checks the combat features against Studio: a swing split into in-betweens, keyframe markers built as `KeyframeMarker`s, the rig tables' grip attachments and an R6 dummy's `Motor6D`s, a weapon, sheath and off-hand animation on their stand-in motors, an R6 animation on an R6 dummy, a planted lunge (`aimAt`) and a two-handed swing (`grip`), each playing as checked. It wires Roblox's wave animation to the idle slot (a missing or changed current ID, or an edited loader, is refused), then verifies in a playtest that the built animation plays on the character as checked and that the idle slot holds and plays the wired ID. Publishing is refused without an Open Cloud key; with `ROQER_ANIMATION_UPLOAD=1` and a key it uploads one real test animation, reads it back, and verifies the published copy. Last, `rig` makes a stock R15 NPC in Workspace as one undo step, its loader holding the idle, walk and run its `Animate` script carried (a path that already names something is refused, and replacing a state needs its current ID), and in the same playtest `verify` walks it with `MoveTo` and sees the loader play the walk, paced to its speed, and then the idle; then the NPC's own `Patrol` script walks it back and forth, and `verify`, given only the model, watches that patrol and passes it. A model's own rig comes last: a Parts dog rigged by hand with `Motor6D`s and no declarations, with welded wedge ears, a ball nose and, when Studio can make one from its classic head mesh, a MeshPart collar. `check` reads its rig from Studio and reports the checks it has nothing to judge by as not checked; `build` plays its animation on a copy of the dog, which plays as checked and leaves the dog where it was; a weld to a part outside the dog is refused, naming it, before any copy is made; and in the playtest `verify` plays the animation on the dog on the server as checked. Then `rig` joins a second dog's loose pieces at their pivots as a quadruped in one undo step and reads it back (a rebuild needs the rig's current revision, a rig edited since and a pivot outside its pieces are refused), `aim` and `aimAt` move the rigged legs with every check passing on a copy and in the playtest, adopting the first dog declares its legs and changes none of its joints, and a dog rigged as an upload arrives is re-rigged only with `replace: "importer"`. It is in the managed runner, not the `test:e2e` smoke gate: run it alone with `npm run test:studio:animation` |
 | `codex-wsl-environment.mjs` | The supported Codex wrapper validates Windows interop and advertises the retained process-identity launcher from a sanitized WSL environment without launching Studio |
 | `eval-bridge-error-preservation.mjs` | `eval_server_runtime` / `eval_client_runtime` surface actual user errors instead of Roblox's generic `"Requested module experienced an error while loading"` wrapper for explicit errors, nil derefs, parser errors, and nested `require()` module-load failures |
 | `eval-context-routing.mjs` | `execute_luau target=server/client-N` runs in plugin context on the selected peer, while `eval_server_runtime` / `eval_client_runtime` run through the server Script and client LocalScript eval bridges |

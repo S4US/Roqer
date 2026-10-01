@@ -98,6 +98,15 @@ test("an animation reads as checking or building, whatever its summary says", ()
   assert.equal(activityLabel("animation", build, false), "Building an animation");
   assert.equal(activityKind("animation", check), "read");
   assert.equal(activityKind("animation", build), "edit");
+  const character = activityTarget("animation", summarizeToolCall("animation", { action: "verify", animation }));
+  const model = activityTarget("animation", summarizeToolCall("animation", { action: "verify", model: "game.Workspace.Guard", position: [4, 0, 0] }));
+  assert.equal(activityLabel("animation", character, true), "Verified an animation in the playtest");
+  assert.equal(activityLabel("animation", model, false), "Verifying a model in the playtest");
+  assert.equal(activityKind("animation", model), "run");
+  const rig = activityTarget("animation", summarizeToolCall("animation", { action: "rig", model: "game.Workspace.Guard", stock: "R15" }));
+  assert.equal(activityLabel("animation", rig, false), "Making an NPC");
+  assert.equal(activityLabel("animation", rig, true), "Made an NPC");
+  assert.equal(activityKind("animation", rig), "edit");
 });
 
 test("every phase can name itself in both tenses", () => {

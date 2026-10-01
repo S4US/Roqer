@@ -26,9 +26,9 @@ install, and connect them; this page says what they can do.
 - Simulate network and device conditions, inspect semantic runtime UI, and
   interact by semantic selector or bounded input.
 
-### Animate characters
+### Animate characters and NPCs
 
-- Check, build, publish, wire and verify R15 character animations with
+- Check, build, publish, wire and verify R15 or R6 character animations with
   `animation`. `check` needs no Studio: it compiles a compact pose description
   and measures the motion. The pose description gives joint rotations, or where
   a limb points and how far it bends.
@@ -38,6 +38,10 @@ install, and connect them; this page says what they can do.
 - `publish` uploads the animation through Open Cloud as the place's owner.
   `wire` sets it on a default `Animate` slot for every character. `verify`
   plays it on the playtest character. See [Character animation](animation.md).
+- For an NPC, `rig` makes a stock R15 or R6 body with a loader inside it that
+  plays its idle, walk and run as it moves. `wire` with `model` sets them, and
+  `verify` with `model` walks or watches the NPC on the playtest's server. See
+  [NPCs](animation.md#npcs).
 
 ### Collect evidence and diagnose performance
 

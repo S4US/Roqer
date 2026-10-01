@@ -4,7 +4,7 @@ import { Box, Camera, ChevronLeft, ChevronRight, Gamepad2, ImageIcon, Maximize2,
 import { MAX_RECORDED_EVIDENCE_IMAGES, type RunChange, type RunEvidence } from "../shared/run-events";
 import { ModelViewer } from "./model-viewer";
 import {
-  hasModelPreview, previewCaption, previewLayout, previewSource, previewSourceLabel, previewTileLabel, previewVersions,
+  animationRigCaption, hasModelPreview, previewCaption, previewLayout, previewSource, previewSourceLabel, previewTileLabel, previewVersions,
   type PreviewTile,
 } from "./preview-layout";
 import { evidenceImages, previewsNotShown } from "./run-view";
@@ -99,7 +99,8 @@ export const PreviewsPanel = memo(function PreviewsPanel({ evidence, changes, ch
 function SourceIcon({ evidence, size }: { evidence: RunEvidence; size: number }) {
   switch (previewSource(evidence)) {
     case "blender": return <Box size={size} aria-hidden="true" />;
-    case "animation": return <PersonStanding size={size} aria-hidden="true" />;
+    case "animation":
+    case "rig": return <PersonStanding size={size} aria-hidden="true" />;
     case "playtest": return <Gamepad2 size={size} aria-hidden="true" />;
     default: return <Camera size={size} aria-hidden="true" />;
   }
@@ -125,7 +126,8 @@ function VersionStepper({ evidence, choice }: { evidence: RunEvidence; choice: V
 
 /** An animation leads the card as itself, playing, rather than as its contact sheet. */
 function playsInline(evidence: RunEvidence): boolean {
-  return previewSource(evidence) === "animation" && hasModelPreview(evidence);
+  const source = previewSource(evidence);
+  return (source === "animation" || source === "rig") && hasModelPreview(evidence);
 }
 
 /**
@@ -153,7 +155,7 @@ function LiveAnimationTile({ tile, count, choice, paused, onOpen }: {
     observer.observe(element);
     return () => observer.disconnect();
   }, []);
-  return <div className="preview-tile" data-role="lead" data-source="animation" data-live="true" ref={host}>
+  return <div className="preview-tile" data-role="lead" data-source={previewSource(evidence)} data-live="true" ref={host}>
     {visible && !paused
       ? <ModelViewer key={evidence.id} evidence={evidence} onShowPicture={() => undefined} compact />
       : <EvidencePicture evidence={evidence} />}
@@ -263,8 +265,12 @@ function PreviewViewer({ images, changes, choice, index, onIndex, onClose }: {
         <strong><SourceIcon evidence={current} size={15} />{current.title}</strong>
         <span>{caption ?? (previewSource(current) === "animation"
           ? inModel
-            ? "The animation on the R15 rig, as checked"
-            : "Five moments of the animation, from two views"
+            ? `The animation on ${animationRigCaption(current)}, as checked`
+            : "Moments of the animation, from two views"
+          : previewSource(current) === "rig"
+            ? inModel
+              ? `Every joint of ${animationRigCaption(current)} turning a little each way; no check judged it`
+              : "Every joint at rest and turned each way, from two views"
           : previewSource(current) !== "blender"
             ? previewSourceLabel(current)
             : inModel

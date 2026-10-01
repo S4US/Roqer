@@ -44,24 +44,38 @@ export type ToolSchema = {
 };
 
 /** sha256 of `packages/core/src/tools/definitions.ts` with LF newlines. */
-export const TOOL_DEFINITIONS_DIGEST = "3cf9054f0fd998624e315e77e9e2d79bc665b1ea0f875232359b0a1143b08905";
+export const TOOL_DEFINITIONS_DIGEST = "6f829dc836a07edb9737d05d1322bb2e7f9299733c7d4e495f1e6aa1f7405524";
+
+/** What a bridge built from these definitions reports as `toolCatalogDigest` on `/health`. */
+export const TOOL_CATALOG_DIGEST = "2f786bd0a803d04be6e38a6c8dd29655a6e0de5dc932d3ed02e4e98d9260a541";
 
 export const TOOL_SCHEMAS: Readonly<Record<string, ToolSchema>> = {
   animation: {
-    description: "Use to check, build, publish, wire, or verify an R15 or R6 character animation.",
+    description: "Use to check, build, publish, wire, or verify animations for R15, R6 or a model, or rig one.",
     parameters: [
-      { name: "action", type: "string", required: true, enumValues: ["check", "build", "publish", "wire", "verify"], description: "check needs no Studio; verify needs a running playtest and the checked animation." },
-      { name: "animation", type: "object", required: false, description: "Pose description for an R15 or R6 rig." },
+      { name: "action", type: "string", required: true, enumValues: ["check", "build", "publish", "wire", "verify", "rig"], description: "check needs Studio only for a model rig; verify needs a running playtest, and the checked animation unless given model." },
+      { name: "animation", type: "object", required: false, description: "Pose description for R15, R6, or a rigged model." },
       { name: "locomotion", type: "boolean", required: false, description: "A gait: adds ground, foot, and symmetry checks." },
       { name: "grounded", type: "boolean", required: false, description: "Stands on the ground: checks feet never sink in." },
       { name: "parent", type: "string", required: false, description: "Build: instance the KeyframeSequence goes in." },
-      { name: "expected_revision", type: "string", required: false, description: "Build: revision its last build returned; required to replace it." },
+      { name: "expected_revision", type: "string", required: false, description: "Build/rig: revision last returned; required to replace it." },
       { name: "waive", type: "string[]", required: false, description: "Failed checks to accept." },
       { name: "path", type: "string", required: false, description: "Publish: the KeyframeSequence a build wrote." },
       { name: "display_name", type: "string", required: false, description: "Publish: asset name; defaults to the sequence name." },
-      { name: "slot", type: "string", required: false, enumValues: ["idle", "walk", "run", "jump", "fall", "climb", "swim", "swimidle", "sit"], description: "Wire/verify: default Animate slot." },
+      { name: "slot", type: "string", required: false, enumValues: ["idle", "walk", "run", "jump", "fall", "climb", "swim", "swimidle", "sit"], description: "Wire/verify: Animate slot, or with model its state." },
       { name: "animation_id", type: "string", required: false, description: "Wire/verify: published ID, rbxassetid://N; verify with slot needs it." },
       { name: "expected_id", type: "string", required: false, description: "Wire: ID the slot holds now; required to replace it." },
+      { name: "model", type: "string", required: false, description: "Rig/wire/verify: an NPC or creature Model, not a character." },
+      { name: "ground_speed", type: "number", required: false, description: "Wire walk/run: the groundSpeed its check reported." },
+      { name: "stock", type: "string", required: false, enumValues: ["R15", "R6"], description: "Rig: make a stock NPC body of this rig type at model." },
+      { name: "animation_file", type: "string", required: false, description: "A baked *.animation.json, in place of animation." },
+      { name: "joints", type: "object[]", required: false, description: "Rig: [{part, parent, pivot, name?, with?}]; pivot is [x,y,z]." },
+      { name: "controller", type: "string", required: false, enumValues: ["Humanoid", "AnimationController"], description: "Rig: Humanoid for a walker. No joints: a skinned mesh." },
+      { name: "plan", type: "string", required: false, enumValues: ["quadruped", "custom"], description: "Rig: body plan declaring limbs from part names." },
+      { name: "declarations", type: "object", required: false, description: "Rig: RoqerRig {feet, hips, limbs, hinges, limits}." },
+      { name: "replace", type: "string", required: false, enumValues: ["importer"], description: "Rig: replace the rig an upload arrived with." },
+      { name: "pivot_space", type: "string", required: false, enumValues: ["world", "import"], description: "Rig: import = pivots from an upload's own origin." },
+      { name: "position", type: "number[]", required: false, description: "[x, y, z]. Rig: where its feet stand; verify: walk it there." },
       { name: "instance_id", type: "string", required: false, description: "Connected place ID; required with multiple places." },
     ],
   },

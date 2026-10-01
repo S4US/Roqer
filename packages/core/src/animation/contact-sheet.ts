@@ -3,23 +3,44 @@
 // column is a moment; the top row looks from the front three-quarter, the
 // bottom row straight at the character's front, or, for a gait, from its right
 // side facing right, where strides and foot plants read. The scale is the same
-// in every frame, so drift and height changes show as they are.
+// in every frame, so drift and height changes show as they are. R15 and R6 are
+// framed as they always have been; any other body is framed by its own size at
+// rest, in wider cells when it is long.
 //
 // A small software rasteriser draws it: a depth buffer, one light-grey
-// rounded mesh a part, and smooth shading from a key and a fill light, on a
+// mesh a part, and smooth shading from a key and a fill light, on a
 // dark ground with a soft contact shadow.
 
 import { rgbaToPng } from '../png-encoder.js';
 import { heldParts, RIG_COLOR, type Rgb } from './box-rig.js';
 import { generatedRigMeshes, type RigMeshes } from './rig-meshes.js';
-import { buildTracks, degreesBetween, poseRig, sampleTrack, sequenceDuration, type Frame, type MotionSequence } from './motion.js';
+import { skinFrames, skinnedVertices } from './skin.js';
+import {
+  buildTracks,
+  degreesBetween,
+  pointToWorld,
+  poseRig,
+  restPose,
+  sampleTrack,
+  sequenceDuration,
+  type Frame,
+  type MotionSequence,
+} from './motion.js';
 import { R15_RIG, type Rig, type Vec3 } from './r15-rig.js';
+import { RIGS } from './rigs.js';
 
 const CELL_WIDTH = 172;
 const CELL_HEIGHT = 236;
 const LABEL_HEIGHT = 18;
 /** Studs across the cell's height; the width follows the cell's shape. */
 const VIEW_HEIGHT_STUDS = 7.4;
+/** Pixels under R15's ground line, and above its head at rest: the room any body is given. */
+const GROUND_MARGIN = 22;
+const HEAD_ROOM = 40;
+/** A long body's cells widen up to this; past it, the body is drawn smaller. */
+export const MAX_CELL_WIDTH = CELL_WIDTH * 2;
+/** A body's cell over its width at rest: room for its limbs to swing out. */
+const SIDE_ROOM = 1.4;
 const COLUMNS = 5;
 /** The most columns a sheet draws: the even ones, with key moments added or snapped in. */
 export const MAX_COLUMNS = 8;
@@ -159,11 +180,11 @@ function lighting(normal: Vec3, camera: View): number {
   return 0.3 + 0.62 * key + 0.18 * fill + 0.12 * rim;
 }
 
-function drawBackground(canvas: Canvas, left: number, top: number, height: number) {
+function drawBackground(canvas: Canvas, left: number, top: number, height: number, width: number) {
   for (let y = 0; y < height; y += 1) {
     const share = y / height;
     const color = TOP.map((value, channel) => Math.round(value + (BOTTOM[channel] - value) * share));
-    for (let x = 0; x < CELL_WIDTH; x += 1) canvas.put(left + x, top + y, color);
+    for (let x = 0; x < width; x += 1) canvas.put(left + x, top + y, color);
   }
 }
 
@@ -174,12 +195,115 @@ interface Figure {
   hidden: ReadonlySet<string>;
 }
 
-function drawCell(canvas: Canvas, figure: Figure, parts: Map<string, Frame>, camera: View, left: number, top: number) {
+/** Where a view puts the body in its cell. */
+interface Placement {
+  /** The point across the view drawn at the cell's middle, in studs. */
+  middle: number;
+  /** The ground line's height in the cell, in pixels from its top. */
+  ground: number;
+}
+
+/**
+ * How a sheet frames its body: the cells' width, pixels a stud, and where each
+ * view puts the body. The same in every frame.
+ */
+interface Framing {
+  cellWidth: number;
+  scale: number;
+  placements: ReadonlyMap<View, Placement>;
+  /** A body's footprint at rest, which its shadow follows; R15 and R6 cast a fixed disc. */
+  footprint?: Footprint;
+  /** The body at rest, which a skinned mesh is bent from. */
+  rest?: ReadonlyMap<string, Frame>;
+}
+
+/** A body's footprint at rest, along the root part's X and Z. */
+interface Footprint {
+  /** Its middle's offset from the body part. */
+  offset: [number, number];
+  /** Its half extents. */
+  half: [number, number];
+  /** The body part's rotation at rest, which its turn is measured from. */
+  rest: Frame['r'];
+}
+
+const BUILT_IN_FRAMING: Framing = { cellWidth: CELL_WIDTH, scale: CELL_HEIGHT / VIEW_HEIGHT_STUDS, placements: new Map() };
+const BUILT_IN_PLACEMENT: Placement = { middle: 0, ground: CELL_HEIGHT - GROUND_MARGIN };
+
+/**
+ * R15 and R6 keep the framing their sheets were drawn with. Any other body is
+ * framed by what is drawn of it at rest: as tall in its cell as R15 is, in a
+ * cell wide enough for its length up to MAX_CELL_WIDTH, then smaller; centred
+ * across each view, and with the ground raised when a long body reaches
+ * toward the viewer below it.
+ */
+function frameFigure(figure: Figure, cameras: readonly View[]): Framing {
+  const { rig, meshes, hidden } = figure;
+  if (RIGS.get(rig.name) === rig) return BUILT_IN_FRAMING;
+  const rest = restPose(rig);
+  const points: Vec3[] = [];
+  for (const [part, mesh] of meshes.parts) {
+    const frame = rest.get(part);
+    if (!frame || hidden.has(part)) continue;
+    for (let index = 0; index < mesh.positions.length; index += 3) {
+      points.push(pointToWorld(frame, [mesh.positions[index], mesh.positions[index + 1], mesh.positions[index + 2]]));
+    }
+  }
+  const body = rest.get(rig.body);
+  if (points.length === 0 || !body) return BUILT_IN_FRAMING;
+  const spans = cameras.map((camera) => {
+    let [low, high, below, above] = [Infinity, -Infinity, 0, 0];
+    for (const point of points) {
+      const across = dot(point, camera.right);
+      const up = dot(point, camera.up) - rig.ground * camera.up[1];
+      [low, high] = [Math.min(low, across), Math.max(high, across)];
+      [below, above] = [Math.min(below, up), Math.max(above, up)];
+    }
+    return { camera, low, high, below, above };
+  });
+  const tallest = Math.max(...spans.map((span) => span.above - span.below));
+  const widest = Math.max(...spans.map((span) => span.high - span.low));
+  let scale = (CELL_HEIGHT - GROUND_MARGIN - HEAD_ROOM) / Math.max(tallest, 0.01);
+  let cellWidth = Math.max(CELL_WIDTH, Math.ceil(widest * scale * SIDE_ROOM));
+  if (cellWidth > MAX_CELL_WIDTH) {
+    cellWidth = MAX_CELL_WIDTH;
+    scale = MAX_CELL_WIDTH / (widest * SIDE_ROOM);
+  }
+  const placements = new Map(spans.map((span) => [
+    span.camera,
+    { middle: (span.low + span.high) / 2, ground: CELL_HEIGHT - GROUND_MARGIN + span.below * scale },
+  ]));
+  let [minX, maxX, minZ, maxZ] = [Infinity, -Infinity, Infinity, -Infinity];
+  for (const point of points) {
+    [minX, maxX] = [Math.min(minX, point[0]), Math.max(maxX, point[0])];
+    [minZ, maxZ] = [Math.min(minZ, point[2]), Math.max(maxZ, point[2])];
+  }
+  const footprint: Footprint = {
+    offset: [(minX + maxX) / 2 - body.p[0], (minZ + maxZ) / 2 - body.p[2]],
+    half: [(maxX - minX) / 2, (maxZ - minZ) / 2],
+    rest: body.r,
+  };
+  return { cellWidth, scale, placements, footprint, rest };
+}
+
+/** A soft round shadow, darkest at its middle, inside one cell. */
+function shade(canvas: Canvas, centre: { x: number; y: number }, radiusX: number, radiusY: number, left: number, width: number) {
+  for (let y = Math.floor(centre.y - radiusY); y <= Math.ceil(centre.y + radiusY); y += 1) {
+    for (let x = Math.floor(centre.x - radiusX); x <= Math.ceil(centre.x + radiusX); x += 1) {
+      if (x < left || x >= left + width) continue;
+      const d = ((x - centre.x) / radiusX) ** 2 + ((y - centre.y) / radiusY) ** 2;
+      if (d < 1) canvas.darken(x, y, 0.55 * (1 - d) ** 1.5);
+    }
+  }
+}
+
+function drawCell(canvas: Canvas, figure: Figure, framing: Framing, parts: Map<string, Frame>, camera: View, left: number, top: number) {
   const { meshes, rig, hidden } = figure;
-  const scale = CELL_HEIGHT / VIEW_HEIGHT_STUDS;
+  const { cellWidth, scale, footprint } = framing;
+  const placement = framing.placements.get(camera) ?? BUILT_IN_PLACEMENT;
   const ground = rig.ground;
-  const originX = left + CELL_WIDTH / 2;
-  const groundY = top + CELL_HEIGHT - 22;
+  const originX = left + cellWidth / 2 - placement.middle * scale;
+  const groundY = top + placement.ground;
   const project = (p: Vec3) => ({
     x: originX + dot(p, camera.right) * scale,
     y: groundY - (dot(p, camera.up) - ground * camera.up[1]) * scale,
@@ -188,32 +312,59 @@ function drawCell(canvas: Canvas, figure: Figure, parts: Map<string, Frame>, cam
 
   // A soft shadow on the ground under the body, as the viewer's floor casts.
   const body = parts.get(rig.body);
-  if (body) {
+  if (body && !footprint) {
     const centre = project([body.p[0], ground, body.p[2]]);
     const radiusX = 1.35 * scale;
     const radiusY = Math.max(3, 1.35 * scale * Math.abs(camera.up[2] * camera.toward[2] + camera.up[0] * camera.toward[0]) + 3);
-    for (let y = Math.floor(centre.y - radiusY); y <= Math.ceil(centre.y + radiusY); y += 1) {
-      for (let x = Math.floor(centre.x - radiusX); x <= Math.ceil(centre.x + radiusX); x += 1) {
-        if (x < left || x >= left + CELL_WIDTH) continue;
-        const d = ((x - centre.x) / radiusX) ** 2 + ((y - centre.y) / radiusY) ** 2;
-        if (d < 1) canvas.darken(x, y, 0.55 * (1 - d) ** 1.5);
-      }
-    }
+    shade(canvas, centre, radiusX, radiusY, left, cellWidth);
+  } else if (body && footprint) {
+    // The footprint turned as the body has turned about the vertical since rest.
+    const { offset, half, rest } = footprint;
+    const flat = (v: Vec3) => {
+      const turned = rotate(body, v);
+      const length = Math.hypot(turned[0], turned[2]);
+      return length > 0.2 ? [turned[0] / length, 0, turned[2] / length] : undefined;
+    };
+    const sideways = flat([rest[0], rest[1], rest[2]]);
+    const back = flat([rest[6], rest[7], rest[8]]);
+    const ex = sideways ?? (back ? [back[2], 0, -back[0]] : [1, 0, 0]);
+    const ez = [-ex[2], 0, ex[0]];
+    const middle: Vec3 = [body.p[0] + ex[0] * offset[0] + ez[0] * offset[1], ground, body.p[2] + ex[2] * offset[0] + ez[2] * offset[1]];
+    const reach = Math.max(half[0], half[1]) * 0.3;
+    const [a, b] = [Math.max(half[0] * 0.72, reach), Math.max(half[1] * 0.72, reach)];
+    const corners = [[-1, -1], [-1, 1], [1, -1], [1, 1]].map(([i, j]) => project([
+      middle[0] + ex[0] * a * i + ez[0] * b * j,
+      ground,
+      middle[2] + ex[2] * a * i + ez[2] * b * j,
+    ]));
+    const xs = corners.map((corner) => corner.x);
+    const ys = corners.map((corner) => corner.y);
+    const radiusX = Math.max(3, (Math.max(...xs) - Math.min(...xs)) / 2);
+    const radiusY = Math.max(3, (Math.max(...ys) - Math.min(...ys)) / 2 + 3);
+    shade(canvas, project(middle), radiusX, radiusY, left, cellWidth);
   }
 
-  const clip = { x0: left, y0: top, x1: left + CELL_WIDTH - 1, y1: top + CELL_HEIGHT - 1 };
+  const clip = { x0: left, y0: top, x1: left + cellWidth - 1, y1: top + CELL_HEIGHT - 1 };
   for (const [part, mesh] of meshes.parts) {
     const frame = parts.get(part);
     if (!frame || hidden.has(part)) continue;
     const color = RIG_COLOR;
     const vertices: Vertex[] = [];
     const world: Vec3[] = [];
+    // A skinned mesh is bent by its bones; any other moves with its part.
+    const bent = mesh.skin ? skinnedVertices(mesh, skinFrames(mesh.skin, part, framing.rest ?? restPose(rig), parts), frame) : undefined;
     for (let index = 0; index < mesh.positions.length; index += 3) {
-      const local: Vec3 = [mesh.positions[index], mesh.positions[index + 1], mesh.positions[index + 2]];
-      const rotated = rotate(frame, local);
-      const point: Vec3 = [rotated[0] + frame.p[0], rotated[1] + frame.p[1], rotated[2] + frame.p[2]];
+      let point: Vec3;
+      let normal: Vec3;
+      if (bent) {
+        point = [bent.positions[index], bent.positions[index + 1], bent.positions[index + 2]];
+        normal = [bent.normals[index], bent.normals[index + 1], bent.normals[index + 2]];
+      } else {
+        const rotated = rotate(frame, [mesh.positions[index], mesh.positions[index + 1], mesh.positions[index + 2]]);
+        point = [rotated[0] + frame.p[0], rotated[1] + frame.p[1], rotated[2] + frame.p[2]];
+        normal = rotate(frame, [mesh.normals[index], mesh.normals[index + 1], mesh.normals[index + 2]]);
+      }
       world.push(point);
-      const normal = rotate(frame, [mesh.normals[index], mesh.normals[index + 1], mesh.normals[index + 2]]);
       const light = lighting(normal, camera);
       const projected = project(point);
       vertices.push({
@@ -327,17 +478,19 @@ export function renderContactSheet(
     meshes: meshes ?? generatedRigMeshes(rig),
     hidden: new Set(heldParts(rig).filter((part) => !tracks.has(part))),
   };
-  const width = CELL_WIDTH * times.length;
+  const cameras = [THREE_QUARTER, options.locomotion ? SIDE : FRONT];
+  const framing = frameFigure(figure, cameras);
+  const width = framing.cellWidth * times.length;
   const rowHeight = CELL_HEIGHT + LABEL_HEIGHT;
   const height = rowHeight * 2;
   const canvas = new Canvas(width, height);
   times.forEach((time, column) => {
     const parts = poseRig(tracks, time, rig).parts;
-    const left = column * CELL_WIDTH;
-    [THREE_QUARTER, options.locomotion ? SIDE : FRONT].forEach((camera, row) => {
+    const left = column * framing.cellWidth;
+    cameras.forEach((camera, row) => {
       const top = row * rowHeight;
-      drawBackground(canvas, left, top, rowHeight);
-      drawCell(canvas, figure, parts, camera, left, top);
+      drawBackground(canvas, left, top, rowHeight, framing.cellWidth);
+      drawCell(canvas, figure, framing, parts, camera, left, top);
       canvas.text(`${time.toFixed(2)}s`, left + 10, top + CELL_HEIGHT + 2, 2, TEXT);
     });
     if (column > 0) for (let y = 0; y < height; y += 1) canvas.put(left, y, DIVIDER);

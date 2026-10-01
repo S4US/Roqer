@@ -3,8 +3,16 @@
 // edges, sized as the stock rig's parts are, in a light grey. Both the contact
 // sheet and the 3D preview draw whichever rig is current, so the model sees
 // the same figure the user plays back.
+//
+// A rig read from a model is drawn the same way, each part as its shape
+// (a block, wedge, cylinder or ball) with the parts welded to it.
 
-import { R15_RIG, type Rig, type Vec3 } from './r15-rig.js';
+import { fittedMesh, type ModelMesh } from './model-meshes.js';
+import { R15_RIG } from './r15-rig.js';
+import type { PartShape, Rig, RigAttachment, Vec3 } from './rig.js';
+
+/** Meshes read from Studio for a model's MeshParts, by mesh ID. */
+export type MeshLibrary = ReadonlyMap<string, ModelMesh>;
 
 export type Rgb = readonly [number, number, number];
 
@@ -12,12 +20,24 @@ export type Rgb = readonly [number, number, number];
 export const RIG_COLOR: Rgb = [214, 217, 222];
 
 /**
- * The body's parts, drawn in every preview: every part but the
- * HumanoidRootPart, which Roblox hides, and a held weapon's.
+ * The body's parts, drawn in every preview: every part but the hidden ones
+ * (on a character, the HumanoidRootPart, which Roblox hides) and a held
+ * weapon's.
  */
 export function drawnParts(rig: Rig = R15_RIG): string[] {
   const held = new Set(heldParts(rig));
-  return Object.keys(rig.parts).filter((part) => part !== rig.rootPart && !held.has(part));
+  const hidden = new Set(rig.hidden ?? [rig.rootPart]);
+  return Object.keys(rig.parts).filter((part) => !hidden.has(part) && !held.has(part));
+}
+
+/**
+ * The parts a preview has a mesh for: the drawn parts, and a hidden one that
+ * visible parts are welded to, drawn as those parts alone.
+ */
+export function meshParts(rig: Rig = R15_RIG): string[] {
+  const held = new Set(heldParts(rig));
+  const hidden = new Set(rig.hidden ?? [rig.rootPart]);
+  return Object.keys(rig.parts).filter((part) => !held.has(part) && (!hidden.has(part) || (rig.attached?.[part]?.length ?? 0) > 0));
 }
 
 /** The parts of optional joints, such as the weapon: drawn only when an animation moves them. */
@@ -25,9 +45,26 @@ export function heldParts(rig: Rig = R15_RIG): string[] {
   return rig.joints.filter((joint) => joint.optional).map((joint) => joint.childPart);
 }
 
-/** Where the ground is, in the HumanoidRootPart's frame. */
+/** Where the ground is, in the root part's frame. */
 export function groundHeight(rig: Rig = R15_RIG): number {
   return rig.ground;
+}
+
+/** The slots of bones a skinned vertex has, as Roblox keeps them. */
+export const SKIN_SLOTS = 4;
+
+/**
+ * How a skinned mesh's vertices follow its bones: for each vertex, SKIN_SLOTS
+ * bones and how much each weighs on it. A vertex whose weights are all 0 moves
+ * with its part, as the parts welded to a skinned one do.
+ */
+export interface MeshSkin {
+  /** The bones' names, as the rig names its bone parts. */
+  bones: string[];
+  /** SKIN_SLOTS indices into `bones` for each vertex. */
+  joints: number[];
+  /** SKIN_SLOTS weights for each vertex, summing to 1 or to 0. */
+  weights: number[];
 }
 
 export interface PartMesh {
@@ -35,6 +72,8 @@ export interface PartMesh {
   normals: number[];
   /** Counter-clockwise seen from outside. */
   indices: number[];
+  /** On a skinned MeshPart: how its bones bend it. */
+  skin?: MeshSkin;
 }
 
 /** How round a part's edges are: the head most, thin parts no more than they allow. */
@@ -99,11 +138,185 @@ export function roundedBox(size: Vec3, radius: number, steps = 3): PartMesh {
   return { positions, normals, indices };
 }
 
-/** A part's mesh, in the part's own frame. */
-export function partMesh(part: string, rig: Rig = R15_RIG): PartMesh {
+/**
+ * A Ball part: the ellipsoid its box holds, which Roblox keeps a sphere. Rings
+ * run from the top down and segments round the vertical.
+ */
+export function ball(size: Vec3, rings = 10, segments = 16): PartMesh {
+  const half = size.map((value) => value / 2);
+  const positions: number[] = [];
+  const normals: number[] = [];
+  const indices: number[] = [];
+  for (let ring = 0; ring <= rings; ring += 1) {
+    const down = (ring * Math.PI) / rings;
+    for (let segment = 0; segment <= segments; segment += 1) {
+      const round = (segment * 2 * Math.PI) / segments;
+      const unit = [Math.sin(down) * Math.cos(round), Math.cos(down), Math.sin(down) * Math.sin(round)];
+      positions.push(...unit.map((value, axis) => value * half[axis]));
+      const gradient = unit.map((value, axis) => value / half[axis]);
+      const length = Math.hypot(gradient[0], gradient[1], gradient[2]);
+      normals.push(...gradient.map((value) => value / length));
+    }
+  }
+  const row = segments + 1;
+  for (let ring = 0; ring < rings; ring += 1) {
+    for (let segment = 0; segment < segments; segment += 1) {
+      const a = ring * row + segment;
+      // The rings at the poles are single points: one triangle a step there.
+      if (ring > 0) indices.push(a, a + 1, a + row);
+      if (ring < rings - 1) indices.push(a + 1, a + row + 1, a + row);
+    }
+  }
+  return { positions, normals, indices };
+}
+
+/**
+ * A Cylinder part as Roblox draws one: its length along X, round across Y
+ * and Z, and as wide as the smaller of the two.
+ */
+export function cylinder(size: Vec3, segments = 20): PartMesh {
+  const length = size[0] / 2;
+  const radius = Math.min(size[1], size[2]) / 2;
+  const positions: number[] = [];
+  const normals: number[] = [];
+  const indices: number[] = [];
+  const angle = (step: number) => (step * 2 * Math.PI) / segments;
+  for (let step = 0; step <= segments; step += 1) {
+    const [c, s] = [Math.cos(angle(step)), Math.sin(angle(step))];
+    positions.push(-length, radius * c, radius * s, length, radius * c, radius * s);
+    normals.push(0, c, s, 0, c, s);
+  }
+  for (let step = 0; step < segments; step += 1) {
+    const a = step * 2;
+    indices.push(a, a + 2, a + 1, a + 2, a + 3, a + 1);
+  }
+  for (const side of [-1, 1]) {
+    const centre = positions.length / 3;
+    positions.push(side * length, 0, 0);
+    normals.push(side, 0, 0);
+    for (let step = 0; step <= segments; step += 1) {
+      positions.push(side * length, radius * Math.cos(angle(step)), radius * Math.sin(angle(step)));
+      normals.push(side, 0, 0);
+    }
+    for (let step = 0; step < segments; step += 1) {
+      const a = centre + 1 + step;
+      indices.push(...(side > 0 ? [centre, a, a + 1] : [centre, a + 1, a]));
+    }
+  }
+  return { positions, normals, indices };
+}
+
+/**
+ * A wedge as Roblox draws one: full faces underneath and at the back (+Z),
+ * and its slope rising from the front's bottom edge to the back's top edge.
+ */
+export function wedge(size: Vec3): PartMesh {
+  const [w, h, d] = size.map((value) => value / 2);
+  const faces: Vec3[][] = [
+    [[-w, -h, -d], [w, -h, -d], [w, -h, d], [-w, -h, d]],
+    [[-w, -h, d], [w, -h, d], [w, h, d], [-w, h, d]],
+    [[-w, -h, -d], [w, -h, -d], [w, h, d], [-w, h, d]],
+    [[-w, -h, -d], [-w, -h, d], [-w, h, d]],
+    [[w, -h, -d], [w, -h, d], [w, h, d]],
+  ];
+  // A point inside: the centre of the wedge's triangular cross-section.
+  const inside: Vec3 = [0, -h / 3, d / 3];
+  const positions: number[] = [];
+  const normals: number[] = [];
+  const indices: number[] = [];
+  for (const face of faces) {
+    const [a, b, c] = face;
+    const u = b.map((value, axis) => value - a[axis]);
+    const v = c.map((value, axis) => value - a[axis]);
+    let normal = [u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0]];
+    const middle = [0, 1, 2].map((axis) => face.reduce((sum, point) => sum + point[axis], 0) / face.length);
+    // Wound to face away from the inside, whichever way the corners were listed.
+    const outward = normal.reduce((sum, value, axis) => sum + value * (middle[axis] - inside[axis]), 0) > 0;
+    const corners = outward ? face : [...face].reverse();
+    if (!outward) normal = normal.map((value) => -value);
+    const length = Math.hypot(normal[0], normal[1], normal[2]);
+    const base = positions.length / 3;
+    for (const corner of corners) {
+      positions.push(...corner);
+      normals.push(...normal.map((value) => value / length));
+    }
+    for (let index = 1; index + 1 < corners.length; index += 1) indices.push(base, base + index, base + index + 1);
+  }
+  return { positions, normals, indices };
+}
+
+/** A part of the given shape and size, centred on the origin; a block's edges are rounded by `radius`. */
+export function shapeMesh(shape: PartShape, size: Vec3, radius: number): PartMesh {
+  if (shape === 'Ball') return ball(size);
+  if (shape === 'Cylinder') return cylinder(size);
+  if (shape === 'Wedge') return wedge(size);
+  return roundedBox(size, radius);
+}
+
+/** A block's rounding on a rig read from a model: a slight bevel, less on a thin part. */
+function modelEdgeRadius(size: Vec3): number {
+  return Math.min(0.06, Math.min(...size) * 0.2);
+}
+
+/** A mesh moved by a CFrame's components: turned by its rotation, then moved by its position. */
+function placed(mesh: PartMesh, offset: RigAttachment['offset']): PartMesh {
+  const turn = (v: number[]) => [0, 1, 2].map((row) => offset[3 + row * 3] * v[0] + offset[4 + row * 3] * v[1] + offset[5 + row * 3] * v[2]);
+  const positions: number[] = [];
+  const normals: number[] = [];
+  for (let index = 0; index < mesh.positions.length; index += 3) {
+    positions.push(...turn(mesh.positions.slice(index, index + 3)).map((value, axis) => value + offset[axis]));
+    normals.push(...turn(mesh.normals.slice(index, index + 3)));
+  }
+  return { positions, normals, indices: mesh.indices };
+}
+
+/** Several meshes as one. When one is skinned, the others' vertices get no weights, so they move with the part. */
+function merged(meshes: readonly PartMesh[]): PartMesh {
+  const result: PartMesh = { positions: [], normals: [], indices: [] };
+  const skinned = meshes.find((mesh) => mesh.skin);
+  const skin: MeshSkin | undefined = skinned?.skin ? { bones: skinned.skin.bones, joints: [], weights: [] } : undefined;
+  for (const mesh of meshes) {
+    const base = result.positions.length / 3;
+    result.positions.push(...mesh.positions);
+    result.normals.push(...mesh.normals);
+    result.indices.push(...mesh.indices.map((index) => index + base));
+    if (!skin) continue;
+    if (mesh === skinned) {
+      skin.joints.push(...mesh.skin!.joints);
+      skin.weights.push(...mesh.skin!.weights);
+    } else {
+      const slots = (mesh.positions.length / 3) * SKIN_SLOTS;
+      skin.joints.push(...new Array<number>(slots).fill(0));
+      skin.weights.push(...new Array<number>(slots).fill(0));
+    }
+  }
+  return skin ? { ...result, skin } : result;
+}
+
+/**
+ * A part's mesh, in the part's own frame, with the parts welded to it: a
+ * MeshPart as its mesh when `library` holds it, and as its box otherwise.
+ */
+export function partMesh(part: string, rig: Rig = R15_RIG, library?: MeshLibrary): PartMesh {
   const size = rig.parts[part];
-  const mesh = roundedBox(size, edgeRadius(part, size));
+  const shape = rig.shapes?.[part];
+  const id = rig.meshIds?.[part];
+  const read = id === undefined ? undefined : library?.get(id);
+  const own = read
+    ? fittedMesh(read, size)
+    : shape === undefined ? roundedBox(size, edgeRadius(part, size)) : shapeMesh(shape, size, modelEdgeRadius(size));
+  // A skin bends its mesh only by bones the rig has; with none of them, it is drawn rigid.
+  if (own.skin && !own.skin.bones.some((bone) => rig.bones?.includes(bone))) delete own.skin;
   const offset = rig.drawOffsets?.[part];
-  if (offset) mesh.positions = mesh.positions.map((value, index) => value + offset[index % 3]);
-  return mesh;
+  if (offset) own.positions = own.positions.map((value, index) => value + offset[index % 3]);
+  const attached = rig.attached?.[part] ?? [];
+  if (attached.length === 0) return own;
+  const hidden = !drawnParts(rig).includes(part) && !heldParts(rig).includes(part);
+  return merged([
+    ...(hidden ? [] : [own]),
+    ...attached.map((piece) => {
+      const mesh = piece.mesh === undefined ? undefined : library?.get(piece.mesh);
+      return placed(mesh ? fittedMesh(mesh, piece.size) : shapeMesh(piece.shape, piece.size, modelEdgeRadius(piece.size)), piece.offset);
+    }),
+  ]);
 }

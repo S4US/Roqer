@@ -1105,6 +1105,22 @@ test("a built animation is one change, verified by its preview and read-back", a
   ]);
 });
 
+test("an animation built from a baked file says so in its verification", async () => {
+  const built = {
+    built: true, path: "game.ServerStorage.Animations.Slither", undoable: true,
+    animation: { name: "Slither", duration: 1, keyframes: 9, loop: true },
+    readBack: { matchesCompiled: true }, playback: { verified: true }, checks: { passed: true },
+  };
+  const { context, evidence } = contextWith([ok(built), ok(built)]);
+  const run = createStudioToolRunner(context);
+
+  await run("animation", { action: "build", animation_file: "C:\\out\\slither.animation.json", parent: "game.ServerStorage.Animations" });
+  await run("animation", { action: "build", animation: { name: "Slither" }, parent: "game.ServerStorage.Animations" });
+
+  const describedBy = evidence.map((item) => item.metadata?.find((entry) => entry.label === "Described by")?.value);
+  assert.deepEqual(describedBy, ["A file baked in Blender", undefined]);
+});
+
 test("publishing, wiring and verifying an animation each leave their own record", async () => {
   const { context, changes, evidence } = contextWith([
     ok({
@@ -1140,6 +1156,127 @@ test("publishing, wiring and verifying an animation each leave their own record"
     { label: "Played from", value: "The published asset" },
     { label: "Largest difference", value: "0.8°" },
     { label: "run slot", value: "Wired" },
+  ]);
+});
+
+test("wiring a model's state records the loader inside the model, and says every copy plays it", async () => {
+  const { context, changes, evidence } = contextWith([
+    ok({
+      wired: true, model: "game.Workspace.Guard", loader: "game.Workspace.Guard.RoqerModelAnimate", installed: true, slot: "walk",
+      animationId: "rbxassetid://555", previousId: false, groundSpeed: 2.2, readBackMatches: true, undoable: true,
+    }),
+    ok({
+      wired: true, model: "game.Workspace.Guard", loader: "game.Workspace.Guard.RoqerModelAnimate", installed: false, slot: "idle",
+      animationId: "rbxassetid://556", previousId: "rbxassetid://550", readBackMatches: false, undoable: true,
+    }),
+  ]);
+  const run = createStudioToolRunner(context);
+
+  await run("animation", { action: "wire", model: "game.Workspace.Guard", slot: "walk", animation_id: "rbxassetid://555", ground_speed: 2.2 });
+  await run("animation", { action: "wire", model: "game.Workspace.Guard", slot: "idle", animation_id: "rbxassetid://556", expected_id: "rbxassetid://550" });
+
+  assert.deepEqual(changes.map((change) => [change.target, change.summary]), [
+    ["game.Workspace.Guard.RoqerModelAnimate", "Installed the animation loader in game.Workspace.Guard and set its walk to rbxassetid://555 (paced for 2.2 studs a second), in one undoable step."],
+    ["game.Workspace.Guard.RoqerModelAnimate", "Set game.Workspace.Guard's idle to rbxassetid://556, replacing rbxassetid://550, in one undoable step."],
+  ]);
+  assert.deepEqual(evidence.map((item) => [item.title, item.passed, item.detail]), [
+    ["game.Workspace.Guard.RoqerModelAnimate", true, "Studio read the loader back: its code is the fixed loader, and its walk holds the new ID. Every copy of the model plays it."],
+    ["game.Workspace.Guard.RoqerModelAnimate", false, "Studio read the loader back, and it does not hold what was wired: its code, or the idle's ID, differs."],
+  ]);
+});
+
+test("rigging an NPC records the model it made, and what Studio read back", async () => {
+  const made = {
+    rigged: true, model: "game.Workspace.Guard", rigType: "R15", parts: 16, joints: 15, height: 5.23, feet: [4, 0, -2], walkSpeed: 16,
+    loader: "game.Workspace.Guard.RoqerModelAnimate", states: { idle: "rbxassetid://1", walk: "rbxassetid://2", run: "rbxassetid://3" },
+    animateRemoved: true, readBackMatches: true, undoable: true,
+  };
+  const { context, changes, evidence } = contextWith([
+    ok(made),
+    ok({ ...made, model: "game.Workspace.Guard2", states: { idle: "rbxassetid://1" }, missingStates: ["walk", "run"], readBackMatches: false }),
+    ok({ ...made, model: "game.Workspace.Guard3", readBackMatches: false, mismatches: ["its feet stand at [4, -0.19, -2], 0.19 studs from where they were asked"] }),
+  ]);
+  const run = createStudioToolRunner(context);
+
+  await run("animation", { action: "rig", model: "game.Workspace.Guard", stock: "R15", position: [4, 0, -2] });
+  await run("animation", { action: "rig", model: "game.Workspace.Guard2", stock: "R15", position: [4, 0, -2] });
+  await run("animation", { action: "rig", model: "game.Workspace.Guard3", stock: "R15", position: [4, 0, -2] });
+
+  assert.deepEqual(changes.map((change) => [change.kind, change.target]), [
+    ["instance", "game.Workspace.Guard"],
+    ["instance", "game.Workspace.Guard2"],
+    ["instance", "game.Workspace.Guard3"],
+  ]);
+  assert.equal(
+    changes[0].summary,
+    "Made a stock R15 NPC at game.Workspace.Guard, its feet at [4, 0, -2], with the animation loader in place of its Animate script, in one undoable step.",
+  );
+  assert.deepEqual(evidence.map((item) => [item.kind, item.title, item.passed, item.detail]), [
+    ["verification", "game.Workspace.Guard", true, "Studio read the NPC back: an R15 body of 16 parts and 15 joints, 5.23 studs tall, its feet at [4, 0, -2], whose loader plays Roblox's default idle, walk and run."],
+    ["verification", "game.Workspace.Guard2", false, "Studio read the NPC back, and it is not what was made: its rig, its place, its loader or the loader's states differ."],
+    // Studio names what differs, and the card says it rather than guessing.
+    ["verification", "game.Workspace.Guard3", false, "Studio read the NPC back, and it is not what was made: its feet stand at [4, -0.19, -2], 0.19 studs from where they were asked."],
+  ]);
+  assert.deepEqual(evidence[0].metadata, [
+    { label: "Undo", value: "One Studio undo step" },
+    { label: "WalkSpeed", value: "16 studs a second" },
+  ]);
+  assert.deepEqual(evidence[1].metadata?.at(-1), { label: "No default", value: "walk and run" });
+});
+
+test("verifying a model records what its loader played while it moved and stood, and why it failed", async () => {
+  const movement = (extra: Record<string, unknown>) => ({
+    verified: true, mode: "walked", reached: true,
+    moving: { samples: 25, averageSpeed: 4.4, played: { walk: 25 } },
+    standing: { samples: 10, played: { idle: 9, walk: 1 } },
+    pace: { state: "walk", groundSpeed: 2.2, averageSpeed: 4.4, needed: 2, played: 2, kept: true },
+    ...extra,
+  });
+  const { context, evidence } = contextWith([
+    ok({ verified: true, model: "game.Workspace.Guard", loader: {}, movement: movement({}) }),
+    ok({
+      verified: false, model: "game.Workspace.Guard", loader: {},
+      movement: movement({ verified: false, standing: { samples: 10, played: { nothing: 10 } }, reason: "it moved at 16 studs a second, but its walk is written for 2.2" }),
+    }),
+  ]);
+  const run = createStudioToolRunner(context);
+
+  await run("animation", { action: "verify", model: "game.Workspace.Guard", position: [10, 0, 0] });
+  await run("animation", { action: "verify", model: "game.Workspace.Guard", position: [10, 0, 0] });
+
+  assert.deepEqual(evidence.map((item) => [item.kind, item.title, item.passed, item.detail]), [
+    ["playtest", "game.Workspace.Guard in the playtest", true, "On the playtest server, its loader played its walk while it moved, and its idle while it stood."],
+    ["playtest", "game.Workspace.Guard in the playtest", false, "Not verified: it moved at 16 studs a second, but its walk is written for 2.2."],
+  ]);
+  assert.deepEqual(evidence[0].metadata, [
+    { label: "Moved by", value: "verify, walking it to a position" },
+    { label: "While moving", value: "walk 100%" },
+    { label: "While standing", value: "idle 90%, walk 10%" },
+    { label: "Pace", value: "walk at 2× for 4.4 studs a second; written for 2.2" },
+  ]);
+});
+
+test("verifying a model's wiring alone says so, and with the animation says it played", async () => {
+  const wiring = { slot: "idle", animationId: "rbxassetid://701", matches: true };
+  const played = { source: "published", verified: true };
+  const { context, evidence } = contextWith([
+    ok({ verified: true, model: "game.Workspace.Snake", loader: {}, wiring }),
+    ok({ verified: true, model: "game.Workspace.Snake", loader: {}, wiring, played }),
+  ]);
+  const run = createStudioToolRunner(context);
+
+  await run("animation", { action: "verify", model: "game.Workspace.Snake", slot: "idle", animation_id: "rbxassetid://701" });
+  await run("animation", {
+    action: "verify", model: "game.Workspace.Snake", slot: "idle", animation_id: "rbxassetid://701", animation_file: "C:\\out\\Slither.animation.json",
+  });
+
+  assert.deepEqual(evidence.map((item) => item.detail), [
+    "On the playtest server, its idle holds rbxassetid://701, though how it plays was not compared.",
+    "On the playtest server, the animation played on it as checked, and its idle holds rbxassetid://701.",
+  ]);
+  assert.deepEqual(evidence[1].metadata, [
+    { label: "Played from", value: "The published asset" },
+    { label: "idle state", value: "Wired" },
   ]);
 });
 

@@ -131,8 +131,10 @@ export function riskForTool(tool: string, args?: Record<string, unknown>): ToolR
   // upload action remains irreversible and keeps its normal confirmation.
   if (tool === "upload_asset" && args?.action === "status") return "read";
   if (tool === "animation") {
-    // Checking compiles and measures on the MCP host. Verifying plays a track on
-    // the playtest character and leaves nothing behind.
+    // Checking compiles and measures on the MCP host, reading a model's rig
+    // from Studio when the animation is for one. Verifying plays a track on
+    // the playtest character, or walks an NPC in the playtest, and changes
+    // nothing that outlasts the playtest. Rigging makes a model: a mutation.
     if (args?.action === "check" || args?.action === "verify") return "read";
     // Uploads to the user's Roblox account, which Studio's undo cannot reverse.
     if (args?.action === "publish") return "irreversible";
@@ -253,17 +255,71 @@ function summarizeAnimation(args: Record<string, unknown>): string {
     const path = typeof args.path === "string" && args.path !== "" ? truncate(args.path, 80) : "an animation";
     return `animation · publish ${path} to Roblox`;
   }
+  if (args.action === "rig" && args.stock === undefined) {
+    const model = typeof args.model === "string" && args.model !== "" ? truncate(args.model, 60) : "a model";
+    const plan = args.plan === "quadruped" ? "a quadruped" : undefined;
+    const built = args.controller === "Humanoid" || args.controller === "AnimationController" ? args.controller : undefined;
+    const replacing = args.replace === "importer"
+      ? ", replacing the rig it was imported with"
+      : typeof args.expected_revision === "string" ? ", replacing the rig rig built before" : "";
+    // A controller with no joints builds around a skinned mesh, whose bones are its joints.
+    if (!Array.isArray(args.joints) && built) {
+      return `animation · rig ${model} around its bones${plan ? `, ${plan}` : ""}, ${built}${replacing}`;
+    }
+    if (!Array.isArray(args.joints)) {
+      const declaring = plan ?? (typeof args.declarations === "object" && args.declarations !== null ? "declared by hand" : undefined);
+      return declaring
+        ? `animation · declare ${model}'s rig ${plan ? `as ${plan}` : declaring}, changing none of its joints`
+        : `animation · read ${model}'s rig and draw its range sheet`;
+    }
+    const joints = args.joints.length;
+    const controller = built ?? "a controller";
+    return `animation · rig ${model}: ${joints} joint${joints === 1 ? "" : "s"}${plan ? `, ${plan}` : ""}, ${controller}${replacing}`;
+  }
+  if (args.action === "rig") {
+    const body = args.stock === "R15" || args.stock === "R6" ? `a stock ${args.stock} NPC` : "an NPC";
+    const model = typeof args.model === "string" && args.model !== "" ? truncate(args.model, 60) : "a new path";
+    const feet = Array.isArray(args.position) && args.position.length === 3 && args.position.every((value) => typeof value === "number")
+      ? `[${args.position.map((value) => Math.round(Number(value) * 10) / 10).join(", ")}]`
+      : "the origin";
+    return `animation · rig ${body} at ${model}, its feet at ${feet}, animated by a loader script`;
+  }
   if (args.action === "wire") {
     const slot = typeof args.slot === "string" ? truncate(args.slot, 20) : "a slot";
     const id = typeof args.animation_id === "string" ? truncate(args.animation_id, 40) : "an animation";
     const replaces = typeof args.expected_id === "string" ? `, replacing ${truncate(args.expected_id, 40)}` : "";
+    if (typeof args.model === "string" && args.model !== "") {
+      const pace = typeof args.ground_speed === "number" && Number.isFinite(args.ground_speed)
+        ? `, paced for ${Math.round(args.ground_speed * 100) / 100} studs a second`
+        : "";
+      return `animation · wire ${id} as the ${slot} of ${truncate(args.model, 60)}${pace}${replaces}`;
+    }
     return `animation · wire ${id} to the ${slot} slot of every character${replaces}`;
   }
   const action = args.action === "build" ? "build" : args.action === "verify" ? "verify" : "check";
   const animation = typeof args.animation === "object" && args.animation !== null && !Array.isArray(args.animation)
     ? args.animation as Record<string, unknown>
     : {};
-  const name = typeof animation.name === "string" && animation.name !== "" ? truncate(animation.name, 40) : "an animation";
+  // A description baked in Blender is in a file: what the card can say of it is the file's name.
+  const file = args.animation === undefined && typeof args.animation_file === "string" && args.animation_file !== ""
+    ? truncate(args.animation_file.split(/[\\/]/).pop() ?? args.animation_file, 60)
+    : undefined;
+  const name = file !== undefined
+    ? `the animation baked in ${file}`
+    : typeof animation.name === "string" && animation.name !== "" ? truncate(animation.name, 40) : "an animation";
+  // R15 goes unsaid; R6 and a model's own rig are named.
+  const rig = typeof animation.rig === "string" && animation.rig !== "" && animation.rig !== "R15" ? ` for ${truncate(animation.rig, 60)}` : "";
+  if (action === "verify" && typeof args.model === "string" && args.model !== "") {
+    const position = Array.isArray(args.position) && args.position.length === 3 && args.position.every((value) => typeof value === "number")
+      ? `, walking it to [${args.position.map((value) => Math.round(Number(value) * 10) / 10).join(", ")}]`
+      : "";
+    const given = args.animation !== undefined || file !== undefined;
+    const played = given ? `, playing ${name} on it` : "";
+    const slot = typeof args.slot === "string" && args.slot !== "" ? `, checking its ${truncate(args.slot, 20)}` : "";
+    // As the tool decides: walked to a position, else watched unless an animation or a slot was asked about.
+    const watched = position === "" && !given && args.slot === undefined ? ", watching it move" : "";
+    return `animation · verify ${truncate(args.model, 60)} in the playtest${played}${slot}${position}${watched}`;
+  }
   const keyframes = Array.isArray(animation.keyframes) ? animation.keyframes : [];
   const times = keyframes
     .map((keyframe) => (typeof keyframe === "object" && keyframe !== null ? (keyframe as Record<string, unknown>).time : undefined))
@@ -275,9 +331,25 @@ function summarizeAnimation(args: Record<string, unknown>): string {
       for (const joint of Object.keys(keyed)) joints.add(joint);
     }
   }
+  // Waves drive joints of their own, and may be the whole animation.
+  const waves = Array.isArray(animation.waves) ? animation.waves : [];
+  for (const wave of waves) {
+    const chain = typeof wave === "object" && wave !== null ? (wave as Record<string, unknown>).joints : undefined;
+    if (Array.isArray(chain)) {
+      for (const joint of chain) if (typeof joint === "string") joints.add(joint);
+    }
+  }
+  const length = Math.max(...times, typeof animation.duration === "number" && Number.isFinite(animation.duration) ? animation.duration : 0);
+  // A gait is named by its pattern; the legs it steps are the rig's to say.
+  const gait = typeof animation.gait === "object" && animation.gait !== null && !Array.isArray(animation.gait)
+    ? animation.gait as Record<string, unknown>
+    : undefined;
+  const gaitWords = gait ? [`a ${typeof gait.pattern === "string" && /^[a-z]{1,12}$/.test(gait.pattern) ? `${gait.pattern} ` : ""}gait`] : [];
   const facts = [
-    `${keyframes.length} keyframe${keyframes.length === 1 ? "" : "s"}`,
-    ...(times.length > 0 ? [`${Math.round(Math.max(...times) * 100) / 100} s`] : []),
+    ...(keyframes.length > 0 || (waves.length === 0 && !gait) ? [`${keyframes.length} keyframe${keyframes.length === 1 ? "" : "s"}`] : []),
+    ...gaitWords,
+    ...(waves.length > 0 ? [`${waves.length} wave${waves.length === 1 ? "" : "s"}`] : []),
+    ...(length > 0 || times.length > 0 ? [`${Math.round(length * 100) / 100} s`] : []),
     ...(animation.loop === true ? ["loops"] : []),
     ...(joints.size > 0 ? [`moves ${joints.size} joint${joints.size === 1 ? "" : "s"}`] : []),
   ];
@@ -288,7 +360,8 @@ function summarizeAnimation(args: Record<string, unknown>): string {
   const waived = Array.isArray(args.waive) && args.waive.length > 0
     ? `, accepting failed ${args.waive.filter((id) => typeof id === "string").join(", ")}`
     : "";
-  return `animation · ${action} ${name}${where}: ${facts.join(", ")}${replaces}${waived}`;
+  if (file !== undefined) return `animation · ${action} ${name}${where}${replaces}${waived}`;
+  return `animation · ${action} ${name}${rig}${where}: ${facts.join(", ")}${replaces}${waived}`;
 }
 
 /** One-line human summary of a proposed call, shown in the activity timeline. */
