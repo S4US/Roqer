@@ -150,10 +150,12 @@ from, and the pivot: the point in the world, in studs, where the piece turns.
 - **The root.** The piece every other hangs from (`Body` above) is jointed to
   an invisible `HumanoidRootPart` that `rig` makes, by a joint named `Root`,
   which is the joint that takes `position`. Do not name a joint `Root`.
-- **An uploaded or generated model** arrives with a rig of its own: every
+- **An uploaded or generated model** may arrive with a rig of its own: every
   piece hung from a `RootPart` at the piece's centre. `rig` refuses with
   `importer_rig`; pass `replace: "importer"` to take that rig out and build
-  yours. See "From Blender" and "A generated body" below.
+  yours. An upload may also arrive with no rig, each piece loose in a Model
+  named `<piece>_Node`; `replace: "importer"` is harmless there, so pass it
+  for any upload. See "From Blender" and "A generated body" below.
 - **Look at the range sheet.** The result carries `rangeSheet`, an image and a
   3D preview with every joint turned 30° each way. A piece that swings away
   from the body, or opens a gap at its joint, has its pivot in the wrong
@@ -178,9 +180,13 @@ A creature modelled in Blender as moving pieces (the building skill's
    each piece, the piece it hangs from, its pivot, and for a leg the joint
    names the recipes key. Fix anything that line flags before uploading.
 2. `upload_asset` the GLB as a Model, and `insert_asset` it where the
-   creature belongs. It arrives as one Model: a MeshPart for each piece,
-   named after it, where it was modelled, hung flat from a `RootPart`.
-3. Rig it with those joints as they are:
+   creature belongs, with a `position`. It arrives as one Model: a MeshPart
+   for each piece, named after it, where it was modelled. The pieces come
+   either hung flat from a `RootPart` or loose in nested `<piece>_Node`
+   Models with no rig; the call below is the same for both, so there is no
+   need to look first.
+3. Rig it with those joints as they are, before moving a piece or changing
+   the model's pivot:
 
 ```text
 {
@@ -193,9 +199,12 @@ A creature modelled in Blender as moving pieces (the building skill's
 
 `pivot_space: "import"` says the pivots are measured from the model's own
 origin, as Blender gave them, so they are right wherever the model was
-inserted and whichever way it faces. Rig it before scaling it. A later `rig`
-call on the same model, to fix a pivot, takes them the same way. Without it
-pivots are points in the world.
+inserted and whichever way it faces. That origin is the `RootPart`, or the
+model's pivot when it arrived without a rig. Rig it before scaling it. A
+later `rig` call on the same model, to fix a pivot, takes them the same way.
+Without it pivots are points in the world. A refusal that a pivot "lies
+outside" its pieces on every joint means the origin was not where expected:
+read `Body`'s position and give the pivots in the world instead.
 
 ### A generated body
 

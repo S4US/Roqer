@@ -242,7 +242,31 @@ describe('rig replaces a rig only when it may', () => {
     expect(plan.replaceImporter).toBe(true);
     // Its RootPart goes, so it is neither a piece nor left loose.
     expect(plan.joints.some((joint) => joint.part0 === 'RootPart')).toBe(false);
-    expect(refused(dogPieces(), { replaceImporter: true }).errorCode).toBe('no_importer_rig');
+    // An upload can arrive with no rig at all: replace then takes nothing out.
+    expect(planned(dogPieces(), { replaceImporter: true }).plan.replaceImporter).toBe(false);
+    // Joints that are not an importer's are not replace's to take.
+    const jointed = { ...dogPieces(), joints: [{ name: 'Neck', part0: 0, part1: 1 }], controllers: ['Humanoid' as const], rig: { revision: 'rr1:a' } };
+    const refusal = refused(jointed, { replaceImporter: true });
+    expect(refusal.errorCode).toBe('no_importer_rig');
+    expect(refusal.errors[0]).toMatch(/1 joint is not an importer's rig/);
+  });
+
+  test('an upload that arrived without a rig is measured from its model\'s pivot', () => {
+    // Nested Models and loose MeshParts, the pivot left at the scene's origin: where insert_asset put it.
+    const [at, turn] = [[80, 5.4, 98] as V, 0];
+    const upload: PiecesReading = { ...dogPieces({ at, turn }), pivot: dogFrame(at, turn).cframe([0, -2.2, 0]) };
+    const modelled = planned(upload, { replaceImporter: true, pivotSpace: 'import', joints: dogJoints() }).plan;
+    const inWorld = planned(upload, { joints: dogJoints({ at, turn }) }).plan;
+    modelled.joints.forEach((joint, index) => {
+      expect(close(joint.c0, inWorld.joints[index].c0, 1e-5)).toBe(true);
+      expect(close(joint.c1, inWorld.joints[index].c1, 1e-5)).toBe(true);
+    });
+    // The pivot is kept as its origin, whichever way the pivots were given.
+    expect(close(modelled.origin!, upload.pivot)).toBe(true);
+    expect(close(inWorld.origin!, upload.pivot)).toBe(true);
+    // A pivot that is not the origin puts the joints outside their pieces, and nothing is built.
+    const elsewhere = { ...upload, pivot: dogFrame(at, turn).cframe([0, 6, 0]) };
+    expect(refused(elsewhere, { pivotSpace: 'import', joints: dogJoints() }).errors.join('\n')).toMatch(/lies outside/);
   });
 
   test('pivots measured from an upload\'s own origin are placed where the upload was put', () => {
@@ -285,10 +309,10 @@ describe('rig replaces a rig only when it may', () => {
     again.joints.forEach((joint, index) => expect(close(joint.c0, inWorld.joints[index].c0, 1e-5)).toBe(true));
     expect(again.origin).toEqual(inWorld.origin);
 
-    // A model that never was an upload has no origin to measure from.
-    const refusal = refused(dogPieces(), { pivotSpace: 'import' });
+    // A rig built before origins were kept has none to measure from.
+    const refusal = refused({ ...built, origin: undefined }, { pivotSpace: 'import', joints: dogJoints(), expectedRevision: 'rr1:a' });
     expect(refusal.errorCode).toBe('no_import_origin');
-    expect(planned(dogPieces()).plan.origin).toBeUndefined();
+    expect(planned({ ...built, origin: undefined }, { joints: dogJoints({ at, turn }), expectedRevision: 'rr1:a' }).plan.origin).toBeUndefined();
   });
 
   test('joints rig did not build are left alone', () => {

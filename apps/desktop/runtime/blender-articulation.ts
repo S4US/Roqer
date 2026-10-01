@@ -191,7 +191,7 @@ export function describeArticulation(articulation: Articulation | undefined): st
     lines.push(` Fix before uploading, since an upload cannot be changed: ${articulation.flags.join("; ")}${hidden > 0 ? `; and ${hidden} more` : ""}.`);
   }
   lines.push(
-    ` The upload keeps where each piece is but not where it turns, so after insert_asset pass these to animation's rig action with replace: "importer" and pivot_space: "import" (pivots are in Roblox's axes from the model's own origin), and a controller and plan: joints: ${JSON.stringify(articulation.joints)}`,
+    ` The upload keeps where each piece is but not where it turns, so after insert_asset pass these to animation's rig action with replace: "importer" and pivot_space: "import" (pivots are in Roblox's axes from the model's own origin; the call is the same whether or not the upload arrives with a rig), and a controller and plan: joints: ${JSON.stringify(articulation.joints)}`,
   );
   return lines.join("");
 }

@@ -65,9 +65,9 @@ export interface PiecesReading {
   controllers: ('Humanoid' | 'AnimationController')[];
   importer?: ImporterRig;
   /**
-   * Where the origin an upload was modelled about now is, as CFrame
-   * components in the world: kept by an earlier `rig` that replaced the
-   * importer's rig, so a rebuild can still take pivots measured from it.
+   * Where the origin the model was made about now is, as CFrame components in
+   * the world: kept by an earlier `rig`, from the importer's root or the
+   * model's pivot, so a rebuild can still take pivots measured from it.
    */
   origin?: number[];
   /** When it has joints: the revision its rig reads with, and the one `rig` stamped when it built it. */
@@ -93,8 +93,9 @@ export interface RigBuildRequest {
   replaceImporter: boolean;
   /**
    * What the joints' pivots are measured in: the world, or `import`, the
-   * frame an upload was modelled in (Roblox's axes from the importer's root),
-   * as the Blender inspection gives them. Defaults to the world.
+   * frame an upload was modelled in (Roblox's axes from the importer's root,
+   * or from the model's pivot when it arrived without a rig), as the Blender
+   * inspection gives them. Defaults to the world.
    */
   pivotSpace?: 'world' | 'import';
   expectedRevision?: string;
@@ -114,7 +115,7 @@ export interface RigBuildPlan {
   welds: { part0: string; part1: string }[];
   controller: { className: 'Humanoid' | 'AnimationController'; hipHeight?: number };
   declarations: string;
-  /** The import's origin in the world, to keep on the model for a rebuild; absent when it has none. */
+  /** The model's origin in the world, to keep on the model for a rebuild; absent on a rig that kept none. */
   origin?: number[];
 }
 
@@ -227,8 +228,10 @@ export function planRigBuild(reading: PiecesReading, request: RigBuildRequest): 
         `${reading.path} has an importer's rig: ${importer.joints} Motor6D${importer.joints === 1 ? '' : 's'} from ${reading.parts[importer.rootPart]?.name ?? 'its root'}, each turning a piece about its own centre. Pass replace: "importer" to take it out and build this rig in its place`,
       ]);
     }
-  } else if (request.replaceImporter) {
-    return refuse('no_importer_rig', [`${reading.path} has no importer's rig to replace; leave replace out`]);
+  } else if (request.replaceImporter && reading.joints.length > 0) {
+    // An upload can arrive with no rig at all, and replace then has nothing to
+    // take out; joints that are not an importer's are another matter.
+    return refuse('no_importer_rig', [`${reading.path}'s ${reading.joints.length} joint${reading.joints.length === 1 ? ' is' : 's are'} not an importer's rig, so replace: "importer" does not cover ${reading.joints.length === 1 ? 'it' : 'them'}; leave replace out`]);
   } else if (reading.joints.length > 0) {
     const current = reading.rig;
     if (!current?.builtRevision) {
@@ -265,10 +268,14 @@ export function planRigBuild(reading: PiecesReading, request: RigBuildRequest): 
   const frameOf = (index: number) => frameFromComponents(reading.parts[index].cframe);
 
   // Where an upload was modelled about: the importer's root, or what an
-  // earlier rig kept of it. Pivots given in the import's frame are placed by it.
-  const origin = importer ? reading.parts[importer.rootPart]?.cframe : reading.origin;
+  // earlier rig kept of it, or, on a model with no joints yet, its own pivot,
+  // which an upload that arrives without a rig has at that origin. Pivots
+  // given in the import's frame are placed by it.
+  const origin = importer
+    ? reading.parts[importer.rootPart]?.cframe
+    : reading.origin ?? (reading.joints.length === 0 ? reading.pivot : undefined);
   if (request.pivotSpace === 'import' && !origin) {
-    return refuse('no_import_origin', [`${reading.path} has no importer's rig, and no rig kept where one's origin was, so pivots cannot be measured from an import's origin; give them in the world and leave pivot_space out`]);
+    return refuse('no_import_origin', [`${reading.path} has a rig that kept no origin, so pivots cannot be measured from an import's origin; give them in the world and leave pivot_space out`]);
   }
   const placed = request.pivotSpace === 'import' && origin
     ? request.joints.map((joint) => ({ ...joint, pivot: pointToWorld(frameFromComponents(origin), joint.pivot) as Vec3 }))

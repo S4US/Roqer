@@ -1,13 +1,13 @@
 # Creature and NPC animation plan
 
-Status as of 2026-10-01: steps 1 to 5 are done. Step 1, the creature spike,
+Status as of 2026-10-01: steps 1 to 6 are done. Step 1, the creature spike,
 answered its questions in [Live results](#live-results), and the design below
 follows them. Step 2 made NPCs on stock rigs, and eval T18 passes. Step 3
 reads a rig from any rigged model, and a dog rigged by hand in Studio plays
 its animation as checked. Step 4 rigs a model's loose pieces, and `aim` and
 `aimAt` move the legs of a dog it rigged. Step 5 added the `wave` and `gait`
-generators, and eval T19 passes. Step 6, pivots from Blender, is built, and
-its eval T17 has not been run. Steps 7 and 8 are proposed and not yet
+generators, and eval T19 passes. Step 6 carries a Blender creature's pivots
+to `rig`, and eval T17 passes. Steps 7 and 8 are proposed and not yet
 scheduled. The
 plan details steps 12 to 14 of the [animation plan](animation-plan.md)
 (creatures made of rigid parts, skinned creatures, animating in Blender), adds
@@ -76,7 +76,9 @@ On the modeling side:
   `insert_asset` is given a position (spike question 7). What it loses is the
   rig: the importer hangs every piece flat from a `RootPart` it adds, each by
   a `Motor6D` at the piece's own centre, and no pivot survives in a part or a
-  joint. The kit probe's lost layout (`npm run eval:kits`, 2026-09-24) is not
+  joint. T17's upload arrived the other way: no rig at all, each piece loose
+  in a Model of its own nested as the objects were parented, and the model's
+  pivot at the scene's origin. `rig` takes both. The kit probe's lost layout (`npm run eval:kits`, 2026-09-24) is not
   a creature's case.
 - Roqer's inspection lists each exported object's name and size, and a saved
   scene's listing adds each object's centre and parent. Nothing reports an
@@ -809,7 +811,7 @@ What changed from the proposal, and why:
 - The skill has a waves section with an octopus idle and swim; the catalog
   budget rose to 50,600 characters for `waves` and `duration`.
 
-### 6. Blender and generated creatures — in progress
+### 6. Blender and generated creatures — done 2026-10-01
 
 - The articulated recipe, and the inspection's origins, parents, pivot flags,
   mesh names and ready `rig` arguments.
@@ -825,11 +827,32 @@ What changed from the proposal, and why:
 
 **Done when** T17 passes.
 
-**Status, 2026-10-01.** Built, and T17 is written but has not been run: it
-needs an agent run with Blender on, against a published place with an Open
-Cloud key (`npm run eval -- --task T17-creature-blender --blender auto`). The
-step is done when it passes. No upload has gone through this path yet, so
-T17 is also the first test of how an upload's origin and axes arrive.
+**Status, 2026-10-01.** Done. T17 passed on its first run: in 43 tool calls
+and under four minutes the agent modelled a twelve-piece wolf in one Blender
+job, uploaded it, rigged it, built an idle of waves and a walk gait, published
+and wired both, and a playtest watched it wander.
+
+That run also showed the path as first built did not fit the upload. It
+arrived with no importer's rig: each piece loose in a Model named
+`<piece>_Node`, nested as the objects were parented, with no `RootPart`. `rig`
+refused `replace: "importer"` (nothing to replace) and then
+`pivot_space: "import"` (no origin), and the agent read three parts'
+positions, worked the origin out and passed the pivots in the world. Its
+arithmetic confirmed what the path assumes: the origin was the model's pivot,
+unrotated, at the position `insert_asset` was given, and the pivots in
+Roblox's axes from it lay in their pieces. So, after the run:
+
+- `replace: "importer"` on a model with no joints takes nothing out and is
+  not refused. It is still refused on joints that are not an importer's.
+- With no importer's rig and no kept origin, a model with no joints is
+  measured from its own pivot. A pivot that is not the origin puts the joints
+  outside their pieces, which `rig` refuses.
+- `rig` keeps the origin on every first build, so a model first rigged with
+  pivots in the world can be rigged again in the import's frame.
+
+The live suite rigs a model shaped as that upload was, with the same call
+the skill gives, and rigs it again after moving and turning it. No real
+upload has gone through the corrected call; the next T17 run is that test.
 
 - **The inspection reads the pivots.** Roqer's check of an exported file now
   reads each mesh object's origin, box, parent (through any empties), mesh
@@ -850,8 +873,9 @@ T17 is also the first test of how an upload's origin and axes arrive.
   Run through the worker in Blender 5.2, the skill's wolf (eleven pieces)
   exported, re-imported and came back as ten joints with nothing flagged.
 - **`pivot_space: "import"` on `rig`.** The joints' pivots are then measured
-  from the upload's own origin, which the importer's `RootPart` marks, and
-  core places them in the world. `rig` keeps where that origin is, as a
+  from the upload's own origin, which the importer's `RootPart` marks, or the
+  model's pivot when it arrived without a rig, and core places them in the
+  world. `rig` keeps where that origin is, as a
   `RoqerRigOrigin` attribute relative to the root it makes, so a rebuild
   takes the same pivots after the model is moved or turned.
 - **Guidance**: the building skill's Blender reference has the creature
@@ -1073,5 +1097,7 @@ version.
 | Adopting the hand-rigged dog | `RoqerRig` written as a quadruped, four feet declared, and no joint's C0 changed. Doing it again needed the revision |
 | An upload's rig | Left alone without `replace` (`importer_rig`). With it, the 14 `Motor6D`s, `RootPart`, `InitialPoses` and controller were removed and the new rig built under an `AnimationController`, its root anchored |
 | `verify` in a playtest | The paw lift played on the rigged pup itself within 0.64° of the poses it was checked with |
+| An upload with no rig | The same pieces, each loose in a `<piece>_Node` Model and the model's pivot at its origin: `replace: "importer"` and `pivot_space: "import"` rigged it under a `Humanoid`, 11 `Motor6D`s and three welds, and again after it was moved and turned |
+| T17 | In 43 tool calls and under four minutes, the agent modelled a wolf of twelve pieces in Blender, uploaded and rigged it, and published and wired an idle and a walk. The upload arrived with no rig, so two `rig` calls were refused before the agent gave the pivots in the world; see step 6 |
 | A generated trot | `gait` wrote a trot for the pup: every check passed and none was skipped, at 4 studs a second, its diagonal feet landing together, each down 53% of the cycle; a copy played it within 0.06° |
 | T19 | In 32 tool calls and two and a half minutes, the agent built a dog from Parts, rigged it with `rig`, gave it an idle and a walk of its own, and published and wired both. A playtest after the last wiring watched its wandering. The oracle found both animations owned by the place's owner, the rig's range sheet, a 3D preview, and every motion check passed |

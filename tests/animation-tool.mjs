@@ -182,6 +182,11 @@ const PUP_NAME = '__RoqerAnimationTestPup';
 const PUP = `game.Workspace.${PUP_NAME}`;
 const IMPORTED_NAME = '__RoqerAnimationTestImported';
 const IMPORTED = `game.Workspace.${IMPORTED_NAME}`;
+// The other way an upload arrives (eval T17, 2026-10-01): no rig at all, each
+// piece loose in a Model named <piece>_Node under the body's, and the model's
+// pivot at the scene's origin.
+const NESTED_NAME = '__RoqerAnimationTestNested';
+const NESTED = `game.Workspace.${NESTED_NAME}`;
 const PUP_LEGS = { FrontLeft: [-0.7, -0.6, -1.4], FrontRight: [0.7, -0.6, -1.4], HindLeft: [-0.7, -0.6, 1.4], HindRight: [0.7, -0.6, 1.4] };
 /** Each piece: its name, size, centre from the body's, and shape. */
 function pupPieces() {
@@ -230,7 +235,22 @@ for _, piece in { ${pieces.join(', ')} } do
   part.Parent = model
   table.insert(made, part)
 end
-${imported ? `
+${imported === 'nested' ? `
+local bodyNode = Instance.new("Model")
+bodyNode.Name = "Body_Node"
+bodyNode.Parent = model
+for _, part in made do
+  part.Anchored = false
+  if part.Name == "Body" then
+    part.Parent = bodyNode
+  else
+    local node = Instance.new("Model")
+    node.Name = part.Name .. "_Node"
+    part.Parent = node
+    node.Parent = bodyNode
+  end
+end
+model.WorldPivot = CFrame.new(at.X, 0, at.Z)` : imported ? `
 local root = Instance.new("Part")
 root.Name = "RootPart"
 root.Size = Vector3.new(0.1, 0.1, 0.1)
@@ -302,7 +322,7 @@ return {
 `;
 }
 const REMOVE_PUPS = `
-for _, name in { ${JSON.stringify(PUP_NAME)}, ${JSON.stringify(IMPORTED_NAME)} } do
+for _, name in { ${JSON.stringify(PUP_NAME)}, ${JSON.stringify(IMPORTED_NAME)}, ${JSON.stringify(NESTED_NAME)} } do
   local model = workspace:FindFirstChild(name)
   if model then model:Destroy() end
 end
@@ -765,6 +785,26 @@ const passed = await runTest('animation tool', async ({ track }) => {
       reRigged.rigged === true && reRigged.readBack?.matches === true && afterMove.motors === 11 && JSON.stringify(afterMove.body) === JSON.stringify(movedTo),
       `moved and turned, it is rigged again from the same pivots, where it now stands (${reRigged.errorCode ?? 'ok'}: ${JSON.stringify(reRigged.errors ?? reRigged.readBack ?? reRigged.error)})`,
     );
+
+    // An upload that arrived with no rig: replace has nothing to take out, and the pivots are measured from the model's pivot.
+    const NESTED_AT = [-60, 2.2, 150];
+    assert(await luau(client, buildPieces(NESTED_NAME, NESTED_AT, 'nested')) === true, 'a dog as an upload arrives without a rig is in Workspace');
+    const nestedArgs = { action: 'rig', model: NESTED, joints: importPivots, controller: 'Humanoid', plan: 'quadruped', pivot_space: 'import', replace: 'importer' };
+    const nestedRig = await client.callTool('animation', nestedArgs, 120_000);
+    const nestedMade = await luau(client, inspectPieces(NESTED_NAME));
+    assert(
+      nestedRig.rigged === true && nestedRig.readBack?.matches === true && nestedRig.removed === undefined && nestedRig.rig?.feet?.length === 4
+        && nestedMade.motors === 11 && nestedMade.welds === 3 && nestedMade.controller === 'Humanoid' && nestedMade.primary === 'HumanoidRootPart',
+      `an upload with no rig is rigged from its pivot, its pieces left in their own Models (${nestedRig.errorCode ?? 'ok'}: ${JSON.stringify(nestedRig.errors ?? nestedRig.error ?? { ...nestedMade, c0s: undefined })})`,
+    );
+    const nestedMoved = await luau(client, `
+      local model = workspace[${JSON.stringify(NESTED_NAME)}]
+      model:PivotTo(CFrame.new(-120, model:GetPivot().Position.Y, 150) * CFrame.Angles(0, math.rad(-90), 0))
+      game:GetService("ChangeHistoryService"):SetWaypoint("Roqer test move")
+      return true
+    `);
+    const nestedAgain = await client.callTool('animation', { ...nestedArgs, replace: undefined, expected_revision: nestedRig.revision }, 120_000);
+    assert(nestedMoved === true && nestedAgain.rigged === true && nestedAgain.readBack?.matches === true, `moved and turned, it too is rigged again from the same pivots (${nestedAgain.errorCode ?? 'ok'}: ${JSON.stringify(nestedAgain.errors ?? nestedAgain.error)})`);
 
     // -- Step 8: publish, wire, verify -------------------------------------
     // The hand-edited sequence stays refused; start it afresh to publish from.

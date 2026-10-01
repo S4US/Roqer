@@ -226,9 +226,11 @@ and where each one turns.
 - **The range sheet.** The result shows every joint turned 30° each way, as
   an image and a 3D preview. A pivot in the wrong place shows as a piece
   swinging off the body.
-- **An uploaded model's rig.** An upload arrives with every piece hung from
-  one `RootPart` at the piece's own centre. Roqer replaces that rig only when
-  the call says to, and the approval card says so.
+- **An uploaded model's rig.** An upload can arrive with every piece hung
+  from one `RootPart` at the piece's own centre. Roqer replaces that rig only
+  when the call says to, and the approval card says so. An upload can also
+  arrive with no rig, its pieces loose in nested Models, and is then rigged
+  as any loose pieces are.
 - **Pivots from Blender.** For a creature modelled in Blender, the pivots
   come from Roqer's check of the exported file
   ([Creatures that move](blender.md#creatures-that-move)), measured from the

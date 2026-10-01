@@ -281,8 +281,10 @@ It needs `--blender`, and the same key and published place as T18, since it
 uploads the model as well as two animations. Its conditions are T19's, on the
 wolf, with the body's turned round: a Blender job and an upload succeeded, and
 the wolf is made of at least five MeshParts, the pieces it was modelled as.
-Its rig carrying `rig`'s stamp and reading back as built means the importer's
-rig was replaced, at pivots that lay in the pieces they join.
+Its rig carrying `rig`'s stamp and reading back as built means `rig` built
+it, at pivots that lay in the pieces they join. It passed on 2026-10-01 in 43
+calls; its upload arrived with no importer's rig, which the creature plan's
+step 6 records.
 
 ```bash
 npm run eval -- --task T17-creature-blender --provider claude --model opus --blender auto
