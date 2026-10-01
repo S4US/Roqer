@@ -1,12 +1,12 @@
 # Creature and NPC animation plan
 
-Status as of 2026-10-01: steps 1 to 4 are done. Step 1, the creature spike,
+Status as of 2026-10-01: steps 1 to 5 are done. Step 1, the creature spike,
 answered its questions in [Live results](#live-results), and the design below
 follows them. Step 2 made NPCs on stock rigs, and eval T18 passes. Step 3
 reads a rig from any rigged model, and a dog rigged by hand in Studio plays
 its animation as checked. Step 4 rigs a model's loose pieces, and `aim` and
-`aimAt` move the legs of a dog it rigged. Step 5, the `wave` and `gait`
-generators, is built, and its eval T19 has not been run. Steps 6 to 8 are
+`aimAt` move the legs of a dog it rigged. Step 5 added the `wave` and `gait`
+generators, and eval T19 passes. Steps 6 to 8 are
 proposed and not yet scheduled. The
 plan details steps 12 to 14 of the [animation plan](animation-plan.md)
 (creatures made of rigid parts, skinned creatures, animating in Blender), adds
@@ -715,7 +715,7 @@ What changed from the proposal, and why:
   made outside an undo step into the next one, so the live test gives its
   pieces a step of their own. Pieces made by `build_instances` have one.
 
-### 5. Motion for any body — in progress
+### 5. Motion for any body — done 2026-10-01
 
 - The `gait` and `wave` generators, and planting along a line.
 - The gait-pattern check.
@@ -729,10 +729,11 @@ What changed from the proposal, and why:
 **Done when** T19 passes, including the loader switching tracks as the dog
 moves.
 
-**Status, 2026-10-01.** Everything is built, and T19 is written but has not
-been run: it needs an agent run against a published place with an Open Cloud
-key (`npm run eval -- --task T19-creature-parts`). The step is done when it
-passes.
+**Status, 2026-10-01.** Done. T19 passed on its first run: in 32 tool calls
+and two and a half minutes the agent built a dog from Parts, rigged it with
+`rig`, gave it an idle and a walk of its own, and published and wired both; a
+playtest watched its own wandering play the walk and then the idle, and
+every motion check passed. What was built:
 
 - **`gait` on the pose description.** A pattern (`walk`, `trot`, `pace`,
   `bound`, `gallop`), a stride, and optionally lift, duty, bob, crouch, each
@@ -1017,3 +1018,5 @@ version.
 | Adopting the hand-rigged dog | `RoqerRig` written as a quadruped, four feet declared, and no joint's C0 changed. Doing it again needed the revision |
 | An upload's rig | Left alone without `replace` (`importer_rig`). With it, the 14 `Motor6D`s, `RootPart`, `InitialPoses` and controller were removed and the new rig built under an `AnimationController`, its root anchored |
 | `verify` in a playtest | The paw lift played on the rigged pup itself within 0.64° of the poses it was checked with |
+| A generated trot | `gait` wrote a trot for the pup: every check passed and none was skipped, at 4 studs a second, its diagonal feet landing together, each down 53% of the cycle; a copy played it within 0.06° |
+| T19 | In 32 tool calls and two and a half minutes, the agent built a dog from Parts, rigged it with `rig`, gave it an idle and a walk of its own, and published and wired both. A playtest after the last wiring watched its wandering. The oracle found both animations owned by the place's owner, the rig's range sheet, a 3D preview, and every motion check passed |
