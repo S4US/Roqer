@@ -1969,22 +1969,31 @@ export class RobloxStudioTools {
   /**
    * Read the meshes of a model's MeshParts from Studio that no earlier call
    * has, at most MAX_MESH_READS a call, so previews draw them; each is kept by
-   * its mesh ID. A mesh Studio will not hand over is drawn as its box, and a
-   * failed read leaves the rest to a later call.
+   * its mesh ID. Each comes as vertices and their triangles' indices. A mesh
+   * Studio will not hand over is drawn as its box; one it put off, as past
+   * what one answer carries, is asked for again in the next read, which always
+   * reads its first mesh; and a failed read leaves the rest to a later call.
    */
   private async _fetchModelMeshes(rig: Rig, instance_id?: string): Promise<void> {
     const directory = rigMeshCacheDirectory();
     const wanted = meshesToRead(rig, directory).slice(0, RobloxStudioTools.MAX_MESH_READS);
-    for (let start = 0; start < wanted.length; start += MAX_MESHES_PER_READ) {
-      const batch = wanted.slice(start, start + MAX_MESHES_PER_READ);
+    while (wanted.length > 0) {
+      const batch = wanted.splice(0, MAX_MESHES_PER_READ);
       let answer: { error?: unknown; meshes?: Record<string, unknown> } | undefined;
       try {
-        answer = await this._callSingle('/api/animation-read-meshes', { meshes: batch }, undefined, instance_id);
+        answer = await this._callSingle('/api/animation-read-meshes', { meshes: batch, indexed: true }, undefined, instance_id);
       } catch {
         return;
       }
       if (typeof answer?.error === 'string' || typeof answer?.meshes !== 'object' || answer.meshes === null) return;
-      for (const id of batch) storeModelMesh(id, answer.meshes[id] ?? { error: 'Studio did not answer for it' }, directory);
+      const putOff: string[] = [];
+      for (const [index, id] of batch.entries()) {
+        const mesh = answer.meshes[id];
+        // The first is never put off, so every read makes progress.
+        if (index > 0 && typeof mesh === 'object' && mesh !== null && (mesh as { deferred?: unknown }).deferred === true) putOff.push(id);
+        else storeModelMesh(id, mesh ?? { error: 'Studio did not answer for it' }, directory);
+      }
+      wanted.unshift(...putOff);
     }
   }
 

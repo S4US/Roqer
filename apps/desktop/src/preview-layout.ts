@@ -1,5 +1,5 @@
 import {
-  ANIMATION_NAME_LABEL, ANIMATION_PREVIEW_TITLE, ANIMATION_RIG_LABEL, BLENDER_MODEL_LABEL, BLENDER_PREVIEW_TITLE, RIG_RANGE_SHEET_TITLE, SCREENSHOT_VIEW_LABEL,
+  ANIMATION_BOXES_LABEL, ANIMATION_NAME_LABEL, ANIMATION_PREVIEW_TITLE, ANIMATION_RIG_LABEL, BLENDER_MODEL_LABEL, BLENDER_PREVIEW_TITLE, RIG_RANGE_SHEET_TITLE, SCREENSHOT_VIEW_LABEL,
   SCREENSHOT_VIEW_PLAYTEST, type RunChange, type RunEvidence,
 } from "../shared/run-events";
 
@@ -145,6 +145,18 @@ export function animationRigCaption(evidence: RunEvidence): string {
   const rig = animationRig(evidence);
   if (rig === undefined) return "its rig";
   return rig === "R15" || rig === "R6" ? `the ${rig} rig` : `${rig}'s own rig`;
+}
+
+/**
+ * What an animation's preview or a rig's range sheet drew as boxes instead of
+ * the model's own meshes, and why, as the MCP's result said; undefined when it
+ * drew every part as itself, or for any other picture.
+ */
+export function previewBoxesNote(evidence: RunEvidence): string | undefined {
+  const source = previewSource(evidence);
+  if (source !== "animation" && source !== "rig") return undefined;
+  const boxes = evidence.metadata?.find((entry) => entry.label === ANIMATION_BOXES_LABEL)?.value;
+  return boxes === undefined || boxes === "" ? undefined : `Drawn as boxes, not their meshes: ${boxes}`;
 }
 
 /** The short label on a tile. */

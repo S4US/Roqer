@@ -465,6 +465,14 @@ export const ANIMATION_NAME_LABEL = "Animation";
 export const ANIMATION_RIG_LABEL = "Rig";
 
 /**
+ * Metadata on an animation's preview or a rig's range sheet: which MeshParts
+ * the MCP drew as their boxes instead of their meshes, and why, as its result
+ * says. Absent when every part is drawn as itself, so a preview never passes a
+ * box off as the model.
+ */
+export const ANIMATION_BOXES_LABEL = "Drawn as boxes";
+
+/**
  * The title of a rig's range sheet: every joint of a creature's rig at rest and
  * turned a little each way, which the animation tool's rig action draws. It is
  * not an animation of the creature, and no check judged it.

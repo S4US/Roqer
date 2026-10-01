@@ -9,7 +9,7 @@ import { skillToolDefinition } from "./skill-tool";
 import { taskToolDefinition } from "./task-tool";
 import type { McpToolOutcome } from "./mcp-types";
 import type { PlannerContext } from "./run-engine";
-import type { RunEvidence } from "../shared/run-events";
+import { ANIMATION_BOXES_LABEL, ANIMATION_NAME_LABEL, ANIMATION_RIG_LABEL, RIG_RANGE_SHEET_TITLE, type RunEvidence } from "../shared/run-events";
 import { runDeveloperInstructions } from "./run-instructions";
 import {
   createStudioToolRunner, MAX_TOOL_DESCRIPTION_CHARS, parseStudioToolInput, studioToolDescription, studioToolGuide, studioToolResultText,
@@ -1756,4 +1756,53 @@ test("an inspect_ui audit is a pass/fail check that says which changes it saw", 
     { label: "Problems", value: "2" }, { label: "Latest change before audit", value: "change-1" },
   ]);
   assert.equal(evidence[1].metadata?.[1]?.value, "change-2");
+});
+
+test("a preview that drew MeshParts as their boxes says which and why, so a box is never taken for the model", async () => {
+  const sheet = (boxes?: string) => ({
+    ...ok({
+      valid: true,
+      animation: { name: "OctopusIdle", rig: "game.Workspace.Octopus", duration: 1.6, keyframes: 4, loop: true },
+      checks: { passed: true },
+      sheet: { times: [0, 0.8, 1.6], ...(boxes === undefined ? {} : { boxes }) },
+    }),
+    images: [{ data: "QUJD", mediaType: "image/png" as const }],
+  });
+  const range = {
+    ...ok({
+      rigged: true, model: "game.Workspace.Octopus", controller: "AnimationController", rig: { joints: [{}, {}] },
+      readBack: { matches: true },
+      rangeSheet: { times: [0, 1], boxes: "MeshParts drawn as their boxes: Octopus (its mesh has not been read from Studio)" },
+    }),
+    images: [{ data: "QUJD", mediaType: "image/png" as const }],
+  };
+  const long = `MeshParts drawn as their boxes: ${"Tentacle (it has 30000 triangles; a preview draws a mesh of at most 20000), ".repeat(8)}`;
+  const { context, evidence } = contextWith([
+    sheet("MeshParts drawn as their boxes: Octopus (it has 30000 triangles; a preview draws a mesh of at most 20000)"),
+    sheet(),
+    range,
+    sheet(long),
+  ]);
+  context.previewImage = async () => PREVIEW;
+  const run = createStudioToolRunner(context);
+
+  await run("animation", { action: "check", animation: { name: "OctopusIdle" } });
+  await run("animation", { action: "check", animation: { name: "OctopusIdle" } });
+  await run("animation", { action: "rig", model: "game.Workspace.Octopus", controller: "AnimationController" });
+  await run("animation", { action: "check", animation: { name: "OctopusIdle" } });
+
+  const previews = evidence.filter((item) => item.imageDataUrl !== undefined);
+  assert.equal(previews.length, 4);
+  // Before the counts, so a journal clipped to five entries keeps it.
+  assert.deepEqual(previews[0].metadata?.slice(0, 3), [
+    { label: ANIMATION_NAME_LABEL, value: "OctopusIdle" },
+    { label: ANIMATION_RIG_LABEL, value: "game.Workspace.Octopus" },
+    { label: ANIMATION_BOXES_LABEL, value: "Octopus (it has 30000 triangles; a preview draws a mesh of at most 20000)" },
+  ]);
+  assert.equal(previews[1].metadata?.some((entry) => entry.label === ANIMATION_BOXES_LABEL), false, "every part drawn as itself");
+  assert.equal(previews[2].title, RIG_RANGE_SHEET_TITLE);
+  assert.equal(previews[2].metadata?.find((entry) => entry.label === ANIMATION_BOXES_LABEL)?.value, "Octopus (its mesh has not been read from Studio)");
+  const bounded = previews[3].metadata?.find((entry) => entry.label === ANIMATION_BOXES_LABEL)?.value ?? "";
+  assert.equal(bounded.length, 400);
+  assert.ok(bounded.endsWith("…"));
 });

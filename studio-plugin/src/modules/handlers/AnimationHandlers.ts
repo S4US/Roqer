@@ -1680,9 +1680,14 @@ function copyRefusal(model: Model): string | undefined {
 	return undefined;
 }
 
-/** The most meshes one read hands over, and the most triangles in each: Roqer's bounds for previews. */
+/** The most meshes one read hands over: Roqer's bound for previews. */
 const MAX_MESHES_PER_READ = 8;
-const MAX_MODEL_MESH_FACES = 3000;
+/** The most triangles in one mesh a preview draws: Roblox's own limit for a mesh it imports. */
+const MAX_MODEL_MESH_FACES = 20000;
+/** The most a core that reads each triangle's corners in turn, not indexed vertices, draws. */
+const MAX_CORNER_MESH_FACES = 3000;
+/** The most triangles one answer carries; a mesh past it, after the first, is put off to the next read. */
+const MAX_FACES_PER_READ = 40000;
 
 /** The slots of bones a skinned vertex has. */
 const SKIN_SLOTS = 4;
@@ -1695,15 +1700,22 @@ interface SkinnedEditableMesh {
 	GetVertexBoneWeights(vertex: number): number[];
 }
 
-/** One mesh's triangles in its own space, each corner with its normal, and its bounds; or why not. */
-function readMesh(id: string): Data {
+/**
+ * One mesh in its own space, with its bounds; or why not; or, when it has more
+ * triangles than `room`, put off. `indexed`, it is its vertices, each a corner
+ * position with its normal, and its triangles' indices into them; otherwise
+ * each triangle's corners in turn, as a core that predates indices reads.
+ */
+function readMesh(id: string, indexed: boolean, room: number): { answer: Data; faces: number } {
 	const assets = game.GetService("AssetService");
 	const mesh = assets.CreateEditableMeshAsync(Content.fromUri(id));
 	const [ok, result] = pcall(() => {
 		const faces = mesh.GetFaces() as number[];
-		if (faces.size() > MAX_MODEL_MESH_FACES) {
-			return { error: `it has ${faces.size()} triangles; a preview draws a mesh of at most ${MAX_MODEL_MESH_FACES}` };
+		const most = indexed ? MAX_MODEL_MESH_FACES : MAX_CORNER_MESH_FACES;
+		if (faces.size() > most) {
+			return { answer: { error: `it has ${faces.size()} triangles; a preview draws a mesh of at most ${most}` }, faces: 0 };
 		}
+		if (faces.size() > room) return { answer: { deferred: true }, faces: 0 };
 		let min = new Vector3(math.huge, math.huge, math.huge);
 		let max = new Vector3(-math.huge, -math.huge, -math.huge);
 		const positions: number[] = [];
@@ -1739,56 +1751,91 @@ function readMesh(id: string): Data {
 			}
 			return slots;
 		};
+		// Each vertex sent once for each normal its corners have, so a hard edge stays hard.
+		const sent = new Map<string, number>();
+		const indices: number[] = [];
 		for (const face of faces) {
 			const corners = mesh.GetFaceVertices(face) as number[];
 			const faceNormals = mesh.GetFaceNormals(face) as number[];
 			if (corners.size() !== 3 || faceNormals.size() !== 3) continue;
 			for (let corner = 0; corner < 3; corner++) {
-				const position = mesh.GetPosition(corners[corner]);
-				const normal = mesh.GetNormal(faceNormals[corner]) ?? Vector3.yAxis;
-				min = min.Min(position);
-				max = max.Max(position);
-				positions.push(round4(position.X), round4(position.Y), round4(position.Z));
-				normals.push(round4(normal.X), round4(normal.Y), round4(normal.Z));
-				if (boneNames.size() > 0) {
-					const slots = vertexSlots(corners[corner]);
-					for (const joint of slots.joints) joints.push(joint);
-					for (const weight of slots.weights) weights.push(weight);
+				const key = `${corners[corner]}/${faceNormals[corner]}`;
+				let index = indexed ? sent.get(key) : undefined;
+				if (index === undefined) {
+					index = positions.size() / 3;
+					if (indexed) sent.set(key, index);
+					const position = mesh.GetPosition(corners[corner]);
+					const normal = mesh.GetNormal(faceNormals[corner]) ?? Vector3.yAxis;
+					min = min.Min(position);
+					max = max.Max(position);
+					positions.push(round4(position.X), round4(position.Y), round4(position.Z));
+					normals.push(round4(normal.X), round4(normal.Y), round4(normal.Z));
+					if (boneNames.size() > 0) {
+						const slots = vertexSlots(corners[corner]);
+						for (const joint of slots.joints) joints.push(joint);
+						for (const weight of slots.weights) weights.push(weight);
+					}
 				}
+				indices.push(index);
 			}
 		}
-		if (positions.size() === 0) return { error: "it has no triangles" };
+		if (indices.size() === 0) return { answer: { error: "it has no triangles" }, faces: 0 };
 		return {
-			positions,
-			normals,
-			min: [round4(min.X), round4(min.Y), round4(min.Z)],
-			max: [round4(max.X), round4(max.Y), round4(max.Z)],
-			...(boneNames.size() > 0 ? { skin: { bones: boneNames, joints, weights } } : {}),
+			answer: {
+				positions,
+				normals,
+				...(indexed ? { indices } : {}),
+				min: [round4(min.X), round4(min.Y), round4(min.Z)],
+				max: [round4(max.X), round4(max.Y), round4(max.Z)],
+				...(boneNames.size() > 0 ? { skin: { bones: boneNames, joints, weights } } : {}),
+			},
+			faces: indices.size() / 3,
 		};
 	});
 	mesh.Destroy();
 	if (!ok) error(result, 0);
-	return result as Data;
+	return result as { answer: Data; faces: number };
 }
 
 /**
- * Meshes of a model's MeshParts for the animation preview, by mesh ID: each as
- * triangles in the mesh's own space with its bounds, which core stretches onto
- * each part's size as Studio does. A mesh Studio will not hand over, or one
- * too large to draw, comes back as why. Read-only: nothing enters the place.
+ * Meshes of a model's MeshParts for the animation preview, by mesh ID: each in
+ * the mesh's own space with its bounds, which core stretches onto each part's
+ * size as Studio does. A mesh Studio will not hand over, or one too large to
+ * draw, comes back as why. Asked for `indexed`, once a mesh has been read,
+ * one that would carry the answer past MAX_FACES_PER_READ triangles, and every
+ * one after it, comes back put off, for core to ask for again. Read-only: nothing
+ * enters the place.
  */
 function animationReadMeshes(requestData: Data) {
 	const ids = requestData.meshes;
 	if (!typeIs(ids, "table") || (ids as unknown[]).size() === 0 || (ids as unknown[]).size() > MAX_MESHES_PER_READ) {
 		return { error: `meshes must list 1 to ${MAX_MESHES_PER_READ} mesh IDs.`, errorCode: "invalid_arguments" };
 	}
-	const meshes: Record<string, Data> = {};
 	for (const id of ids as unknown[]) {
 		if (!typeIs(id, "string") || id === "" || id.size() > 200) {
 			return { error: "every mesh ID must be a string of 1 to 200 characters.", errorCode: "invalid_arguments" };
 		}
-		const [ok, result] = pcall(() => readMesh(id));
-		meshes[id] = ok ? (result as Data) : { error: `Studio would not hand it over: ${tostring(result)}` };
+	}
+	const indexed = requestData.indexed === true;
+	const meshes: Record<string, Data> = {};
+	let carried = 0;
+	let putOff = false;
+	for (const id of ids as string[]) {
+		if (putOff) {
+			meshes[id] = { deferred: true };
+			continue;
+		}
+		// Nothing is put off until a mesh has been read, so every read makes progress.
+		const room = indexed && carried > 0 ? MAX_FACES_PER_READ - carried : math.huge;
+		const [ok, result] = pcall(() => readMesh(id, indexed, room));
+		if (!ok) {
+			meshes[id] = { error: `Studio would not hand it over: ${tostring(result)}` };
+			continue;
+		}
+		const read = result as { answer: Data; faces: number };
+		meshes[id] = read.answer;
+		carried += read.faces;
+		if ((read.answer as { deferred?: boolean }).deferred === true) putOff = true;
 	}
 	return { meshes };
 }

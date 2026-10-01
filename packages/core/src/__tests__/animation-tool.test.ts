@@ -933,12 +933,37 @@ describe('an animation for a model\'s own rig', () => {
     });
     const first = body(await tools.animation({ action: 'check', animation: wag() }));
     expect(calls.map((call) => call.endpoint)).toEqual(['/api/animation-read-rig', '/api/animation-read-meshes']);
-    expect(calls[1].data).toEqual({ meshes: ['rbxassetid://31', 'rbxassetid://32'] });
+    expect(calls[1].data).toEqual({ meshes: ['rbxassetid://31', 'rbxassetid://32'], indexed: true });
     expect(first.sheet.boxes).toBe('MeshParts drawn as their boxes: Tail (Studio would not hand it over: not permitted)');
     // Kept, and refused, for this process: the next check reads the rig alone.
     const second = body(await tools.animation({ action: 'check', animation: wag() }));
     expect(calls.map((call) => call.endpoint).slice(2)).toEqual(['/api/animation-read-rig']);
     expect(second.sheet.boxes).toBe(first.sheet.boxes);
+  });
+
+  test('a mesh Studio put off as past what one answer carries is asked for again, until each is read', async () => {
+    const tetrahedron = {
+      positions: [0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1],
+      normals: [0, 0, -1, 0, -1, 0, -1, 0, 0, 1, 1, 1],
+      indices: [0, 2, 1, 0, 1, 3, 0, 3, 2, 1, 2, 3],
+      min: [0, 0, 0],
+      max: [1, 1, 1],
+    };
+    const reading = {
+      ...partsDog(),
+      parts: partsDog().parts.map((part) => (part.name === 'Head' ? { ...part, mesh: 'rbxassetid://41' } : part.name === 'Tail' ? { ...part, mesh: 'rbxassetid://42' } : part)),
+    };
+    // Studio reads one mesh an answer and puts the rest off.
+    const { tools, calls } = studio({
+      '/api/animation-read-rig': () => reading,
+      '/api/animation-read-meshes': (data) => ({
+        meshes: Object.fromEntries((data.meshes as string[]).map((id, index) => [id, index === 0 ? tetrahedron : { deferred: true }])),
+      }),
+    });
+    const result = body(await tools.animation({ action: 'check', animation: wag() }));
+    expect(calls.filter((call) => call.endpoint === '/api/animation-read-meshes').map((call) => call.data))
+      .toEqual([{ meshes: ['rbxassetid://41', 'rbxassetid://42'], indexed: true }, { meshes: ['rbxassetid://42'], indexed: true }]);
+    expect(result.sheet.boxes).toBeUndefined();
   });
 
   test('verify compares the model\'s playtest with its own rig, and a character is not asked to play it', async () => {

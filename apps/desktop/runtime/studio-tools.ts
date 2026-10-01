@@ -14,7 +14,7 @@ import { boundedCode, diffDeletedRange, diffText, normalizeNewlines } from "../s
 import {
   ANIMATION_ALL_CHECKS_PASSED, ANIMATION_CHECKED_AS_GAIT, ANIMATION_GAIT_CHECKS_LABEL, ANIMATION_MOTION_CHECKS_LABEL,
   ANIMATION_DESCRIBED_BY_BAKE, ANIMATION_DESCRIBED_BY_LABEL, MODEL_STATE_WIRED, modelStateLabel,
-  ANIMATION_NAME_LABEL, ANIMATION_PLAYED_FROM_LABEL, ANIMATION_PLAYED_PUBLISHED, ANIMATION_PREVIEW_TITLE, ANIMATION_RIG_LABEL, animationSlotLabel, RIG_RANGE_SHEET_TITLE,
+  ANIMATION_BOXES_LABEL, ANIMATION_NAME_LABEL, ANIMATION_PLAYED_FROM_LABEL, ANIMATION_PLAYED_PUBLISHED, ANIMATION_PREVIEW_TITLE, ANIMATION_RIG_LABEL, animationSlotLabel, RIG_RANGE_SHEET_TITLE,
   BLENDER_MODEL_LABEL, BLENDER_PREVIEW_TITLE, MAX_EVIDENCE_SUBJECT_CHARS, MODEL_MOVED_BY_GAME, MODEL_MOVED_BY_LABEL,
   MODEL_MOVED_BY_VERIFY, MODEL_WHILE_MOVING_LABEL, MODEL_WHILE_STANDING_LABEL, SCREENSHOT_VIEW_LABEL, SCREENSHOT_VIEW_PLAYTEST,
   type RunChange, type RunEvidence, type RunMetadata,
@@ -1112,6 +1112,23 @@ function recordBuild(context: PlannerContext, args: JsonRecord, outcome: McpTool
   });
 }
 
+/** How the MCP's result opens its list of MeshParts drawn as their boxes; the metadata's label says it instead. */
+const BOXES_PREFIX = "MeshParts drawn as their boxes: ";
+/** The most of that list a preview's metadata keeps; the journal keeps 500 characters of a value. */
+const MAX_BOXES_CHARS = 400;
+
+/**
+ * Which MeshParts a preview's sheet drew as their boxes, and why, as metadata,
+ * or nothing when the result names none: `sheet` for an animation's contact
+ * sheet, `rangeSheet` for a rig's.
+ */
+function boxesMetadata(data: JsonRecord, sheet: "sheet" | "rangeSheet"): RunMetadata[] {
+  const drawn = stringField(data[sheet], "boxes");
+  if (drawn === undefined || drawn.trim() === "") return [];
+  const named = drawn.startsWith(BOXES_PREFIX) ? drawn.slice(BOXES_PREFIX.length) : drawn;
+  return [{ label: ANIMATION_BOXES_LABEL, value: named.length <= MAX_BOXES_CHARS ? named : `${named.slice(0, MAX_BOXES_CHARS - 1)}…` }];
+}
+
 /**
  * An animation's contact sheet as a preview in the answer, with the box rig's
  * 3D preview behind it when the host could keep one. Both were drawn by the
@@ -1142,6 +1159,8 @@ async function recordAnimationPreview(context: PlannerContext, outcome: McpToolO
     metadata: [
       { label: ANIMATION_NAME_LABEL, value: name },
       ...(rig === undefined ? [] : [{ label: ANIMATION_RIG_LABEL, value: rig }]),
+      // Before the counts: a journal clipped for room keeps a preview's first five.
+      ...boxesMetadata(data, "sheet"),
       ...(keyframes === undefined ? [] : [{ label: "Keyframes", value: String(keyframes) }]),
       ...(duration === undefined ? [] : [{ label: "Length", value: `${duration} s${animation.loop === true ? ", looping" : ""}` }]),
     ],
@@ -1385,6 +1404,7 @@ async function recordModelRig(context: PlannerContext, outcome: McpToolOutcome):
     ...(isModelPreviewId(modelPreviewId) ? { modelPreviewId } : {}),
     metadata: [
       { label: ANIMATION_RIG_LABEL, value: model },
+      ...boxesMetadata(data, "rangeSheet"),
       ...(joints === undefined ? [] : [{ label: "Joints", value: String(joints) }]),
     ],
   });

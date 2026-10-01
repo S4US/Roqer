@@ -365,7 +365,9 @@ between versions ("Version 3 of 6"), and the newest is shown first.
 - A model's own rig has at most 64 joints and 128 parts, and its `Bone`s are
   not read. Roqer rigs a model of at most 512 parts, made of rigid pieces; it
   does not skin a mesh. The only body plan with names is `quadruped`. A preview draws at most 256 welded parts and 40,000 triangles of
-  meshes, each mesh at most 3,000; a part past these is drawn as its box.
+  meshes, each mesh at most 20,000 (Roblox's own limit for an imported mesh);
+  a part past these is drawn as its box, and the preview in Roqer says which
+  parts and why.
 - A prop is animated through a `Motor6D` the game adds when the weapon is
   equipped (or, for a sheath, when the character spawns), because Roblox's
   own grip weld cannot be animated. The animation skill has the scripts.

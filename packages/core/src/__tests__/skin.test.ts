@@ -50,6 +50,38 @@ function tube(blend = false) {
   return { positions, normals, min: [-0.4, -0.4, -4], max: [0.4, 0.4, 4], skin: { bones: [...SNAKE_BONES], joints, weights } };
 }
 
+/**
+ * The snake's tube as a dense skinned mesh, as a model made in Blender is,
+ * sent as Studio sends one asked for indices: `rings` rings of `segments`
+ * vertices along it, each vertex once with its smooth normal and its bone.
+ */
+function denseTube(rings: number, segments: number) {
+  const positions: number[] = [];
+  const normals: number[] = [];
+  const joints: number[] = [];
+  const weights: number[] = [];
+  const indices: number[] = [];
+  for (let ring = 0; ring <= rings; ring += 1) {
+    const z = 4 - (8 * ring) / rings;
+    for (let segment = 0; segment < segments; segment += 1) {
+      const angle = (segment * 2 * Math.PI) / segments;
+      const [x, y] = [Math.cos(angle), Math.sin(angle)];
+      positions.push(0.4 * x, 0.4 * y, z);
+      normals.push(x, y, 0);
+      joints.push(Math.min(7, Math.max(0, Math.floor(4 - z))), 0, 0, 0);
+      weights.push(1, 0, 0, 0);
+    }
+  }
+  for (let ring = 0; ring < rings; ring += 1) {
+    for (let segment = 0; segment < segments; segment += 1) {
+      const a = ring * segments + segment;
+      const b = ring * segments + ((segment + 1) % segments);
+      indices.push(a, a + segments, b, b, a + segments, b + segments);
+    }
+  }
+  return { positions, normals, indices, min: [-0.4, -0.4, -4], max: [0.4, 0.4, 4], skin: { bones: [...SNAKE_BONES], joints, weights } };
+}
+
 const snakeLimits = { version: 1, limits: Object.fromEntries(SNAKE_BONES.slice(1).map((name) => [name, { turn: 60 }])) };
 
 function snake(): Rig {
@@ -165,6 +197,32 @@ describe('a skinned mesh drawn', () => {
     expect(json.accessors[attributes.JOINTS_0].count).toBe(json.accessors[attributes.POSITION].count);
     expect(json.accessors[attributes.WEIGHTS_0].type).toBe('VEC4');
     expect(json.accessors[json.skins[0].inverseBindMatrices]).toMatchObject({ type: 'MAT4', count: SNAKE_BONES.length + 1 });
+  });
+
+  it('is drawn as itself, not its box, at the size of a model made in Blender, and bends in both previews', () => {
+    // 9,120 triangles, as the octopus that was drawn as its box when a preview drew at most 3,000.
+    const sentMesh = denseTube(190, 24);
+    expect(sentMesh.indices.length / 3).toBe(9120);
+    const rig = snake();
+    const sequence = bend(rig);
+    expect(storeModelMesh(MESH_ID, sentMesh, directory)).toBeDefined();
+    const drawn = modelRigMeshes(rig, directory);
+    expect(drawn.boxes).toEqual([]);
+    const own = drawn.meshes.parts.get('SnakeGeometry')!;
+    expect(own.indices).toHaveLength(9120 * 3);
+    expect(own.skin).toBeDefined();
+    const bare = { positions: own.positions, normals: own.normals, indices: own.indices };
+    const bentSheet = renderContactSheet(sequence, drawn.meshes, { rig });
+    const rigidSheet = renderContactSheet(sequence, { ...drawn.meshes, parts: new Map([['SnakeGeometry', bare]]) }, { rig });
+    expect(bentSheet.png.equals(rigidSheet.png)).toBe(false);
+    const glb = renderRigGlb(sequence, 'Bend', drawn.meshes, rig);
+    const json = JSON.parse(glb.subarray(20, 20 + glb.readUInt32LE(12)).toString('utf8'));
+    const meshNode = json.nodes.find((node: { name: string }) => node.name === 'SnakeGeometry mesh');
+    const primitive = json.meshes[meshNode.mesh].primitives[0];
+    expect(json.accessors[primitive.indices].count).toBe(9120 * 3);
+    expect(json.accessors[primitive.attributes.POSITION].count).toBe(191 * 24);
+    expect(json.accessors[primitive.attributes.POSITION].min).toEqual([-0.4, -0.4, -4]);
+    expect(meshNode.skin).toBe(0);
   });
 
   it('is drawn rigid on a rig that has none of its bones', () => {

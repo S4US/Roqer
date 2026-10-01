@@ -6,6 +6,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { partMesh, type PartMesh } from '../animation/box-rig.js';
 import {
+  MAX_MESHES_PER_READ,
   MAX_MODEL_MESH_TRIANGLES,
   MAX_PREVIEW_MESH_TRIANGLES,
   fittedMesh,
@@ -61,6 +62,30 @@ function squareCube(): PartMesh {
 /** The cube as Studio sends it, off its own origin as a mesh often is. */
 const cube = () => sent(squareCube(), [5, 0, 0]);
 
+/** A mesh as Studio sends one asked for indices: each vertex once, and the triangles' indices into them. */
+function sentIndexed(mesh: PartMesh, shift: [number, number, number] = [0, 0, 0]) {
+  const positions = mesh.positions.map((value, index) => value + shift[index % 3]);
+  const { min, max } = sent(mesh, shift);
+  return { positions, normals: [...mesh.normals], indices: [...mesh.indices], min, max };
+}
+
+/** A flat sheet of `triangles` triangles over shared vertices, a strip two vertices wide. */
+function strip(triangles: number) {
+  const positions: number[] = [];
+  const normals: number[] = [];
+  const indices: number[] = [];
+  const rows = Math.ceil(triangles / 2) + 1;
+  for (let row = 0; row < rows; row += 1) {
+    positions.push(0, row / rows, 0, 1, row / rows, 0);
+    normals.push(0, 0, 1, 0, 0, 1);
+  }
+  for (let triangle = 0; triangle < triangles; triangle += 1) {
+    const a = Math.floor(triangle / 2) * 2;
+    indices.push(...(triangle % 2 === 0 ? [a, a + 1, a + 3] : [a, a + 3, a + 2]));
+  }
+  return { positions, normals, indices, min: [0, 0, 0], max: [1, 1, 0] };
+}
+
 /** The dog with its head a MeshPart and a MeshPart collar welded to its body. */
 function meshDog(): Rig {
   const reading: ModelRigReading = {
@@ -105,6 +130,32 @@ describe('a MeshPart\'s mesh', () => {
     expect(normalizeModelMesh(huge)).toBeUndefined();
   });
 
+  it('comes as shared vertices and their triangles\' indices, checked and turned as corners are', () => {
+    const mesh = normalizeModelMesh(sentIndexed(squareCube(), [5, 0, 0]))!;
+    expect(mesh.positions).toHaveLength(24 * 3);
+    expect(mesh.indices).toEqual(squareCube().indices);
+    expect(mesh.min).toEqual([4, -1, -1]);
+    // Wound the other way, each triangle is turned back by its indices alone.
+    const backwards = sentIndexed(squareCube());
+    for (let corner = 0; corner < backwards.indices.length; corner += 3) {
+      [backwards.indices[corner + 1], backwards.indices[corner + 2]] = [backwards.indices[corner + 2], backwards.indices[corner + 1]];
+    }
+    expect(normalizeModelMesh(backwards)!.indices).toEqual(squareCube().indices);
+    // Indices that are not whole triangles, point past the vertices, or are not whole numbers are refused.
+    expect(normalizeModelMesh({ ...sentIndexed(squareCube()), indices: squareCube().indices.slice(1) })).toBeUndefined();
+    expect(normalizeModelMesh({ ...sentIndexed(squareCube()), indices: [0, 1, 24] })).toBeUndefined();
+    expect(normalizeModelMesh({ ...sentIndexed(squareCube()), indices: [0, 1, 2.5] })).toBeUndefined();
+    expect(normalizeModelMesh({ ...sentIndexed(squareCube()), indices: [] })).toBeUndefined();
+    // More vertices than the triangles' corners is refused, so a mesh's size is bounded by its triangles.
+    expect(normalizeModelMesh({ ...sentIndexed(squareCube()), indices: [0, 1, 2] })).toBeUndefined();
+  });
+
+  it('is drawn up to the most triangles a mesh may have, and refused past them', () => {
+    expect(MAX_MODEL_MESH_TRIANGLES).toBe(20_000);
+    expect(normalizeModelMesh(strip(MAX_MODEL_MESH_TRIANGLES))?.indices).toHaveLength(MAX_MODEL_MESH_TRIANGLES * 3);
+    expect(normalizeModelMesh(strip(MAX_MODEL_MESH_TRIANGLES + 1))).toBeUndefined();
+  });
+
   it('is stretched onto a part\'s size about its middle, its normals kept square to it', () => {
     const fitted = fittedMesh(normalizeModelMesh(cube())!, [4, 1, 2]);
     const along = (axis: number) => fitted.positions.filter((_value, index) => index % 3 === axis);
@@ -118,12 +169,16 @@ describe('a MeshPart\'s mesh', () => {
     expect(storeModelMesh('rbxassetid://11', cube(), directory)).toBeDefined();
     resetModelMeshesForTests();
     expect(modelMesh('rbxassetid://11', directory)?.indices).toHaveLength(36);
-    const [file] = fs.readdirSync(path.join(directory, 'model-meshes-2'));
-    fs.writeFileSync(path.join(directory, 'model-meshes-2', file), JSON.stringify({ ...cube(), id: 'rbxassetid://99' }));
+    const [file] = fs.readdirSync(path.join(directory, 'model-meshes-3'));
+    fs.writeFileSync(path.join(directory, 'model-meshes-3', file), JSON.stringify({ ...cube(), id: 'rbxassetid://99' }));
     resetModelMeshesForTests();
     expect(modelMesh('rbxassetid://11', directory)).toBeUndefined();
-    fs.writeFileSync(path.join(directory, 'model-meshes-2', file), '{ not json');
+    fs.writeFileSync(path.join(directory, 'model-meshes-3', file), '{ not json');
     expect(modelMesh('rbxassetid://11', directory)).toBeUndefined();
+    // An indexed mesh is kept with its indices, and read back the same.
+    const indexed = storeModelMesh('rbxassetid://13', sentIndexed(squareCube()), directory)!;
+    resetModelMeshesForTests();
+    expect(modelMesh('rbxassetid://13', directory)).toEqual(indexed);
   });
 
   it('that Studio would not hand over is remembered with why, and not asked for again this process', () => {
@@ -184,5 +239,18 @@ describe('a model drawn with its meshes', () => {
     const past = modelRigMeshes(spiked(fits + 1), directory);
     expect(past.boxes).toHaveLength(fits + 1);
     expect(past.boxes[0]).toEqual({ part: 'Spike0', reason: `past the ${MAX_PREVIEW_MESH_TRIANGLES} triangles of meshes a preview draws` });
+  });
+});
+
+describe('the plugin that reads meshes', () => {
+  // The repository runs no Luau; this keeps the plugin's bounds on a read in step with what core draws.
+  const root = fs.existsSync(path.join(process.cwd(), 'studio-plugin')) ? process.cwd() : path.resolve(process.cwd(), '../..');
+  const handlers = fs.readFileSync(path.join(root, 'studio-plugin/src/modules/handlers/AnimationHandlers.ts'), 'utf8');
+  const constant = (name: string) => Number(new RegExp(`\\nconst ${name} = (\\d+);`).exec(handlers)?.[1]);
+
+  it('reads a mesh as large as core draws, as many a read as core asks for, and no more an answer than a preview draws', () => {
+    expect(constant('MAX_MODEL_MESH_FACES')).toBe(MAX_MODEL_MESH_TRIANGLES);
+    expect(constant('MAX_MESHES_PER_READ')).toBe(MAX_MESHES_PER_READ);
+    expect(constant('MAX_FACES_PER_READ')).toBe(MAX_PREVIEW_MESH_TRIANGLES);
   });
 });
