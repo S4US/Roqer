@@ -7,8 +7,8 @@ reads a rig from any rigged model, and a dog rigged by hand in Studio plays
 its animation as checked. Step 4 rigs a model's loose pieces, and `aim` and
 `aimAt` move the legs of a dog it rigged. Step 5 added the `wave` and `gait`
 generators, and eval T19 passes. Step 6 carries a Blender creature's pivots
-to `rig`, and eval T17 passes. Step 7, skinned creatures, has its live test
-written and waits on that test's upload run. Step 8 is proposed and not yet
+to `rig`, and eval T17 passes. Step 7, skinned creatures, has run its live test,
+which found that an upload keeps its bones and weights, and is being built. Step 8 is proposed and not yet
 scheduled. The
 plan details steps 12 to 14 of the [animation plan](animation-plan.md)
 (creatures made of rigid parts, skinned creatures, animating in Blender), adds
@@ -943,19 +943,47 @@ upload. It writes a skinned snake itself, one mesh on a chain of bones laid
 out as Blender exports an armature; imported into Blender 5.2, each of its
 variants (8 bones, 300 bones, eight influences a vertex) came back with its
 bones, weights summing to 1 on every vertex, and a mesh that bends when a
-bone is posed. The questions that need an upload are not answered yet: the
-run creates three Model assets, so it waits for a key.
+bone is posed. Run with its upload on 2026-10-01 (Studio 0.741), it answered
+every question; the table is in [Live results](#a-skinned-upload). In short:
 
-Answered so far, on `Bone`s made under a plain Part (Studio 0.741):
+- **An Open Cloud Model upload keeps the skin.** The snake arrived as one
+  Model holding one `MeshPart`, named after the mesh and reporting a skinned
+  mesh, with its eight `Bone`s under it, nested as the armature was and named
+  as its bones were. It came with an `AnimationController` that has no
+  `Animator`, an `InitialPoses` folder, and no `RootPart`, `Motor6D` or other
+  joint.
+- **Bones keep Blender's axes.** Each bone stood where it was modelled, half a
+  turn about Y from glTF's axes as parts are, with its +Y along the bone. So a
+  bone's `CFrame` is its rest frame in its parent, as the plan assumed, and
+  its rest frame is not the body's axes: a pose written in the body's axes is
+  turned into the bone's, as it already is for a part that does not rest
+  upright.
+- **A `KeyframeSequence` drives bones** in edit mode and on a playtest's
+  server, each keyed bone turning exactly as keyed, when its poses nest as the
+  bones do: a pose for each bone from the root bone down, the unkeyed ones at
+  weight 0. Poses for the parts above (`HumanoidRootPart`, the mesh) are
+  optional. Bones keyed side by side are not driven at all. That is the shape
+  the builder already writes for parts, with a bone's name in place of a
+  part's.
+- **`EditableMesh` hands over the skin**: the bones with their names and
+  frames, and each vertex's bones and weights, four slots a vertex. So core
+  can skin a preview itself, with no Blender render.
+- **Limits.** A chain of 300 bones arrived whole, nested 300 deep. A mesh
+  weighted to eight bones a vertex arrived with four, renormalised to sum to
+  1: Roblox keeps the four largest, so the worker's check refuses more than
+  four rather than let the shape change silently.
 
-- A `KeyframeSequence` drives bones, in edit mode and on a playtest's server,
-  under an `AnimationController`. Each keyed bone turned exactly as keyed.
-- The poses must nest as the bones do: a pose for each bone from the root
-  bone down, the unkeyed ones at weight 0. Poses for the part above them
-  (`HumanoidRootPart`, the mesh) are optional. Bones keyed side by side,
-  under the keyframe or under the mesh's pose, are not driven at all.
+What follows from it, in the order it is built:
 
-Nothing in core reads a bone yet; that follows the upload's answers.
+1. Bones read into the rig: a bone is a joint whose C0 is its `CFrame` and
+   whose C1 is the identity, moving a "part" named after it that is never
+   drawn. The compiler, the checks, the builder and `verify` take it as they
+   take a `Motor6D`.
+2. Previews that bend the mesh: the plugin reads each vertex's bones and
+   weights, and core skins the mesh for the contact sheet and the 3D preview.
+3. `rig` on a skinned model: declarations, and for one that walks, the root
+   part and `Humanoid` around its mesh.
+4. The Blender recipe and the worker's check of the weights, then the eval.
 
 ### 8. Animating in Blender — proposed
 
@@ -1098,6 +1126,23 @@ body, and no `RoqerRig`. Its animation wags the head and the tail.
 | `build` previews on a copy | The copy played the animation within 0.23° of the poses it was checked with. The dog stayed where it was, and the copy left nothing in Workspace |
 | A weld reaching outside | A `WeldConstraint` from the tail to a post outside the dog was refused before anything was built (`model_not_copyable`), naming the weld and the post, and the post did not move |
 | `verify` in a playtest | The animation played on the dog itself within 0.27° of the poses it was checked with |
+
+### A skinned upload
+
+`npm run test:spike:skinned`, run on 2026-10-01 against Studio 0.741 with its
+upload on. The snake is one mesh, 8 studs long, skinned to a chain of bones as
+Blender exports an armature: the root bone turned so its +Y lies along the
+snake, each child one bone's length up its parent's +Y.
+
+| Question | Finding |
+| --- | --- |
+| Does a Model upload keep the skin? | Yes. One Model holding one `MeshPart`, named after the mesh, with `HasSkinnedMesh` true and the 8 `Bone`s under it. An `AnimationController` with no `Animator`, an `InitialPoses` folder, and no joint or `RootPart` |
+| How do the bones arrive? | Named as modelled, nested as the chain was, the root bone under the `MeshPart`, each where it was modelled to within 0.001 studs after the half turn about Y |
+| A Blender bone's axes | Kept: each bone's +Y points along the snake (Roblox's -Z after the half turn), and a child's `Position` is `(0, 1, 0)`, its offset in its parent's frame |
+| Which sequences drive bones? | Poses nested as the bones are, from the root bone down, with or without poses for `HumanoidRootPart` and the mesh above them: each keyed bone turned as keyed, to 0°. Bones keyed side by side, under the keyframe or the mesh's pose, did not move. The same in edit mode and on a playtest's server, and the same on `Bone`s made by hand under a plain Part |
+| Does `EditableMesh` read the skin? | Yes: `GetBones`, `GetBoneName`, `GetBoneCFrame`, `GetVertexBones` and `GetVertexBoneWeights` all work. 8 bones by name, the first at `(0, 0, 4)` in the mesh's space, and every vertex's weights in four slots summing to 1 |
+| 300 bones | The upload went through, skinned, and all 300 arrived, nested 300 deep |
+| Eight bones a vertex | The upload went through, skinned. Every vertex read back with four bones, weights summing to 1: the four largest kept and renormalised |
 
 ### A dog rigged by the tool
 
