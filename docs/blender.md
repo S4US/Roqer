@@ -104,6 +104,26 @@ After the upload, the agent rigs the inserted model with those joints
 (see [Rigging a model](animation.md#rigging-a-model)). The pivots are measured
 from the model's own origin, so they hold wherever it was inserted.
 
+### Creatures that bend
+
+Pieces turn rigidly. A body that must bend along its length, for "Model a
+snake and make it slither" or a creature with a long tail, is modelled as one
+mesh skinned to bones instead. Roblox keeps the bones and the skin's weights
+when such a model is uploaded, so it arrives ready to animate.
+
+Roqer's check of the exported file reads the armature and the weights, and
+points out what Roblox would not keep, while the model can still be changed:
+
+- a vertex that follows no bone, which would stay behind;
+- a vertex that follows more than four bones, since Roblox keeps the four
+  largest;
+- more than one mesh on the armature, or more than one armature;
+- more than 63 bones, which is as many as Roqer animates;
+- a leg with no foot bone, or a foot bone above the ground.
+
+After the upload, the agent has Roqer build the rig around the mesh's bones
+(see [Skinned creatures](animation.md#skinned-creatures)).
+
 ## Safety
 
 A Blender script is a program, and it runs with your permissions. That is why

@@ -242,6 +242,28 @@ and where each one turns.
 - **A model that is already rigged** can be given declarations without
   changing a joint.
 
+## Skinned creatures
+
+A creature that is one mesh bent by bones, such as a snake, a fish or a wolf
+with a tail that curls, is animated the same way as one made of pieces. Each
+bone is a joint, named after the bone.
+
+- **Where it comes from.** Usually Blender
+  ([Creatures that bend](blender.md#creatures-that-bend)). Any model whose
+  MeshPart holds `Bone`s works, including one from the Creator Store.
+- **Rigging it.** Roqer adds what a skinned mesh lacks to be animated and
+  moved: a hidden root part joined to the mesh, a `Humanoid` or an
+  `AnimationController`, and the declarations of its legs, read from its
+  bones' names. It never adds, moves or removes a bone. It is one undo step.
+- **Previews bend the mesh.** The contact sheet and the 3D preview show the
+  mesh skinned as Studio skins it. When Studio will not hand a mesh's skin
+  over, the result says the mesh is drawn rigid, so a still image is not
+  mistaken for a check.
+- **The checks and the generators are the same**: waves, gaits and every
+  motion check work on bones as on parts.
+- **Limits.** A rig of at most 64 joints, the root among them. Roblox keeps
+  at most four bones on a vertex.
+
 ## Waves
 
 A tail, a tentacle, a wing or a spine sways as a wave rather than as

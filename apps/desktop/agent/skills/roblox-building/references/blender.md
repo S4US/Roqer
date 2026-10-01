@@ -87,6 +87,9 @@ get the direction of wrong, and they paint it when given a colour:
   of a creature (see "A creature of moving pieces"): its origin goes to
   `pivot` without moving its shape, its mesh is named after it, and it hangs
   from `parent`.
+- `roqer.bind(obj, bones)` and `roqer.skin(obj, bones, name="Armature")`: for
+  a creature that bends (see "A creature that bends"): bind says which bones a
+  part follows, and skin makes the armature and weights the joined mesh.
 
 Prefer them for any part that is not upright. Raw `bpy` is still available for
 shapes they do not cover; there, keep the model flat-shaded (no
@@ -239,6 +242,60 @@ bpy.ops.export_scene.gltf(filepath=os.path.join(OUTPUT_DIR, "wolf.glb"), export_
 
 Then upload and insert it as in "Getting it into Studio", and rig it: the
 creature reference's "From Blender" section has the call.
+
+## A creature that bends: one skinned mesh
+
+Pieces turn rigidly, which suits a blocky creature. A body that must bend
+along its length (a snake, a fish, a tentacle, a worm, a long tail or neck)
+is one mesh skinned to bones instead. The upload keeps the bones and the
+weights, so nothing about the rig has to be carried to Studio by hand.
+
+- **Bind each part to its bones as you make it**: `roqer.bind(part, "Head")`
+  for a part that moves rigidly with one bone, `roqer.bind(part, ["Tail",
+  "Tail2"])` for one that bends between several. A part left unbound is
+  weighted among every bone by which lie nearest, which is right for a single
+  tube and wrong for a leg beside a belly.
+- **A part bends only where it has vertices.** A box has them at its ends, so
+  build a bending length from several short segments end to end (a tail of six
+  boxes, a snake of twenty), all bound to the same list of bones.
+- **Join everything into one object** with `roqer.join`, then
+  `roqer.skin(obj, bones)`. `bones` lists `(name, head, tail)` or
+  `(name, head, tail, parent)`, parents first: each bone runs from `head` to
+  `tail`, and a part turns about its bone's `head`. Keep to 63 bones or fewer.
+- **Name bones as the body plan names pieces**: `Head`, `Tail`, `Tail2`, and
+  for a four-legged body `FrontLeftUpper`, `FrontLeftLower` and
+  `FrontLeftFoot` for each leg. The foot bone's head is at the sole, on Z 0:
+  it is where the leg ends and where the foot meets the ground. Do not name a
+  bone `Root`, or after the mesh; name the spine `Spine`.
+- Model it at rest, front toward −Y, feet on Z 0, and export one GLB as usual.
+
+Read the result's **skinned** line. It names the mesh and its bones, and
+lists what Roblox would not keep, each with what to change: a vertex no bone
+holds, a vertex held by more than four bones, more than one mesh or armature,
+a leg with no foot bone. It ends with the `rig` call, which takes no joints.
+
+```python
+import bpy, os
+
+GREEN, PALE = (0.3, 0.5, 0.28, 1), (0.75, 0.78, 0.6, 1)
+names = [f"Spine{index + 1}" for index in range(8)]
+
+# A snake facing -Y, 8 studs long, lying on Z 0: twenty short segments that
+# bend along eight bones, and a head that moves with the first.
+parts = [roqer.bind(roqer.box_between("head", (0, -4.6, 0.3), (0, -4.0, 0.3), 0.7, 0.5, rgba=GREEN), "Spine1")]
+for index in range(20):
+    y = -4 + index * 0.4
+    parts.append(roqer.bind(roqer.box_between(f"s{index}", (0, y, 0.25), (0, y + 0.4, 0.25), 0.5, 0.5, rgba=GREEN if index % 2 else PALE), names))
+
+bones = [(name, (0, -4 + index, 0.25), (0, -3 + index, 0.25), names[index - 1] if index else None) for index, name in enumerate(names)]
+snake = roqer.join("Snake", parts)
+roqer.skin(snake, bones)
+
+bpy.ops.export_scene.gltf(filepath=os.path.join(OUTPUT_DIR, "snake.glb"), export_format="GLB", export_apply=True, use_visible=True)
+```
+
+Then upload and insert it, and rig it: the creature reference's "A skinned
+creature" section has the call.
 
 ## Getting it into Studio
 

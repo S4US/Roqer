@@ -562,7 +562,7 @@ test("a reset the bridge rejects is an error, not a failing score", async () => 
 });
 
 test("every shipped task declares a prompt, a seed, a probe, and its targets", () => {
-  assert.equal(EVAL_TASKS.length, 18);
+  assert.equal(EVAL_TASKS.length, 19);
   const ids = new Set(EVAL_TASKS.map((task) => task.id));
   assert.equal(ids.size, EVAL_TASKS.length, "task ids are unique");
 

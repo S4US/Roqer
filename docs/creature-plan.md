@@ -7,8 +7,9 @@ reads a rig from any rigged model, and a dog rigged by hand in Studio plays
 its animation as checked. Step 4 rigs a model's loose pieces, and `aim` and
 `aimAt` move the legs of a dog it rigged. Step 5 added the `wave` and `gait`
 generators, and eval T19 passes. Step 6 carries a Blender creature's pivots
-to `rig`, and eval T17 passes. Step 7, skinned creatures, has run its live test,
-which found that an upload keeps its bones and weights, and is being built. Step 8 is proposed and not yet
+to `rig`, and eval T17 passes. Step 7, skinned creatures, is built on what its
+live test found, that an upload keeps its bones and weights; its eval T20 has
+not been run. Step 8 is proposed and not yet
 scheduled. The
 plan details steps 12 to 14 of the [animation plan](animation-plan.md)
 (creatures made of rigid parts, skinned creatures, animating in Blender), adds
@@ -935,7 +936,7 @@ Then:
 - **Previews**: the viewer plays a GLB with its skin. For the contact sheet,
   decide at the time between a Blender render and a skinned renderer in core.
 
-**Done when** a skinned creature passes T17's checks.
+**Done when** a skinned creature passes T17's checks: eval T20.
 
 **Status, 2026-10-01.** The live test is written (`npm run
 test:spike:skinned`, described in `tests/README.md`) and has run without its
@@ -1002,7 +1003,36 @@ What follows from it, in the order it is built:
    with. Bones are never made, moved or removed. A quadruped's legs are bones
    named `<Leg>Upper`, `<Leg>Lower` and `<Leg>Foot`, the foot bone at the
    paw's sole. Live, the uploaded snake was built around under a `Humanoid`.
-4. The Blender recipe and the worker's check of the weights, then the eval.
+4. **Done, but for its eval: the Blender side.** `roqer.bind(part, bones)`
+   says which bones a part follows, and `roqer.skin(obj, bones)` makes the
+   armature and weights the joined mesh: each vertex among the bones its part
+   was bound to, or among all of them, by nearness to the fourth power, at
+   most four a vertex and summing to 1. It does not use Blender's automatic
+   weights, which fail on a mesh joined from separate boxes. Roqer's check of
+   the exported file reads the armature and each vertex's weights and flags
+   what Roblox would not keep: a vertex no bone holds, one held by more than
+   four, several meshes or armatures, more than 63 bones, a bone named `Root`
+   or after the mesh, a leg with no foot bone or one above the ground. It
+   ends with the `rig` call. Run through the worker in Blender 5.2, a skinned
+   wolf of 16 bones and the skill's snake of 8 exported, re-imported and came
+   back whole, with nothing flagged.
+5. **Eval T20** `creature-skinned` is T17's prompt asking for one skinned
+   mesh. It has not been run: it needs an agent run with Blender on, a
+   published place and an Open Cloud key (`npm run eval -- --task
+   T20-creature-skinned --blender auto`). It is also the first upload of a
+   skinned mesh that Blender exported; the spike's was written by hand to
+   match one.
+
+What changed from the proposal, and why:
+
+- **No Blender render for previews.** `EditableMesh` hands the skin over, so
+  core skins the mesh itself and the same image serves as for any rig.
+- **No armature templates.** A body plan's bones are named in the skill, and
+  `roqer.skin` takes any list of bones, so a snake, a fish and a wolf go the
+  same way.
+- **Weights are Roqer's own, not Blender's automatic ones**, as above.
+- **T20 instead of a second T17.** T17 stays the pieces prompt, so both ways
+  of making a creature keep a test.
 
 ### 8. Animating in Blender — proposed
 

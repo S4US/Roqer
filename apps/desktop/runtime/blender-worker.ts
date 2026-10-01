@@ -10,6 +10,7 @@ import {
   MAX_BLENDER_SCRIPT_CHARACTERS,
 } from "../shared/blender";
 import { articulationOf, describeArticulation, MAX_LISTED_OBJECTS, parseObjects, type Articulation, type InspectedObject } from "./blender-articulation";
+import { describeSkins, parseSkins, type InspectedSkin } from "./blender-skin";
 import type { McpCallOptions, McpToolImage, McpToolOutcome } from "./mcp-types";
 import { isViewableGlb, JOB_RETENTION_MS, MAX_KEPT_JOBS, modelPreviewFileName, pruneJobFolders } from "./model-preview";
 import { modelPreviewId } from "../shared/model-preview";
@@ -266,6 +267,118 @@ def piece(obj, pivot, parent=None):
     obj.matrix_world = placed
     bpy.context.view_layer.update()
     return obj
+
+
+_MAX_INFLUENCES = 4
+
+
+def bind(obj, bones):
+    """Say which bones a part follows, before it is joined and skinned.
+
+    bones is one bone's name, for a part that moves rigidly with it (a paw with its foot bone),
+    or a list of names, for a part that bends between them (a tail along its tail bones).
+    roqer.skin weights each of its vertices among those bones only. A part that is not bound
+    is weighted among every bone, by which lie nearest.
+    """
+    names = [bones] if isinstance(bones, str) else list(bones)
+    if not names or not all(isinstance(name, str) and name for name in names):
+        raise ValueError(f"bones must be a bone's name or a list of names, got {bones!r}")
+    indices = [vertex.index for vertex in obj.data.vertices]
+    for name in names:
+        group = obj.vertex_groups.get(name) or obj.vertex_groups.new(name=name)
+        group.add(indices, 1.0, "REPLACE")
+    return obj
+
+
+def _segment_distance(point, head, tail):
+    along = tail - head
+    length = along.length_squared
+    share = 0.0 if length < 1e-12 else max(0.0, min(1.0, (point - head).dot(along) / length))
+    return (point - (head + along * share)).length
+
+
+def skin(obj, bones, name="Armature"):
+    """Skin one mesh to an armature, so it bends at its bones when animated in Studio.
+
+    bones lists (name, head, tail) or (name, head, tail, parent): each bone runs from head to
+    tail in studs, a parent before its children. obj is the whole creature as one object, joined
+    with roqer.join. Every vertex is weighted to the bones nearest it, blending where two meet,
+    at most four a vertex and summing to 1; a part bound with roqer.bind keeps to its own bones.
+    Returns the armature. Export both: the upload keeps the bones and the weights.
+    """
+    if obj.type != "MESH":
+        raise ValueError(f"{obj.name} is a {obj.type.lower()}, not a mesh")
+    entries = []
+    seen = set()
+    for entry in bones:
+        if len(entry) not in (3, 4):
+            raise ValueError(f"a bone is (name, head, tail) or (name, head, tail, parent), got {entry!r}")
+        bone_name, head, tail = entry[0], _vector(entry[1], "head"), _vector(entry[2], "tail")
+        parent = entry[3] if len(entry) == 4 else None
+        if not isinstance(bone_name, str) or not bone_name or bone_name in seen:
+            raise ValueError(f"each bone needs a name of its own, got {bone_name!r}")
+        if (tail - head).length < 1e-4:
+            raise ValueError(f"{bone_name}'s head and tail are the same point")
+        if parent is not None and parent not in seen:
+            raise ValueError(f"{bone_name}'s parent {parent!r} must come before it in the list")
+        seen.add(bone_name)
+        entries.append((bone_name, head, tail, parent))
+    if not entries:
+        raise ValueError("skin needs at least one bone")
+    unknown = sorted(group.name for group in obj.vertex_groups if group.name not in seen)
+    if unknown:
+        raise ValueError(f"parts are bound to bones that are not in the list: {', '.join(unknown)}")
+
+    data = bpy.data.armatures.new(name)
+    armature = bpy.data.objects.new(name, data)
+    bpy.context.scene.collection.objects.link(armature)
+    bpy.context.view_layer.objects.active = armature
+    with bpy.context.temp_override(active_object=armature, object=armature, selected_objects=[armature], selected_editable_objects=[armature]):
+        bpy.ops.object.mode_set(mode="EDIT")
+        made = {}
+        for bone_name, head, tail, parent in entries:
+            bone = data.edit_bones.new(bone_name)
+            bone.head, bone.tail = head, tail
+            if parent is not None:
+                bone.parent = made[parent]
+            made[bone_name] = bone
+        bpy.ops.object.mode_set(mode="OBJECT")
+
+    # Which bones each vertex may follow: those its part was bound to, or all of them.
+    bound = {}
+    for vertex in obj.data.vertices:
+        names = [obj.vertex_groups[item.group].name for item in vertex.groups if item.weight > 0]
+        if names:
+            bound[vertex.index] = set(names)
+    for group in list(obj.vertex_groups):
+        obj.vertex_groups.remove(group)
+    groups = {bone_name: obj.vertex_groups.new(name=bone_name) for bone_name, _, _, _ in entries}
+    world = obj.matrix_world
+    for vertex in obj.data.vertices:
+        point = world @ vertex.co
+        allowed = bound.get(vertex.index)
+        near = sorted(
+            (_segment_distance(point, head, tail), bone_name)
+            for bone_name, head, tail, _ in entries if allowed is None or bone_name in allowed
+        )[:_MAX_INFLUENCES]
+        # Nearness to the fourth power: a vertex midway between two bones is shared, one
+        # beside a bone is almost wholly its own.
+        raw = [(1.0 / max(distance, 1e-4) ** 4, bone_name) for distance, bone_name in near]
+        most = max(weight for weight, _ in raw)
+        kept = [(weight, bone_name) for weight, bone_name in raw if weight >= most * 0.05]
+        total = sum(weight for weight, _ in kept)
+        for weight, bone_name in kept:
+            groups[bone_name].add([vertex.index], weight / total, "REPLACE")
+
+    for modifier in list(obj.modifiers):
+        if modifier.type == "ARMATURE":
+            obj.modifiers.remove(modifier)
+    obj.modifiers.new(name, "ARMATURE").object = armature
+    obj.parent = armature
+    obj.matrix_parent_inverse = armature.matrix_world.inverted()
+    obj.data.name = obj.name
+    bpy.context.view_layer.update()
+    return armature
 `;
 
 /**
@@ -443,6 +556,12 @@ else:
         bpy.ops.wm.obj_import(filepath=model_path)
 
 scene = bpy.context.scene
+# The glTF importer draws each bone as a shape object of its own, which is no part of the model.
+armatures = [item for item in scene.objects if item.type == "ARMATURE"]
+for shape in {bone.custom_shape for item in armatures for bone in item.pose.bones if bone.custom_shape is not None}:
+    for bone in [bone for item in armatures for bone in item.pose.bones if bone.custom_shape is shape]:
+        bone.custom_shape = None
+    bpy.data.objects.remove(shape, do_unlink=True)
 meshes = [item for item in scene.objects if item.type == "MESH" and not item.hide_render]
 depsgraph = bpy.context.evaluated_depsgraph_get()
 triangles = 0
@@ -499,6 +618,38 @@ for item in meshes[:48]:
     objects.append(entry)
 stats = {"meshes": len(meshes), "triangles": triangles, "materials": sorted(materials)[:32], "preview": False,
          "colorSource": color_source, "objects": objects}
+
+# Skins: each armature's bones, head and tail in Blender coordinates, and for
+# each mesh that follows it how its vertices are weighted, which is what Roblox
+# keeps of it: a vertex no bone holds stays behind, and one held by more than
+# four keeps the four largest.
+skins = []
+for armature in armatures[:4]:
+    names = {bone.name for bone in armature.data.bones}
+    entry = {"armature": armature.name, "boneCount": len(armature.data.bones), "bones": [], "meshes": []}
+    for bone in list(armature.data.bones)[:96]:
+        listed = {"name": bone.name, "head": r3(armature.matrix_world @ bone.head_local), "tail": r3(armature.matrix_world @ bone.tail_local)}
+        if bone.parent is not None:
+            listed["parent"] = bone.parent.name
+        entry["bones"].append(listed)
+    for item in meshes:
+        if not any(modifier.type == "ARMATURE" and modifier.object is armature for modifier in item.modifiers):
+            continue
+        group_names = {group.index: group.name for group in item.vertex_groups}
+        unweighted = over = most = 0
+        for vertex in item.data.vertices:
+            held = sum(1 for group in vertex.groups if group.weight > 1e-4 and group_names.get(group.group) in names)
+            most = max(most, held)
+            if held == 0:
+                unweighted += 1
+            elif held > 4:
+                over += 1
+        entry["meshes"].append({"name": item.name, "mesh": item.data.name, "vertices": len(item.data.vertices),
+                                "unweighted": unweighted, "overFour": over, "mostInfluences": most,
+                                "materials": sum(1 for slot in item.material_slots if slot.material is not None)})
+    skins.append(entry)
+if skins:
+    stats["skins"] = skins
 
 # Smooth shading across hard edges: a corner whose normal leans far from its
 # face's is shaded as if the edge were rounded, which makes boxes and panels
@@ -902,6 +1053,8 @@ export type InspectedFile = Readonly<{
   objects?: readonly InspectedObject[];
   /** For a model whose objects hang from one another: its pieces as `rig` joints, and what would rig badly. */
   articulation?: Articulation;
+  /** For a skinned model: its armature's bones and how each mesh that follows them is weighted. */
+  skins?: readonly InspectedSkin[];
   /** Where the model's lowest point sits, in Blender units: 0 stands it on the ground. */
   bottom?: number;
   /** How the model's pieces sit against each other, in the script's Blender coordinates. */
@@ -1249,6 +1402,7 @@ export class BlenderWorker {
         colorSource: stats.colorSource === "texture" || stats.colorSource === "vertex" || stats.colorSource === "material" ? stats.colorSource : undefined,
         objects: parseObjects(stats.objects),
         articulation: articulationOf(parseObjects(stats.objects) ?? []),
+        skins: parseSkins(stats.skins),
         bottom: Array.isArray(stats.min) && typeof stats.min[2] === "number" ? stats.min[2] : undefined,
         layout: parseLayout(stats.layout),
         smoothShaded: Array.isArray(stats.smoothShaded)
@@ -1390,7 +1544,7 @@ function describeFile(file: InspectedFile): string {
   const pieces = file.objects !== undefined && file.objects.length > 1
     ? `\n  objects, each arriving as its own MeshPart named after it: ${listed.map((object) => `${object.name} ${object.size.map((value) => value.toFixed(2)).join(" × ")}`).join("; ")}${more(listed.length, file.objects.length)}`
     : "";
-  const articulated = file.inspectionError === undefined ? describeArticulation(file.articulation) : "";
+  const articulated = file.inspectionError === undefined ? `${describeArticulation(file.articulation)}${describeSkins(file.skins, file.bottom)}` : "";
   const layout = file.inspectionError === undefined ? describeLayout(file.layout, file.bottom, file.articulation) : "";
   const shading = file.smoothShaded !== undefined && file.smoothShaded.length > 0
     ? `\n  shading: smooth across hard edges on ${file.smoothShaded.map((entry) => `${entry.object} (${Math.round(entry.share * 100)}% of corners)`).join(", ")}, which makes boxes and panels look puffy in Roblox. Unless the object is meant to look rounded, remove shade_smooth; roqer.join keeps what it joins flat.`

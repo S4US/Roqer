@@ -206,6 +206,48 @@ Without it pivots are points in the world. A refusal that a pivot "lies
 outside" its pieces on every joint means the origin was not where expected:
 read `Body`'s position and give the pivots in the world instead.
 
+### A skinned creature
+
+A creature that bends along its length is one mesh skinned to bones (the
+building skill's `references/blender.md`, "A creature that bends"). The
+upload keeps its bones and weights: it arrives as one Model holding one
+MeshPart, with the armature's bones inside it as `Bone`s. A bone is a joint
+named after itself, so there are no joints to give:
+
+```text
+{
+  "action": "rig", "model": "game.Workspace.Snake",
+  "controller": "AnimationController", "replace": "importer",
+  "plan": "custom",
+  "declarations": { "limits": { "Spine2": { "turn": 60 }, "Spine3": { "turn": 60 } } }
+}
+```
+
+- `rig` makes the hidden root and its `Root` joint around the mesh, the
+  controller, and the declarations, and takes out the `AnimationController`
+  and `InitialPoses` the upload came with. It never changes a bone.
+- **Animate the bones by name**, exactly as joints: `rotation` in the body's
+  axes whichever way a bone lies, `waves` down a chain of them, and on a
+  four-legged body `gait`, `aim` and `aimAt` on the legs. `Root` takes
+  `position` and moves the whole creature.
+- **`plan: "quadruped"`** reads the bones' names as it reads pieces':
+  `FrontLeftUpper`, `FrontLeftLower` and `FrontLeftFoot` make a leg whose
+  knee is the lower bone's joint and whose foot is the foot bone, standing
+  where that bone begins. Its joints are named after the bones, so a recipe's
+  `FrontLeft` is `FrontLeftUpper` here and its `FrontLeftKnee` is
+  `FrontLeftLower`.
+- **A limb on bones ends where the next bone begins.** Declaring a limb whose
+  last bone has no bone below it needs `end`, a point in that bone's frame:
+  `[0, length, 0]`, since a bone's +Y runs along it.
+- **Declare a range for every bone you move**, under `limits`, or
+  `jointLimits` reports them as not judged.
+- At most 64 joints, the root's among them.
+- The result's sheet has `skin`: "bent by its bones" means the image shows
+  the mesh as Studio will skin it. "drawn rigid" means the mesh's skin could
+  not be read, and only the checks and Studio show the motion.
+- Without a `controller`, `rig {model, plan, declarations}` only declares,
+  and leaves the mesh loose and unanchored: use the call above.
+
 ### A generated body
 
 Without Blender, `generate_model` can make the body: pass the pieces as

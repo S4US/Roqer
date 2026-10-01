@@ -622,7 +622,7 @@ test("T15 passes a run that meets every one of the plan's conditions", () => {
 });
 
 test("only the tasks that judge an owner against the place's need a published place", () => {
-  assert.deepEqual(EVAL_TASKS.filter((task) => needsPublishedPlace([task])).map((task) => task.id), ["T15-animation-run", "T18-npc-patrol", "T19-creature-parts", "T17-creature-blender"]);
+  assert.deepEqual(EVAL_TASKS.filter((task) => needsPublishedPlace([task])).map((task) => task.id), ["T15-animation-run", "T18-npc-patrol", "T19-creature-parts", "T17-creature-blender", "T20-creature-skinned"]);
   assert.match(animationRun({ place: { id: 0, type: "User" } }).detail, /The place is not published/);
 });
 
@@ -810,6 +810,39 @@ test("T17 wants a Blender job, an upload, and the pieces the upload arrived as, 
   assert.match(wolf({ rigStamp: false }).detail, /The wolf's rig was not built by rig/);
   assert.match(wolf({ feet: 0 }).detail, /The wolf's rig declares 0 feet/);
   assert.match(wolf({ walkGroundSpeed: false }).detail, /The wolf's walk was wired without its ground speed/);
+});
+
+/** The wolf as one skinned mesh: a MeshPart Roblox reports as skinned, holding its bones, under the root rig made. */
+const SKINNED_PROBE = { meshParts: 1, skinnedParts: 1, bones: 16, motors: 1 };
+
+function skinnedWolf(probe: Record<string, unknown> = {}, toolCalls = BLENDER_CALLS) {
+  const onWolf = dogEvidence().map((item) => ({
+    ...item,
+    title: item.title.replace(DOG_PATH, WOLF_PATH),
+    ...(item.subject === undefined ? {} : { subject: item.subject.replace(DOG_PATH, WOLF_PATH) }),
+  }));
+  return verdict("T20-creature-skinned", {
+    probe: { ...WOLF_PROBE, ...SKINNED_PROBE, ...probe }, outcome: "completed", verified: true, toolCalls, changedTargets: [], evidence: onWolf,
+  });
+}
+
+test("T20 passes a wolf that is one skinned mesh, rigged by rig around its bones, that walks and idles on its own", () => {
+  const result = skinnedWolf();
+  assert.equal(result.passed, true, result.detail);
+});
+
+test("T20 wants one skinned MeshPart holding a four-legged body's bones, under a rig that rig built", () => {
+  assert.match(skinnedWolf({}, [{ tool: "upload_asset", ok: true }]).detail, /No Blender job succeeded/);
+  // Pieces, or a mesh Roblox does not report as skinned, are not one skinned mesh.
+  assert.match(skinnedWolf({ meshParts: 12, skinnedParts: 0 }).detail, /The wolf has 12 MeshParts, 0 of them skinned; it was to be one skinned mesh/);
+  assert.match(skinnedWolf({ skinnedParts: 0 }).detail, /it was to be one skinned mesh/);
+  assert.match(skinnedWolf({ bones: 4 }).detail, /The wolf's mesh holds 4 Bones/);
+  assert.match(skinnedWolf({ rigStamp: false }).detail, /The wolf's rig was not built by rig/);
+  // Declared but never built around: no root joins the mesh.
+  assert.match(skinnedWolf({ motors: 0 }).detail, /The wolf's rig declares 4 feet on 16 joints/);
+  assert.match(skinnedWolf({ feet: 0 }).detail, /The wolf's rig declares 0 feet/);
+  // The pieces task still refuses one mesh.
+  assert.match(wolf({ ...SKINNED_PROBE }).detail, /The wolf has 1 MeshParts/);
 });
 
 test("T18 wants a 3D preview, both sequences kept with every check passed, a gait among them, and the completion gate", () => {

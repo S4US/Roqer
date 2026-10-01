@@ -501,6 +501,33 @@ ${SIGNATURE_LUAU}
       }
 `;
 
+/** The wolf's den, raised and apart from the other tasks' builds, with the wolf of an earlier run cleared. */
+const DEN_SEED = `
+      for _, name in ipairs({ "WorkbenchEvalWolf", "WorkbenchEvalDen" }) do
+        local old = workspace:FindFirstChild(name)
+        if old then old:Destroy() end
+      end
+      local den = Instance.new("Model")
+      den.Name = "WorkbenchEvalDen"
+      local ground = Instance.new("Part")
+      ground.Name = "Ground"
+      ground.Anchored = true
+      ground.Size = Vector3.new(48, 1, 48)
+      ground.Position = Vector3.new(80, 0.5, 90)
+      ground.Material = Enum.Material.Ground
+      ground.Color = Color3.fromRGB(110, 95, 75)
+      ground.Parent = den
+      local mark = Instance.new("Part")
+      mark.Name = "Den"
+      mark.Anchored = true
+      mark.CanCollide = false
+      mark.Size = Vector3.new(6, 0.2, 6)
+      mark.Position = Vector3.new(80, 1.1, 90)
+      mark.Material = Enum.Material.Slate
+      mark.Parent = den
+      den.Parent = workspace
+    `;
+
 export const EVAL_TASKS: readonly EvalTask[] = [
   {
     id: "T1-property-write",
@@ -1719,36 +1746,31 @@ ${EXTENT_LUAU}
     needsBlender: true,
     needsUploads: true,
     needsPublishedPlace: true,
-    seed: `
-      for _, name in ipairs({ "WorkbenchEvalWolf", "WorkbenchEvalDen" }) do
-        local old = workspace:FindFirstChild(name)
-        if old then old:Destroy() end
-      end
-      local den = Instance.new("Model")
-      den.Name = "WorkbenchEvalDen"
-      local ground = Instance.new("Part")
-      ground.Name = "Ground"
-      ground.Anchored = true
-      ground.Size = Vector3.new(48, 1, 48)
-      ground.Position = Vector3.new(80, 0.5, 90)
-      ground.Material = Enum.Material.Ground
-      ground.Color = Color3.fromRGB(110, 95, 75)
-      ground.Parent = den
-      local mark = Instance.new("Part")
-      mark.Name = "Den"
-      mark.Anchored = true
-      mark.CanCollide = false
-      mark.Size = Vector3.new(6, 0.2, 6)
-      mark.Position = Vector3.new(80, 1.1, 90)
-      mark.Material = Enum.Material.Slate
-      mark.Parent = den
-      den.Parent = workspace
-    `,
+    seed: DEN_SEED,
     probe: creatureProbe("WorkbenchEvalWolf", "wolf"),
     allowedTargets: [],
     // The wander script may live in the wolf or in ServerScriptService, under a name of the run's choosing.
     allowedRoots: [`game.${EVAL_ROOT}`, "game.Workspace.WorkbenchEvalWolf", "game.ServerScriptService"],
     oracle: ({ probe, verified, evidence, toolCalls }) => judgeBuiltCreature(probe, verified, evidence ?? [], WOLF, toolCalls),
+  },
+  {
+    id: "T20-creature-skinned",
+    prompt: "Model a low-poly wolf in Blender as one skinned mesh, so that it bends at bones instead of turning as separate pieces. "
+      + "Rig it, give it idle and walk animations, and make it walk around the den. "
+      + "The den is game.Workspace.WorkbenchEvalDen.Den. Name the wolf game.Workspace.WorkbenchEvalWolf, "
+      + "and keep its KeyframeSequences under ServerStorage.WorkbenchEval.",
+    // The creature plan's step 7: T17's prompt and conditions, on a wolf that
+    // is one skinned mesh. In the pieces' place it must be a MeshPart Roblox
+    // reports as skinned, holding the bones of four legs and a body, and its
+    // rig must be one `rig` built around those bones and read back.
+    needsBlender: true,
+    needsUploads: true,
+    needsPublishedPlace: true,
+    seed: DEN_SEED,
+    probe: creatureProbe("WorkbenchEvalWolf", "wolf"),
+    allowedTargets: [],
+    allowedRoots: [`game.${EVAL_ROOT}`, "game.Workspace.WorkbenchEvalWolf", "game.ServerScriptService"],
+    oracle: ({ probe, verified, evidence, toolCalls }) => judgeBuiltCreature(probe, verified, evidence ?? [], WOLF, toolCalls, true),
   },
 ];
 
@@ -1782,11 +1804,16 @@ function creatureProbe(name: string, key: string): string {
       for _, item in ipairs(game:GetService("ServerStorage").WorkbenchEval:GetDescendants()) do
         if item:IsA("KeyframeSequence") then sequences += 1 end
       end
-      local motors, meshParts, feet = 0, 0, 0
+      local motors, meshParts, feet, bones, skinnedParts = 0, 0, 0, 0, 0
       if dog and dog:IsA("Model") then
         for _, item in ipairs(dog:GetDescendants()) do
           if item:IsA("Motor6D") then motors += 1 end
-          if item:IsA("MeshPart") then meshParts += 1 end
+          if item:IsA("Bone") then bones += 1 end
+          if item:IsA("MeshPart") then
+            meshParts += 1
+            local ok, skinned = pcall(function() return item.HasSkinnedMesh end)
+            if ok and skinned == true then skinnedParts += 1 end
+          end
         end
         local declared = dog:GetAttribute("RoqerRig")
         local ok, rig = pcall(function() return game:GetService("HttpService"):JSONDecode(declared) end)
@@ -1809,6 +1836,8 @@ function creatureProbe(name: string, key: string): string {
         sequences = sequences,
         motors = motors,
         meshParts = meshParts,
+        bones = bones,
+        skinnedParts = skinnedParts,
         feet = feet,
         rigStamp = type(stamp) == "string" and stamp or false,
       }
@@ -1906,6 +1935,7 @@ function judgeBuiltCreature(
   evidence: readonly RunEvidence[],
   subject: WalkingModel,
   toolCalls?: EvalOracleInput["toolCalls"],
+  skinned = false,
 ): EvalVerdict {
   const { noun } = subject;
   const path = `game.Workspace.${subject.name}`;
@@ -1918,7 +1948,15 @@ function judgeBuiltCreature(
   if (field(probe, subject.key) === "Model") {
     const meshParts = Number(field(probe, "meshParts") ?? 0);
     if (toolCalls === undefined && meshParts > 0) return { passed: false, detail: `The ${noun} has MeshParts; it was to be built from Parts.` };
-    if (toolCalls !== undefined && meshParts < 5) {
+    const bones = Number(field(probe, "bones") ?? 0);
+    if (skinned && (Number(field(probe, "skinnedParts") ?? 0) !== 1 || meshParts !== 1)) {
+      return { passed: false, detail: `The ${noun} has ${meshParts} MeshParts, ${String(field(probe, "skinnedParts") ?? 0)} of them skinned; it was to be one skinned mesh.` };
+    }
+    // Four legs of an upper, a lower and a foot bone, and something for them to hang from.
+    if (skinned && bones < 13) {
+      return { passed: false, detail: `The ${noun}'s mesh holds ${bones} Bones; a four-legged body that bends needs a bone for each leg's upper, lower and foot, and one for its body.` };
+    }
+    if (toolCalls !== undefined && !skinned && meshParts < 5) {
       return { passed: false, detail: `The ${noun} has ${meshParts} MeshParts; a body modelled as moving pieces arrives as one for its body and one or more for each leg.` };
     }
     if (typeof field(probe, "rigStamp") !== "string") {
@@ -1929,8 +1967,10 @@ function judgeBuiltCreature(
     if (rigs.length === 0 || rigs[rigs.length - 1].passed !== true) {
       return { passed: false, detail: rigs.length === 0 ? `No rig call built the ${noun}'s rig in this run.` : `The ${noun}'s rig did not read back from Studio as it was built.` };
     }
-    if (Number(field(probe, "feet") ?? 0) !== 4 || Number(field(probe, "motors") ?? 0) < 5) {
-      return { passed: false, detail: `The ${noun}'s rig declares ${String(field(probe, "feet") ?? 0)} feet on ${String(field(probe, "motors") ?? 0)} joints; a four-legged body needs four feet, each on a leg of its own.` };
+    // A skinned body's joints are its bones, with one Motor6D from the root rig made.
+    const joints = skinned ? bones : Number(field(probe, "motors") ?? 0);
+    if (Number(field(probe, "feet") ?? 0) !== 4 || joints < 5 || (skinned && Number(field(probe, "motors") ?? 0) < 1)) {
+      return { passed: false, detail: `The ${noun}'s rig declares ${String(field(probe, "feet") ?? 0)} feet on ${joints} joints; a four-legged body needs four feet, each on a leg of its own.` };
     }
     if (!evidence.some((item) => item.title === RIG_RANGE_SHEET_TITLE && item.subject === path && item.modelPreviewId !== undefined)) {
       return { passed: false, detail: `No range sheet of the ${noun}'s rig, with its 3D view, was shown in the chat.` };
