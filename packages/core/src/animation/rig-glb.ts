@@ -5,7 +5,7 @@
 //
 // Node layout, per part: a frame node, holding the part's mesh and its child
 // joints; each joint node carries the joint's
-// Transform on top of its offset in the parent part, and holds the child
+// Transform on top of its frame in the parent part, C0, and holds the child
 // part's frame, offset back by the joint's attachment in the child:
 //   frame(parent) -> joint (offsetInParent + Transform) -> frame(child) (-offsetInChild)
 // which is Roblox's parent * offsetInParent * Transform * offsetInChild^-1.
@@ -214,7 +214,15 @@ export function renderRigGlb(
       children.push(node);
     }
     for (const child of joints.filter((candidate) => candidate.parentPart === part)) {
-      const jointIndex = addNode({ name: child.name, translation: [...child.parentOffset] });
+      // At rest the node holds C0 with the Transform left out, so the file's
+      // own pose is the rig standing, as a viewer measures it before it plays:
+      // R6's joints and a weapon's grip are turned, and C0 without its turn
+      // would lay the figure on its back.
+      const jointIndex = addNode({
+        name: child.name,
+        translation: [...child.parentOffset],
+        ...(child.parentRotation ? { rotation: rotationQuaternion(jointParentFrame(child).r) } : {}),
+      });
       jointNodes.set(child.name, jointIndex);
       nodes[jointIndex].children = [frame(child.childPart, child)];
       children.push(jointIndex);

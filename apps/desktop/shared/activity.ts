@@ -297,6 +297,8 @@ export function activityLabel(tool: string, target: string | null, past: boolean
       return past ? "Verified a model in the playtest" : "Verifying a model in the playtest";
     }
     if (target?.startsWith("verify ")) return past ? "Verified an animation in the playtest" : "Verifying an animation in the playtest";
+    // The tool refuses an action it does not have, so the call is no check.
+    if (target?.startsWith("unknown action")) return past ? "Called the animation tool" : "Calling the animation tool";
     return past ? "Checked an animation" : "Checking an animation";
   }
   if (target === null) return `${verb} ${toolPhrase(tool)}`;

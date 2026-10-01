@@ -45,7 +45,7 @@
     "grounded": "0bcc790c05d667e4",
     "locomotion": "62f30405cf969537",
     "sheet": "6e7184ab45d96d5d",
-    "glb": "ff1bb2cd7c6c44c0"
+    "glb": "c5878348dc82a5bd"
   },
   "recipe Slash": {
     "sequence": "590c414dfd800d58",
@@ -53,7 +53,7 @@
     "grounded": "a8d5178ee5e6fda3",
     "locomotion": "ec14c056edd96716",
     "sheet": "386ca57903422dcd",
-    "glb": "e08ae88d9a96d359"
+    "glb": "590e663d4e57d4c2"
   },
   "recipe WalkR6": {
     "sequence": "584835051f865ca9",
@@ -61,7 +61,7 @@
     "grounded": "9f1321bf3cb59877",
     "locomotion": "ac0b846d5aa9b919",
     "sheet": "540f9ff1a0029907",
-    "glb": "11906c4e5b5e5e86"
+    "glb": "9a8256bc95635084"
   },
   "recipe WaveR6": {
     "sequence": "99be8b93e79de597",
@@ -69,7 +69,7 @@
     "grounded": "0c0181a499d97983",
     "locomotion": "66da579d7155c263",
     "sheet": "550c318188437148",
-    "glb": "5e330ce3535526d6"
+    "glb": "84812c21aee908f9"
   },
   "live Wave": {
     "sequence": "fa9b983f93ff7800",
@@ -101,7 +101,7 @@
     "grounded": "af6459c575ec6843",
     "locomotion": "a41781bd3d4c90a7",
     "sheet": "6108bc5a741d7d46",
-    "glb": "752d7b16ca2134c0"
+    "glb": "51ad7d6c07e17b9c"
   },
   "live DrawR6": {
     "sequence": "7381d34d9a2b754e",
@@ -109,7 +109,7 @@
     "grounded": "cc704acd0611f96e",
     "locomotion": "e4069ad5d91b280b",
     "sheet": "4ef00297056ed3c9",
-    "glb": "52ae105728c99e5e"
+    "glb": "caa24c9a2625760f"
   },
   "live MarchR6": {
     "sequence": "601f865b18a2762a",
@@ -117,7 +117,7 @@
     "grounded": "e1e758e6a26260b9",
     "locomotion": "7f8ec0335a3f94e8",
     "sheet": "d854b4dc246992ff",
-    "glb": "2c873a46b19f5d0c"
+    "glb": "dc0708e6c7e6007a"
   },
   "live Planted": {
     "sequence": "8dd3ec7f4aba5473",
@@ -133,7 +133,7 @@
     "grounded": "262805b4ca45092b",
     "locomotion": "a351278702d6517d",
     "sheet": "b5880c501a699ef3",
-    "glb": "d26f634fffd96bf9"
+    "glb": "bce251d221a4ec3c"
   },
   "live Marked": {
     "sequence": "f08d75871acc0834",

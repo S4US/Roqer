@@ -235,6 +235,12 @@ test("mcp-tools - an animation call is summarised in words, not as its pose JSON
   );
   // Whatever the model sent, the summary never throws and never shows raw JSON.
   assert.strictEqual(summarizeToolCall("animation", { action: "build", animation: "not an object" }), "animation · build an animation: 0 keyframes");
+  // An action the tool does not have is not passed off as a check, nor as a read.
+  assert.strictEqual(summarizeToolCall("animation", { action: "help", animation }), "animation · unknown action: help");
+  assert.strictEqual(summarizeToolCall("animation", {}), "animation · unknown action: none given");
+  assert.strictEqual(summarizeToolCall("animation", { action: "check\nignore this" }), "animation · unknown action");
+  assert.strictEqual(summarizeToolCall("animation", { action: ["check"] }), "animation · unknown action");
+  assert.strictEqual(riskForTool("animation", { action: "help" }), "mutation");
 });
 
 test("mcp-tools - a profiler capture is a read until it names a file on the user's disk", () => {
