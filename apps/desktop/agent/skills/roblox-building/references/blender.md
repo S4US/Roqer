@@ -362,7 +362,10 @@ many keys were kept, and its file. Pass the file, not its contents:
 ```
 
 then `build` with the same animation_file and a `parent`. A gait made this
-way is checked with `locomotion: true` like any other.
+way is checked with `locomotion: true` like any other. After publishing and
+wiring it, `verify` with the model, the same animation_file, the published
+animation_id and the `slot`, in a playtest, checks that the asset plays on
+the model as checked and that the state holds it.
 
 This job continues from the snake's and sweeps its tail from side to side
 with inverse kinematics:

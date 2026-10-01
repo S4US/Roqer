@@ -1404,6 +1404,7 @@ function recordModelVerify(context: PlannerContext, args: JsonRecord, data: Json
       ? [`its loader played its ${moving} while it moved, and ${standing === undefined || standing === "nothing" ? "nothing while it stood, leaving its rest pose" : `its ${standing} while it stood`}`]
       : []),
     ...(played ? [`${name ?? "the animation"} played on it as checked`] : []),
+    ...(wiring ? [`its ${String(wiring.slot)} holds ${String(wiring.animationId)}${played ? "" : ", though how it plays was not compared"}`] : []),
   ];
   context.recordEvidence({
     kind: "playtest",

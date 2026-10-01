@@ -2514,6 +2514,10 @@ export class RobloxStudioTools {
       ...(playback ? { played: { source: animationId ? 'published' : 'temporary clip', length: response.length, ...playback } } : {}),
       ...(wiring ? { wiring } : {}),
       ...(movement ? { movement } : {}),
+      // Wiring alone passes on what the loader holds; say so, since how the asset plays was never looked at.
+      ...(wiring && !playback && !movement
+        ? { unchecked: 'how it plays: add animation or animation_file to play the asset on the model and compare its joints' }
+        : {}),
     });
   }
 

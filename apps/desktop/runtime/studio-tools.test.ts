@@ -1256,6 +1256,30 @@ test("verifying a model records what its loader played while it moved and stood,
   ]);
 });
 
+test("verifying a model's wiring alone says so, and with the animation says it played", async () => {
+  const wiring = { slot: "idle", animationId: "rbxassetid://701", matches: true };
+  const played = { source: "published", verified: true };
+  const { context, evidence } = contextWith([
+    ok({ verified: true, model: "game.Workspace.Snake", loader: {}, wiring }),
+    ok({ verified: true, model: "game.Workspace.Snake", loader: {}, wiring, played }),
+  ]);
+  const run = createStudioToolRunner(context);
+
+  await run("animation", { action: "verify", model: "game.Workspace.Snake", slot: "idle", animation_id: "rbxassetid://701" });
+  await run("animation", {
+    action: "verify", model: "game.Workspace.Snake", slot: "idle", animation_id: "rbxassetid://701", animation_file: "C:\\out\\Slither.animation.json",
+  });
+
+  assert.deepEqual(evidence.map((item) => item.detail), [
+    "On the playtest server, its idle holds rbxassetid://701, though how it plays was not compared.",
+    "On the playtest server, the animation played on it as checked, and its idle holds rbxassetid://701.",
+  ]);
+  assert.deepEqual(evidence[1].metadata, [
+    { label: "Played from", value: "The published asset" },
+    { label: "idle state", value: "Wired" },
+  ]);
+});
+
 test("the Studio tool description stays inside a model turn's tool limit", () => {
   // turn-contract refuses a tool description over 8,192 characters.
   assert.ok(studioToolDescription().length <= 8_192, `${studioToolDescription().length} characters`);

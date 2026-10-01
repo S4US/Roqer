@@ -264,6 +264,17 @@ the options (`locomotion`, `grounded`, `waive`) work as usual. It carries the
 skeleton it was made on, and is refused if the model in Studio is not that
 one: animate the scene the upload was exported from.
 
+Once it is published and wired, check both in one call in a running
+playtest: the published asset is played on the model and its joints compared
+with the file, and the state is read from its loader.
+
+```text
+{ "action": "verify", "model": "<model path>", "animation_file": "<same path>", "animation_id": "rbxassetid://N", "slot": "idle" }
+```
+
+`slot` and animation_id alone check only what the loader holds, not how it
+plays.
+
 ### A generated body
 
 Without Blender, `generate_model` can make the body: pass the pieces as

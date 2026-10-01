@@ -310,7 +310,12 @@ are that the sequence kept in Studio was last built from the file a Blender
 job baked (a build records what described it), with every motion check
 passed, and that the published asset sits in the snake's idle and played on
 the snake as checked, in a playtest after the last wiring. A snake has no
-feet, so no gait check is asked for. It has not been run yet.
+feet, so no gait check is asked for. Its first run, on 2026-10-01, did all of
+it in 22 calls, and the slither played in the playtest, but it was scored a
+failure: its only `verify` passed `slot` and an animation_id, which checks
+what the idle holds and not how the asset plays. The Blender guidance now
+gives the one call that checks both, and a wiring-only result says what it
+left unchecked.
 
 ```bash
 npm run eval -- --task T21-creature-blender-animation --provider claude --model opus --blender auto

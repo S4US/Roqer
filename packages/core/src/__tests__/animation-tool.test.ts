@@ -720,6 +720,7 @@ describe('verifying a model in a playtest', () => {
       instance_id: 'place:1',
       timeoutMs: 60_000,
     }]);
+    expect(result).not.toHaveProperty('unchecked');
     expect(result).toMatchObject({
       verified: true,
       model: 'game.Workspace.Guard',
@@ -751,6 +752,7 @@ describe('verifying a model in a playtest', () => {
       model: 'game.Workspace.Guard',
       loader: { unchanged: true, states: LOADER.ids, groundSpeeds: LOADER.speeds },
       wiring: { slot: 'walk', animationId: WALK, matches: true },
+      unchecked: 'how it plays: add animation or animation_file to play the asset on the model and compare its joints',
     });
   });
 

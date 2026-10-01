@@ -1093,7 +1093,7 @@ What changed from the proposal, and why:
 - **T20 instead of a second T17.** T17 stays the pieces prompt, so both ways
   of making a creature keep a test.
 
-### 8. Animating in Blender — built, eval T21 not yet run
+### 8. Animating in Blender — built, eval T21 not yet passed
 
 For motion that is easier to make with Blender's tools (inverse kinematics,
 constraints, a creature's own armature) than to write as poses. Blender bakes
@@ -1112,9 +1112,19 @@ and wires like any other. Studio keeps one path in. It needs:
 and checked against Blender itself and in Studio. The plan set no eval for it,
 so one was added: T21 `creature-blender-animation`, a skinned snake whose
 slither is made in Blender, passed when the sequence kept in Studio was built
-from the baked file and its published asset played on the snake. It has not
-been run, so the first agent run with this step is still to be made. R15 and
-R6 are not covered.
+from the baked file and its published asset played on the snake. R15 and R6
+are not covered.
+
+Its first run, on 2026-10-01, made all of it in 22 tool calls: an 8-bone
+snake, a 1.6-second slither baked in Blender and kept as 39 keyframes, built
+from the file with every check passed, published, and wired to the snake's
+idle. In the playtest the track played and the bones swung, which the agent
+read with its own Luau. The run was still scored a failure: its `verify`
+passed only the idle and the asset's ID, which checks what the loader holds
+and not how the asset plays, and nothing in the result said so. The
+animation guidance now gives the call that checks both, with the file, the
+asset and the state, and a model `verify` of wiring alone says in
+`unchecked` that the motion was not compared.
 
 - **`roqer.export_animation(name, source, rig, start, end, loop)`** in a
   Blender job samples the scene frame by frame, constraints and inverse
