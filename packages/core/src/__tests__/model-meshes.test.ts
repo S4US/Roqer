@@ -118,11 +118,11 @@ describe('a MeshPart\'s mesh', () => {
     expect(storeModelMesh('rbxassetid://11', cube(), directory)).toBeDefined();
     resetModelMeshesForTests();
     expect(modelMesh('rbxassetid://11', directory)?.indices).toHaveLength(36);
-    const [file] = fs.readdirSync(path.join(directory, 'model-meshes'));
-    fs.writeFileSync(path.join(directory, 'model-meshes', file), JSON.stringify({ ...cube(), id: 'rbxassetid://99' }));
+    const [file] = fs.readdirSync(path.join(directory, 'model-meshes-2'));
+    fs.writeFileSync(path.join(directory, 'model-meshes-2', file), JSON.stringify({ ...cube(), id: 'rbxassetid://99' }));
     resetModelMeshesForTests();
     expect(modelMesh('rbxassetid://11', directory)).toBeUndefined();
-    fs.writeFileSync(path.join(directory, 'model-meshes', file), '{ not json');
+    fs.writeFileSync(path.join(directory, 'model-meshes-2', file), '{ not json');
     expect(modelMesh('rbxassetid://11', directory)).toBeUndefined();
   });
 

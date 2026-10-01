@@ -11,7 +11,7 @@
 import { createHash } from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
-import type { PartMesh } from './box-rig.js';
+import { SKIN_SLOTS, type MeshSkin, type PartMesh } from './box-rig.js';
 import type { Rig, Vec3 } from './rig.js';
 
 /** The most triangles in one mesh a preview draws; Studio refuses larger ones before sending them. */
@@ -33,6 +33,22 @@ export interface ModelMesh {
   /** Its bounds, which a MeshPart's size stretches onto the part's box. */
   min: Vec3;
   max: Vec3;
+  /** A skinned mesh's bones and each corner's weights, as EditableMesh hands them over. */
+  skin?: MeshSkin;
+}
+
+/** The most bones a mesh's skin may name. */
+const MAX_SKIN_BONES = 512;
+
+/** A skin Studio sent for a mesh of `corners` corners, or undefined when it is malformed. */
+function normalizeSkin(raw: unknown, corners: number): MeshSkin | undefined {
+  if (!isRecord(raw) || !Array.isArray(raw.bones) || !finiteList(raw.joints) || !finiteList(raw.weights)) return undefined;
+  const { bones, joints, weights } = raw;
+  if (bones.length === 0 || bones.length > MAX_SKIN_BONES || !bones.every((bone) => typeof bone === 'string' && bone !== '' && bone.length <= 100)) return undefined;
+  if (joints.length !== corners * SKIN_SLOTS || weights.length !== joints.length) return undefined;
+  if (!joints.every((joint) => Number.isInteger(joint) && joint >= 0 && joint < bones.length)) return undefined;
+  if (!weights.every((weight) => weight >= 0 && weight <= 1.001)) return undefined;
+  return { bones: bones as string[], joints, weights };
 }
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -71,7 +87,12 @@ export function normalizeModelMesh(raw: unknown): ModelMesh | undefined {
     const agrees = face[0] * average[0] + face[1] * average[1] + face[2] * average[2] >= 0;
     indices.push(...(agrees ? [a, b, c] : [a, c, b]));
   }
-  return { positions, normals, indices, min: [min[0], min[1], min[2]], max: [max[0], max[1], max[2]] };
+  let skin: MeshSkin | undefined;
+  if (raw.skin !== undefined) {
+    skin = normalizeSkin(raw.skin, positions.length / 3);
+    if (!skin) return undefined;
+  }
+  return { positions, normals, indices, min: [min[0], min[1], min[2]], max: [max[0], max[1], max[2]], ...(skin ? { skin } : {}) };
 }
 
 /**
@@ -92,14 +113,15 @@ export function fittedMesh(mesh: ModelMesh, size: Vec3): PartMesh {
     const length = Math.hypot(n[0], n[1], n[2]);
     normals.push(...(length > 1e-9 ? n.map((value) => value / length) : [0, 1, 0]));
   }
-  return { positions, normals, indices: mesh.indices };
+  return { positions, normals, indices: mesh.indices, ...(mesh.skin ? { skin: mesh.skin } : {}) };
 }
 
 const known = new Map<string, ModelMesh>();
 const refused = new Map<string, string>();
 
 function meshFile(directory: string, id: string): string {
-  return path.join(directory, 'model-meshes', `${createHash('sha256').update(id, 'utf8').digest('hex').slice(0, 32)}.json`);
+  // The second layout: a skinned mesh is kept with its skin, which the first never read.
+  return path.join(directory, 'model-meshes-2', `${createHash('sha256').update(id, 'utf8').digest('hex').slice(0, 32)}.json`);
 }
 
 /** A mesh already read: from this process, or from the disk cache when it is sound and is this mesh's. */
@@ -142,7 +164,7 @@ export function storeModelMesh(id: string, raw: unknown, directory: string): Mod
     if (fs.readdirSync(folder).length < MAX_CACHED_MESHES) {
       const file = meshFile(directory, id);
       const temporary = `${file}.${process.pid}.tmp`;
-      fs.writeFileSync(temporary, JSON.stringify({ id, positions: mesh.positions, normals: mesh.normals, min: mesh.min, max: mesh.max }));
+      fs.writeFileSync(temporary, JSON.stringify({ id, positions: mesh.positions, normals: mesh.normals, min: mesh.min, max: mesh.max, ...(mesh.skin ? { skin: mesh.skin } : {}) }));
       fs.renameSync(temporary, file);
     }
   } catch {

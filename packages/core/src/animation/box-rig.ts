@@ -50,11 +50,30 @@ export function groundHeight(rig: Rig = R15_RIG): number {
   return rig.ground;
 }
 
+/** The slots of bones a skinned vertex has, as Roblox keeps them. */
+export const SKIN_SLOTS = 4;
+
+/**
+ * How a skinned mesh's vertices follow its bones: for each vertex, SKIN_SLOTS
+ * bones and how much each weighs on it. A vertex whose weights are all 0 moves
+ * with its part, as the parts welded to a skinned one do.
+ */
+export interface MeshSkin {
+  /** The bones' names, as the rig names its bone parts. */
+  bones: string[];
+  /** SKIN_SLOTS indices into `bones` for each vertex. */
+  joints: number[];
+  /** SKIN_SLOTS weights for each vertex, summing to 1 or to 0. */
+  weights: number[];
+}
+
 export interface PartMesh {
   positions: number[];
   normals: number[];
   /** Counter-clockwise seen from outside. */
   indices: number[];
+  /** On a skinned MeshPart: how its bones bend it. */
+  skin?: MeshSkin;
 }
 
 /** How round a part's edges are: the head most, thin parts no more than they allow. */
@@ -251,16 +270,27 @@ function placed(mesh: PartMesh, offset: RigAttachment['offset']): PartMesh {
   return { positions, normals, indices: mesh.indices };
 }
 
-/** Several meshes as one. */
+/** Several meshes as one. When one is skinned, the others' vertices get no weights, so they move with the part. */
 function merged(meshes: readonly PartMesh[]): PartMesh {
   const result: PartMesh = { positions: [], normals: [], indices: [] };
+  const skinned = meshes.find((mesh) => mesh.skin);
+  const skin: MeshSkin | undefined = skinned?.skin ? { bones: skinned.skin.bones, joints: [], weights: [] } : undefined;
   for (const mesh of meshes) {
     const base = result.positions.length / 3;
     result.positions.push(...mesh.positions);
     result.normals.push(...mesh.normals);
     result.indices.push(...mesh.indices.map((index) => index + base));
+    if (!skin) continue;
+    if (mesh === skinned) {
+      skin.joints.push(...mesh.skin!.joints);
+      skin.weights.push(...mesh.skin!.weights);
+    } else {
+      const slots = (mesh.positions.length / 3) * SKIN_SLOTS;
+      skin.joints.push(...new Array<number>(slots).fill(0));
+      skin.weights.push(...new Array<number>(slots).fill(0));
+    }
   }
-  return result;
+  return skin ? { ...result, skin } : result;
 }
 
 /**
@@ -275,6 +305,8 @@ export function partMesh(part: string, rig: Rig = R15_RIG, library?: MeshLibrary
   const own = read
     ? fittedMesh(read, size)
     : shape === undefined ? roundedBox(size, edgeRadius(part, size)) : shapeMesh(shape, size, modelEdgeRadius(size));
+  // A skin bends its mesh only by bones the rig has; with none of them, it is drawn rigid.
+  if (own.skin && !own.skin.bones.some((bone) => rig.bones?.includes(bone))) delete own.skin;
   const offset = rig.drawOffsets?.[part];
   if (offset) own.positions = own.positions.map((value, index) => value + offset[index % 3]);
   const attached = rig.attached?.[part] ?? [];

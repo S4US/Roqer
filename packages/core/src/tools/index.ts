@@ -237,6 +237,22 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+/**
+ * How a preview drew the parts that hold bones: bent by them, where the
+ * mesh's skin was read, or rigid, where it was not and the bones' motion does
+ * not show.
+ */
+function describeSkin(rig: Rig, drawn: ReadonlyMap<string, { skin?: { bones: string[] } }>): string {
+  const bones = new Set(rig.bones ?? []);
+  const holders = [...new Set(rig.joints.filter((joint) => bones.has(joint.childPart) && !bones.has(joint.parentPart)).map((joint) => joint.parentPart))];
+  const bent = holders.filter((part) => drawn.get(part)?.skin);
+  const rigid = holders.filter((part) => !drawn.get(part)?.skin);
+  return [
+    ...(bent.length > 0 ? [`${bent.join(', ')} bent by ${bent.length === 1 ? 'its' : 'their'} bones, as Studio skins ${bent.length === 1 ? 'it' : 'them'}`] : []),
+    ...(rigid.length > 0 ? [`${rigid.join(', ')} drawn rigid, ${rigid.length === 1 ? 'its' : 'their'} skin not read, so what the bones do does not show here: judge by the checks and by Studio`] : []),
+  ].join('; ');
+}
+
 /** Which MeshParts a preview drew as their boxes, and why, the first few by name. */
 function describeBoxes(boxes: readonly BoxedMeshPart[]): string {
   const named = boxes.slice(0, 6).map((box) => `${box.part} (${box.reason})`);
@@ -1966,6 +1982,7 @@ export class RobloxStudioTools {
                   ? 'the R6 rig, whose parts are blocks'
                   : meshes.source === 'studio' ? 'the stock R15 rig' : 'a stand-in block rig, until a build reads the stock rig from Studio',
               ...(boxes.length > 0 ? { boxes: describeBoxes(boxes) } : {}),
+              ...(model && rig.bones ? { skin: describeSkin(rig, meshes.parts) } : {}),
               ...(previewProps(sequence, rig).length > 0
                 ? { props: 'stand-ins: a 4-stud blade along each hand prop\'s +Y, a 3.8-stud sheath along SheathAttach\'s +Y' }
                 : {}),

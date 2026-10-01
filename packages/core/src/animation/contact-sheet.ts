@@ -14,6 +14,7 @@
 import { rgbaToPng } from '../png-encoder.js';
 import { heldParts, RIG_COLOR, type Rgb } from './box-rig.js';
 import { generatedRigMeshes, type RigMeshes } from './rig-meshes.js';
+import { skinFrames, skinnedVertices } from './skin.js';
 import {
   buildTracks,
   degreesBetween,
@@ -212,6 +213,8 @@ interface Framing {
   placements: ReadonlyMap<View, Placement>;
   /** A body's footprint at rest, which its shadow follows; R15 and R6 cast a fixed disc. */
   footprint?: Footprint;
+  /** The body at rest, which a skinned mesh is bent from. */
+  rest?: ReadonlyMap<string, Frame>;
 }
 
 /** A body's footprint at rest, along the root part's X and Z. */
@@ -280,7 +283,7 @@ function frameFigure(figure: Figure, cameras: readonly View[]): Framing {
     half: [(maxX - minX) / 2, (maxZ - minZ) / 2],
     rest: body.r,
   };
-  return { cellWidth, scale, placements, footprint };
+  return { cellWidth, scale, placements, footprint, rest };
 }
 
 /** A soft round shadow, darkest at its middle, inside one cell. */
@@ -348,12 +351,20 @@ function drawCell(canvas: Canvas, figure: Figure, framing: Framing, parts: Map<s
     const color = RIG_COLOR;
     const vertices: Vertex[] = [];
     const world: Vec3[] = [];
+    // A skinned mesh is bent by its bones; any other moves with its part.
+    const bent = mesh.skin ? skinnedVertices(mesh, skinFrames(mesh.skin, part, framing.rest ?? restPose(rig), parts), frame) : undefined;
     for (let index = 0; index < mesh.positions.length; index += 3) {
-      const local: Vec3 = [mesh.positions[index], mesh.positions[index + 1], mesh.positions[index + 2]];
-      const rotated = rotate(frame, local);
-      const point: Vec3 = [rotated[0] + frame.p[0], rotated[1] + frame.p[1], rotated[2] + frame.p[2]];
+      let point: Vec3;
+      let normal: Vec3;
+      if (bent) {
+        point = [bent.positions[index], bent.positions[index + 1], bent.positions[index + 2]];
+        normal = [bent.normals[index], bent.normals[index + 1], bent.normals[index + 2]];
+      } else {
+        const rotated = rotate(frame, [mesh.positions[index], mesh.positions[index + 1], mesh.positions[index + 2]]);
+        point = [rotated[0] + frame.p[0], rotated[1] + frame.p[1], rotated[2] + frame.p[2]];
+        normal = rotate(frame, [mesh.normals[index], mesh.normals[index + 1], mesh.normals[index + 2]]);
+      }
       world.push(point);
-      const normal = rotate(frame, [mesh.normals[index], mesh.normals[index + 1], mesh.normals[index + 2]]);
       const light = lighting(normal, camera);
       const projected = project(point);
       vertices.push({

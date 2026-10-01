@@ -1684,6 +1684,17 @@ function copyRefusal(model: Model): string | undefined {
 const MAX_MESHES_PER_READ = 8;
 const MAX_MODEL_MESH_FACES = 3000;
 
+/** The slots of bones a skinned vertex has. */
+const SKIN_SLOTS = 4;
+
+/** EditableMesh's skin, which the skinned spike found it hands over (docs/creature-plan.md, "A skinned upload"). */
+interface SkinnedEditableMesh {
+	GetBones(): number[];
+	GetBoneName(bone: number): string;
+	GetVertexBones(vertex: number): number[];
+	GetVertexBoneWeights(vertex: number): number[];
+}
+
 /** One mesh's triangles in its own space, each corner with its normal, and its bounds; or why not. */
 function readMesh(id: string): Data {
 	const assets = game.GetService("AssetService");
@@ -1697,6 +1708,37 @@ function readMesh(id: string): Data {
 		let max = new Vector3(-math.huge, -math.huge, -math.huge);
 		const positions: number[] = [];
 		const normals: number[] = [];
+		// A skinned mesh's bones, by name, and each vertex's slots of them, read once a vertex.
+		const skinned = mesh as unknown as SkinnedEditableMesh;
+		const [hasBones, boneIds] = pcall(() => skinned.GetBones());
+		const boneIndex = new Map<number, number>();
+		const boneNames: string[] = [];
+		if (hasBones) {
+			for (const id of boneIds as number[]) {
+				boneIndex.set(id, boneNames.size());
+				boneNames.push(skinned.GetBoneName(id));
+			}
+		}
+		const joints: number[] = [];
+		const weights: number[] = [];
+		const slotsOf = new Map<number, { joints: number[]; weights: number[] }>();
+		const vertexSlots = (vertex: number) => {
+			let slots = slotsOf.get(vertex);
+			if (!slots) {
+				const onVertex = skinned.GetVertexBones(vertex);
+				const weighing = skinned.GetVertexBoneWeights(vertex);
+				slots = { joints: [], weights: [] };
+				for (let slot = 0; slot < SKIN_SLOTS; slot++) {
+					const index = boneIndex.get(onVertex[slot]);
+					const weight = weighing[slot];
+					const used = index !== undefined && weight !== undefined && weight > 0;
+					slots.joints.push(used ? index : 0);
+					slots.weights.push(used ? round4(weight) : 0);
+				}
+				slotsOf.set(vertex, slots);
+			}
+			return slots;
+		};
 		for (const face of faces) {
 			const corners = mesh.GetFaceVertices(face) as number[];
 			const faceNormals = mesh.GetFaceNormals(face) as number[];
@@ -1708,10 +1750,21 @@ function readMesh(id: string): Data {
 				max = max.Max(position);
 				positions.push(round4(position.X), round4(position.Y), round4(position.Z));
 				normals.push(round4(normal.X), round4(normal.Y), round4(normal.Z));
+				if (boneNames.size() > 0) {
+					const slots = vertexSlots(corners[corner]);
+					for (const joint of slots.joints) joints.push(joint);
+					for (const weight of slots.weights) weights.push(weight);
+				}
 			}
 		}
 		if (positions.size() === 0) return { error: "it has no triangles" };
-		return { positions, normals, min: [round4(min.X), round4(min.Y), round4(min.Z)], max: [round4(max.X), round4(max.Y), round4(max.Z)] };
+		return {
+			positions,
+			normals,
+			min: [round4(min.X), round4(min.Y), round4(min.Z)],
+			max: [round4(max.X), round4(max.Y), round4(max.Z)],
+			...(boneNames.size() > 0 ? { skin: { bones: boneNames, joints, weights } } : {}),
+		};
 	});
 	mesh.Destroy();
 	if (!ok) error(result, 0);

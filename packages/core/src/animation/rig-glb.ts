@@ -14,9 +14,13 @@
 // glTF models half a turn onto Roblox's axes, so the figure ends up facing -Z,
 // as it does in Studio.
 
-import { heldParts, meshParts, RIG_COLOR } from './box-rig.js';
+import { heldParts, meshParts, RIG_COLOR, SKIN_SLOTS, type MeshSkin } from './box-rig.js';
 import { generatedRigMeshes, type RigMeshes } from './rig-meshes.js';
+import { invertFrame } from './skin.js';
 import {
+  IDENTITY_FRAME,
+  restPose,
+  type Frame,
   buildTracks,
   jointChildFrameInverse,
   jointParentFrame,
@@ -55,10 +59,10 @@ class BinaryBuilder {
     return this.bufferViews.length - 1;
   }
 
-  floats(values: number[], type: 'SCALAR' | 'VEC3' | 'VEC4', options: { target?: number; bounds?: boolean } = {}): number {
+  floats(values: number[], type: 'SCALAR' | 'VEC3' | 'VEC4' | 'MAT4', options: { target?: number; bounds?: boolean } = {}): number {
     const bytes = Buffer.alloc(values.length * 4);
     values.forEach((value, index) => bytes.writeFloatLE(value, index * 4));
-    const size = type === 'SCALAR' ? 1 : type === 'VEC3' ? 3 : 4;
+    const size = type === 'SCALAR' ? 1 : type === 'VEC3' ? 3 : type === 'VEC4' ? 4 : 16;
     const accessor: Record<string, unknown> = {
       bufferView: this.view(bytes, options.target),
       componentType: FLOAT,
@@ -72,6 +76,14 @@ class BinaryBuilder {
       accessor.max = max;
     }
     this.accessors.push(accessor);
+    return this.accessors.length - 1;
+  }
+
+  /** Two-byte whole numbers, as a skin's joint indices are. */
+  shorts(values: number[], type: 'VEC4', target: number): number {
+    const bytes = Buffer.alloc(values.length * 2);
+    values.forEach((value, index) => bytes.writeUInt16LE(value, index * 2));
+    this.accessors.push({ bufferView: this.view(bytes, target), componentType: UNSIGNED_SHORT, count: values.length / 4, type });
     return this.accessors.length - 1;
   }
 
@@ -108,6 +120,12 @@ function glb(json: Record<string, unknown>, binary: Buffer): Buffer {
   return Buffer.concat([header, textHeader, text, binaryHeader, binary]);
 }
 
+/** A rigid transform as glTF writes a matrix: 16 numbers, column by column. */
+function matrix(frame: Frame): number[] {
+  const { p, r } = frame;
+  return [r[0], r[3], r[6], 0, r[1], r[4], r[7], 0, r[2], r[5], r[8], 0, p[0], p[1], p[2], 1];
+}
+
 /** The sample times: GLB_SAMPLE_RATE a second across one pass, both ends included. */
 export function glbSampleTimes(sequence: MotionSequence): number[] {
   const duration = sequenceDuration(sequence);
@@ -134,25 +152,45 @@ export function renderRigGlb(
     pbrMetallicRoughness: { baseColorFactor: [...RIG_COLOR.map((value) => (value / 255) ** 2.2), 1], metallicFactor: 0, roughnessFactor: 0.72 },
   }];
   const meshes: Record<string, unknown>[] = [];
+  // A skinned part's mesh, to be given its skin once every bone has a node.
+  const skinned: { part: string; node: number; skin: MeshSkin }[] = [];
   const meshFor = (part: string): number => {
     const mesh = partMeshes.parts.get(part);
     if (!mesh) throw new Error(`no mesh for ${part}`);
-    meshes.push({
-      name: part,
-      primitives: [{
-        attributes: {
-          POSITION: builder.floats(mesh.positions, 'VEC3', { target: ARRAY_BUFFER, bounds: true }),
-          NORMAL: builder.floats(mesh.normals, 'VEC3', { target: ARRAY_BUFFER }),
-        },
-        indices: builder.indices(mesh.indices),
-        material: 0,
-      }],
-    });
+    const attributes: Record<string, number> = {
+      POSITION: builder.floats(mesh.positions, 'VEC3', { target: ARRAY_BUFFER, bounds: true }),
+      NORMAL: builder.floats(mesh.normals, 'VEC3', { target: ARRAY_BUFFER }),
+    };
+    if (mesh.skin) {
+      // Joint 0 is the part itself, which takes whatever weight a vertex's bones do not.
+      const joints: number[] = [];
+      const weights: number[] = [];
+      for (let vertex = 0; vertex < mesh.positions.length / 3; vertex += 1) {
+        const slots: [number, number][] = [];
+        for (let slot = 0; slot < SKIN_SLOTS; slot += 1) {
+          const weight = mesh.skin.weights[vertex * SKIN_SLOTS + slot];
+          const bone = mesh.skin.bones[mesh.skin.joints[vertex * SKIN_SLOTS + slot]];
+          if (weight > 0 && rig.bones?.includes(bone)) slots.push([mesh.skin.joints[vertex * SKIN_SLOTS + slot] + 1, weight]);
+        }
+        const held = slots.reduce((sum, [, weight]) => sum + weight, 0);
+        if (held < 1 - 1e-3 && slots.length < SKIN_SLOTS) slots.push([0, 1 - held]);
+        // glTF wants each vertex's weights to sum to 1.
+        const total = slots.reduce((sum, [, weight]) => sum + weight, 0);
+        for (let slot = 0; slot < SKIN_SLOTS; slot += 1) {
+          joints.push(slots[slot]?.[0] ?? 0);
+          weights.push(slots[slot] ? slots[slot][1] / total : 0);
+        }
+      }
+      attributes.JOINTS_0 = builder.shorts(joints, 'VEC4', ARRAY_BUFFER);
+      attributes.WEIGHTS_0 = builder.floats(weights, 'VEC4', { target: ARRAY_BUFFER });
+    }
+    meshes.push({ name: part, primitives: [{ attributes, indices: builder.indices(mesh.indices), material: 0 }] });
     return meshes.length - 1;
   };
 
   const nodes: Record<string, unknown>[] = [];
   const jointNodes = new Map<string, number>();
+  const frameNodes = new Map<string, number>();
   const drawn = new Set([...meshParts(rig), ...heldParts(rig).filter((part) => tracks.has(part))]);
   const addNode = (node: Record<string, unknown>): number => {
     nodes.push(node);
@@ -167,8 +205,14 @@ export function renderRigGlb(
       ...(inverse ? { translation: inverse.p } : {}),
       ...(joint?.childRotation ? { rotation: rotationQuaternion(inverse!.r) } : {}),
     });
+    frameNodes.set(part, index);
     const children: number[] = [];
-    if (drawn.has(part)) children.push(addNode({ name: `${part} mesh`, mesh: meshFor(part) }));
+    if (drawn.has(part)) {
+      const node = addNode({ name: `${part} mesh`, mesh: meshFor(part) });
+      const skin = partMeshes.parts.get(part)?.skin;
+      if (skin) skinned.push({ part, node, skin });
+      children.push(node);
+    }
     for (const child of joints.filter((candidate) => candidate.parentPart === part)) {
       const jointIndex = addNode({ name: child.name, translation: [...child.parentOffset] });
       jointNodes.set(child.name, jointIndex);
@@ -180,6 +224,27 @@ export function renderRigGlb(
   };
   const root = addNode({ name: name || 'Animation', rotation: [0, 1, 0, 0] });
   nodes[root].children = [frame(rig.rootPart)];
+
+  // Each skinned mesh's skin: its part, then its bones, each with the
+  // transform that carries the mesh at rest into the joint's own frame.
+  const skins: Record<string, unknown>[] = [];
+  if (skinned.length > 0) {
+    const rest = restPose(rig);
+    for (const { part, node, skin } of skinned) {
+      const partRest = rest.get(part)!;
+      const joints = [frameNodes.get(part)!];
+      const inverseBind = [...matrix(IDENTITY_FRAME)];
+      for (const bone of skin.bones) {
+        const boneRest = rest.get(bone);
+        const boneNode = frameNodes.get(bone);
+        // A bone the rig lacks keeps its place in the list, standing in as the part.
+        joints.push(boneRest && boneNode !== undefined ? boneNode : frameNodes.get(part)!);
+        inverseBind.push(...matrix(boneRest && boneNode !== undefined ? multiply(invertFrame(boneRest), partRest) : IDENTITY_FRAME));
+      }
+      skins.push({ name: part, joints, inverseBindMatrices: builder.floats(inverseBind, 'MAT4') });
+      nodes[node].skin = skins.length - 1;
+    }
+  }
 
   const times = glbSampleTimes(sequence);
   const input = builder.floats(times, 'SCALAR', { bounds: true });
@@ -217,6 +282,7 @@ export function renderRigGlb(
     nodes,
     meshes,
     materials,
+    ...(skins.length > 0 ? { skins } : {}),
     animations: [{ name: name || 'Animation', samplers, channels }],
     accessors: builder.accessors,
     bufferViews: builder.bufferViews,

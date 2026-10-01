@@ -327,6 +327,8 @@ return {
 // a stud up its parent's +Y, as the skinned spike found an upload's bones.
 const BONES_NAME = '__RoqerAnimationTestBones';
 const BONES = `game.Workspace.${BONES_NAME}`;
+const SKINNED_NAME = '__RoqerAnimationTestSkinned';
+const SKINNED = `game.Workspace.${SKINNED_NAME}`;
 const BUILD_BONES = `
 local existing = workspace:FindFirstChild(${JSON.stringify(BONES_NAME)})
 if existing then existing:Destroy() end
@@ -355,7 +357,7 @@ game:GetService("ChangeHistoryService"):SetWaypoint("Roqer test bones")
 return true
 `;
 const REMOVE_PUPS = `
-for _, name in { ${JSON.stringify(PUP_NAME)}, ${JSON.stringify(IMPORTED_NAME)}, ${JSON.stringify(NESTED_NAME)}, ${JSON.stringify(BONES_NAME)} } do
+for _, name in { ${JSON.stringify(PUP_NAME)}, ${JSON.stringify(IMPORTED_NAME)}, ${JSON.stringify(NESTED_NAME)}, ${JSON.stringify(BONES_NAME)}, ${JSON.stringify(SKINNED_NAME)} } do
   local model = workspace:FindFirstChild(name)
   if model then model:Destroy() end
 end
@@ -857,6 +859,33 @@ const passed = await runTest('animation tool', async ({ track }) => {
     }, 120_000);
     assert(slither.built === true && slither.readBack?.matchesCompiled === true && slither.checks?.passed === true, `a wave down the bones builds with its checks passing (${slither.error ?? JSON.stringify(slither.errors ?? slither.checks)})`);
     assert(slither.playback?.verified === true && slither.playback.samples > 0, `a copy played the wave on its bones as checked (within ${slither.playback?.maxDegrees}°; ${slither.playback?.reason ?? 'ok'})`);
+
+    // With ROQER_SKINNED_ASSET_ID, the skinned spike's snake as it was uploaded: a real skinned
+    // MeshPart, whose skin the plugin reads through EditableMesh and the previews bend.
+    const skinnedAsset = Number(process.env.ROQER_SKINNED_ASSET_ID);
+    if (Number.isInteger(skinnedAsset) && skinnedAsset > 0) {
+      const inserted = await client.callTool('insert_asset', { assetId: skinnedAsset, parentPath: 'game.Workspace', position: { x: -60, y: 0.4, z: 200 } }, 60_000);
+      const insertedName = inserted.instances?.[0]?.name;
+      assert(inserted.success === true && typeof insertedName === 'string', `the skinned snake is inserted (${inserted.error ?? insertedName})`);
+      assert(await luau(client, `workspace[${JSON.stringify(insertedName)}].Name = ${JSON.stringify(SKINNED_NAME)} return true`) === true, 'it is renamed for the test');
+      const skinnedRig = await client.callTool('animation', {
+        action: 'rig', model: SKINNED, plan: 'custom',
+        declarations: { limits: Object.fromEntries(boneNames.slice(1).map((name) => [name, { turn: 60 }])) },
+      }, 120_000);
+      assert(
+        skinnedRig.declared === true && skinnedRig.rig?.position === 'Bone000' && /bent by its bones/.test(skinnedRig.rangeSheet?.skin ?? ''),
+        `rig reads the upload's bones, and its range sheet bends the mesh by them (${skinnedRig.errorCode ?? 'ok'}: ${JSON.stringify(skinnedRig.errors ?? skinnedRig.error ?? skinnedRig.rangeSheet)})`,
+      );
+      const skinnedSlither = await client.callTool('animation', {
+        action: 'build',
+        animation: { name: 'SkinnedSlither', rig: SKINNED, loop: true, duration: 2, waves: [{ joints: boneNames.slice(1), axis: 'Y', amplitude: 20, lag: 0.14 }] },
+        parent: PARENT,
+      }, 120_000);
+      assert(skinnedSlither.built === true && skinnedSlither.checks?.passed === true && skinnedSlither.playback?.verified === true, `a wave down the upload's bones builds and plays as checked on a copy (${skinnedSlither.error ?? JSON.stringify(skinnedSlither.errors ?? skinnedSlither.playback)})`);
+      assert(/bent by its bones/.test(skinnedSlither.sheet?.skin ?? '') && skinnedSlither.sheet?.boxes === undefined, `its contact sheet bends the mesh (${JSON.stringify(skinnedSlither.sheet)})`);
+    } else {
+      console.log('  - a real skinned upload was not tried: set ROQER_SKINNED_ASSET_ID to the skinned spike\'s base model');
+    }
 
     // -- Step 8: publish, wire, verify -------------------------------------
     // The hand-edited sequence stays refused; start it afresh to publish from.
