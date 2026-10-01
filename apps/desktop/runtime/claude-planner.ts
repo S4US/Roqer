@@ -222,6 +222,51 @@ export function streamedOutput(message: JsonRecord): { start?: true; characters?
   return typeof streamed === "string" && streamed.length > 0 ? { characters: streamed.length } : null;
 }
 
+const tokenCount = (value: unknown): number | undefined =>
+  typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : undefined;
+
+/**
+ * How full the conversation's context was at one of the main agent's
+ * responses, from the usage on its `assistant` message: everything the request
+ * read, cached or not, plus what it wrote. A subagent works in a context of its
+ * own, so its messages say nothing about the conversation's.
+ */
+export function claudeContextUsage(message: JsonRecord): { usedTokens: number; model: string | null } | null {
+  if (message.type !== "assistant" || message.parent_tool_use_id != null) return null;
+  const payload = message.message;
+  if (!isRecord(payload) || !isRecord(payload.usage)) return null;
+  const usage = payload.usage;
+  const input = tokenCount(usage.input_tokens);
+  if (input === undefined) return null;
+  const usedTokens = input +
+    (tokenCount(usage.cache_creation_input_tokens) ?? 0) +
+    (tokenCount(usage.cache_read_input_tokens) ?? 0) +
+    (tokenCount(usage.output_tokens) ?? 0);
+  return Number.isSafeInteger(usedTokens)
+    ? { usedTokens, model: typeof payload.model === "string" ? payload.model : null }
+    : null;
+}
+
+/**
+ * The context window Claude Code reports for the main agent's model in a
+ * turn's `result`, under `modelUsage`. That map is keyed by the model Claude
+ * Code asked for, which may carry a bracketed variant such as `[1m]` that the
+ * API's own name for the model does not, so a key matches either way. Null
+ * when no key matches: the window of some other model (a subagent's) is not
+ * the conversation's.
+ */
+export function claudeContextWindow(result: JsonRecord, models: readonly (string | null)[]): number | null {
+  if (!isRecord(result.modelUsage)) return null;
+  const bare = (model: string) => model.replace(/\[[^\]]*\]$/, "");
+  const wanted = models.filter((model): model is string => model !== null);
+  for (const [key, entry] of Object.entries(result.modelUsage)) {
+    if (!wanted.some((model) => model === key || bare(model) === bare(key))) continue;
+    const window = isRecord(entry) ? tokenCount(entry.contextWindow) : undefined;
+    if (window !== undefined && window > 0) return window;
+  }
+  return null;
+}
+
 function assistantText(message: JsonRecord): string {
   if (message.parent_tool_use_id != null) return "";
   const payload = message.message;
@@ -259,6 +304,10 @@ export class ClaudeSession {
   readonly key: string;
   /** The prompt of the last run that finished cleanly on this session. */
   lastPrompt: string | null = null;
+  /** The main agent's model, as Claude Code announced it at the start of a turn. */
+  mainModel: string | null = null;
+  /** The context window Claude Code last reported for that model, kept for the next run. */
+  contextWindow: number | null = null;
   /** Skill documents delivered into this process's conversation and still in it. */
   readonly skills: SkillToolRunner;
 
@@ -442,6 +491,8 @@ export function createClaudePlanner(options: ClaudePlannerOptions): Planner {
       let turnProseStart = 0;
       /** What the API response in progress has streamed, for the waiting line's count. */
       let responseCharacters = 0;
+      /** The latest main-agent response's context, as Claude Code reported it. */
+      let contextReading: { usedTokens: number; model: string | null } | null = null;
 
       const finish = (summary: string) => {
         if (settled) return;
@@ -540,6 +591,7 @@ export function createClaudePlanner(options: ClaudePlannerOptions): Planner {
             fail(new Error("Claude Code did not load the Roqer tools."));
             return;
           }
+          if (session !== undefined && typeof message.model === "string") session.mainModel = message.model;
           context.progress(waitingLabel);
           return;
         }
@@ -561,6 +613,11 @@ export function createClaudePlanner(options: ClaudePlannerOptions): Planner {
         }
 
         if (message.type === "assistant") {
+          const reading = claudeContextUsage(message);
+          if (reading !== null) {
+            contextReading = reading;
+            context.contextUsage(reading.usedTokens, session?.contextWindow ?? null);
+          }
           // Only the fallback when partial messages are unavailable; the
           // streamed deltas already carry the same text.
           if (streaming) return;
@@ -570,6 +627,10 @@ export function createClaudePlanner(options: ClaudePlannerOptions): Planner {
         }
 
         if (message.type === "result") {
+          if (session !== undefined) {
+            session.contextWindow = claudeContextWindow(message, [session.mainModel, contextReading?.model ?? null]) ?? session.contextWindow;
+          }
+          if (contextReading !== null) context.contextUsage(contextReading.usedTokens, session?.contextWindow ?? null);
           const summary = typeof message.result === "string" ? message.result : "";
           if (message.is_error === true || message.subtype !== "success") {
             fail(new Error(summary || `Claude Code ended the turn (${String(message.subtype)}).`));

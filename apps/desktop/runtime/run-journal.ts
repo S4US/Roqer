@@ -276,8 +276,9 @@ export class RunJournal {
 
   record(event: RunEvent): void {
     // Arrives every second while a model streams and changes nothing kept,
-    // so it must not keep the snapshot rewriting itself.
-    if (event.type === "output-tokens") return;
+    // so it must not keep the snapshot rewriting itself. A context reading is
+    // live state for the composer's meter in the same way.
+    if (event.type === "output-tokens" || event.type === "context-usage") return;
     const snapshot = this.snapshots.get(event.runId);
     if (!snapshot) return;
     applyEvent(snapshot, event);

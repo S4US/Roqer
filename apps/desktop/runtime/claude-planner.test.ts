@@ -4,7 +4,7 @@ import http from "node:http";
 import path from "node:path";
 import test from "node:test";
 
-import { createClaudePlanner, streamedOutput, type ClaudeSession } from "./claude-planner";
+import { claudeContextUsage, claudeContextWindow, createClaudePlanner, streamedOutput, type ClaudeSession } from "./claude-planner";
 import type { AgentDefinition } from "./agent-definition";
 import type { McpToolOutcome } from "./mcp-types";
 import type { PlannerContext } from "./run-engine";
@@ -66,6 +66,7 @@ function makeContext(controller: AbortController, outcome?: (tool: string) => Mc
     status: () => undefined,
     progress: () => undefined,
     outputTokens: () => undefined,
+    contextUsage: () => undefined,
     say: (text) => recorded.said.push(text),
     recordChange: (change) => recorded.changes.push(change),
     recordEvidence: (item) => recorded.evidence.push(item),
@@ -994,4 +995,77 @@ test("Claude Code's stream is counted for the waiting line: what streamed, then 
   assert.equal(event({ type: "content_block_delta", index: 0, delta: { type: "signature_delta", signature: "sig" } }), null);
   assert.equal(event({ type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "Sub-agent" } }, "toolu_1"), null);
   assert.equal(event({ type: "message_delta", usage: { output_tokens: -1 } }), null);
+});
+
+test("Claude Code's context is what the main agent's response read and wrote, against the window its result names", () => {
+  const assistant = (usage: Record<string, unknown>, parent: string | null = null) =>
+    claudeContextUsage({ type: "assistant", parent_tool_use_id: parent, message: { model: "claude-opus-5-5", usage } });
+
+  assert.deepEqual(
+    assistant({ input_tokens: 12, cache_creation_input_tokens: 3_000, cache_read_input_tokens: 61_000, output_tokens: 400 }),
+    { usedTokens: 64_412, model: "claude-opus-5-5" },
+    "cached input is still in the context",
+  );
+  assert.deepEqual(assistant({ input_tokens: 900 }), { usedTokens: 900, model: "claude-opus-5-5" });
+  // A subagent's context is its own, and a usage without a count says nothing.
+  assert.equal(assistant({ input_tokens: 900 }, "toolu_1"), null);
+  assert.equal(assistant({ output_tokens: 10 }), null);
+  assert.equal(assistant({ input_tokens: -1 }), null);
+
+  const result = {
+    type: "result",
+    modelUsage: {
+      "claude-haiku-4-5-20251001": { contextWindow: 200_000 },
+      "claude-opus-5-5[1m]": { contextWindow: 1_000_000 },
+    },
+  };
+  assert.equal(claudeContextWindow(result, [null, "claude-opus-5-5"]), 1_000_000, "a bracketed variant names the same model");
+  assert.equal(claudeContextWindow(result, ["claude-opus-5-5[1m]"]), 1_000_000);
+  assert.equal(claudeContextWindow(result, ["claude-sonnet-5-5"]), null, "another model's window is not the conversation's");
+  assert.equal(claudeContextWindow({ type: "result" }, ["claude-opus-5-5"]), null);
+  assert.equal(claudeContextWindow({ type: "result", modelUsage: { "claude-opus-5-5": { contextWindow: 0 } } }, ["claude-opus-5-5"]), null);
+});
+
+test("Claude reports the context as each response ends, and a kept process knows the window from its first response", async () => {
+  const sessions = new ProviderSessionStore<ClaudeSession>();
+  const launches: FakeChildProcess[] = [];
+  let turn = 0;
+  const launcher = {
+    launch: async () => {
+      const child = new FakeChildProcess();
+      launches.push(child);
+      child.stdin.setEncoding("utf8");
+      child.stdin.on("data", (chunk: string) => {
+        const messages = chunk.split("\n").filter(Boolean).length;
+        for (let index = 0; index < messages; index += 1) {
+          turn += 1;
+          const used = turn * 10_000;
+          child.writeLine({ type: "system", subtype: "init", tools: PROVIDER_TOOLS, model: "claude-opus-5-5" });
+          child.writeLine({ type: "assistant", parent_tool_use_id: "toolu_sub", message: { model: "claude-haiku-4-5", usage: { input_tokens: 5 } } });
+          child.writeLine({ type: "assistant", parent_tool_use_id: null, message: { model: "claude-opus-5-5", content: [{ type: "text", text: `Answer ${turn}` }], usage: { input_tokens: used, output_tokens: 50 } } });
+          child.writeLine({
+            type: "result", subtype: "success", is_error: false, result: `Answer ${turn}`,
+            modelUsage: { "claude-opus-5-5": { contextWindow: 200_000 }, "claude-haiku-4-5": { contextWindow: 64_000 } },
+          });
+        }
+      });
+      return child.asChild();
+    },
+  };
+  const planner = createClaudePlanner({ ...PLANNER_DEFAULTS, launcher, chatId: "chat-1", sessions });
+  const readings: Array<{ usedTokens: number; windowTokens: number | null }> = [];
+  const { context } = makeContext(new AbortController());
+  const reporting: PlannerContext = { ...context, contextUsage: (usedTokens, windowTokens) => readings.push({ usedTokens, windowTokens }) };
+
+  await planner.run(reporting);
+  assert.deepEqual(readings, [
+    { usedTokens: 10_050, windowTokens: null },
+    { usedTokens: 10_050, windowTokens: 200_000 },
+  ], "the window arrives with the result, and the subagent's usage is not the conversation's");
+
+  readings.length = 0;
+  await planner.run(followUp(reporting, "Answer 1", "Now change it."));
+  assert.equal(launches.length, 1);
+  assert.deepEqual(readings[0], { usedTokens: 20_050, windowTokens: 200_000 });
+  await sessions.closeAll();
 });

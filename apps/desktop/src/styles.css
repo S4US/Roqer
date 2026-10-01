@@ -494,6 +494,36 @@ button:focus-visible, textarea:focus-visible, select:focus-visible, input:focus-
 .composer-expanded-head > .text-button { margin-left: auto; color: var(--ink-secondary); }
 .composer-hint { flex: none; margin-right: 10px; color: var(--faint); font-size: var(--type-meta); white-space: nowrap; }
 .composer-hint kbd { padding: 1px 5px; color: var(--muted); border: 1px solid var(--border); border-radius: 4px; font: var(--weight-regular) 11px/1.4 "Geist Mono Variable", monospace; }
+/* The context meter: a ring that fills as the model's context does, grey until
+   it is worth noticing. It opens details, not a choice, so it has no chevron. */
+.context-menu { flex: none; margin-right: 6px; }
+.context-menu .composer-menu-trigger { padding: 0 9px 0 8px; color: var(--muted); }
+.context-meter { display: flex; align-items: center; gap: 7px; }
+.context-ring { flex: none; transform: rotate(-90deg); }
+.context-ring circle { fill: none; stroke-width: 2; }
+.context-ring-track { stroke: var(--border); }
+.context-ring-track.unknown { stroke: var(--border-strong); stroke-dasharray: 2.2 2.2; }
+.context-ring-fill { stroke: var(--muted); stroke-linecap: round; transition: stroke-dashoffset .3s ease, stroke .18s ease; }
+.context-meter-label { font: var(--weight-medium) var(--type-meta) "Geist Mono Variable", monospace; font-variant-numeric: tabular-nums; }
+.context-menu.tone-none .context-meter-label { color: var(--faint); }
+.context-menu.tone-warning .context-ring-fill, .context-menu.tone-warning .context-bar > span { stroke: var(--warning); background: var(--warning); }
+.context-menu.tone-warning .context-meter-label, .context-menu.tone-warning .context-percent { color: var(--warning); }
+.context-menu.tone-danger .context-ring-fill, .context-menu.tone-danger .context-bar > span { stroke: var(--danger); background: var(--danger); }
+.context-menu.tone-danger .context-meter-label, .context-menu.tone-danger .context-percent { color: var(--danger); }
+.context-menu .composer-menu-panel { right: 0; left: auto; width: min(304px, 80vw); }
+.context-panel { display: flex; flex-direction: column; gap: 12px; padding: 8px 8px 6px; }
+.context-panel-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.context-percent { color: var(--muted); font: var(--weight-regular) var(--type-meta) "Geist Mono Variable", monospace; }
+.context-bar { height: 6px; overflow: hidden; background: var(--surface-sunken); border-radius: 3px; }
+.context-bar > span { display: block; height: 100%; background: var(--muted); border-radius: 3px; }
+.context-figures { display: flex; justify-content: space-between; gap: 12px; margin-top: -4px; color: var(--muted); font: var(--weight-regular) var(--type-meta) "Geist Mono Variable", monospace; }
+.context-advice { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; padding: 10px 11px; color: var(--ink-secondary); font-size: var(--type-meta); line-height: 1.5; background: var(--warning-soft); border: 1px solid var(--warning-border); border-radius: 9px; }
+.context-menu.tone-danger .context-advice { background: var(--danger-soft); border-color: var(--danger-border); }
+.context-advice button { height: 28px; padding: 0 10px; color: var(--action-ink); background: var(--action); border: 0; border-radius: 7px; font-size: var(--type-meta); font-weight: var(--weight-medium); }
+.context-advice button:hover { background: var(--action-hover); }
+.context-advice button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.context-panel .metadata-list .context-model { font-family: inherit; }
+.context-footnote { margin: 0; color: var(--muted); font-size: var(--type-meta); line-height: 1.5; }
 .stop-button { display: flex; flex: none; align-items: center; gap: 7px; height: 36px; padding: 0 13px; color: var(--danger); background: var(--danger-soft); border: 1px solid var(--danger-border); border-radius: 10px; font-size: var(--type-label); font-weight: var(--weight-medium); }
 .stop-button:hover { border-color: var(--danger); }
 
@@ -1316,6 +1346,9 @@ a.small-button:focus-visible { outline: 2px solid var(--accent); outline-offset:
   .user-prompt { max-width: 100%; }
   .suggestion-grid { grid-template-columns: 1fr; }
   .run-menu .composer-menu-label em { display: none; }
+  /* The ring alone; its figure is still in the tooltip and the details. */
+  .context-meter-label { display: none; }
+  .context-menu .composer-menu-trigger { padding: 0 7px; }
   .composer-dock { padding-right: 10px; padding-left: 10px; }
   /* The header stays one row at every width: the filename gives up space and
    * the action collapses to its icon rather than wrapping. */

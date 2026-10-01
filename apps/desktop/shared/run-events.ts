@@ -230,6 +230,15 @@ export type RunEvent =
    * reasoning a model does not show. A later response starts again from zero.
    */
   | (RunEventBase & { type: "output-tokens"; tokens: number; exact: boolean })
+  /**
+   * How full the model's context window was at its latest response, as the
+   * provider itself reported it: what that response read plus what it wrote.
+   * `windowTokens` is the window's size when the provider said it, else null;
+   * Roqer never guesses either number. Live state like `output-tokens`: the
+   * renderer keeps the latest reading per chat for the composer's meter, and
+   * the chat's record never stores it.
+   */
+  | (RunEventBase & { type: "context-usage"; usedTokens: number; windowTokens: number | null })
   /** A chunk of assistant prose. Concatenating deltas rebuilds the reply. */
   | (RunEventBase & { type: "message-delta"; text: string })
   | (RunEventBase & { type: "tool-proposed"; proposal: ToolProposal })
@@ -356,6 +365,9 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
 
 const isString = (value: unknown): value is string => typeof value === "string";
+
+const isTokenCount = (value: unknown): value is number =>
+  typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
 
 const APPROVAL_MODES: readonly string[] = ["Ask first", "Auto approve", "Full auto", "Read only"];
 const RISKS: readonly string[] = ["read", "mutation", "irreversible"];
@@ -624,6 +636,9 @@ export function isRunEvent(value: unknown): value is RunEvent {
     case "output-tokens":
       return typeof value.tokens === "number" && Number.isSafeInteger(value.tokens) && value.tokens >= 0 &&
         typeof value.exact === "boolean";
+    case "context-usage":
+      return isTokenCount(value.usedTokens) &&
+        (value.windowTokens === null || (isTokenCount(value.windowTokens) && value.windowTokens > 0));
     case "message-delta":
       return isString(value.text);
     case "tool-proposed":

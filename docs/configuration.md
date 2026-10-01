@@ -83,6 +83,16 @@ Claude subscription through Claude Code, or a model endpoint they configure in
 Settings. One run can be active across the app at a time, against one Studio
 place.
 
+The ring in the composer's corner shows how full the model's context window
+was at its latest response in the chat, as the provider reported it: Claude
+Code and Codex report both the tokens in use and the window's size, and a
+configured endpoint reports the tokens while the window is the one set for the
+model in Settings. Roqer never estimates either number. A chat with nothing
+reported, or a model with no known window, says so instead of showing a share.
+The ring turns amber at 70% and red at 90%, and clicking it shows the figures
+and who reported them. Readings are not saved: after a restart, the meter
+fills in again with the chat's next response.
+
 ChatGPT runs use a Codex home of Roqer's own, inside Roqer's data folder, so
 Roqer asks you to sign in to ChatGPT once even if the Codex CLI is already
 signed in, and your own Codex MCP servers and plugins are not loaded there.

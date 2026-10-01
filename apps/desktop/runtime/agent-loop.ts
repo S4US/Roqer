@@ -873,7 +873,12 @@ export function createAgentLoopPlanner(options: AgentLoopPlannerOptions): Planne
               stopReason = event.stopReason;
               usage = event.usage;
               turnUsage = event.usage;
-              if (event.usage !== undefined) context.outputTokens(event.usage.outputTokens, true);
+              if (event.usage !== undefined) {
+                context.outputTokens(event.usage.outputTokens, true);
+                // The endpoint's own count of what this turn read and wrote;
+                // the window is the one the user gave the model, if any.
+                context.contextUsage(event.usage.inputTokens + event.usage.outputTokens, options.contextWindow ?? null);
+              }
             }
           } catch (error) {
             // A cancellation or a stall ends the run exactly as before: a stall

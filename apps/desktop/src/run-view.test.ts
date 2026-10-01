@@ -87,6 +87,23 @@ const started: RunEventBody = {
  * "Completed · 0 tool calls" under a one-line answer makes a conversation look
  * like a build.
  */
+test("a context reading is the run's latest, kept through tool calls and the run's end", () => {
+  const events = stream(
+    started,
+    { type: "context-usage", usedTokens: 10_050, windowTokens: null },
+    { type: "tool-proposed", proposal: proposal("call-1") },
+    { type: "context-usage", usedTokens: 12_000, windowTokens: 200_000 },
+    { type: "run-completed", outcome: "completed", summary: "Done." },
+  );
+  const upTo = (count: number) => fold(events.slice(0, count));
+
+  assert.equal(upTo(1).contextUsage, null, "nothing until the provider reports");
+  assert.deepEqual(upTo(2).contextUsage, { usedTokens: 10_050, windowTokens: null });
+  assert.deepEqual(upTo(3).contextUsage, { usedTokens: 10_050, windowTokens: null }, "a tool call does not clear it");
+  assert.deepEqual(upTo(2).timeline, [], "a reading is never a step");
+  assert.deepEqual(upTo(5).contextUsage, { usedTokens: 12_000, windowTokens: 200_000 });
+});
+
 test("an output count is live state for the response in progress, cleared when the turn moves on", () => {
   const events = stream(
     started,

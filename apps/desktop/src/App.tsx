@@ -38,6 +38,8 @@ import { Markdown } from "./markdown-view";
 import { SettingsPage } from "./settings-page";
 import { ResultsCard, type FileExpansion } from "./results-card";
 import { ModelMenu, RunMenu } from "./composer-menus";
+import { ContextMeter } from "./context-meter";
+import { contextMeterView, nextContextReading, type ContextReading } from "./context-usage";
 import { blockPreview, characterCount, composedMessage, isLongPaste, lineCount, textSize, type PastedBlock } from "./composer-text";
 
 /** The key that sends with Enter, named the way this computer's keyboard names it. */
@@ -172,6 +174,8 @@ function App() {
   const [composerExpanded, setComposerExpanded] = useState(false);
   const [attachments, setAttachments] = useState<AssetAttachment[]>([]);
   const [runView, setRunView] = useState<RunView | null>(null);
+  /** The latest context reading per chat, for the composer's meter. Never saved; see context-usage.ts. */
+  const [contextReadings, setContextReadings] = useState<ReadonlyMap<string, ContextReading>>(() => new Map());
   const [runStarting, setRunStarting] = useState(false);
   /** The callId of a pending question being answered in the composer, if any. */
   const [explainingQuestion, setExplainingQuestion] = useState<string | null>(null);
@@ -227,6 +231,12 @@ function App() {
   const eventBuffer = useRef<RunEvent[]>([]);
   const demoHandle = useRef<DemoRunHandle | null>(null);
   const runTarget = useRef<{ projectId: string; chatId: string } | null>(null);
+  /**
+   * The chat, provider and model of the latest run, which its context
+   * readings describe. Unlike `runTarget` it outlives the run, so a reading
+   * that arrives with the run's end is still filed under the right chat.
+   */
+  const contextTarget = useRef<{ chatId: string; provider: ProviderId; model: string | null } | null>(null);
   const recordedRunId = useRef<string | null>(null);
   const runAttempt = useRef(0);
   const pendingStartAttempt = useRef<number | null>(null);
@@ -509,6 +519,15 @@ function App() {
     });
   }, [hydrated, modelCatalog]);
 
+  // Each reading the run reports becomes its chat's latest, for the meter.
+  const reportedContext = runView?.contextUsage ?? null;
+  useEffect(() => {
+    const target = contextTarget.current;
+    if (reportedContext === null || target === null) return;
+    const reading: ContextReading = { ...target, ...reportedContext, observedAt: Date.now() };
+    setContextReadings((current) => new Map(current).set(target.chatId, nextContextReading(current.get(target.chatId), reading)));
+  }, [reportedContext]);
+
   // A finished run becomes one assistant message carrying a compacted record,
   // so the result survives a restart without keeping the whole event stream.
   useEffect(() => {
@@ -667,6 +686,7 @@ function App() {
         : availableModel?.defaultReasoningEffort ?? "medium",
     };
     runTarget.current = { projectId, chatId };
+    contextTarget.current = { chatId, provider: request.provider, model: request.model };
     const attempt = ++runAttempt.current;
     pendingStartAttempt.current = attempt;
     pendingStartId.current = request.startId!;
@@ -1059,6 +1079,10 @@ function App() {
   const imagesReachModel = hasDesktopRuntime();
   const selectedModel = modelCatalog.models
     .find((model) => model.id === selectedModelId(workspace.preferences, provider)) ?? null;
+  const contextView = contextMeterView(
+    workspace.selectedChatId === null ? undefined : contextReadings.get(workspace.selectedChatId),
+    { provider, model: selectedModel?.id ?? null },
+  );
   /** Exactly what Send would send. */
   const message = composedMessage(pastedBlocks, composer);
   // Offered once there is enough to want more room, and never in the way before.
@@ -1415,6 +1439,7 @@ function App() {
               />
               <div className="toolbar-spacer" />
               {composerHint !== null && <span className="composer-hint">{composerHint}</span>}
+              <ContextMeter view={contextView} modelName={selectedModel?.displayName ?? null} onNewChat={newChat} />
               {showRunControls && <button className="stop-button" onClick={stopRun}><Square size={11} fill="currentColor" aria-hidden="true" /> Stop</button>}
               {steering
                 ? <button className="send-button" onClick={() => void sendSteer()} disabled={!composer.trim()} aria-label="Send note to the running task"><ArrowUp size={18} /></button>
