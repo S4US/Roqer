@@ -1036,6 +1036,14 @@ What follows from it, in the order it is built:
 
 Known and left as they are:
 
+- **The T20 wolf's legs look off as it walks** (reported after its second
+  run, not yet looked into): the way they bend, and the way they turn away
+  from the body at the hip. Two things to check first. Its leg mesh is bound
+  only to the leg's own bones, so the top of a leg swings rigidly out of the
+  torso instead of blending into it. And the quadruped plan folds a front
+  knee back and a hind knee forward, which may not be how the leg was
+  modelled to read.
+
 - **The range sheet of a deep chain curls out of frame.** Every joint turned
   30° adds up along twenty nested bones.
 - **A gait crouches a straight-legged body**, fixed after T20. The run's
