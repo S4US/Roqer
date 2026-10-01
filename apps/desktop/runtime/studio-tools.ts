@@ -120,11 +120,11 @@ function numberField(value: unknown, key: string): number | undefined {
 }
 
 /**
- * The operations whose signatures the tool description carries.
+ * The operations whose signatures the tool guide carries.
  *
  * The `operation` enum names every tool the server has, but a bare name is not
  * something a model can call correctly, and spelling all of them out would put
- * the whole catalog in front of the model on every turn. So the description
+ * the whole catalog in front of the model on every turn. So the guide
  * documents the build-inspect-playtest loop an ordinary run walks, and every
  * other operation is discovered the cheap way: call it, and a call whose
  * arguments do not fit comes back with that operation's schema attached.
