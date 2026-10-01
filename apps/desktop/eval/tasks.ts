@@ -13,6 +13,7 @@
 
 import {
   ANIMATION_ALL_CHECKS_PASSED, ANIMATION_CHECKED_AS_GAIT, ANIMATION_GAIT_CHECKS_LABEL, ANIMATION_MOTION_CHECKS_LABEL,
+  ANIMATION_DESCRIBED_BY_BAKE, ANIMATION_DESCRIBED_BY_LABEL, MODEL_STATE_WIRED, modelStateLabel,
   ANIMATION_PLAYED_FROM_LABEL, ANIMATION_PLAYED_PUBLISHED, ANIMATION_PREVIEW_TITLE, animationSlotLabel, RIG_RANGE_SHEET_TITLE, MODEL_MOVED_BY_GAME,
   MODEL_MOVED_BY_LABEL, MODEL_WHILE_MOVING_LABEL, MODEL_WHILE_STANDING_LABEL, type RunEvidence,
 } from "../shared/run-events";
@@ -501,9 +502,9 @@ ${SIGNATURE_LUAU}
       }
 `;
 
-/** The wolf's den, raised and apart from the other tasks' builds, with the wolf of an earlier run cleared. */
+/** The den, raised and apart from the other tasks' builds, with the creatures of earlier runs cleared. */
 const DEN_SEED = `
-      for _, name in ipairs({ "WorkbenchEvalWolf", "WorkbenchEvalDen" }) do
+      for _, name in ipairs({ "WorkbenchEvalWolf", "WorkbenchEvalSnake", "WorkbenchEvalDen" }) do
         local old = workspace:FindFirstChild(name)
         if old then old:Destroy() end
       end
@@ -1772,6 +1773,27 @@ ${EXTENT_LUAU}
     allowedRoots: [`game.${EVAL_ROOT}`, "game.Workspace.WorkbenchEvalWolf", "game.ServerScriptService"],
     oracle: ({ probe, verified, evidence, toolCalls }) => judgeBuiltCreature(probe, verified, evidence ?? [], WOLF, toolCalls, true),
   },
+  {
+    id: "T21-creature-blender-animation",
+    prompt: "Model a low-poly snake in Blender as one skinned mesh, and animate it in Blender too: a looping slither on the spot, "
+      + "a wave running down its body from head to tail. Bring the snake and its slither into Studio and make the snake play it while it rests in the den. "
+      + "The den is game.Workspace.WorkbenchEvalDen.Den. Name the snake game.Workspace.WorkbenchEvalSnake, "
+      + "and keep its KeyframeSequence under ServerStorage.WorkbenchEval.",
+    // The creature plan's step 8: motion made in Blender, baked to a pose
+    // description file, and built from that file. The body is T20's, with no
+    // legs: one skinned mesh under a rig that `rig` built. The motion's own
+    // conditions are that its last build was described by the baked file and
+    // passed every check, and that the published asset played on the snake in
+    // a playtest with its idle holding it. A snake has no gait to check.
+    needsBlender: true,
+    needsUploads: true,
+    needsPublishedPlace: true,
+    seed: DEN_SEED,
+    probe: creatureProbe("WorkbenchEvalSnake", "snake"),
+    allowedTargets: [],
+    allowedRoots: [`game.${EVAL_ROOT}`, "game.Workspace.WorkbenchEvalSnake", "game.ServerScriptService"],
+    oracle: ({ probe, verified, evidence, toolCalls }) => judgeBakedCreature(probe, verified, evidence ?? [], toolCalls),
+  },
 ];
 
 /**
@@ -1977,6 +1999,99 @@ function judgeBuiltCreature(
     }
   }
   return judgeNpcPatrol(probe, verified, evidence, subject);
+}
+
+/** A snake's bones: enough of them down its length for a wave to run along. */
+const SNAKE_BONES = 4;
+
+/**
+ * The creature plan's step 8: a snake modelled as one skinned mesh and
+ * animated in Blender, the motion baked to a file and built from it. Each
+ * condition is from Studio or from evidence the host recorded off a tool
+ * result. The first unmet one is the verdict.
+ */
+function judgeBakedCreature(
+  probe: unknown,
+  verified: boolean,
+  evidence: readonly RunEvidence[],
+  toolCalls: EvalOracleInput["toolCalls"],
+): EvalVerdict {
+  const path = "game.Workspace.WorkbenchEvalSnake";
+  const succeeded = (tool: string) => toolCalls.some((call) => call.tool === tool && call.ok);
+  if (!succeeded("run_blender_script")) return { passed: false, detail: "No Blender job succeeded; the snake was neither modelled nor animated." };
+  if (!succeeded("upload_asset")) return { passed: false, detail: "The modelled snake was never uploaded." };
+
+  if (field(probe, "snake") !== "Model") {
+    return { passed: false, detail: field(probe, "snake") === false ? "There is no WorkbenchEvalSnake in Workspace." : "WorkbenchEvalSnake is not a Model." };
+  }
+  const meshParts = Number(field(probe, "meshParts") ?? 0);
+  const skinnedParts = Number(field(probe, "skinnedParts") ?? 0);
+  if (skinnedParts !== 1 || meshParts !== 1) {
+    return { passed: false, detail: `The snake has ${meshParts} MeshParts, ${skinnedParts} of them skinned; it was to be one skinned mesh.` };
+  }
+  const bones = Number(field(probe, "bones") ?? 0);
+  if (bones < SNAKE_BONES) {
+    return { passed: false, detail: `The snake's mesh holds ${bones} Bones; a wave down its body needs at least ${SNAKE_BONES}.` };
+  }
+  if (typeof field(probe, "rigStamp") !== "string" || Number(field(probe, "motors") ?? 0) < 1) {
+    return { passed: false, detail: "The snake's rig was not built by rig around its bones: it carries no RoqerRigRevision, or no root joins its mesh." };
+  }
+  const rigs = evidence.filter((item) => item.kind === "verification" && item.changeKind === "instance" && item.title === path);
+  if (rigs.length === 0 || rigs[rigs.length - 1].passed !== true) {
+    return { passed: false, detail: rigs.length === 0 ? "No rig call built the snake's rig in this run." : "The snake's rig did not read back from Studio as it was built." };
+  }
+
+  // The last build of each sequence is the one kept; one of them must be the bake.
+  const kept = new Map<string, RunEvidence>();
+  for (const item of evidence) {
+    if (item.kind === "verification" && item.changeKind === "instance" && metadataValue(item, ANIMATION_MOTION_CHECKS_LABEL) !== undefined) {
+      kept.set(item.title, item);
+    }
+  }
+  if (kept.size === 0) return { passed: false, detail: "No animation was built in Studio." };
+  const baked = [...kept].filter(([, build]) => metadataValue(build, ANIMATION_DESCRIBED_BY_LABEL) === ANIMATION_DESCRIBED_BY_BAKE);
+  if (baked.length === 0) {
+    return { passed: false, detail: "No animation kept in Studio was built from a file baked in Blender; the slither was written as poses instead." };
+  }
+  for (const [sequence, build] of baked) {
+    if (build.passed !== true) return { passed: false, detail: `The last build of ${sequence} did not play or read back as it was checked.` };
+    const checks = metadataValue(build, ANIMATION_MOTION_CHECKS_LABEL);
+    if (checks !== ANIMATION_ALL_CHECKS_PASSED) return { passed: false, detail: `The last build of ${sequence}: ${checks}; none may be left failing.` };
+  }
+  if (!evidence.some((item) => item.title === ANIMATION_PREVIEW_TITLE && item.modelPreviewId !== undefined)) {
+    return { passed: false, detail: "No 3D preview of the motion was shown in the chat." };
+  }
+  if (Number(field(probe, "sequences") ?? 0) < 1) {
+    return { passed: false, detail: "No KeyframeSequence was kept under ServerStorage.WorkbenchEval." };
+  }
+
+  const published = publishedAssets(evidence);
+  if (published.size === 0) return { passed: false, detail: "No animation was published and read back from Roblox." };
+  const loader = field(probe, "loader");
+  if (loader !== "Script" || field(probe, "enabled") !== true) {
+    return { passed: false, detail: loader === false ? "The snake has no RoqerModelAnimate loader, so nothing animates it." : "The snake's RoqerModelAnimate is not an enabled Script." };
+  }
+  const idle = field(probe, "idle");
+  if (typeof idle !== "string") return { passed: false, detail: "The snake's idle is not wired, so nothing plays while it rests." };
+  if (!published.has(idle)) return { passed: false, detail: `The snake's idle holds ${idle}, which this run did not publish.` };
+  const ownership = animationOwnershipProblem(idle, field(probe, "idleOwner"), field(probe, "place"));
+  if (ownership) return { passed: false, detail: ownership };
+
+  // Played after the last wiring, so the state it saw holding the asset is the one wired now.
+  const loaderPath = `${path}.RoqerModelAnimate`;
+  const lastWire = evidence.reduce((last, item, index) => item.kind === "verification" && item.title === loaderPath ? index : last, -1);
+  const played = evidence.some((item, index) => index > lastWire && item.kind === "playtest" && item.passed === true &&
+    item.title === `${path} in the playtest` &&
+    metadataValue(item, ANIMATION_PLAYED_FROM_LABEL) === ANIMATION_PLAYED_PUBLISHED &&
+    metadataValue(item, modelStateLabel("idle")) === MODEL_STATE_WIRED);
+  if (!played) {
+    return { passed: false, detail: "No playtest after the last wiring showed the published slither playing on the snake as it was checked, with its idle holding it." };
+  }
+  if (!verified) return { passed: false, detail: "The run finished without satisfying the completion gate." };
+  return {
+    passed: true,
+    detail: `The snake's slither ${idle}, baked in Blender and owned by the place's owner, played on its ${bones} bones in a playtest, with a 3D preview and every motion check passed.`,
+  };
 }
 
 interface WalkingModel { /** The probe field holding its class. */ key: string; name: string; noun: string }

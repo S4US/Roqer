@@ -1105,6 +1105,22 @@ test("a built animation is one change, verified by its preview and read-back", a
   ]);
 });
 
+test("an animation built from a baked file says so in its verification", async () => {
+  const built = {
+    built: true, path: "game.ServerStorage.Animations.Slither", undoable: true,
+    animation: { name: "Slither", duration: 1, keyframes: 9, loop: true },
+    readBack: { matchesCompiled: true }, playback: { verified: true }, checks: { passed: true },
+  };
+  const { context, evidence } = contextWith([ok(built), ok(built)]);
+  const run = createStudioToolRunner(context);
+
+  await run("animation", { action: "build", animation_file: "C:\\out\\slither.animation.json", parent: "game.ServerStorage.Animations" });
+  await run("animation", { action: "build", animation: { name: "Slither" }, parent: "game.ServerStorage.Animations" });
+
+  const describedBy = evidence.map((item) => item.metadata?.find((entry) => entry.label === "Described by")?.value);
+  assert.deepEqual(describedBy, ["A file baked in Blender", undefined]);
+});
+
 test("publishing, wiring and verifying an animation each leave their own record", async () => {
   const { context, changes, evidence } = contextWith([
     ok({

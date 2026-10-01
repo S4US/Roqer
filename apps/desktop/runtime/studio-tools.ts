@@ -13,6 +13,7 @@ import {
 import { boundedCode, diffDeletedRange, diffText, normalizeNewlines } from "../shared/text-diff";
 import {
   ANIMATION_ALL_CHECKS_PASSED, ANIMATION_CHECKED_AS_GAIT, ANIMATION_GAIT_CHECKS_LABEL, ANIMATION_MOTION_CHECKS_LABEL,
+  ANIMATION_DESCRIBED_BY_BAKE, ANIMATION_DESCRIBED_BY_LABEL, MODEL_STATE_WIRED, modelStateLabel,
   ANIMATION_NAME_LABEL, ANIMATION_PLAYED_FROM_LABEL, ANIMATION_PLAYED_PUBLISHED, ANIMATION_PREVIEW_TITLE, ANIMATION_RIG_LABEL, animationSlotLabel, RIG_RANGE_SHEET_TITLE,
   BLENDER_MODEL_LABEL, BLENDER_PREVIEW_TITLE, MAX_EVIDENCE_SUBJECT_CHARS, MODEL_MOVED_BY_GAME, MODEL_MOVED_BY_LABEL,
   MODEL_MOVED_BY_VERIFY, MODEL_WHILE_MOVING_LABEL, MODEL_WHILE_STANDING_LABEL, SCREENSHOT_VIEW_LABEL, SCREENSHOT_VIEW_PLAYTEST,
@@ -1129,7 +1130,7 @@ async function recordAnimationPreview(context: PlannerContext, outcome: McpToolO
  * passes only when Studio's read-back matched what was compiled and its
  * preview played as the checks measured; the MCP result carries both.
  */
-function recordAnimationBuild(context: PlannerContext, outcome: McpToolOutcome): void {
+function recordAnimationBuild(context: PlannerContext, args: JsonRecord, outcome: McpToolOutcome): void {
   const data = isRecord(outcome.data) ? outcome.data : {};
   const path = stringField(data, "path");
   if (path === undefined || data.built !== true) return;
@@ -1171,6 +1172,8 @@ function recordAnimationBuild(context: PlannerContext, outcome: McpToolOutcome):
     metadata: [
       { label: ANIMATION_MOTION_CHECKS_LABEL, value: waived.length > 0 ? `Passed, with ${waived.join(", ")} waived` : ANIMATION_ALL_CHECKS_PASSED },
       ...(gaitChecked === undefined ? [] : [{ label: ANIMATION_GAIT_CHECKS_LABEL, value: gaitChecked ? ANIMATION_CHECKED_AS_GAIT : "Not checked as a gait" }]),
+      // The bridge read the description from the file the call named; only a Blender job's bake is named so.
+      ...(typeof args.animation_file === "string" ? [{ label: ANIMATION_DESCRIBED_BY_LABEL, value: ANIMATION_DESCRIBED_BY_BAKE }] : []),
       ...(maxDegrees === undefined ? [] : [{ label: "Preview", value: `Within ${maxDegrees}° of the checked model` }]),
       { label: "Read back", value: readBack.matchesCompiled === true ? "Matches what was compiled" : "Differs from what was compiled" },
       { label: "Undo", value: data.undoable !== false ? "One Studio undo step" : "Not recorded in Studio's undo history" },
@@ -1418,7 +1421,7 @@ function recordModelVerify(context: PlannerContext, args: JsonRecord, data: Json
         value: `${String(pace.state)} at ${String(pace.played)}× for ${String(pace.averageSpeed)} studs a second; written for ${String(pace.groundSpeed)}`,
       }] : []),
       ...(played ? [{ label: ANIMATION_PLAYED_FROM_LABEL, value: played.source === "published" ? ANIMATION_PLAYED_PUBLISHED : "A temporary clip" }] : []),
-      ...(wiring ? [{ label: `${String(wiring.slot)} state`, value: wiring.matches === true ? "Wired" : "Not wired" }] : []),
+      ...(wiring ? [{ label: modelStateLabel(String(wiring.slot)), value: wiring.matches === true ? MODEL_STATE_WIRED : "Not wired" }] : []),
     ],
   });
 }
@@ -1760,7 +1763,7 @@ export function createStudioToolRunner(context: PlannerContext): StudioToolRunne
 
     if (outcome.ok && !refused && operation === "animation") {
       if (args.action === "check" || args.action === "build") await recordAnimationPreview(context, outcome);
-      if (args.action === "build") recordAnimationBuild(context, outcome);
+      if (args.action === "build") recordAnimationBuild(context, args, outcome);
       else if (args.action === "publish") recordAnimationPublish(context, outcome);
       else if (args.action === "wire") recordAnimationWire(context, outcome);
       else if (args.action === "verify") recordAnimationVerify(context, args, outcome);

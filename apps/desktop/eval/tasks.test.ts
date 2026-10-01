@@ -3,6 +3,7 @@ import test from "node:test";
 
 import {
   ANIMATION_ALL_CHECKS_PASSED, ANIMATION_CHECKED_AS_GAIT, ANIMATION_GAIT_CHECKS_LABEL, ANIMATION_MOTION_CHECKS_LABEL,
+  ANIMATION_DESCRIBED_BY_BAKE, ANIMATION_DESCRIBED_BY_LABEL, MODEL_STATE_WIRED, modelStateLabel,
   ANIMATION_NAME_LABEL, ANIMATION_PLAYED_FROM_LABEL, ANIMATION_PLAYED_PUBLISHED, ANIMATION_PREVIEW_TITLE, animationSlotLabel,
   MODEL_MOVED_BY_GAME, MODEL_MOVED_BY_LABEL, MODEL_MOVED_BY_VERIFY, MODEL_WHILE_MOVING_LABEL, MODEL_WHILE_STANDING_LABEL,
   RIG_RANGE_SHEET_TITLE, type RunEvidence,
@@ -622,7 +623,7 @@ test("T15 passes a run that meets every one of the plan's conditions", () => {
 });
 
 test("only the tasks that judge an owner against the place's need a published place", () => {
-  assert.deepEqual(EVAL_TASKS.filter((task) => needsPublishedPlace([task])).map((task) => task.id), ["T15-animation-run", "T18-npc-patrol", "T19-creature-parts", "T17-creature-blender", "T20-creature-skinned"]);
+  assert.deepEqual(EVAL_TASKS.filter((task) => needsPublishedPlace([task])).map((task) => task.id), ["T15-animation-run", "T18-npc-patrol", "T19-creature-parts", "T17-creature-blender", "T20-creature-skinned", "T21-creature-blender-animation"]);
   assert.match(animationRun({ place: { id: 0, type: "User" } }).detail, /The place is not published/);
 });
 
@@ -843,6 +844,92 @@ test("T20 wants one skinned MeshPart holding a four-legged body's bones, under a
   assert.match(skinnedWolf({ feet: 0 }).detail, /The wolf's rig declares 0 feet/);
   // The pieces task still refuses one mesh.
   assert.match(wolf({ ...SKINNED_PROBE }).detail, /The wolf has 1 MeshParts/);
+});
+
+const SNAKE_PATH = "game.Workspace.WorkbenchEvalSnake";
+const SNAKE_PROBE = {
+  snake: "Model", humanoid: true, loader: "Script", enabled: true, idle: "701", idleOwner: OWNED,
+  walkGroundSpeed: false, place: { id: 42, type: "User" }, sequences: 1,
+  motors: 1, meshParts: 1, skinnedParts: 1, bones: 8, feet: 0, rigStamp: "rr1:4300:eacf5e7cde01a843",
+};
+
+/** A finished snake run: its rig read back, the slither built from the baked file, published, wired, and played. */
+function snakeEvidence(): RunEvidence[] {
+  return [
+    { id: "s1", kind: "verification", changeKind: "instance", title: SNAKE_PATH, passed: true },
+    {
+      id: "s2", kind: "inspection", title: ANIMATION_PREVIEW_TITLE, passed: true, imageDataUrl: "data:image/png;base64,QUJD",
+      modelPreviewId: "a1b2c3d4-2", metadata: [{ label: ANIMATION_NAME_LABEL, value: "Slither" }],
+    },
+    {
+      id: "s3", kind: "verification", changeKind: "instance", title: "game.ServerStorage.WorkbenchEval.Slither", passed: true,
+      metadata: [
+        { label: ANIMATION_MOTION_CHECKS_LABEL, value: ANIMATION_ALL_CHECKS_PASSED },
+        { label: ANIMATION_DESCRIBED_BY_LABEL, value: ANIMATION_DESCRIBED_BY_BAKE },
+      ],
+    },
+    { id: "s4", kind: "verification", changeKind: "asset", title: "rbxassetid://701", passed: true },
+    { id: "s5", kind: "verification", changeKind: "instance", title: `${SNAKE_PATH}.RoqerModelAnimate`, passed: true },
+    {
+      id: "s6", kind: "playtest", title: `${SNAKE_PATH} in the playtest`, passed: true,
+      metadata: [
+        { label: ANIMATION_PLAYED_FROM_LABEL, value: ANIMATION_PLAYED_PUBLISHED },
+        { label: modelStateLabel("idle"), value: MODEL_STATE_WIRED },
+      ],
+    },
+  ];
+}
+
+function snake(probe: Record<string, unknown> = {}, evidence: RunEvidence[] = snakeEvidence(), toolCalls = BLENDER_CALLS, verified = true) {
+  return verdict("T21-creature-blender-animation", {
+    probe: { ...SNAKE_PROBE, ...probe }, outcome: "completed", verified, toolCalls, changedTargets: [], evidence,
+  });
+}
+
+test("T21 passes a skinned snake whose slither was baked in Blender, built from the file, published and played on it", () => {
+  const result = snake();
+  assert.equal(result.passed, true, result.detail);
+});
+
+test("T21 wants the snake modelled in Blender as one skinned mesh, under a rig that rig built around its bones", () => {
+  assert.match(snake({}, snakeEvidence(), [{ tool: "upload_asset", ok: true }]).detail, /No Blender job succeeded/);
+  assert.match(snake({}, snakeEvidence(), [{ tool: "run_blender_script", ok: true }]).detail, /never uploaded/);
+  assert.match(snake({ snake: false }).detail, /no WorkbenchEvalSnake/);
+  assert.match(snake({ meshParts: 6, skinnedParts: 0 }).detail, /The snake has 6 MeshParts, 0 of them skinned/);
+  assert.match(snake({ bones: 2 }).detail, /holds 2 Bones/);
+  assert.match(snake({ rigStamp: false }).detail, /not built by rig/);
+  assert.match(snake({ motors: 0 }).detail, /not built by rig/);
+  assert.match(snake({}, snakeEvidence().filter((item) => item.id !== "s1")).detail, /No rig call built/);
+});
+
+test("T21 wants the kept slither built from the baked file, with every check passed, and a 3D preview", () => {
+  const evidence = snakeEvidence();
+  const unbaked = evidence.map((item) => item.id === "s3"
+    ? { ...item, metadata: item.metadata?.filter((entry) => entry.label !== ANIMATION_DESCRIBED_BY_LABEL) }
+    : item);
+  assert.match(snake({}, evidence.filter((item) => item.id !== "s3")).detail, /No animation was built/);
+  // The same motion written out as poses is not what the task asked for.
+  assert.match(snake({}, unbaked).detail, /written as poses instead/);
+  // A later build of the same sequence from poses replaces the baked one.
+  assert.match(snake({}, [...evidence, unbaked[2]]).detail, /written as poses instead/);
+  assert.match(snake({}, withMetadata(evidence, "s3", ANIMATION_MOTION_CHECKS_LABEL, "Passed, with jointLimits waived")).detail, /jointLimits waived/);
+  assert.match(snake({}, evidence.map((item) => item.id === "s3" ? { ...item, passed: false } : item)).detail, /did not play or read back/);
+  assert.match(snake({}, evidence.map((item) => item.id === "s2" ? { ...item, modelPreviewId: undefined } : item)).detail, /No 3D preview/);
+  assert.match(snake({ sequences: 0 }).detail, /No KeyframeSequence/);
+});
+
+test("T21 wants the published slither in the snake's idle, owned by the place's owner, and seen playing after the last wiring", () => {
+  const evidence = snakeEvidence();
+  assert.match(snake({}, evidence.filter((item) => item.id !== "s4")).detail, /No animation was published/);
+  assert.match(snake({ loader: false }).detail, /no RoqerModelAnimate loader/);
+  assert.match(snake({ idle: undefined }).detail, /idle is not wired/);
+  assert.match(snake({ idle: "507766388" }).detail, /which this run did not publish/);
+  assert.match(snake({ idleOwner: { ...OWNED, id: 7 } }).detail, /not the place's owner/);
+  assert.match(snake({}, withMetadata(evidence, "s6", ANIMATION_PLAYED_FROM_LABEL, "A temporary clip")).detail, /No playtest after the last wiring/);
+  assert.match(snake({}, withMetadata(evidence, "s6", modelStateLabel("idle"), "Not wired")).detail, /No playtest after the last wiring/);
+  const [s1, s2, s3, s4, s5, s6] = evidence;
+  assert.match(snake({}, [s1, s2, s3, s4, s6, s5]).detail, /No playtest after the last wiring/);
+  assert.match(snake({}, evidence, BLENDER_CALLS, false).detail, /completion gate/);
 });
 
 test("T18 wants a 3D preview, both sequences kept with every check passed, a gait among them, and the completion gate", () => {

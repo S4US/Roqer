@@ -66,7 +66,7 @@ tasks also destroy and rebuild `Workspace.WorkbenchEvalIsland` or
 Terrain that no reset removes, T15 removes `ServerScriptService.RoqerAnimate`, the loader that wires animations to characters,
 T18 destroys and rebuilds `Workspace.WorkbenchEvalPosts` and removes `Workspace.WorkbenchEvalGuard`,
 T19 destroys and rebuilds `Workspace.WorkbenchEvalYard` and removes `Workspace.WorkbenchEvalDog`,
-and T17 and T20 destroy and rebuild `Workspace.WorkbenchEvalDen` and remove `Workspace.WorkbenchEvalWolf`.
+and T17, T20 and T21 destroy and rebuild `Workspace.WorkbenchEvalDen` and remove `Workspace.WorkbenchEvalWolf` and `Workspace.WorkbenchEvalSnake`.
 Point it at a scratch place, never at real work.
 
 Results land in `eval/results/<taskId>.jsonl` (gitignored). Each file is one
@@ -102,6 +102,7 @@ prompt processing, and only the second is something this end can fix.
 | `T19-creature-parts` | "Build a blocky four-legged dog from Parts and make it wander around the spawn, with idle and walk animations of its own." | the creature plan's Parts prompt: a dog of Parts whose rig `rig` built, read back, declared four feet on and drew a range sheet of; then T18's conditions on the dog |
 | `T17-creature-blender` | "Model a low-poly wolf in Blender, rig it, give it idle and walk animations, and make it walk around the den." | the creature plan's Blender prompt: a Blender job and an upload; a wolf of five or more MeshParts whose rig `rig` built, read back, declared four feet on and drew a range sheet of; then T18's conditions on the wolf. Needs `--blender` |
 | `T20-creature-skinned` | "Model a low-poly wolf in Blender as one skinned mesh, so that it bends at bones instead of turning as separate pieces. Rig it, give it idle and walk animations, and make it walk around the den." | the creature plan's step 7: T17's conditions on a wolf that is one MeshPart Roblox reports as skinned, holding 13 or more Bones, under a root `rig` made. Needs `--blender` |
+| `T21-creature-blender-animation` | "Model a low-poly snake in Blender as one skinned mesh, and animate it in Blender too: a looping slither on the spot, a wave running down its body from head to tail. Bring the snake and its slither into Studio and make the snake play it while it rests in the den." | the creature plan's step 8: a Blender job and an upload; a snake that is one skinned MeshPart holding four or more Bones, under a root `rig` made; its slither's last build described by a file baked in Blender, every check passed; that animation published, owned by the place's owner, in the snake's idle, and seen playing on it in a playtest after the last wiring. Needs `--blender` |
 
 T7 and T8 are a pair. Either alone rewards a fixed preference; together they
 measure whether the agent chooses its construction from the requested style.
@@ -302,6 +303,19 @@ records the root it found too large.
 npm run eval -- --task T20-creature-skinned --provider claude --model opus --blender auto
 ```
 
+T21 is the creature plan's step 8: a snake modelled as one skinned mesh and
+animated in Blender, where a wave down a chain of bones is easier to make than
+to write as poses. The body's conditions are T20's without legs. The motion's
+are that the sequence kept in Studio was last built from the file a Blender
+job baked (a build records what described it), with every motion check
+passed, and that the published asset sits in the snake's idle and played on
+the snake as checked, in a playtest after the last wiring. A snake has no
+feet, so no gait check is asked for. It has not been run yet.
+
+```bash
+npm run eval -- --task T21-creature-blender-animation --provider claude --model opus --blender auto
+```
+
 The oracles read the run's evidence as well as its tool calls. So that
 evidence matches the app's, the harness keeps each tool image with its
 evidence as the tool's own bytes; the app downsizes them with Electron, which
@@ -393,4 +407,4 @@ the reset-per-task harness above; no model-quality result is implied by its pres
   belong to whoever serves the model and are not inferred here.
 - No competitor baseline. "Roqer versus X" needs X driven through the same
   reset and oracles, which is a larger piece of work than this slice.
-- Nineteen tasks. T17 and T19 exist because the creature plan set goal prompts for a creature modelled in Blender and one built from Parts, and T20 because its step 7 is done when a skinned creature passes T17's checks. T15 exists because the animation plan set its goal as one prompt with five conditions, and T18 because the creature plan did the same for an NPC. T9 exists because the first recorded world baselines exposed the need for a measured local visual-repair loop, T10 and T11 because the world-building plan's village and large-map baselines had no scored form, T12 because the first real Blender run brought in a model at the wrong scale and in one colour, T13 because a live map built from a reference image came out far from it, and T14 because a live shop passed its own screenshot review with overlapping text; add another only when a real failure or an outstanding baseline motivates it.
+- Twenty tasks. T17 and T19 exist because the creature plan set goal prompts for a creature modelled in Blender and one built from Parts, T20 because its step 7 is done when a skinned creature passes T17's checks, and T21 because its step 8 was built with no agent run to show it. T15 exists because the animation plan set its goal as one prompt with five conditions, and T18 because the creature plan did the same for an NPC. T9 exists because the first recorded world baselines exposed the need for a measured local visual-repair loop, T10 and T11 because the world-building plan's village and large-map baselines had no scored form, T12 because the first real Blender run brought in a model at the wrong scale and in one colour, T13 because a live map built from a reference image came out far from it, and T14 because a live shop passed its own screenshot review with overlapping text; add another only when a real failure or an outstanding baseline motivates it.

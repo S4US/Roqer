@@ -1093,7 +1093,7 @@ What changed from the proposal, and why:
 - **T20 instead of a second T17.** T17 stays the pieces prompt, so both ways
   of making a creature keep a test.
 
-### 8. Animating in Blender — built, no eval
+### 8. Animating in Blender — built, eval T21 not yet run
 
 For motion that is easier to make with Blender's tools (inverse kinematics,
 constraints, a creature's own armature) than to write as poses. Blender bakes
@@ -1109,9 +1109,12 @@ and wires like any other. Studio keeps one path in. It needs:
   interpolation.
 
 **Status, 2026-10-01.** Built for a creature's own rig, skinned or of pieces,
-and checked against Blender itself and in Studio. It has no eval of its own:
-nothing in the plan set one, and the first agent run with it is still to be
-made. R15 and R6 are not covered.
+and checked against Blender itself and in Studio. The plan set no eval for it,
+so one was added: T21 `creature-blender-animation`, a skinned snake whose
+slither is made in Blender, passed when the sequence kept in Studio was built
+from the baked file and its published asset played on the snake. It has not
+been run, so the first agent run with this step is still to be made. R15 and
+R6 are not covered.
 
 - **`roqer.export_animation(name, source, rig, start, end, loop)`** in a
   Blender job samples the scene frame by frame, constraints and inverse
