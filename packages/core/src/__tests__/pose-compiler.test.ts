@@ -208,7 +208,7 @@ describe('compilePoseAnimation', () => {
       ],
     });
     expect(problems).toEqual([
-      'animation: unknown field "speed"; expected name, rig, loop, priority, easing, keyframes',
+      'animation: unknown field "speed"; expected name, rig, loop, priority, easing, keyframes, duration, waves',
       'name: must be a non-empty string',
       'loop: must be true or false',
       'priority: must be one of Core, Idle, Movement, Action, Action2, Action3, Action4',

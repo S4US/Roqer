@@ -137,7 +137,9 @@ describe('MCP v2 tool runtime', () => {
   // forms (joints, controller, plan, declarations, replace) then added about
   // 490: without them a creature's pieces were joined in hand-written Luau,
   // with nothing to check a pivot, and an upload kept the importer's rig, whose
-  // pieces each turn about their own middle.
+  // pieces each turn about their own middle. `waves` and `duration` then added
+  // about 160: without them a tail, a wing or a tentacle swaying was dozens of
+  // hand-written keys a joint, each a chance to break the loop's seam.
   test('keeps the catalog within the 3.0 token budget', () => {
     const catalog = TOOL_DEFINITIONS.map(publicToolDefinition);
     const names = new Set(catalog.map((tool) => tool.name));
@@ -153,7 +155,7 @@ describe('MCP v2 tool runtime', () => {
     // The action branches on solo_playtest added about 200: a recorded run
     // started a playtest without mode because it looked optional, and each
     // miss cost a round trip to learn the rule.
-    expect(serialized.length).toBeLessThanOrEqual(50_400);
+    expect(serialized.length).toBeLessThanOrEqual(50_600);
     expect(catalog.filter((tool) => tool.outputSchema)).toHaveLength(51);
     expect(catalog.every((tool) => tool.description.length <= 120)).toBe(true);
     expect(inspectorCatalog).toHaveLength(25);

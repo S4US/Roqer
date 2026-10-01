@@ -699,6 +699,14 @@ const passed = await runTest('animation tool', async ({ track }) => {
     const pupLimits = pupLift.checks?.results?.find((check) => check.id === 'jointLimits');
     assert(pupLift.built === true && pupLift.checks?.passed === true && pupLift.checks.results.every((check) => check.status !== 'fail') && pupLimits?.status === 'pass', `aim and aimAt move the rigged legs with every check passing (${pupLift.error ?? JSON.stringify(pupLift.checks?.results)})`);
     assert(pupLift.playback?.verified === true, `a copy of the rigged dog played it as checked (within ${pupLift.playback?.maxDegrees}°; ${pupLift.playback?.reason ?? 'ok'})`);
+    // Step 5: waves alone are a whole animation, written out as keys Studio plays as checked.
+    const pupSway = await client.callTool('animation', {
+      action: 'build',
+      animation: { name: 'PupSway', rig: PUP, loop: true, duration: 1.2, waves: [{ joints: ['Tail', 'Neck'], axis: 'Y', amplitude: [25, 10], cycles: 2, lag: 0.25 }] },
+      parent: PARENT,
+    }, 120_000);
+    assert(pupSway.built === true && pupSway.animation?.keyframes === 25 && pupSway.checks?.passed === true, `a wave down the tail and neck builds as 25 keys with its checks passing (${pupSway.error ?? JSON.stringify(pupSway.errors ?? pupSway.animation)})`);
+    assert(pupSway.playback?.verified === true, `a copy of the rigged dog played the wave as checked (within ${pupSway.playback?.maxDegrees}°; ${pupSway.playback?.reason ?? 'ok'})`);
     await luau(client, `local motor = workspace[${JSON.stringify(PUP_NAME)}].Tail.Tail motor.C0 = motor.C0 * CFrame.new(0, 0.05, 0) return true`);
     const pupEdited = await client.callTool('animation', { ...pupArgs, expected_revision: pupRebuilt.revision }, 120_000);
     assert(pupEdited.errorCode === 'rig_edited_since_build', `a rig edited since rig built it is left alone (${pupEdited.errorCode})`);

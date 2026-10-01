@@ -17,6 +17,9 @@ floor, which a crouch or lunge easily does.
 { name, rig: "R15" | "R6", loop?, priority?, easing?, keyframes: [{ time, name?, easing?, joints: { <Joint>: pose }, markers? }] }
 ```
 
+`rig` may also be a rigged model's path, and `waves` with `duration` can
+replace or join `keyframes` for a swaying chain (see [Waves](#waves-tails-tentacles-wings-spines)).
+
 - Joints: `Root`, `Waist`, `Neck`, `LeftShoulder`, `LeftElbow`, `LeftWrist`,
   `RightShoulder`, `RightElbow`, `RightWrist`, `LeftHip`, `LeftKnee`,
   `LeftAnkle`, `RightHip`, `RightKnee`, `RightAnkle`, and the props `Weapon`,
@@ -621,6 +624,75 @@ from, and the pivot: the point in the world, in studs, where the piece turns.
   rig and draws its range sheet.
 
 Then animate it with the model's path as the animation's `rig`, as above.
+
+## Waves: tails, tentacles, wings, spines
+
+A chain that sways is written as a wave, not as keys. The animation's
+`waves` send a sine down a list of joints, each joint trailing the one before
+it, and `duration` gives the length in seconds. With waves, `keyframes` may
+be left out; the tool writes twelve keys a cycle.
+
+```text
+{
+  "name": "TailSway", "rig": "game.Workspace.Cat", "loop": true, "duration": 2,
+  "waves": [{ "joints": ["Tail", "Tail2", "Tail3"], "axis": "Y", "amplitude": [10, 25], "lag": 0.15 }]
+}
+```
+
+- `joints`: the chain's joint names, from where the wave starts (the base).
+  The list need not be one limb: both wings with `lag: 0` flap together.
+- `axis`: `"X"`, `"Y"` or `"Z"`, the body axis at rest the joints turn about,
+  as `rotation` uses. Y swings a tail side to side; X lifts and lowers it.
+- `amplitude`: degrees each way. `[first, last]` grows or fades it evenly
+  along the chain; a tip that swings wider than its base reads as loose.
+- `cycles`: how many times it repeats over the animation, 1 by default. In a
+  loop it must be a whole number, and then the loop always joins up.
+- `lag`: the share of a cycle each joint trails the one before, 0 by default.
+  0.1 to 0.2 makes a travelling wave; 0 moves the chain as one.
+- `offset`: degrees each joint is turned throughout, such as a curl;
+  `[first, last]` as for amplitude.
+- `phase`: the share of a cycle already run at time 0. Give each limb its own
+  so they do not move in step.
+- Two waves may drive the same joint only about different axes; together
+  they move a tip in a circle or an ellipse, which is what makes an arm look
+  alive. A joint a wave drives cannot also be keyed by hand in `keyframes`;
+  other joints can, and the last keyframe's time may stand in for `duration`.
+- A wave's turn counts toward the joint's range, so `amplitude` plus `offset`
+  must fit the declared limits.
+
+An octopus whose arms are `Arm1`…`Arm8`, each with joints `ArmN`, `ArmNB`,
+`ArmNC`, `ArmND` from the body to the tip. Idle: every arm sways two ways,
+each arm out of step with the next (arm 3 shown; repeat for each arm with
+`phase` of arm / 8, and that plus 0.25):
+
+```text
+{
+  "name": "Idle", "rig": "game.Workspace.Octopus", "loop": true, "priority": "Idle", "duration": 4,
+  "waves": [
+    { "joints": ["Arm3", "Arm3B", "Arm3C", "Arm3D"], "axis": "X", "amplitude": [4, 14], "lag": 0.12, "phase": 0.375 },
+    { "joints": ["Arm3", "Arm3B", "Arm3C", "Arm3D"], "axis": "Z", "amplitude": [3, 10], "lag": 0.12, "phase": 0.625 }
+  ]
+}
+```
+
+Swim: every arm opens outward and closes together, tips trailing, so all
+arms share one phase. An arm opens away from the body's middle: one at the
+front or back turns about X, one at a side about Z, and one between about
+both, in proportion, with the sign that swings it outward. Check the contact
+sheet: if an arm swings inward, flip its amplitudes' sign.
+
+```text
+{
+  "name": "Swim", "rig": "game.Workspace.Octopus", "loop": true, "priority": "Movement", "duration": 1.6,
+  "waves": [
+    { "joints": ["Arm1", "Arm1B", "Arm1C", "Arm1D"], "axis": "X", "amplitude": [18, 30], "lag": 0.1 },
+    { "joints": ["Arm3", "Arm3B", "Arm3C", "Arm3D"], "axis": "Z", "amplitude": [18, 30], "lag": 0.1 }
+  ]
+}
+```
+
+A swimmer is rigged under an `AnimationController`: the animation moves its
+arms, and a script moves its anchored root through the water.
 
 ## Reading the result
 

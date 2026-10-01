@@ -234,6 +234,24 @@ and where each one turns.
 - **A model that is already rigged** can be given declarations without
   changing a joint.
 
+## Waves
+
+A tail, a tentacle, a wing or a spine sways as a wave rather than as
+hand-written keys, for "Make my octopus's arms drift while it idles". The
+agent names a chain of joints, the axis they turn about, how far, and how
+much each joint trails the one before; Roqer writes the keys, twelve to a
+cycle.
+
+- Waves and a duration can be the whole animation, or run beside hand-written
+  keyframes on other joints. A joint a wave drives cannot also be keyed by
+  hand.
+- Two waves can drive one joint about different axes, so a tip moves in an
+  ellipse.
+- In a loop a wave runs a whole number of cycles, so the loop always joins up.
+- The keys are ordinary keys: the motion checks, the previews and Studio's
+  playback comparison treat them as any others.
+- Waves work on R15 and R6 as well as on a model's own rig.
+
 ## In the chat
 
 The latest animation plays in the answer's previews card, with a play/pause

@@ -193,8 +193,14 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
                 required: ['time', 'joints'],
               },
             },
+            waves: {
+              type: 'array',
+              description: 'Sines down joint chains: [{joints, axis, amplitude, cycles?, lag?, offset?, phase?}].',
+              items: { type: 'object' },
+            },
+            duration: { type: 'number', description: 'With waves: seconds; keyframes may be left out.' },
           },
-          required: ['name', 'rig', 'keyframes'],
+          required: ['name', 'rig'],
         },
         locomotion: {
           type: 'boolean',

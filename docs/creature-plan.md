@@ -708,12 +708,13 @@ What changed from the proposal, and why:
   walk; an `AnimationController`'s is anchored, since nothing else holds it
   up.
 - **The tool catalog's budget rose** from 49,900 to 50,400 characters for the
-  five new arguments ([token efficiency](token-efficiency.md)).
+  five new arguments ([token efficiency](token-efficiency.md)); step 5's
+  `waves` and `duration` raised it to 50,600.
 - **Pieces made by untracked Luau undo with the rig.** Studio folds changes
   made outside an undo step into the next one, so the live test gives its
   pieces a step of their own. Pieces made by `build_instances` have one.
 
-### 5. Motion for any body — proposed
+### 5. Motion for any body — in progress
 
 - The `gait` and `wave` generators, and planting along a line.
 - The gait-pattern check.
@@ -726,6 +727,33 @@ What changed from the proposal, and why:
 
 **Done when** T19 passes, including the loader switching tracks as the dog
 moves.
+
+**Status, 2026-10-01.** The `wave` generator is built; `gait`, planting along
+a line, the gait-pattern check, the per-plan recipes and T19 are not.
+
+- **`waves` on the pose description.** Each wave names a chain of joints, a
+  body axis, an amplitude, and optionally cycles, the lag from one joint to
+  the next, a constant offset and a starting phase; amplitude and offset may
+  run from a first value to a last along the chain. With `duration`, waves
+  alone are a whole animation.
+- **Written out before anything reads it.** A wave becomes `rotation` keys,
+  twelve a cycle of the fastest wave, Linear between them, among any hand
+  keyframes; a hand keyframe within 1/240 s of a wave's key carries it. The
+  compiler, checks, previews and Studio see only keyframes, so an animation
+  without waves compiles byte for byte as before.
+- **Refusals.** A joint a wave drives keyed by hand; two waves turning one
+  joint about the same axis; a part-cycle count in a loop; a chain naming a
+  part, an unknown joint or a joint twice; no length; more than 240 keyframes.
+- **Two waves on one joint about different axes** are allowed, which the
+  proposal did not say: an arm swaying two ways out of phase moves its tip
+  in an ellipse.
+- **Tests.** Unit tests hold the sine at and between keys, the wave running
+  base to tip, the loop's seam, and an eight-armed octopus fixture's idle and
+  swim to their checks and their gesture. Live, a wave down the rigged pup's
+  tail and neck built as 25 keys and played on a copy within 0.06° of the
+  poses it was checked with.
+- The skill has a waves section with an octopus idle and swim; the catalog
+  budget rose to 50,600 characters for `waves` and `duration`.
 
 ### 6. Blender and generated creatures — proposed
 

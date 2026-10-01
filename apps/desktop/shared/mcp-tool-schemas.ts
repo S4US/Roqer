@@ -44,10 +44,10 @@ export type ToolSchema = {
 };
 
 /** sha256 of `packages/core/src/tools/definitions.ts` with LF newlines. */
-export const TOOL_DEFINITIONS_DIGEST = "8a8733d149fa1696a9a374682e7271e6313c48440c944aa9bc9d06953c409f9e";
+export const TOOL_DEFINITIONS_DIGEST = "5158a8af84c70eb115eeb723124a0cdcb91f8756248a602e520f123d6fa133fa";
 
 /** What a bridge built from these definitions reports as `toolCatalogDigest` on `/health`. */
-export const TOOL_CATALOG_DIGEST = "1fb6327bfce5a6d8bed60236d2997f3a33885982eaad1a0d9f63246213f9e2d3";
+export const TOOL_CATALOG_DIGEST = "4802570d86c7b6bd76046baa583f219c78afd002146e7325237602431196355c";
 
 export const TOOL_SCHEMAS: Readonly<Record<string, ToolSchema>> = {
   animation: {

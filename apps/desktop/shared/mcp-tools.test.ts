@@ -203,6 +203,16 @@ test("mcp-tools - an animation call is summarised in words, not as its pose JSON
     "animation · check Run for game.Workspace.Dog: 2 keyframes, 0.3 s, loops, moves 3 joints",
   );
   assert.strictEqual(riskForTool("animation", { action: "check", animation: { ...animation, rig: "game.Workspace.Dog" } }), "read");
+  // Waves are counted with the joints they drive, and may be the whole animation.
+  const waves = [{ joints: ["Tail", "Tail2", "Tail3"], axis: "Y", amplitude: 20 }, { joints: ["Tail"], axis: "X", amplitude: 5 }];
+  assert.strictEqual(
+    summarizeToolCall("animation", { action: "check", animation: { name: "Sway", rig: "game.Workspace.Cat", loop: true, duration: 2, waves } }),
+    "animation · check Sway for game.Workspace.Cat: 2 waves, 2 s, loops, moves 3 joints",
+  );
+  assert.strictEqual(
+    summarizeToolCall("animation", { action: "check", animation: { ...animation, duration: 0.6, waves: [{ joints: ["Neck"], axis: "X", amplitude: "wide" }] } }),
+    "animation · check Run: 2 keyframes, 1 wave, 0.6 s, loops, moves 4 joints",
+  );
   // Whatever the model sent, the summary never throws and never shows raw JSON.
   assert.strictEqual(summarizeToolCall("animation", { action: "build", animation: "not an object" }), "animation · build an animation: 0 keyframes");
 });

@@ -319,9 +319,19 @@ function summarizeAnimation(args: Record<string, unknown>): string {
       for (const joint of Object.keys(keyed)) joints.add(joint);
     }
   }
+  // Waves drive joints of their own, and may be the whole animation.
+  const waves = Array.isArray(animation.waves) ? animation.waves : [];
+  for (const wave of waves) {
+    const chain = typeof wave === "object" && wave !== null ? (wave as Record<string, unknown>).joints : undefined;
+    if (Array.isArray(chain)) {
+      for (const joint of chain) if (typeof joint === "string") joints.add(joint);
+    }
+  }
+  const length = Math.max(...times, typeof animation.duration === "number" && Number.isFinite(animation.duration) ? animation.duration : 0);
   const facts = [
-    `${keyframes.length} keyframe${keyframes.length === 1 ? "" : "s"}`,
-    ...(times.length > 0 ? [`${Math.round(Math.max(...times) * 100) / 100} s`] : []),
+    ...(keyframes.length > 0 || waves.length === 0 ? [`${keyframes.length} keyframe${keyframes.length === 1 ? "" : "s"}`] : []),
+    ...(waves.length > 0 ? [`${waves.length} wave${waves.length === 1 ? "" : "s"}`] : []),
+    ...(length > 0 || times.length > 0 ? [`${Math.round(length * 100) / 100} s`] : []),
     ...(animation.loop === true ? ["loops"] : []),
     ...(joints.size > 0 ? [`moves ${joints.size} joint${joints.size === 1 ? "" : "s"}`] : []),
   ];

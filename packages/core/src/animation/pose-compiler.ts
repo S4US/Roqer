@@ -25,6 +25,7 @@ import { buildTracks, pointToWorld, poseRig, restTurn, slerpRotation, transformF
 import { R15_RIG } from './r15-rig.js';
 import type { Rig, RigHinge, RigJoint, RigLimb } from './rig.js';
 import { RIGS } from './rigs.js';
+import { expandWaves, type WaveSpec } from './wave.js';
 
 export { POSE_EASING_DIRECTIONS, POSE_EASING_STYLES, type PoseEasingDirection, type PoseEasingStyle };
 
@@ -152,7 +153,12 @@ export interface PoseAnimationSpec {
   /** Defaults to Action, as a new KeyframeSequence does. */
   priority?: AnimationPriority;
   easing?: PoseEasing;
-  keyframes: PoseKeyframeSpec[];
+  /** May be left out when `waves` and `duration` describe the whole animation. */
+  keyframes?: PoseKeyframeSpec[];
+  /** Seconds. Only with `waves`: the animation's length, when the last keyframe is not at it. */
+  duration?: number;
+  /** Sines sent down chains of joints, written out as rotation keys (wave.ts). */
+  waves?: WaveSpec[];
 }
 
 /** CFrame.new(x, y, z, R00, R01, R02, R10, R11, R12, R20, R21, R22) order. */
@@ -1248,7 +1254,7 @@ function compileKeyframe(
 export function compilePoseAnimation(input: unknown, model?: Rig): PoseCompileResult {
   const issues = new Issues();
   if (!isRecord(input)) return { ok: false, errors: ['animation: must be an object'] };
-  checkKeys(input, ['name', 'rig', 'loop', 'priority', 'easing', 'keyframes'], 'animation', issues);
+  checkKeys(input, ['name', 'rig', 'loop', 'priority', 'easing', 'keyframes', 'duration', 'waves'], 'animation', issues);
 
   const name = parseName(input.name, 'name', issues);
   const rig = typeof input.rig !== 'string' ? undefined : model?.name === input.rig ? model : RIGS.get(input.rig);
@@ -1258,8 +1264,18 @@ export function compilePoseAnimation(input: unknown, model?: Rig): PoseCompileRe
     ? 'Action'
     : parseEnum(input.priority, ANIMATION_PRIORITIES, 'priority', issues);
   const easing = parseEasing(input.easing, 'easing', issues);
-  let keyframes = rig ? parseKeyframes(input.keyframes, rig, issues) : [];
-  const complete = Array.isArray(input.keyframes) && keyframes.length === input.keyframes.length;
+  // Waves are written out as rotation keys first, so everything below reads
+  // only keyframes.
+  let described = input.keyframes;
+  let unread = false;
+  if (rig && (input.waves !== undefined || input.duration !== undefined)) {
+    const expanded = expandWaves(input, rig, POSE_LIMITS.maxKeyframes, POSE_LIMITS.maxDurationSeconds, (path, message) => issues.add(path, message));
+    described = expanded.keyframes;
+    // With no hand keyframes, a wave that failed leaves nothing to read.
+    unread = expanded.failed && input.keyframes === undefined;
+  }
+  let keyframes = rig && !unread ? parseKeyframes(described, rig, issues) : [];
+  const complete = Array.isArray(described) && keyframes.length === described.length;
   let solvedBy = new Map<string, string>();
   let inBetweenCount = 0;
   if (rig && issues.count === 0) {
