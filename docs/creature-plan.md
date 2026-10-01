@@ -7,7 +7,8 @@ reads a rig from any rigged model, and a dog rigged by hand in Studio plays
 its animation as checked. Step 4 rigs a model's loose pieces, and `aim` and
 `aimAt` move the legs of a dog it rigged. Step 5 added the `wave` and `gait`
 generators, and eval T19 passes. Step 6 carries a Blender creature's pivots
-to `rig`, and eval T17 passes. Steps 7 and 8 are proposed and not yet
+to `rig`, and eval T17 passes. Step 7, skinned creatures, has its live test
+written and waits on that test's upload run. Step 8 is proposed and not yet
 scheduled. The
 plan details steps 12 to 14 of the [animation plan](animation-plan.md)
 (creatures made of rigid parts, skinned creatures, animating in Blender), adds
@@ -903,7 +904,7 @@ What changed from the proposal, and why:
   varies. The skill says to read the range sheet and generate again when a
   piece is split badly.
 
-### 7. Skinned creatures — proposed
+### 7. Skinned creatures — in progress
 
 Some creatures bend along their skin instead of hinging between pieces: a
 snake, a tentacle, a dragon's neck. That needs a Blender armature with skin
@@ -935,6 +936,26 @@ Then:
   decide at the time between a Blender render and a skinned renderer in core.
 
 **Done when** a skinned creature passes T17's checks.
+
+**Status, 2026-10-01.** The live test is written (`npm run
+test:spike:skinned`, described in `tests/README.md`) and has run without its
+upload. It writes a skinned snake itself, one mesh on a chain of bones laid
+out as Blender exports an armature; imported into Blender 5.2, each of its
+variants (8 bones, 300 bones, eight influences a vertex) came back with its
+bones, weights summing to 1 on every vertex, and a mesh that bends when a
+bone is posed. The questions that need an upload are not answered yet: the
+run creates three Model assets, so it waits for a key.
+
+Answered so far, on `Bone`s made under a plain Part (Studio 0.741):
+
+- A `KeyframeSequence` drives bones, in edit mode and on a playtest's server,
+  under an `AnimationController`. Each keyed bone turned exactly as keyed.
+- The poses must nest as the bones do: a pose for each bone from the root
+  bone down, the unkeyed ones at weight 0. Poses for the part above them
+  (`HumanoidRootPart`, the mesh) are optional. Bones keyed side by side,
+  under the keyframe or under the mesh's pose, are not driven at all.
+
+Nothing in core reads a bone yet; that follows the upload's answers.
 
 ### 8. Animating in Blender — proposed
 

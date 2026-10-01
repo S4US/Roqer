@@ -339,6 +339,41 @@ lands afterwards. The uploads are named
 archived afterwards in the Creator Dashboard. The report and the GLB go to
 `tmp/creature-spike/`.
 
+## Skinned spike
+
+`tests/skinned-spike.mjs` opens step 7 of the [creature plan](../docs/creature-plan.md).
+Like the creature spike, it is a research probe in neither runner profile. It
+asks what Roblox does with a skinned mesh uploaded through Open Cloud:
+
+1. Does a Model upload keep the armature, the bones and the weights, and how
+   does it arrive: what parts, what bones under what, with what joints and
+   controller?
+2. How do a Blender bone's axes, +Y along the bone, arrive in a `Bone`?
+3. How must a `KeyframeSequence`'s poses be named and nested to drive bones,
+   in edit mode and on a playtest's server? This one is also asked, with no
+   upload, of `Bone`s the spike makes under a plain Part.
+4. Does `EditableMesh` hand over the bones and each vertex's weights?
+5. What happens past the limits: a chain of 300 bones, and a mesh whose every
+   vertex is weighted to eight bones? A refused upload is an answer here.
+
+The spike writes the GLBs itself (`tests/lib/skinned-glb.mjs`): a snake, one
+mesh skinned to a chain of bones the way Blender exports an armature.
+
+```bash
+npm run test:spike:skinned
+
+# Also upload three test models to your account (every question but the made bones)
+ROQER_SPIKE_UPLOAD=1 ROBLOX_OPEN_CLOUD_API_KEY=... ROBLOX_CREATOR_USER_ID=... \
+  npm run test:spike:skinned
+```
+
+Set the key as the creature spike's section says. The answers are findings,
+not assertions. The spike works in a temporary `__RoqerSkinnedSpike` folder in
+Workspace, which it removes on every path, and stops the playtest it starts.
+The uploads are named "Roqer skinned spike: base", "many-bones" and
+"many-influences" and can be archived afterwards in the Creator Dashboard.
+The report and the GLBs go to `tmp/skinned-spike/`.
+
 ## What each test exercises
 
 | File | What it checks |
