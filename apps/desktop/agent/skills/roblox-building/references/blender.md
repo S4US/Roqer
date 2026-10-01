@@ -110,6 +110,11 @@ its triangles, meshes, materials and size, its layout, and a preview of four
 views in one image: the side from +X, the top, and three-quarter views from two
 opposite corners.
 
+- The preview is how you check the model, but it is not evidence of the
+  place: Roqer's completion check counts only what Studio shows. In a task
+  list, a task that only models in Blender asks for no evidence; ask for
+  visual evidence on the task that inserts the model, and take a Studio
+  screenshot there.
 - Look at every view. A part that looks right from one angle can lean the wrong
   way, float, or pass through another part in the side or top view. If the
   silhouette or colours are wrong, fix the script; do not upload a model you

@@ -1055,8 +1055,18 @@ Known and left as they are:
 
   The building skill's wolf of pieces, run through the worker and rigged
   from its inspection, walks a 0.8-stud stride with no drop and a 1.5-stud
-  one with 0.1, where its straight-legged version dropped 0.2. No eval has
-  been rerun with it.
+  one with 0.1, where its straight-legged version dropped 0.2.
+
+  T20 was run again with these and with the root fix. The agent modelled the
+  wolf's legs bent, each knee 0.3 studs off its leg's line the way it folds,
+  and nothing was flagged; `rig` made a root of 1 by 1 by 4.8 studs with a
+  hip height of 2.35, and the wolf stood and walked in the playtest with no
+  repair by hand, in 33 tool calls where the first run took 55. The run was
+  still scored a failure, by Roqer's completion check and not by the oracle:
+  the agent had asked for visual evidence on its Blender modelling task, and
+  a Blender preview is not evidence of the place, by design. The task tool
+  and the Blender reference now say to ask for it on the task that brings
+  the model into Studio. T20 has not been run since.
 
 What changed from the proposal, and why:
 
