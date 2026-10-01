@@ -12,7 +12,7 @@ import {
   type RunChange, type RunEvent, type RunEvidence, type RunFailure,
   type RunOutcome, type RunRecord, type ToolProposal,
 } from "../shared/run-events";
-import { keptPreviewIds } from "./preview-layout";
+import { keptPreviewIds, pictureCategory, type PictureCategory } from "./preview-layout";
 
 /**
  * Folds the run event stream into what the conversation renders.
@@ -486,11 +486,15 @@ export function evidenceImages(evidence: readonly RunEvidence[]): RunEvidence[] 
   return evidence.filter((item) => hasPicture(item) && kept.has(item.id));
 }
 
-/** How many pictures the run took that the answer does not show, live or saved. */
-export function previewsNotShown(evidence: readonly RunEvidence[]): number {
-  const pictures = evidence.filter(hasPicture).length;
-  const dropped = evidence.filter((item) => !hasPicture(item) && item.previewNotKept === true).length;
-  return pictures - keptImageIds(evidence).size + dropped;
+/**
+ * How many pictures the run took that the answer does not show, live or saved;
+ * with `category`, only those that belong in that tab. The budget is the whole
+ * run's, so which pictures were kept is decided over all of them.
+ */
+export function previewsNotShown(evidence: readonly RunEvidence[], category?: PictureCategory): number {
+  const kept = keptImageIds(evidence);
+  return evidence.filter((item) => (category === undefined || pictureCategory(item) === category)
+    && (hasPicture(item) ? !kept.has(item.id) : item.previewNotKept === true)).length;
 }
 
 /**

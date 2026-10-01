@@ -117,6 +117,19 @@ export function previewSource(evidence: RunEvidence): PreviewSource {
 }
 
 /**
+ * Which tab a picture belongs in. A screenshot shows the place as it stands —
+ * Studio, a playtest, anything else the run captured; a preview shows one
+ * thing the run built — a Blender model, a rig's range sheet, an animation —
+ * and is checked again and again as that thing is revised.
+ */
+export type PictureCategory = "screenshots" | "previews";
+
+export function pictureCategory(evidence: RunEvidence): PictureCategory {
+  const source = previewSource(evidence);
+  return source === "blender" || source === "animation" || source === "rig" ? "previews" : "screenshots";
+}
+
+/**
  * The rig an animation's preview was drawn on, as a label says it: R15, R6, or
  * the model whose own rig it is, by its name. Undefined for a preview recorded
  * before the rig was.
