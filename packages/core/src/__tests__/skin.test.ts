@@ -145,7 +145,8 @@ describe('a skinned mesh drawn', () => {
     storeModelMesh(MESH_ID, tube(), directory);
     const skinned = modelRigMeshes(rig, directory).meshes;
     const bentSheet = renderContactSheet(sequence, skinned, { rig });
-    const { skin: _skin, ...bare } = skinned.parts.get('SnakeGeometry')!;
+    const own = skinned.parts.get('SnakeGeometry')!;
+    const bare = { positions: own.positions, normals: own.normals, indices: own.indices };
     const rigidSheet = renderContactSheet(sequence, { ...skinned, parts: new Map([['SnakeGeometry', bare]]) }, { rig });
     expect(bentSheet.png.equals(rigidSheet.png)).toBe(false);
   });
