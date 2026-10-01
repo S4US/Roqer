@@ -21,7 +21,7 @@ import {
   type PoseEasingDirection,
   type PoseEasingStyle,
 } from './easing.js';
-import { buildTracks, pointToWorld, poseRig, restTurn, slerpRotation, transformFromBody, transformInBody, type Frame } from './motion.js';
+import { buildTracks, pointToWorld, poseRig, restPose, restTurn, slerpRotation, transformFromBody, transformInBody, type Frame } from './motion.js';
 import { applyRows as apply, limbEndAt, straightest, turned } from './limb-reach.js';
 import { R15_RIG } from './r15-rig.js';
 import type { Rig, RigHinge, RigJoint, RigLimb } from './rig.js';
@@ -55,6 +55,9 @@ export const POSE_LIMITS = {
   gripStepSeconds: 1 / 60,
   maxMarkersPerKeyframe: 16,
   maxMarkerValueLength: 200,
+  /** How far a joint's pivot may stand from where an animation's `skeleton` has it: studs, or a share of its offset. */
+  skeletonToleranceStuds: 0.05,
+  skeletonToleranceShare: 0.03,
   /**
    * Degrees a joint may turn between consecutive keys, unless the earlier key
    * snaps (Constant). Past 90° Studio's playback of Linear keys drifts from a
@@ -1227,6 +1230,63 @@ function compileKeyframe(
   };
 }
 
+/** The most mismatched joints a skeleton's refusal names. */
+const MAX_SKELETON_ISSUES = 5;
+
+/**
+ * An animation made on another copy of the rig, as one baked in Blender is,
+ * says what that copy's skeleton was: for each joint, the joint it hangs from
+ * and where its pivot stood from that joint's at rest, in studs in the body's
+ * axes. Rotations made on a skeleton of another shape would pose this one
+ * wrongly, so a joint the rig lacks, one hung from another joint, or one whose
+ * pivot stands elsewhere refuses the animation.
+ */
+function checkSkeleton(value: unknown, rig: Rig, issues: Issues): void {
+  if (!isRecord(value)) {
+    issues.add('skeleton', 'must be an object of joint name to { parent?, offset: [x, y, z] }');
+    return;
+  }
+  const rest = restPose(rig);
+  const joints = new Map(rig.joints.map((joint) => [joint.name, joint]));
+  const pivot = (joint: RigJoint) => pointToWorld(rest.get(joint.parentPart)!, joint.parentOffset);
+  const mover = new Map(rig.joints.map((joint) => [joint.childPart, joint]));
+  const problems: string[] = [];
+  for (const [name, entry] of Object.entries(value)) {
+    const joint = joints.get(name);
+    if (!joint) {
+      problems.push(`${name} is not a joint of ${rig.name}`);
+      continue;
+    }
+    if (!isRecord(entry) || (entry.parent !== undefined && typeof entry.parent !== 'string')) {
+      issues.add(`skeleton.${name}`, 'must be { parent?, offset: [x, y, z] }');
+      continue;
+    }
+    if (entry.parent === undefined) continue;
+    const offset = entry.offset;
+    if (!Array.isArray(offset) || offset.length !== 3 || !offset.every((part) => typeof part === 'number' && Number.isFinite(part))) {
+      issues.add(`skeleton.${name}.offset`, 'must be [x, y, z] in studs, from its parent joint\'s pivot at rest');
+      continue;
+    }
+    const above = mover.get(joint.parentPart);
+    if (!above || above.name !== entry.parent) {
+      problems.push(`${name} hangs from ${entry.parent} there and from ${above?.name ?? `the root part, ${joint.parentPart},`} here`);
+      continue;
+    }
+    const [here, parent] = [pivot(joint), pivot(above)];
+    const actual = [here[0] - parent[0], here[1] - parent[1], here[2] - parent[2]];
+    const off = Math.hypot(actual[0] - (offset[0] as number), actual[1] - (offset[1] as number), actual[2] - (offset[2] as number));
+    const allowed = Math.max(POSE_LIMITS.skeletonToleranceStuds, POSE_LIMITS.skeletonToleranceShare * Math.hypot(actual[0], actual[1], actual[2]));
+    if (off > allowed) {
+      const studs = (v: readonly number[]) => `[${v.map((part) => Math.round((part as number) * 100) / 100).join(', ')}]`;
+      problems.push(`${name} stands ${studs(offset)} from ${entry.parent} there and ${studs(actual)} here`);
+    }
+  }
+  if (problems.length > 0) {
+    const shown = problems.slice(0, MAX_SKELETON_ISSUES).join('; ');
+    issues.add('skeleton', `the animation was made on a rig that is not this one: ${shown}${problems.length > MAX_SKELETON_ISSUES ? `; and ${problems.length - MAX_SKELETON_ISSUES} more` : ''}. Animate the model that was uploaded, or upload and rig this one again`);
+  }
+}
+
 /**
  * Validates a pose description and compiles it. Returns every problem found
  * when it is invalid; never returns a partial sequence.
@@ -1237,11 +1297,12 @@ function compileKeyframe(
 export function compilePoseAnimation(input: unknown, model?: Rig): PoseCompileResult {
   const issues = new Issues();
   if (!isRecord(input)) return { ok: false, errors: ['animation: must be an object'] };
-  checkKeys(input, ['name', 'rig', 'loop', 'priority', 'easing', 'keyframes', 'duration', 'waves', 'gait'], 'animation', issues);
+  checkKeys(input, ['name', 'rig', 'loop', 'priority', 'easing', 'keyframes', 'duration', 'waves', 'gait', 'skeleton'], 'animation', issues);
 
   const name = parseName(input.name, 'name', issues);
   const rig = typeof input.rig !== 'string' ? undefined : model?.name === input.rig ? model : RIGS.get(input.rig);
   if (!rig) issues.add('rig', `must be ${[...RIGS.keys()].join(' or ')}, or the path of a rigged Model in Studio`);
+  if (rig && input.skeleton !== undefined) checkSkeleton(input.skeleton, rig, issues);
   if (input.loop !== undefined && typeof input.loop !== 'boolean') issues.add('loop', 'must be true or false');
   const priority = input.priority === undefined
     ? 'Action'

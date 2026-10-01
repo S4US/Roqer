@@ -142,6 +142,9 @@ describe('MCP v2 tool runtime', () => {
   // hand-written keys a joint, each a chance to break the loop's seam. `gait`
   // then added about 130: without it a four-legged walk was some sixty aimAt
   // targets worked out by hand, and its feet slid wherever one was off.
+  // `animation_file` then added about 100: without it an animation baked in
+  // Blender, hundreds of poses, crossed the model's context twice, once as the
+  // job's result and again as the call's arguments.
   test('keeps the catalog within the 3.0 token budget', () => {
     const catalog = TOOL_DEFINITIONS.map(publicToolDefinition);
     const names = new Set(catalog.map((tool) => tool.name));
@@ -157,7 +160,7 @@ describe('MCP v2 tool runtime', () => {
     // The action branches on solo_playtest added about 200: a recorded run
     // started a playtest without mode because it looked optional, and each
     // miss cost a round trip to learn the rule.
-    expect(serialized.length).toBeLessThanOrEqual(50_750);
+    expect(serialized.length).toBeLessThanOrEqual(50_850);
     expect(catalog.filter((tool) => tool.outputSchema)).toHaveLength(51);
     expect(catalog.every((tool) => tool.description.length <= 120)).toBe(true);
     expect(inspectorCatalog).toHaveLength(25);

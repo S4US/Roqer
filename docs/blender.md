@@ -124,6 +124,23 @@ points out what Roblox would not keep, while the model can still be changed:
 After the upload, the agent has Roqer build the rig around the mesh's bones
 (see [Skinned creatures](animation.md#skinned-creatures)).
 
+### Animating in Blender
+
+Most motion is written for Roqer's animation tool directly. For motion that
+Blender's own tools make, such as a tail pulled toward a moving target by
+inverse kinematics or a head made to track a point, the agent animates the
+creature in the scene it was exported from and has Roqer bake it:
+
+- Roqer samples the scene frame by frame, with constraints and inverse
+  kinematics applied, and keeps only the keys each joint needs to stay within
+  a quarter of a degree of what was sampled.
+- The result is an animation file for Roqer's animation tool, which checks,
+  previews, builds and publishes it like any other
+  ([Animations made in Blender](animation.md#animations-made-in-blender)).
+- It works for a skinned creature's armature and for a creature of pieces.
+  Only the body as a whole can travel; any other bone or piece only turns.
+- At most 60 seconds, sampled as up to 240 keyframes.
+
 ## Safety
 
 A Blender script is a program, and it runs with your permissions. That is why

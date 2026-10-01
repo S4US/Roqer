@@ -9,8 +9,8 @@ its animation as checked. Step 4 rigs a model's loose pieces, and `aim` and
 generators, and eval T19 passes. Step 6 carries a Blender creature's pivots
 to `rig`, and eval T17 passes. Step 7, skinned creatures, is built on what its
 live test found, that an upload keeps its bones and weights, and eval T20
-passes. Step 8 is proposed and not yet
-scheduled. The
+passes. Step 8, animating in Blender, is built for a creature's own rig and
+checked against Blender and Studio, with no agent run yet. The
 plan details steps 12 to 14 of the [animation plan](animation-plan.md)
 (creatures made of rigid parts, skinned creatures, animating in Blender), adds
 NPCs, and orders the work anew. Update each step's status here as it lands.
@@ -1069,7 +1069,7 @@ What changed from the proposal, and why:
 - **T20 instead of a second T17.** T17 stays the pieces prompt, so both ways
   of making a creature keep a test.
 
-### 8. Animating in Blender — proposed
+### 8. Animating in Blender — built, no eval
 
 For motion that is easier to make with Blender's tools (inverse kinematics,
 constraints, a creature's own armature) than to write as poses. Blender bakes
@@ -1083,6 +1083,59 @@ and wires like any other. Studio keeps one path in. It needs:
 - a refusal when the Blender rig's joints do not match the Studio rig's;
 - the easing measured in the animation plan's step 6, to convert Blender's
   interpolation.
+
+**Status, 2026-10-01.** Built for a creature's own rig, skinned or of pieces,
+and checked against Blender itself and in Studio. It has no eval of its own:
+nothing in the plan set one, and the first agent run with it is still to be
+made. R15 and R6 are not covered.
+
+- **`roqer.export_animation(name, source, rig, start, end, loop)`** in a
+  Blender job samples the scene frame by frame, constraints and inverse
+  kinematics applied, for an armature or for a creature of pieces from its
+  body piece. For each joint it writes how the joint is turned from rest, in
+  Roblox's axes about the body's own axes, which is how a pose is written; so
+  a Blender bone's own axes never have to be matched to a Roblox bone's.
+- **Roqer turns the bake into a pose description** beside it: each joint
+  keyed only where a straight run between its keys would stray more than a
+  quarter of a degree from a sample, joints that never move left out, and the
+  body's travel put on the rig's `Root` joint.
+- **`animation_file`** on `check`, `build` and `verify` takes that file in
+  place of `animation`, so hundreds of poses do not cross the model's context
+  as a job result and again as a call's arguments. Only a file named
+  `*.animation.json`, of at most 2 MB, is read.
+- **`skeleton`** in a pose description says what the animation was made on:
+  each joint's parent and where its pivot stood from its parent's. A joint
+  the rig lacks, one hung from another joint, or one standing elsewhere
+  refuses the animation with what differs.
+
+Checked:
+
+- A skinned snake animated in Blender (a wave down its bones, a lift and a
+  roll on two of them, its root bone travelling), baked, and posed by core on
+  a rig of the same skeleton: every bone within 0.07 studs of where Blender
+  had it at four moments, the tail's end after seven joints included.
+- The building skill's wolf of pieces, its body, head, tail and three leg
+  pieces animated, baked from its body piece and posed on the rig `rig`
+  plans from its inspection: every piece within 0.001 studs of Blender's.
+- The skill's inverse-kinematics recipe, a job continuing from the snake's,
+  baked 41 samples into 37 keyframes and 114 poses on the five bones it
+  moves, a file of 5.8 KB.
+- Live, a description with its skeleton built from a file on a chain of
+  bones and played as checked on a copy; with the skeleton's bones 0.4 studs
+  longer it was refused, naming each bone.
+
+What changed from the proposal, and why:
+
+- **No easing conversion.** The bake is linear keys between samples, kept
+  within a tolerance, so Blender's curves are never converted and the
+  measured easings are not needed.
+- **Keyframes are reduced per joint**, not per moment: a joint keeps only its
+  own keys, though the moments they fall on still add up toward the 240.
+- **The refusal compares shape, not only names.** A rig re-modelled with the
+  same bone names would otherwise play a wrong animation without complaint.
+- **Not for R15 or R6.** That needs a stock armature built in Blender to
+  match Roblox's, which nothing here makes; a character's animations are
+  written as poses.
 
 ## Verification
 

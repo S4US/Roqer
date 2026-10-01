@@ -44,10 +44,10 @@ export type ToolSchema = {
 };
 
 /** sha256 of `packages/core/src/tools/definitions.ts` with LF newlines. */
-export const TOOL_DEFINITIONS_DIGEST = "f771cf9aad46e883cd9a765f27e5080ff5621f52dd5ec065fe8c607ebdc5d882";
+export const TOOL_DEFINITIONS_DIGEST = "6f829dc836a07edb9737d05d1322bb2e7f9299733c7d4e495f1e6aa1f7405524";
 
 /** What a bridge built from these definitions reports as `toolCatalogDigest` on `/health`. */
-export const TOOL_CATALOG_DIGEST = "3d99522e3a6455fcc4746ccc014aefa66280ba33a1406de995fa3afa1adc6980";
+export const TOOL_CATALOG_DIGEST = "2f786bd0a803d04be6e38a6c8dd29655a6e0de5dc932d3ed02e4e98d9260a541";
 
 export const TOOL_SCHEMAS: Readonly<Record<string, ToolSchema>> = {
   animation: {
@@ -68,6 +68,7 @@ export const TOOL_SCHEMAS: Readonly<Record<string, ToolSchema>> = {
       { name: "model", type: "string", required: false, description: "Rig/wire/verify: an NPC or creature Model, not a character." },
       { name: "ground_speed", type: "number", required: false, description: "Wire walk/run: the groundSpeed its check reported." },
       { name: "stock", type: "string", required: false, enumValues: ["R15", "R6"], description: "Rig: make a stock NPC body of this rig type at model." },
+      { name: "animation_file", type: "string", required: false, description: "A baked *.animation.json, in place of animation." },
       { name: "joints", type: "object[]", required: false, description: "Rig: [{part, parent, pivot, name?, with?}]; pivot is [x,y,z]." },
       { name: "controller", type: "string", required: false, enumValues: ["Humanoid", "AnimationController"], description: "Rig: Humanoid for a walker. No joints: a skinned mesh." },
       { name: "plan", type: "string", required: false, enumValues: ["quadruped", "custom"], description: "Rig: body plan declaring limbs from part names." },

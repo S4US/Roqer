@@ -248,6 +248,22 @@ named after itself, so there are no joints to give:
 - Without a `controller`, `rig {model, plan, declarations}` only declares,
   and leaves the mesh loose and unanchored: use the call above.
 
+### An animation made in Blender
+
+Motion that Blender's tools make more easily than keys do (inverse
+kinematics, a constraint, a path) is animated there and baked: the building
+skill's `references/blender.md`, "Animating a creature in Blender". The job's
+result names a file; pass it as animation_file in place of `animation`:
+
+```text
+{ "action": "build", "animation_file": "<path from the job's result>", "parent": "game.ServerStorage.Animations" }
+```
+
+It is a pose description like any other, so `check`, `build`, `verify` and
+the options (`locomotion`, `grounded`, `waive`) work as usual. It carries the
+skeleton it was made on, and is refused if the model in Studio is not that
+one: animate the scene the upload was exported from.
+
 ### A generated body
 
 Without Blender, `generate_model` can make the body: pass the pieces as

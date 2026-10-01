@@ -40,6 +40,9 @@
 // upload arrives is re-rigged only when the call says to replace the
 // importer's rig.
 
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 import { McpClient, assert, runTest, safeStopPlaytest, startPlaytestAndWait } from './lib/mcp-client.mjs';
 
 const FOLDER_NAME = '__RoqerAnimationTest';
@@ -881,6 +884,29 @@ const passed = await runTest('animation tool', async ({ track }) => {
       return chain
     `);
     assert(bonesMade.motors === 1 && bonesMade.rootAnchored === true && bonesMade.primary === 'HumanoidRootPart' && JSON.stringify(bonesAfter) === JSON.stringify(bonesBefore), `Studio holds one Motor6D, the root's, and every bone as it was (${JSON.stringify({ ...bonesMade, c0s: undefined })})`);
+
+    // Step 8: an animation baked in Blender arrives as a file, with the skeleton it was made on.
+    const bakedDirectory = mkdtempSync(path.join(tmpdir(), 'roqer-animation-file-'));
+    const bakedFile = path.join(bakedDirectory, 'BakedBend.animation.json');
+    const baked = (offset) => ({
+      name: 'BakedBend', rig: BONES, loop: true, easing: { style: 'Linear' },
+      keyframes: [
+        { time: 0, joints: { Bone004: { rotation: [0, 0, 0] }, Bone006: { rotation: [0, 0, 0] } } },
+        { time: 0.5, joints: { Bone004: { rotation: [0, 24, 0] }, Bone006: { rotation: [10, 0, 0] } } },
+        { time: 1, joints: { Bone004: { rotation: [0, 0, 0] }, Bone006: { rotation: [0, 0, 0] } } },
+      ],
+      skeleton: Object.fromEntries(boneNames.slice(1).map((name, index) => [name, { parent: boneNames[index], offset }])),
+    });
+    writeFileSync(bakedFile, JSON.stringify(baked([0, 0, -1])));
+    const bakedBuilt = await client.callTool('animation', { action: 'build', animation_file: bakedFile, parent: PARENT }, 120_000);
+    assert(
+      bakedBuilt.built === true && bakedBuilt.animation?.name === 'BakedBend' && bakedBuilt.checks?.passed === true && bakedBuilt.playback?.verified === true,
+      `a baked animation builds from its file and plays as checked on a copy (${bakedBuilt.error ?? JSON.stringify(bakedBuilt.errors ?? bakedBuilt.playback)})`,
+    );
+    writeFileSync(bakedFile, JSON.stringify(baked([0, 0, -1.4])));
+    const bakedElsewhere = await client.callTool('animation', { action: 'check', animation_file: bakedFile }, 120_000);
+    assert(bakedElsewhere.valid === false && /made on a rig that is not this one/.test(bakedElsewhere.errors?.[0] ?? ''), `one baked on a skeleton of another shape is refused (${JSON.stringify(bakedElsewhere.errors ?? bakedElsewhere.valid)})`);
+    rmSync(bakedDirectory, { recursive: true, force: true });
 
     // With ROQER_SKINNED_ASSET_ID, the skinned spike's snake as it was uploaded: a real skinned
     // MeshPart, whose skin the plugin reads through EditableMesh and the previews bend.

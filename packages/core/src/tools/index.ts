@@ -237,6 +237,39 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+/** What a pose description's file is named, and the most it may hold: Roqer's Blender worker writes them. */
+const ANIMATION_FILE_SUFFIX = '.animation.json';
+const MAX_ANIMATION_FILE_BYTES = 2 * 1024 * 1024;
+
+/**
+ * A pose description read from a file on this machine, as a Blender job
+ * bakes one: only a file named as those are, of a bounded size, holding one
+ * JSON object. It is then checked as a description given inline is.
+ */
+function readAnimationFile(value: unknown): Record<string, unknown> {
+  if (typeof value !== 'string' || !path.isAbsolute(value) || !value.toLowerCase().endsWith(ANIMATION_FILE_SUFFIX)) {
+    throw new Error(`animation_file must be the absolute path of a pose description named *${ANIMATION_FILE_SUFFIX}, as a Blender job writes one`);
+  }
+  let text: string;
+  try {
+    if (fs.statSync(value).size > MAX_ANIMATION_FILE_BYTES) throw new Error('too large');
+    text = fs.readFileSync(value, 'utf8');
+  } catch (error) {
+    throw new Error(error instanceof Error && error.message === 'too large'
+      ? `animation_file is larger than ${MAX_ANIMATION_FILE_BYTES / 1024 / 1024} MB; bake a shorter animation`
+      : `animation_file could not be read: no file at ${value}`);
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    throw new Error('animation_file does not hold JSON');
+  }
+  const record = asRecord(parsed);
+  if (!record) throw new Error('animation_file must hold one pose description, a JSON object');
+  return record;
+}
+
 /**
  * How a preview drew the parts that hold bones: bent by them, where the
  * mesh's skin was read, or rigid, where it was not and the bones' motion does
@@ -1760,8 +1793,15 @@ export class RobloxStudioTools {
    * animation. Arguments arrive as the tool's own object, since each action
    * reads a different few of them.
    */
-  async animation(args: Record<string, unknown>, instance_id?: string) {
-    const action = args?.action;
+  async animation(input: Record<string, unknown>, instance_id?: string) {
+    const action = input?.action;
+    let args = input;
+    if (input?.animation_file !== undefined) {
+      if (action !== 'check' && action !== 'build' && action !== 'verify') throw new Error('animation_file goes with check, build or verify: it is the pose description they take');
+      if (input.animation !== undefined) throw new Error('give animation or animation_file, not both');
+      args = { ...input, animation: readAnimationFile(input.animation_file) };
+      delete args.animation_file;
+    }
     if (action === 'check' || action === 'build') return this._animationBuild(action, args, instance_id);
     if (action === 'publish') return this._animationPublish(args, instance_id);
     if (action === 'wire') return this._animationWire(args, instance_id);

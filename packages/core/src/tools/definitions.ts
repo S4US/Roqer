@@ -262,6 +262,10 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
           enum: ['R15', 'R6'],
           description: 'Rig: make a stock NPC body of this rig type at model.'
         },
+        animation_file: {
+          type: 'string',
+          description: 'A baked *.animation.json, in place of animation.'
+        },
         joints: {
           type: 'array',
           items: { type: 'object' },

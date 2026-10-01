@@ -10,6 +10,7 @@ import {
   MAX_BLENDER_SCRIPT_CHARACTERS,
 } from "../shared/blender";
 import { articulationOf, describeArticulation, MAX_LISTED_OBJECTS, parseObjects, type Articulation, type InspectedObject } from "./blender-articulation";
+import { ANIMATION_SUFFIX, BAKE_SUFFIX, describeBake, describeBakedFile, parseBake } from "./blender-animation";
 import { describeSkins, parseSkins, type InspectedSkin } from "./blender-skin";
 import type { McpCallOptions, McpToolImage, McpToolOutcome } from "./mcp-types";
 import { isViewableGlb, JOB_RETENTION_MS, MAX_KEPT_JOBS, modelPreviewFileName, pruneJobFolders } from "./model-preview";
@@ -269,6 +270,138 @@ def piece(obj, pivot, parent=None):
     return obj
 
 
+def _quaternion(q):
+    """A Blender rotation as [x, y, z, w] in Roblox's axes: a point at (x, y, z) arrives at (-x, z, y)."""
+    return [round(-q.x, 6), round(q.z, 6), round(q.y, 6), round(q.w, 6)]
+
+
+def _studs(vector):
+    return [round(-vector.x, 4), round(vector.z, 4), round(vector.y, 4)]
+
+
+def _joint_name(piece):
+    """The joint rig makes for a piece, as Roqer's inspection names them: a leg's for the leg, its knee and ankle after it."""
+    if piece == "Head":
+        return "Neck"
+    for suffix, joint in (("Upper", ""), ("Lower", "Knee"), ("Foot", "Ankle")):
+        if piece.endswith(suffix) and len(piece) > len(suffix):
+            return piece[:-len(suffix)] + joint
+    return piece
+
+
+_MAX_SAMPLES = 240
+_MAX_SECONDS = 60
+
+
+def export_animation(name, source, rig, start=None, end=None, loop=True, rest_frame=None, root_joint="Root"):
+    """Bake what a creature does between two frames into an animation for Studio's animation tool.
+
+    source is the armature of a skinned creature, or the body piece of a creature of moving
+    pieces. rig is the path its model has in Studio, such as "game.Workspace.Wolf". Every frame
+    from start to end (the scene's own by default) is sampled with constraints and inverse
+    kinematics applied, so animate however Blender makes easy. For a loop, make the last frame
+    the same pose as the first. A creature of pieces is at rest at rest_frame (start by default);
+    an armature's rest is its own. The result names a file to pass to animation as animation_file.
+    """
+    import json, math, os
+    from mathutils import Matrix, Vector
+    if not isinstance(name, str) or not name or any(c in name for c in '/\\:*?"<>|'):
+        raise ValueError(f"name must be the animation's name, usable as a file name, got {name!r}")
+    if not isinstance(rig, str) or not rig.startswith("game."):
+        raise ValueError("rig must be the model's path in Studio, such as game.Workspace.Wolf")
+    scene = bpy.context.scene
+    start = scene.frame_start if start is None else int(start)
+    end = scene.frame_end if end is None else int(end)
+    if end <= start:
+        raise ValueError(f"end ({end}) must be after start ({start})")
+    fps = scene.render.fps / scene.render.fps_base
+    if (end - start) / fps > _MAX_SECONDS:
+        raise ValueError(f"frames {start} to {end} last {(end - start) / fps:.1f} s; an animation lasts at most {_MAX_SECONDS}")
+    step = max(1, math.ceil((end - start) / (_MAX_SAMPLES - 1)))
+    frames = list(range(start, end, step)) + [end]
+
+    def sample(frame):
+        scene.frame_set(frame)
+        bpy.context.view_layer.update()
+        return bpy.context.evaluated_depsgraph_get()
+
+    joints, baked, ignored = [], [], set()
+    if source.type == "ARMATURE":
+        world = source.matrix_world.copy()
+        bones = list(source.data.bones)
+        tops = [bone for bone in bones if bone.parent is None]
+        rest_world = {bone.name: (world @ bone.matrix_local).to_quaternion() for bone in bones}
+        rest_local = {bone.name: (bone.parent.matrix_local.inverted() @ bone.matrix_local) if bone.parent else bone.matrix_local.copy() for bone in bones}
+        for bone in bones:
+            entry = {"name": bone.name}
+            if bone.parent is not None:
+                entry["parent"] = bone.parent.name
+                entry["offset"] = _studs(world @ bone.head_local - world @ bone.parent.head_local)
+            joints.append(entry)
+        for frame in frames:
+            posed = source.evaluated_get(sample(frame)).pose.bones
+            rotations = {}
+            for bone in bones:
+                pose = posed[bone.name]
+                local = (pose.parent.matrix.inverted() @ pose.matrix) if pose.parent else pose.matrix
+                basis = rest_local[bone.name].inverted() @ local
+                turn = rest_world[bone.name] @ basis.to_quaternion() @ rest_world[bone.name].inverted()
+                rotations[bone.name] = _quaternion(turn)
+                if bone.parent is not None and basis.to_translation().length > 1e-3:
+                    ignored.add(bone.name)
+            entry = {"time": round((frame - start) / fps, 5), "rotations": rotations}
+            if len(tops) == 1:
+                entry["travel"] = _studs(world @ posed[tops[0].name].matrix.to_translation() - world @ tops[0].matrix_local.to_translation())
+            baked.append(entry)
+    elif source.type == "MESH":
+        pieces = []
+
+        def gather(item, parent):
+            piece = item if item.type == "MESH" else None
+            if piece is not None:
+                pieces.append((piece, parent))
+            for child in item.children:
+                gather(child, piece or parent)
+
+        gather(source, None)
+        rest = {piece.name: piece.evaluated_get(sample(start if rest_frame is None else int(rest_frame))).matrix_world.copy() for piece, _ in pieces}
+        centre = sum((Vector(corner) for corner in source.bound_box), Vector()) / 8
+        body_at = rest[source.name] @ centre
+        named = {piece.name: (root_joint if parent is None else _joint_name(piece.data.name)) for piece, parent in pieces}
+        for piece, parent in pieces:
+            entry = {"name": named[piece.name]}
+            if parent is not None:
+                entry["parent"] = named[parent.name]
+                entry["offset"] = _studs(rest[piece.name].to_translation() - (body_at if parent is source else rest[parent.name].to_translation()))
+            joints.append(entry)
+        for frame in frames:
+            depsgraph = sample(frame)
+            now = {piece.name: piece.evaluated_get(depsgraph).matrix_world.copy() for piece, _ in pieces}
+            rotations = {}
+            for piece, parent in pieces:
+                turned, rested = now[piece.name].to_quaternion(), rest[piece.name].to_quaternion()
+                if parent is None:
+                    turn = turned @ rested.inverted()
+                else:
+                    above = rest[parent.name].to_quaternion()
+                    turn = above @ now[parent.name].to_quaternion().inverted() @ turned @ rested.inverted()
+                    slid = (now[parent.name].inverted() @ now[piece.name]).to_translation() - (rest[parent.name].inverted() @ rest[piece.name]).to_translation()
+                    if slid.length > 1e-3:
+                        ignored.add(piece.name)
+                rotations[named[piece.name]] = _quaternion(turn)
+            travel = now[source.name] @ centre - body_at
+            baked.append({"time": round((frame - start) / fps, 5), "rotations": rotations, "travel": _studs(travel)})
+    else:
+        raise ValueError(f"{source.name} is a {source.type.lower()}; export_animation takes an armature, or a creature's body piece")
+    scene.frame_set(start)
+
+    path = os.path.join(_OUTPUT_DIR, name + ".bake.json")
+    with open(path, "w", encoding="utf-8") as handle:
+        json.dump({"name": name, "rig": rig, "loop": bool(loop), "rootJoint": root_joint, "joints": joints, "frames": baked,
+                   "ignoredTravel": sorted(ignored)[:16]}, handle)
+    return path
+
+
 _MAX_INFLUENCES = 4
 
 
@@ -414,7 +547,7 @@ except BaseException:
 script_path = os.path.join(job_dir, "script.py")
 with open(script_path, "r", encoding="utf-8") as handle:
     source = handle.read()
-helpers = {"__name__": "roqer"}
+helpers = {"__name__": "roqer", "_OUTPUT_DIR": OUTPUT_DIR}
 with open(os.path.join(job_dir, "roqer_helpers.py"), "r", encoding="utf-8") as handle:
     exec(compile(handle.read(), "roqer_helpers.py", "exec"), helpers)
 roqer = types.SimpleNamespace(**{name: value for name, value in helpers.items()
@@ -633,7 +766,9 @@ for armature in armatures[:4]:
             listed["parent"] = bone.parent.name
         entry["bones"].append(listed)
     for item in meshes:
-        if not any(modifier.type == "ARMATURE" and modifier.object is armature for modifier in item.modifiers):
+        # A saved scene's modifiers were baked away above; there the mesh is still the armature's child.
+        follows = any(modifier.type == "ARMATURE" and modifier.object is armature for modifier in item.modifiers)
+        if not follows and not (item.parent is armature and len(item.vertex_groups) > 0):
             continue
         group_names = {group.index: group.name for group in item.vertex_groups}
         unweighted = over = most = 0
@@ -1328,7 +1463,12 @@ export class BlenderWorker {
     }
     const models = entries.filter((name) => MODEL_EXTENSIONS.has(path.extname(name).toLowerCase()));
     const renders = entries.filter((name) => path.extname(name).toLowerCase() === ".png");
-    const others = entries.filter((name) => !models.includes(name) && !renders.includes(name));
+    // Animations roqer.export_animation baked: each becomes a pose description beside it.
+    const animations: BakedAnimation[] = [];
+    for (const name of entries.filter((entry) => entry.toLowerCase().endsWith(BAKE_SUFFIX)).slice(0, MAX_BAKED_ANIMATIONS)) {
+      animations.push(await convertBake(outputDirectory, name));
+    }
+    const others = entries.filter((name) => !models.includes(name) && !renders.includes(name) && !name.toLowerCase().endsWith(BAKE_SUFFIX));
     if (models.length === 0 && renders.length === 0 && !sceneSaved) {
       return failure(
         `${beforeFailure}The script finished but left no model (.glb, .gltf, .fbx or .obj) or PNG image in OUTPUT_DIR. Export the model there, for example bpy.ops.export_scene.gltf(filepath=os.path.join(OUTPUT_DIR, "model.glb"), export_format="GLB", export_apply=True, use_visible=True), or render the image there.${others.length > 0 ? ` It left: ${others.join(", ")}.` : ""}`,
@@ -1459,6 +1599,15 @@ export class BlenderWorker {
         "To use an image in UI: upload_asset {action: 'upload', filePath: <its path>, assetType: 'Decal', displayName}, then set ImageLabel.Image to rbxassetid://<imageId from that result>. The decalId does not display in an ImageLabel; if imageId is null, check the upload again with action 'status'.",
       );
     }
+    if (animations.length > 0) {
+      lines.push(
+        "Animations it baked, each sampled frame by frame and kept as the keys its joints need:",
+        ...animations.map((animation) => animation.line),
+        ...(animations.some((animation) => animation.path !== undefined)
+          ? ["To use one: animation {action: 'check', animation_file: <its path>}, with locomotion: true for a gait, then build with the same animation_file and a parent. Its rig is the model path the script gave; the model must be rigged in Studio first, and be the one this scene was uploaded as."]
+          : []),
+      );
+    }
     lines.push(...describeScene(jobId, continueFrom, contents, sceneSaved, inspectScene));
     return {
       ok: true,
@@ -1466,6 +1615,7 @@ export class BlenderWorker {
         jobId,
         ...(continueFrom === undefined ? {} : { continuedFrom: continueFrom }),
         jobDirectory, outputDirectory, files, images: rendered, otherFiles: others, log,
+        ...(animations.length > 0 ? { animations: animations.flatMap((animation) => animation.path === undefined ? [] : [{ name: animation.name, path: animation.path }]) } : {}),
         scene: sceneSaved ? { path: sceneFile, ...(contents === undefined ? {} : { contents }) } : null,
       },
       text: lines.join("\n"),
@@ -1526,6 +1676,39 @@ export class BlenderWorker {
    */
   private async prune(keep?: string): Promise<void> {
     await pruneJobFolders(this.options.jobsRoot, this.now(), keep);
+  }
+}
+
+const MAX_BAKED_ANIMATIONS = 8;
+const MAX_BAKE_BYTES = 16 * 1024 * 1024;
+
+type BakedAnimation = Readonly<{ name: string; line: string; path?: string }>;
+
+/**
+ * One bake the script left in its output folder, turned into a pose
+ * description beside it. The bake is removed either way: it is only the
+ * script's samples, and the description is what the animation tool takes.
+ */
+async function convertBake(directory: string, file: string): Promise<BakedAnimation> {
+  const source = path.join(directory, file);
+  const name = file.slice(0, -BAKE_SUFFIX.length);
+  const refuse = (why: string): BakedAnimation => ({ name, line: `- ${name} could not be used: ${why}.` });
+  try {
+    if ((await fs.stat(source)).size > MAX_BAKE_BYTES) return refuse("its bake is too large");
+    const raw: unknown = JSON.parse(await fs.readFile(source, "utf8"));
+    const bake = parseBake(raw);
+    if (typeof bake === "string") return refuse(bake);
+    const baked = describeBake(bake);
+    if (baked.joints === 0) return refuse("nothing moves between its first frame and its last");
+    const target = path.join(directory, `${name}${ANIMATION_SUFFIX}`);
+    await fs.writeFile(target, JSON.stringify(baked.description));
+    const ignored = isRecord(raw) && Array.isArray(raw.ignoredTravel) ? raw.ignoredTravel.filter((entry): entry is string => typeof entry === "string").slice(0, 8) : [];
+    const note = ignored.length > 0 ? `; ${ignored.join(", ")} also slid from ${ignored.length === 1 ? "its" : "their"} joint, which only the body's own joint can do, so that part was left out` : "";
+    return { name, path: target, line: `${describeBakedFile(target, baked)}${note}` };
+  } catch (error) {
+    return refuse(error instanceof Error ? error.message : String(error));
+  } finally {
+    await fs.rm(source, { force: true }).catch(() => undefined);
   }
 }
 

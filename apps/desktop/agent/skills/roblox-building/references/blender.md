@@ -90,6 +90,9 @@ get the direction of wrong, and they paint it when given a colour:
 - `roqer.bind(obj, bones)` and `roqer.skin(obj, bones, name="Armature")`: for
   a creature that bends (see "A creature that bends"): bind says which bones a
   part follows, and skin makes the armature and weights the joined mesh.
+- `roqer.export_animation(name, source, rig, start=None, end=None, loop=True)`:
+  bakes what a creature does in the scene into an animation for Studio (see
+  "Animating a creature in Blender").
 
 Prefer them for any part that is not upright. Raw `bpy` is still available for
 shapes they do not cover; there, keep the model flat-shaded (no
@@ -310,6 +313,67 @@ bpy.ops.export_scene.gltf(filepath=os.path.join(OUTPUT_DIR, "snake.glb"), export
 
 Then upload and insert it, and rig it: the creature reference's "A skinned
 creature" section has the call.
+
+## Animating a creature in Blender
+
+Most creature motion is written for the `animation` tool directly: keys,
+`waves` and `gait` (the animation skill's creature reference). Animate in
+Blender instead when Blender's own tools make the motion: inverse
+kinematics pulling a chain toward a moving target, a constraint that makes a
+head track a point, a path, a physics bake. Roqer samples the result frame by
+frame and hands the `animation` tool a pose description, so everything after
+that (checks, previews, build, publish, wire) is the same.
+
+- **Animate the scene the creature was exported from**: a second job with
+  `continue_from` set to the job that made it. The armature is named
+  `Armature`; a creature of pieces has its body piece. Leave the model as it
+  is: an animation made on a body of another shape is refused in Studio.
+- **Set the frames**: `scene.frame_start`, `scene.frame_end` and
+  `scene.render.fps`. At most 60 seconds, sampled as up to 240 keyframes.
+- **For a loop, the last frame is the first pose again.**
+- **`roqer.export_animation(name, source, rig, start=None, end=None,
+  loop=True)`** bakes it. `source` is the armature, or the body piece of a
+  creature of pieces. `rig` is the path the model has, or will have, in
+  Studio, such as `game.Workspace.Snake`: the model must be uploaded,
+  inserted there and rigged before the animation is checked.
+- A creature of pieces is at rest at `start`, so begin from the pose it was
+  exported in.
+- Only the body as a whole can travel: the root bone's, or the body piece's,
+  change of place goes on the rig's `Root` joint. Any other bone or piece
+  only turns, and a slide of its own is left out and reported.
+
+The result lists each animation with its length, how many joints move, how
+many keys were kept, and its file. Pass the file, not its contents:
+
+```text
+{ "action": "check", "animation_file": "<path from the job's result>", "locomotion": false }
+```
+
+then `build` with the same animation_file and a `parent`. A gait made this
+way is checked with `locomotion: true` like any other.
+
+This job continues from the snake's and sweeps its tail from side to side
+with inverse kinematics:
+
+```python
+import bpy, math
+
+armature = bpy.data.objects["Armature"]
+scene = bpy.context.scene
+scene.frame_start, scene.frame_end, scene.render.fps = 1, 41, 20
+
+# The last five bones reach for a target that swings across behind the snake and lifts.
+target = bpy.data.objects.new("TailTarget", None)
+scene.collection.objects.link(target)
+reach = armature.pose.bones["Spine8"].constraints.new("IK")
+reach.target, reach.chain_count = target, 5
+for frame in range(1, 42):
+    turn = 2 * math.pi * (frame - 1) / 40
+    target.location = (1.6 * math.sin(turn), 3.6, 0.25 + 0.7 * abs(math.sin(turn)))
+    target.keyframe_insert("location", frame=frame)
+
+roqer.export_animation("TailSweep", armature, "game.Workspace.Snake")
+```
 
 ## Getting it into Studio
 

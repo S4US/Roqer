@@ -300,17 +300,24 @@ function summarizeAnimation(args: Record<string, unknown>): string {
   const animation = typeof args.animation === "object" && args.animation !== null && !Array.isArray(args.animation)
     ? args.animation as Record<string, unknown>
     : {};
-  const name = typeof animation.name === "string" && animation.name !== "" ? truncate(animation.name, 40) : "an animation";
+  // A description baked in Blender is in a file: what the card can say of it is the file's name.
+  const file = args.animation === undefined && typeof args.animation_file === "string" && args.animation_file !== ""
+    ? truncate(args.animation_file.split(/[\\/]/).pop() ?? args.animation_file, 60)
+    : undefined;
+  const name = file !== undefined
+    ? `the animation baked in ${file}`
+    : typeof animation.name === "string" && animation.name !== "" ? truncate(animation.name, 40) : "an animation";
   // R15 goes unsaid; R6 and a model's own rig are named.
   const rig = typeof animation.rig === "string" && animation.rig !== "" && animation.rig !== "R15" ? ` for ${truncate(animation.rig, 60)}` : "";
   if (action === "verify" && typeof args.model === "string" && args.model !== "") {
     const position = Array.isArray(args.position) && args.position.length === 3 && args.position.every((value) => typeof value === "number")
       ? `, walking it to [${args.position.map((value) => Math.round(Number(value) * 10) / 10).join(", ")}]`
       : "";
-    const played = args.animation !== undefined ? `, playing ${name} on it` : "";
+    const given = args.animation !== undefined || file !== undefined;
+    const played = given ? `, playing ${name} on it` : "";
     const slot = typeof args.slot === "string" && args.slot !== "" ? `, checking its ${truncate(args.slot, 20)}` : "";
     // As the tool decides: walked to a position, else watched unless an animation or a slot was asked about.
-    const watched = position === "" && args.animation === undefined && args.slot === undefined ? ", watching it move" : "";
+    const watched = position === "" && !given && args.slot === undefined ? ", watching it move" : "";
     return `animation · verify ${truncate(args.model, 60)} in the playtest${played}${slot}${position}${watched}`;
   }
   const keyframes = Array.isArray(animation.keyframes) ? animation.keyframes : [];
@@ -353,6 +360,7 @@ function summarizeAnimation(args: Record<string, unknown>): string {
   const waived = Array.isArray(args.waive) && args.waive.length > 0
     ? `, accepting failed ${args.waive.filter((id) => typeof id === "string").join(", ")}`
     : "";
+  if (file !== undefined) return `animation · ${action} ${name}${where}${replaces}${waived}`;
   return `animation · ${action} ${name}${rig}${where}: ${facts.join(", ")}${replaces}${waived}`;
 }
 

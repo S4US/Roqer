@@ -264,6 +264,24 @@ bone is a joint, named after the bone.
 - **Limits.** A rig of at most 64 joints, the root among them. Roblox keeps
   at most four bones on a vertex.
 
+## Animations made in Blender
+
+An animation can be made in Blender and brought in, for "Make its tail reach
+for the fish with inverse kinematics". Roqer bakes what the creature does in
+the Blender scene into a file ([Animating in Blender](blender.md#animating-in-blender)),
+and the agent gives the animation tool that file in place of a written
+description.
+
+- **Everything after that is the same**: the motion checks, the contact
+  sheet and 3D preview, Studio playing it on a copy before anything is
+  written, publishing and wiring.
+- **It must be made on the model that is in Studio.** The file carries the
+  skeleton it was animated on. If a joint is missing in Studio, hangs from
+  another joint, or stands somewhere else, the animation is refused with what
+  differs, rather than played on a body of another shape.
+- **The file is read on your machine** by the MCP server. Only a file named
+  `*.animation.json`, of at most 2 MB, is read.
+
 ## Waves
 
 A tail, a tentacle, a wing or a spine sways as a wave rather than as

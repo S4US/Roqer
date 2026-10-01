@@ -147,6 +147,12 @@ test("mcp-tools - rigging a creature says what it joins, what it declares and wh
     summarizeToolCall("animation", { action: "rig", model: "game.Workspace.Wolf", joints, controller: "AnimationController", replace: "importer" }),
     "animation · rig game.Workspace.Wolf: 2 joints, AnimationController, replacing the rig it was imported with",
   );
+  // A description baked in Blender is named by its file.
+  assert.strictEqual(
+    summarizeToolCall("animation", { action: "build", animation_file: "C:\\jobs\\2026-x\\output\\Slither.animation.json", parent: "game.ServerStorage.Animations" }),
+    "animation · build the animation baked in Slither.animation.json in game.ServerStorage.Animations",
+  );
+  assert.strictEqual(riskForTool("animation", { action: "check", animation_file: "C:\\jobs\\Slither.animation.json" }), "read");
   // A controller with no joints builds around a skinned mesh's bones.
   assert.strictEqual(
     summarizeToolCall("animation", { action: "rig", model: "game.Workspace.Wolf", controller: "Humanoid", plan: "quadruped", replace: "importer" }),
