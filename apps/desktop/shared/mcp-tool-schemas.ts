@@ -44,10 +44,10 @@ export type ToolSchema = {
 };
 
 /** sha256 of `packages/core/src/tools/definitions.ts` with LF newlines. */
-export const TOOL_DEFINITIONS_DIGEST = "a4195cd0ebe78e6d58e791bba20db9cef7ca50b5bf2574abe6dc6a9b95899a89";
+export const TOOL_DEFINITIONS_DIGEST = "f771cf9aad46e883cd9a765f27e5080ff5621f52dd5ec065fe8c607ebdc5d882";
 
 /** What a bridge built from these definitions reports as `toolCatalogDigest` on `/health`. */
-export const TOOL_CATALOG_DIGEST = "e77c34676b3f9409858bc3a72d2ce0f6068f285ca5d35672306fac6a0990cb56";
+export const TOOL_CATALOG_DIGEST = "3d99522e3a6455fcc4746ccc014aefa66280ba33a1406de995fa3afa1adc6980";
 
 export const TOOL_SCHEMAS: Readonly<Record<string, ToolSchema>> = {
   animation: {
@@ -69,7 +69,7 @@ export const TOOL_SCHEMAS: Readonly<Record<string, ToolSchema>> = {
       { name: "ground_speed", type: "number", required: false, description: "Wire walk/run: the groundSpeed its check reported." },
       { name: "stock", type: "string", required: false, enumValues: ["R15", "R6"], description: "Rig: make a stock NPC body of this rig type at model." },
       { name: "joints", type: "object[]", required: false, description: "Rig: [{part, parent, pivot, name?, with?}]; pivot is [x,y,z]." },
-      { name: "controller", type: "string", required: false, enumValues: ["Humanoid", "AnimationController"], description: "Rig with joints: Humanoid for a walker." },
+      { name: "controller", type: "string", required: false, enumValues: ["Humanoid", "AnimationController"], description: "Rig: Humanoid for a walker. No joints: a skinned mesh." },
       { name: "plan", type: "string", required: false, enumValues: ["quadruped", "custom"], description: "Rig: body plan declaring limbs from part names." },
       { name: "declarations", type: "object", required: false, description: "Rig: RoqerRig {feet, hips, limbs, hinges, limits}." },
       { name: "replace", type: "string", required: false, enumValues: ["importer"], description: "Rig: replace the rig an upload arrived with." },

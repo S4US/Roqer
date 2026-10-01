@@ -43,12 +43,30 @@ export interface PieceLink {
   made?: boolean;
 }
 
-/** A rig an importer made: every piece hung from one part at its own centre. */
+/**
+ * What an importer left on a model: a rig, every piece hung from one part at
+ * its own centre; or, on a skinned mesh, which needs no joints, only its
+ * AnimationController and InitialPoses, with no root part.
+ */
 export interface ImporterRig {
-  rootPart: number;
+  rootPart?: number;
   joints: number;
   initialPoses: number;
 }
+
+/** A skinned mesh's Bone, as the plugin reads it: a joint the model already has, which `rig` leaves as it is. */
+export interface PieceBone {
+  name: string;
+  /** The bone or part it is in, by name. */
+  parent: string;
+  /** The part it is in, directly or through other bones, by index. */
+  part: number;
+  /** Its CFrame in its parent, as CFrame components. */
+  cframe: number[];
+}
+
+/** The size a bone is read with, as the plugin's rig reading gives one. */
+const BONE_SIZE: [number, number, number] = [0.1, 0.1, 0.1];
 
 /** What the plugin reads from a model `rig` builds on. */
 export interface PiecesReading {
@@ -61,6 +79,8 @@ export interface PiecesReading {
   /** Its Motor6Ds and AnimationConstraints between its own parts. */
   joints: PieceLink[];
   welds: PieceLink[];
+  /** Its skinned meshes' Bones, parents before children. */
+  bones?: PieceBone[];
   /** The Humanoids and AnimationControllers directly in it. */
   controllers: ('Humanoid' | 'AnimationController')[];
   importer?: ImporterRig;
@@ -225,7 +245,9 @@ export function planRigBuild(reading: PiecesReading, request: RigBuildRequest): 
   if (importer) {
     if (!request.replaceImporter) {
       return refuse('importer_rig', [
-        `${reading.path} has an importer's rig: ${importer.joints} Motor6D${importer.joints === 1 ? '' : 's'} from ${reading.parts[importer.rootPart]?.name ?? 'its root'}, each turning a piece about its own centre. Pass replace: "importer" to take it out and build this rig in its place`,
+        importer.rootPart === undefined
+          ? `${reading.path} has what an importer left on a skinned mesh: an AnimationController and its InitialPoses. Pass replace: "importer" to take them out and build this rig in their place`
+          : `${reading.path} has an importer's rig: ${importer.joints} Motor6D${importer.joints === 1 ? '' : 's'} from ${reading.parts[importer.rootPart]?.name ?? 'its root'}, each turning a piece about its own centre. Pass replace: "importer" to take it out and build this rig in its place`,
       ]);
     }
   } else if (request.replaceImporter && reading.joints.length > 0) {
@@ -253,7 +275,7 @@ export function planRigBuild(reading: PiecesReading, request: RigBuildRequest): 
   }
 
   const errors: string[] = [];
-  const removed = new Set<number>(importer ? [importer.rootPart] : []);
+  const removed = new Set<number>(importer?.rootPart !== undefined ? [importer.rootPart] : []);
   const byName = new Map<string, number[]>();
   reading.parts.forEach((part, index) => {
     if (removed.has(index)) return;
@@ -271,7 +293,7 @@ export function planRigBuild(reading: PiecesReading, request: RigBuildRequest): 
   // earlier rig kept of it, or, on a model with no joints yet, its own pivot,
   // which an upload that arrives without a rig has at that origin. Pivots
   // given in the import's frame are placed by it.
-  const origin = importer
+  const origin = importer?.rootPart !== undefined
     ? reading.parts[importer.rootPart]?.cframe
     : reading.origin ?? (reading.joints.length === 0 ? reading.pivot : undefined);
   if (request.pivotSpace === 'import' && !origin) {
@@ -296,6 +318,19 @@ export function planRigBuild(reading: PiecesReading, request: RigBuildRequest): 
     jointNames.set(name, index);
   });
   for (const joint of joints) if (!children.has(joint.parent)) tops.add(joint.parent);
+  // A skinned mesh's bones are its joints already: with none given, the rig
+  // hangs from the one part that holds them.
+  const bones = reading.bones ?? [];
+  if (joints.length === 0) {
+    const holders = [...new Set(bones.map((bone) => bone.part))].filter((index) => !removed.has(index));
+    if (holders.length === 0) {
+      return refuse('invalid_arguments', [`${reading.path} has no Bones, so its rig is the joints the call gives: joints must list each joint as { part, parent, pivot: [x, y, z], name?, with? }`]);
+    }
+    if (holders.length > 1) {
+      return refuse('invalid_rig', [`${reading.path}'s Bones are in ${holders.length} parts (${holders.map((index) => reading.parts[index].name).join(', ')}); give the joints that join those parts, or skin one mesh to the whole armature`]);
+    }
+    tops.add(reading.parts[holders[0]].name);
+  }
   if (tops.size !== 1) {
     errors.push(tops.size === 0
       ? 'joints: every piece is moved by a joint, so nothing is left for the rig to hang from; they must form a tree from one piece'
@@ -452,8 +487,19 @@ export function planRigBuild(reading: PiecesReading, request: RigBuildRequest): 
   const rootBottom = Math.min(...corners(rootFrame, rootSize).map((corner) => corner[1]));
   const hipHeight = request.controller === 'Humanoid' ? round(Math.max(0, rootBottom - lowest)) : undefined;
 
+  // The bones of the rig's pieces: joints the model has already, each from the
+  // bone or part it is in to itself, which the rig reads back beside its own.
+  const pieceNames = new Map([...indexOf].map(([name, index]) => [index, name]));
+  const kept = bones.filter((bone) => pieceNames.has(bone.part));
+  const strayBones = bones.filter((bone) => !pieceNames.has(bone.part) && !removed.has(bone.part));
+  if (strayBones.length > 0) {
+    const holders = [...new Set(strayBones.map((bone) => reading.parts[bone.part].name))];
+    return refuse('invalid_rig', [`${holders.join(', ')} ${holders.length === 1 ? 'holds' : 'hold'} Bones but ${holders.length === 1 ? 'is' : 'are'} not a piece of the rig, so nothing would move them; make ${holders.length === 1 ? 'it' : 'each'} a piece with a joint of its own`]);
+  }
+  const boneJoints = kept.map((bone) => ({ name: bone.name, part0: bone.parent, part1: bone.name, c0: bone.cframe.map(round), c1: [0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1] }));
+
   // Declarations: the plan's, with the call's over them.
-  const planJoints = planned.map((joint) => ({ name: joint.name, parentPart: joint.part0, childPart: joint.part1 }));
+  const planJoints = [...planned, ...boneJoints].map((joint) => ({ name: joint.name, parentPart: joint.part0, childPart: joint.part1 }));
   const declarations = JSON.stringify(mergeDeclarations(planDeclarations(request.plan, planJoints), request.declarations));
 
   // The rig the model will read back as, checked as any rig read from a model is.
@@ -468,8 +514,11 @@ export function planRigBuild(reading: PiecesReading, request: RigBuildRequest): 
     rootPart: ROOT_PART,
     controller: request.controller,
     ...(hipHeight !== undefined ? { hipHeight } : {}),
-    parts: [ROOT_PART, ...planned.map((joint) => joint.part1)].map(partEntry),
-    joints: planned,
+    parts: [
+      ...[ROOT_PART, ...planned.map((joint) => joint.part1)].map(partEntry),
+      ...kept.map((bone) => ({ name: bone.name, size: BONE_SIZE, shape: 'Block' as PartShape, bone: true })),
+    ],
+    joints: [...planned, ...boneJoints],
     declarations,
   };
   const checked = rigFromModel(expected);

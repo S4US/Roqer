@@ -258,6 +258,14 @@ function summarizeAnimation(args: Record<string, unknown>): string {
   if (args.action === "rig" && args.stock === undefined) {
     const model = typeof args.model === "string" && args.model !== "" ? truncate(args.model, 60) : "a model";
     const plan = args.plan === "quadruped" ? "a quadruped" : undefined;
+    const built = args.controller === "Humanoid" || args.controller === "AnimationController" ? args.controller : undefined;
+    const replacing = args.replace === "importer"
+      ? ", replacing the rig it was imported with"
+      : typeof args.expected_revision === "string" ? ", replacing the rig rig built before" : "";
+    // A controller with no joints builds around a skinned mesh, whose bones are its joints.
+    if (!Array.isArray(args.joints) && built) {
+      return `animation · rig ${model} around its bones${plan ? `, ${plan}` : ""}, ${built}${replacing}`;
+    }
     if (!Array.isArray(args.joints)) {
       const declaring = plan ?? (typeof args.declarations === "object" && args.declarations !== null ? "declared by hand" : undefined);
       return declaring
@@ -265,10 +273,7 @@ function summarizeAnimation(args: Record<string, unknown>): string {
         : `animation · read ${model}'s rig and draw its range sheet`;
     }
     const joints = args.joints.length;
-    const controller = args.controller === "Humanoid" || args.controller === "AnimationController" ? args.controller : "a controller";
-    const replacing = args.replace === "importer"
-      ? ", replacing the rig it was imported with"
-      : typeof args.expected_revision === "string" ? ", replacing the rig rig built before" : "";
+    const controller = built ?? "a controller";
     return `animation · rig ${model}: ${joints} joint${joints === 1 ? "" : "s"}${plan ? `, ${plan}` : ""}, ${controller}${replacing}`;
   }
   if (args.action === "rig") {

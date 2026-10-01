@@ -859,6 +859,28 @@ const passed = await runTest('animation tool', async ({ track }) => {
     }, 120_000);
     assert(slither.built === true && slither.readBack?.matchesCompiled === true && slither.checks?.passed === true, `a wave down the bones builds with its checks passing (${slither.error ?? JSON.stringify(slither.errors ?? slither.checks)})`);
     assert(slither.playback?.verified === true && slither.playback.samples > 0, `a copy played the wave on its bones as checked (within ${slither.playback?.maxDegrees}°; ${slither.playback?.reason ?? 'ok'})`);
+    // With a controller and no joints, rig builds around the bones: a root joined to the part that holds them.
+    const bonesBefore = await luau(client, `
+      local chain = {}
+      for _, bone in workspace[${JSON.stringify(BONES_NAME)}]:GetDescendants() do
+        if bone:IsA("Bone") then table.insert(chain, { bone.Name, bone.Parent.Name, bone.CFrame:GetComponents() }) end
+      end
+      return chain
+    `);
+    const bonesBuilt = await client.callTool('animation', { action: 'rig', model: BONES, controller: 'AnimationController', plan: 'custom', replace: 'importer' }, 120_000);
+    const bonesMade = await luau(client, inspectPieces(BONES_NAME));
+    assert(
+      bonesBuilt.rigged === true && bonesBuilt.readBack?.matches === true && bonesBuilt.root?.made === true && bonesBuilt.rig?.position === 'Root' && bonesBuilt.rig?.joints?.includes('Bone007'),
+      `rig makes a root around the bones and reads them back with it (${bonesBuilt.errorCode ?? 'ok'}: ${JSON.stringify(bonesBuilt.errors ?? bonesBuilt.error ?? bonesBuilt.rig)})`,
+    );
+    const bonesAfter = await luau(client, `
+      local chain = {}
+      for _, bone in workspace[${JSON.stringify(BONES_NAME)}]:GetDescendants() do
+        if bone:IsA("Bone") then table.insert(chain, { bone.Name, bone.Parent.Name, bone.CFrame:GetComponents() }) end
+      end
+      return chain
+    `);
+    assert(bonesMade.motors === 1 && bonesMade.rootAnchored === true && bonesMade.primary === 'HumanoidRootPart' && JSON.stringify(bonesAfter) === JSON.stringify(bonesBefore), `Studio holds one Motor6D, the root's, and every bone as it was (${JSON.stringify({ ...bonesMade, c0s: undefined })})`);
 
     // With ROQER_SKINNED_ASSET_ID, the skinned spike's snake as it was uploaded: a real skinned
     // MeshPart, whose skin the plugin reads through EditableMesh and the previews bend.
@@ -883,6 +905,16 @@ const passed = await runTest('animation tool', async ({ track }) => {
       }, 120_000);
       assert(skinnedSlither.built === true && skinnedSlither.checks?.passed === true && skinnedSlither.playback?.verified === true, `a wave down the upload's bones builds and plays as checked on a copy (${skinnedSlither.error ?? JSON.stringify(skinnedSlither.errors ?? skinnedSlither.playback)})`);
       assert(/bent by its bones/.test(skinnedSlither.sheet?.skin ?? '') && skinnedSlither.sheet?.boxes === undefined, `its contact sheet bends the mesh (${JSON.stringify(skinnedSlither.sheet)})`);
+      // Built around: what the importer left is taken out, and a Humanoid walks the mesh from a root.
+      const skinnedKept = await client.callTool('animation', { action: 'rig', model: SKINNED, controller: 'Humanoid', plan: 'custom' }, 120_000);
+      assert(skinnedKept.errorCode === 'importer_rig', `what the importer left on a skinned mesh is replaced only when the call says so (${skinnedKept.errorCode})`);
+      const skinnedBuilt = await client.callTool('animation', { action: 'rig', model: SKINNED, controller: 'Humanoid', plan: 'custom', replace: 'importer' }, 120_000);
+      const skinnedMade = await luau(client, inspectPieces(SKINNED_NAME));
+      assert(
+        skinnedBuilt.rigged === true && skinnedBuilt.readBack?.matches === true && skinnedBuilt.removed?.includes('InitialPoses') && skinnedBuilt.removed?.includes('AnimationController')
+          && skinnedMade.motors === 1 && skinnedMade.controller === 'Humanoid' && skinnedMade.initialPoses === false && skinnedMade.rootAnchored === false,
+        `rig builds a walker around the skinned upload (${skinnedBuilt.errorCode ?? 'ok'}: ${JSON.stringify(skinnedBuilt.errors ?? skinnedBuilt.error ?? { removed: skinnedBuilt.removed, ...skinnedMade, c0s: undefined })})`,
+      );
     } else {
       console.log('  - a real skinned upload was not tried: set ROQER_SKINNED_ASSET_ID to the skinned spike\'s base model');
     }

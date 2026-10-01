@@ -14,6 +14,7 @@ import type { ModelRigReading } from '../animation/model-rig.js';
 import type { PiecesReading, RigBuildPlan } from '../animation/rig-build.js';
 import { dogJoints, dogPieces } from './fixtures/dog-pieces.js';
 import { partsDog } from './fixtures/parts-dog.js';
+import { skinnedWolfPieces } from './fixtures/skinned.js';
 
 type ToolContent = { type: string; text?: string; data?: string; mimeType?: string; resource?: { uri: string; mimeType: string } };
 type Call = { endpoint: string; data: Record<string, unknown> };
@@ -30,10 +31,17 @@ function readBackOf(plan: RigBuildPlan, pieces: PiecesReading): ModelRigReading 
     rootPart: plan.root.name,
     controller: plan.controller.className,
     ...(plan.controller.hipHeight !== undefined ? { hipHeight: plan.controller.hipHeight } : {}),
-    parts: names.map((name) => (name === plan.root.name && plan.root.make
-      ? { name, size: plan.root.make.size as [number, number, number], hidden: true }
-      : { name, size: sizes.get(name)!.size, ...(sizes.get(name)!.shape ? { shape: sizes.get(name)!.shape } : {}) })),
-    joints: plan.joints,
+    parts: [
+      ...names.map((name) => (name === plan.root.name && plan.root.make
+        ? { name, size: plan.root.make.size as [number, number, number], hidden: true }
+        : { name, size: sizes.get(name)!.size, ...(sizes.get(name)!.shape ? { shape: sizes.get(name)!.shape } : {}), ...(sizes.get(name)!.mesh ? { mesh: sizes.get(name)!.mesh } : {}) })),
+      // A skinned mesh's bones, which Studio reads beside the joints the plan made.
+      ...(pieces.bones ?? []).map((bone) => ({ name: bone.name, size: [0.1, 0.1, 0.1] as [number, number, number], bone: true })),
+    ],
+    joints: [
+      ...plan.joints,
+      ...(pieces.bones ?? []).map((bone) => ({ name: bone.name, part0: bone.parent, part1: bone.name, c0: bone.cframe, c1: [0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1] })),
+    ],
     declarations: plan.declarations,
   };
 }
@@ -133,9 +141,44 @@ describe('rig joins a model\'s pieces', () => {
     await expect(rig({ joints: dogJoints(), controller: 'Humanoid', replace: 'all' })).rejects.toThrow(/replace must be "importer"/);
     await expect(rig({ stock: 'R15', joints: dogJoints() })).rejects.toThrow(/joints is for rigging a model's own pieces/);
     await expect(rig({ position: [0, 0, 0] })).rejects.toThrow(/position goes with stock/);
-    await expect(rig({ controller: 'Humanoid' })).rejects.toThrow(/controller goes with joints/);
+    await expect(rig({ replace: 'importer' })).rejects.toThrow(/replace goes with joints or a controller/);
     expect(body(await rig({ joints: [{ part: 'Head' }], controller: 'Humanoid' }))).toMatchObject({ errorCode: 'invalid_arguments' });
     expect(calls).toEqual([]);
+  });
+
+  test('with a controller and no joints, it builds around a skinned mesh, whose bones are its joints', async () => {
+    const pieces = skinnedWolfPieces();
+    const { tools, calls } = studio({
+      '/api/animation-read-pieces': () => pieces,
+      '/api/animation-build-rig': (data) => ({
+        rig: readBackOf(data.plan as RigBuildPlan, pieces),
+        stamp: 'rr1:built',
+        removed: ['InitialPoses', 'AnimationController'],
+        rootAnchored: false,
+        undoable: true,
+      }),
+    });
+    const answer = body(await tools.animation({ action: 'rig', model: 'game.Workspace.SkinnedWolf', controller: 'Humanoid', plan: 'quadruped', replace: 'importer' }));
+    // Studio is asked to make one joint, the root's; the bones are there already.
+    expect((calls[1].data.plan as RigBuildPlan).joints.map((joint) => joint.name)).toEqual(['Root']);
+    expect(answer).toMatchObject({
+      rigged: true,
+      controller: 'Humanoid',
+      root: { part: 'HumanoidRootPart', made: true },
+      removed: ['InitialPoses', 'AnimationController'],
+      readBack: { matches: true },
+      rig: { position: 'Root', feet: ['FrontLeftFoot', 'FrontRightFoot', 'HindLeftFoot', 'HindRightFoot'] },
+    });
+    // Its mesh was not read here, so the sheet says the bones' motion does not show.
+    expect(answer.rangeSheet.skin).toMatch(/^Wolf drawn rigid, its skin not read/);
+  });
+
+  test('a model with no bones is not rigged without joints', async () => {
+    const { tools, calls } = building();
+    const answer = body(await tools.animation({ action: 'rig', model: 'game.Workspace.Dog', controller: 'Humanoid' }));
+    expect(answer.errorCode).toBe('invalid_arguments');
+    expect(answer.errors[0]).toMatch(/has no Bones, so its rig is the joints the call gives/);
+    expect(calls.map((call) => call.endpoint)).toEqual(['/api/animation-read-pieces']);
   });
 });
 

@@ -270,7 +270,7 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
         controller: {
           type: 'string',
           enum: ['Humanoid', 'AnimationController'],
-          description: 'Rig with joints: Humanoid for a walker.'
+          description: 'Rig: Humanoid for a walker. No joints: a skinned mesh.'
         },
         plan: {
           type: 'string',

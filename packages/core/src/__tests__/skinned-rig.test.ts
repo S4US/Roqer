@@ -9,8 +9,9 @@ import { mergeDeclarations, planDeclarations } from '../animation/body-plans.js'
 import { drawnParts } from '../animation/box-rig.js';
 import { rigFromModel, type ModelRigReading } from '../animation/model-rig.js';
 import { buildTracks, pointToWorld, poseRig, restPose } from '../animation/motion.js';
+import { planRigBuild, type RigBuildRequest } from '../animation/rig-build.js';
 import type { Rig } from '../animation/rig.js';
-import { skinnedSnake, skinnedWolf, SNAKE_BONES, WOLF_HIPS } from './fixtures/skinned.js';
+import { skinnedSnake, skinnedWolf, skinnedWolfPieces, SNAKE_BONES, WOLF_HIPS } from './fixtures/skinned.js';
 
 function rigOf(reading: ModelRigReading): Rig {
   const result = rigFromModel(reading);
@@ -79,6 +80,59 @@ describe('a skinned mesh\'s bones are a rig', () => {
       poses = poses[0].children;
     }
     expect(chain).toEqual(['SnakeGeometry', ...SNAKE_BONES]);
+  });
+});
+
+describe('rig builds around a skinned mesh', () => {
+  const build = (overrides: Partial<RigBuildRequest> = {}, reading = skinnedWolfPieces()) =>
+    planRigBuild(reading, { joints: [], controller: 'Humanoid', plan: 'quadruped', replaceImporter: true, ...overrides });
+
+  test('with no joints given, it makes the root and the controller, and leaves the bones as they are', () => {
+    const result = build();
+    if (!result.ok) throw new Error(result.errors.join('\n'));
+    const { plan, expected } = result;
+    // One joint to make: the root's, to the mesh. The bones are not the plugin's to make.
+    expect(plan.joints.map((joint) => [joint.name, joint.part0, joint.part1])).toEqual([['Root', 'HumanoidRootPart', 'Wolf']]);
+    expect(plan.root.make?.size).toEqual([1.4, 4, 6]);
+    expect(plan.replaceImporter).toBe(true);
+    expect(plan.rootAnchored).toBe(false);
+    // The paws stand on the ground the mesh's box stands on, so the root rides at its own bottom.
+    expect(plan.controller).toEqual({ className: 'Humanoid', hipHeight: 0 });
+    // The rig it will read back as has every bone, and the plan's declarations from their names.
+    expect(expected.joints).toHaveLength(1 + 16);
+    expect(expected.parts.filter((part) => part.bone).map((part) => part.name)).toContain('HindRightFoot');
+    const declared = JSON.parse(plan.declarations) as { feet: string[]; limbs: Record<string, unknown> };
+    expect(declared.feet).toEqual(['FrontLeftFoot', 'FrontRightFoot', 'HindLeftFoot', 'HindRightFoot']);
+    expect(declared.limbs.FrontLeftUpper).toEqual({ hinge: 'FrontLeftLower', foot: 'FrontLeftFoot' });
+    // Its origin is kept, as any upload's is.
+    expect(plan.origin).toEqual(skinnedWolfPieces().pivot);
+  });
+
+  test('what the importer left is replaced only when the call says so', () => {
+    const kept = build({ replaceImporter: false });
+    expect(kept.ok).toBe(false);
+    if (!kept.ok) {
+      expect(kept.errorCode).toBe('importer_rig');
+      expect(kept.errors[0]).toMatch(/has what an importer left on a skinned mesh: an AnimationController and its InitialPoses/);
+    }
+    // Under an AnimationController the root is anchored, for a script to move.
+    const swimmer = build({ controller: 'AnimationController' });
+    if (!swimmer.ok) throw new Error(swimmer.errors.join('\n'));
+    expect(swimmer.plan.rootAnchored).toBe(true);
+  });
+
+  test('a model with no bones still needs its joints, and bones in two parts need them joined', () => {
+    const boneless = build({}, { ...skinnedWolfPieces(), bones: [], importer: undefined, controllers: [] });
+    expect(boneless.ok).toBe(false);
+    if (!boneless.ok) expect(boneless.errors[0]).toMatch(/has no Bones, so its rig is the joints the call gives/);
+    const pieces = skinnedWolfPieces();
+    const two = build({}, {
+      ...pieces,
+      parts: [...pieces.parts, { name: 'Rider', cframe: [0, 5, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1], size: [1, 2, 1] }],
+      bones: [...pieces.bones!, { name: 'RiderSpine', parent: 'Rider', part: 1, cframe: [0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1] }],
+    });
+    expect(two.ok).toBe(false);
+    if (!two.ok) expect(two.errors[0]).toMatch(/Bones are in 2 parts \(Wolf, Rider\)/);
   });
 });
 

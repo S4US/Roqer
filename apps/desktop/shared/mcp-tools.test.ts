@@ -147,6 +147,11 @@ test("mcp-tools - rigging a creature says what it joins, what it declares and wh
     summarizeToolCall("animation", { action: "rig", model: "game.Workspace.Wolf", joints, controller: "AnimationController", replace: "importer" }),
     "animation · rig game.Workspace.Wolf: 2 joints, AnimationController, replacing the rig it was imported with",
   );
+  // A controller with no joints builds around a skinned mesh's bones.
+  assert.strictEqual(
+    summarizeToolCall("animation", { action: "rig", model: "game.Workspace.Wolf", controller: "Humanoid", plan: "quadruped", replace: "importer" }),
+    "animation · rig game.Workspace.Wolf around its bones, a quadruped, Humanoid, replacing the rig it was imported with",
+  );
   assert.strictEqual(
     summarizeToolCall("animation", { action: "rig", model: "game.Workspace.Dog", joints, controller: "Humanoid", expected_revision: "rr1:a" }),
     "animation · rig game.Workspace.Dog: 2 joints, Humanoid, replacing the rig rig built before",

@@ -1808,18 +1808,22 @@ const MADE_WELD_ATTRIBUTE = "RoqerRigWeld";
 const RIG_ORIGIN_ATTRIBUTE = "RoqerRigOrigin";
 /** The most parts a model rig builds on may have: Roqer's bound, so a reading stays small. */
 const MAX_PIECE_PARTS = 512;
+/** The most Bones such a model may have. */
+const MAX_PIECE_BONES = 256;
 const ROOT_PART_NAME = "HumanoidRootPart";
 /** How near its piece's centre an importer's joint frame sits. */
 const IMPORTER_CENTRE_STUDS = 0.01;
 
 type WeldReading = { instance: Instance; pair: [BasePart, BasePart] };
-type ImporterReading = { root: BasePart; motors: Motor6D[]; initialPoses: Instance[]; controllers: AnimationController[] };
+type ImporterReading = { root?: BasePart; motors: Motor6D[]; initialPoses: Instance[]; controllers: AnimationController[] };
 type Pieces = {
 	model: Model;
 	parts: BasePart[];
 	joints: PartJointReading[];
 	welds: WeldReading[];
 	controllers: (Humanoid | AnimationController)[];
+	/** Its skinned meshes' Bones, parents before children. */
+	bones: Bone[];
 	importer?: ImporterReading;
 };
 
@@ -1828,8 +1832,15 @@ type Pieces = {
  * part, each with its frame at the centre of the piece it moves, under an
  * AnimationController, as an uploaded model or a generated one arrives.
  */
-function importerRig(model: Model, joints: PartJointReading[], controllers: (Humanoid | AnimationController)[]): ImporterReading | undefined {
-	if (joints.size() === 0) return undefined;
+function importerRig(model: Model, joints: PartJointReading[], controllers: (Humanoid | AnimationController)[], bones: Bone[]): ImporterReading | undefined {
+	if (joints.size() === 0) {
+		// A skinned mesh needs no joints, so an importer leaves it only an
+		// AnimationController and its InitialPoses folder.
+		const poses = model.FindFirstChild("InitialPoses");
+		const onlyControllers = controllers.filter((controller): controller is AnimationController => controller.IsA("AnimationController"));
+		if (bones.size() === 0 || !poses || onlyControllers.size() === 0 || onlyControllers.size() !== controllers.size()) return undefined;
+		return { motors: [], initialPoses: [poses], controllers: onlyControllers };
+	}
 	const motors: Motor6D[] = [];
 	for (const descendant of model.GetDescendants()) {
 		if (descendant.IsA("AnimationConstraint")) return undefined;
@@ -1874,7 +1885,15 @@ function modelPieces(path: unknown): Pieces | Refusal {
 		if (child.IsA("Humanoid") || child.IsA("AnimationController")) controllers.push(child);
 	}
 	const joints = partJoints(target);
-	return { model: target, parts, joints, welds, controllers, importer: importerRig(target, joints, controllers) };
+	const bones: Bone[] = [];
+	for (const descendant of target.GetDescendants()) {
+		const parent = descendant.Parent;
+		if (descendant.IsA("Bone") && parent && (parent.IsA("Bone") || parent.IsA("BasePart"))) bones.push(descendant);
+	}
+	if (bones.size() > MAX_PIECE_BONES) {
+		return { error: `${path} has ${bones.size()} Bones; rig builds on a model of at most ${MAX_PIECE_BONES}.`, errorCode: "model_too_large" };
+	}
+	return { model: target, parts, joints, welds, controllers, bones, importer: importerRig(target, joints, controllers, bones) };
 }
 
 /** A revision of everything rig's build reads from a model, which its write compares. */
@@ -1892,6 +1911,7 @@ function piecesRevision(pieces: Pieces): string {
 	}
 	for (const weld of pieces.welds) out.push(`w:${weld.instance.ClassName}:${getInstancePath(weld.pair[0])}:${getInstancePath(weld.pair[1])}`);
 	for (const controller of pieces.controllers) out.push(`c:${controller.ClassName}`);
+	for (const bone of pieces.bones) out.push(`b:${getInstancePath(bone)}:${formatComponents(componentsOf(bone.CFrame))}`);
 	return `rp1:${sourceRevision(out.join("\n")).sub(5)}`;
 }
 
@@ -1938,7 +1958,19 @@ function animationReadPieces(requestData: Data) {
 			...(weld.instance.GetAttribute(MADE_WELD_ATTRIBUTE) === true ? { made: true } : {}),
 		})),
 		controllers: pieces.controllers.map((controller) => controller.ClassName),
-		...(importer ? { importer: { rootPart: index.get(importer.root)!, joints: importer.motors.size(), initialPoses: importer.initialPoses.size() } } : {}),
+		...(pieces.bones.size() > 0
+			? {
+				bones: pieces.bones.map((bone) => ({
+					name: bone.Name,
+					parent: bone.Parent!.Name,
+					part: index.get(bone.FindFirstAncestorWhichIsA("BasePart")!)!,
+					cframe: componentsOf(bone.CFrame),
+				})),
+			}
+			: {}),
+		...(importer
+			? { importer: { ...(importer.root ? { rootPart: index.get(importer.root)! } : {}), joints: importer.motors.size(), initialPoses: importer.initialPoses.size() } }
+			: {}),
 		...(!importer && madeRoot && typeIs(kept, "CFrame") ? { origin: componentsOf(madeRoot.CFrame.mul(kept)) } : {}),
 		...(rig ? { rig } : {}),
 		...(typeIs(declared, "string") ? { declarations: declared } : {}),
@@ -1990,10 +2022,10 @@ function animationBuildRig(requestData: Data) {
 			for (const motor of importer.motors) motor.Destroy();
 			for (const poses of importer.initialPoses) if (poses.Parent) poses.Destroy();
 			for (const controller of importer.controllers) controller.Destroy();
-			removed.push(`${importer.motors.size()} Motor6Ds`, importer.root.Name);
+			if (importer.root) removed.push(`${importer.motors.size()} Motor6Ds`, importer.root.Name);
 			if (importer.initialPoses.size() > 0) removed.push("InitialPoses");
 			removed.push("AnimationController");
-			importer.root.Destroy();
+			if (importer.root) importer.root.Destroy();
 		}
 		if (plan.rebuild === true) {
 			let joints = 0;

@@ -975,14 +975,33 @@ every question; the table is in [Live results](#a-skinned-upload). In short:
 
 What follows from it, in the order it is built:
 
-1. Bones read into the rig: a bone is a joint whose C0 is its `CFrame` and
-   whose C1 is the identity, moving a "part" named after it that is never
-   drawn. The compiler, the checks, the builder and `verify` take it as they
-   take a `Motor6D`.
-2. Previews that bend the mesh: the plugin reads each vertex's bones and
-   weights, and core skins the mesh for the contact sheet and the 3D preview.
-3. `rig` on a skinned model: declarations, and for one that walks, the root
-   part and `Humanoid` around its mesh.
+1. **Done: bones read into the rig.** A bone is a joint named after itself,
+   whose C0 is its `CFrame` and whose C1 is the identity, moving a "part" of
+   its own name that is never drawn and has no box. The plugin's rig reading
+   lists bones beside `Motor6D`s and its playback sampling reads their
+   `Transform`. The compiler, the generators and the checks needed no change:
+   a pose was already written in the body's axes and turned into the joint's,
+   and keyframes already nested as the joints do. What a bone's missing box
+   changes is in the declarations: a limb ends where the one bone below its
+   last bone begins (or at its foot bone), and a foot that is a bone meets the
+   ground where the bone is. Live, a wave down a chain of eight bones built,
+   and played as checked on a copy and on a playtest's server, within 0.05°.
+2. **Done: previews that bend the mesh.** The plugin reads each corner's
+   bones and weights through `EditableMesh`; the contact sheet skins the mesh
+   itself and the 3D preview carries a glTF skin. A vertex with no weight
+   moves with its part. The result's `skin` says whether a part that holds
+   bones was drawn bent or rigid. Live, on the spike's uploaded snake
+   (`ROQER_SKINNED_ASSET_ID`), the skin was read and both sheets bent the
+   mesh; Blender 5.2 imported the 3D preview and its mesh followed the bones.
+3. **Done: `rig` on a skinned model.** Without `joints`, `rig {model, plan}`
+   declares the bones as it declares any rig's joints. With a `controller`
+   and no `joints`, it builds around the mesh: a hidden root joined to the one
+   part that holds the bones, the controller with its `Animator`, the physics,
+   and the plan's declarations from the bones' names; `replace: "importer"`
+   takes out the `AnimationController` and `InitialPoses` the upload came
+   with. Bones are never made, moved or removed. A quadruped's legs are bones
+   named `<Leg>Upper`, `<Leg>Lower` and `<Leg>Foot`, the foot bone at the
+   paw's sole. Live, the uploaded snake was built around under a `Humanoid`.
 4. The Blender recipe and the worker's check of the weights, then the eval.
 
 ### 8. Animating in Blender — proposed

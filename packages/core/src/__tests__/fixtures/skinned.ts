@@ -4,6 +4,7 @@
 // +Y runs along it, so no bone rests in the body's axes; a bone's joint has its
 // frame in its parent as C0 and the identity as C1.
 import type { ModelRigJoint, ModelRigPart, ModelRigReading } from '../../animation/model-rig.js';
+import type { PiecesReading } from '../../animation/rig-build.js';
 import { cf, inverse, motor, times, type CF, type V } from './parts-dog.js';
 
 /** A bone whose +Y points toward -Z, forward: its X is the body's -X and its Z the body's -Y, as the spike read one. */
@@ -49,6 +50,26 @@ export function skinnedSnake(declarations?: unknown): ModelRigReading {
     parts,
     joints,
     ...(declarations === undefined ? {} : { declarations: JSON.stringify(declarations) }),
+  };
+}
+
+/**
+ * The wolf as it arrives from an upload, for `rig` to build on: one skinned
+ * MeshPart standing with its paws on the ground at `at`, its bones inside it,
+ * and what the importer left, an AnimationController and its InitialPoses.
+ */
+export function skinnedWolfPieces(at: V = [0, 2, 0]): PiecesReading {
+  const wolf = skinnedWolf();
+  return {
+    path: 'game.Workspace.SkinnedWolf',
+    revision: 'rp1:pieces',
+    pivot: [at[0], at[1] - 2, at[2], 1, 0, 0, 0, 1, 0, 0, 0, 1],
+    parts: [{ name: 'Wolf', cframe: [...at, 1, 0, 0, 0, 1, 0, 0, 0, 1], size: [1.4, 4, 6], mesh: 'rbxassetid://2' }],
+    joints: [],
+    welds: [],
+    bones: wolf.joints.filter((joint) => joint.name !== 'Root').map((joint) => ({ name: joint.name, parent: joint.part0, part: 0, cframe: joint.c0 })),
+    controllers: ['AnimationController'],
+    importer: { joints: 0, initialPoses: 1 },
   };
 }
 

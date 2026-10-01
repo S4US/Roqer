@@ -2167,7 +2167,10 @@ export class RobloxStudioTools {
     const stock = args.stock;
     if (stock === undefined) {
       if (args.position !== undefined) throw new Error('position goes with stock: it is where a stock NPC\'s feet stand');
-      return args.joints === undefined ? this._animationAdoptRig(model, args, instance_id) : this._animationBuildRig(model, args, instance_id);
+      // With joints, or with a controller for a skinned mesh whose bones are its joints, rig builds; otherwise it adopts.
+      return args.joints === undefined && args.controller === undefined
+        ? this._animationAdoptRig(model, args, instance_id)
+        : this._animationBuildRig(model, args, instance_id);
     }
     for (const key of ['joints', 'controller', 'plan', 'declarations', 'replace', 'pivot_space']) {
       if (args[key] !== undefined) throw new Error(`${key} is for rigging a model's own pieces; a stock NPC takes model, stock and position`);
@@ -2214,7 +2217,8 @@ export class RobloxStudioTools {
    * sheet, every joint turned a little each way.
    */
   private async _animationBuildRig(model: string, args: Record<string, unknown>, instance_id?: string) {
-    const joints = parseBuildJoints(args.joints);
+    // No joints with a controller: a skinned mesh, whose Bones are its joints; the plan refuses any other model.
+    const joints = args.joints === undefined ? { ok: true as const, joints: [] } : parseBuildJoints(args.joints);
     if (!joints.ok) return this._textResult({ error: 'The joints are not valid; nothing was changed.', errorCode: 'invalid_arguments', errors: joints.errors });
     const controller = args.controller;
     if (controller !== 'Humanoid' && controller !== 'AnimationController') {
@@ -2274,8 +2278,8 @@ export class RobloxStudioTools {
    * only read the rig and draw its range sheet.
    */
   private async _animationAdoptRig(model: string, args: Record<string, unknown>, instance_id?: string) {
-    for (const key of ['controller', 'replace', 'pivot_space']) {
-      if (args[key] !== undefined) throw new Error(`${key} goes with joints: rig without joints adopts the model's own joints and changes none of them`);
+    for (const key of ['replace', 'pivot_space']) {
+      if (args[key] !== undefined) throw new Error(`${key} goes with joints or a controller: rig with neither adopts the model's own joints and changes none of them`);
     }
     const { plan, declarations, expectedRevision } = this._rigDeclarationArgs(args);
     const reading = await this._callSingle('/api/animation-read-rig', { model }, undefined, instance_id);
