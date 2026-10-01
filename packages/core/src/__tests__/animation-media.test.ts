@@ -6,7 +6,9 @@ import { compilePoseAnimation, type KeyframeSequenceDescription } from '../anima
 import { R15_RIG } from '../animation/r15-rig.js';
 import { R6_RIG } from '../animation/r6-rig.js';
 import { previewProps } from '../animation/animation-tool.js';
-import { buildTracks, pointToWorld, poseRig } from '../animation/motion.js';
+import {
+  IDENTITY_FRAME, buildTracks, degreesBetween, multiply, pointToWorld, poseRig, restPose, translation, type Frame,
+} from '../animation/motion.js';
 import { normalizeToolResult } from '../mcp-runtime.js';
 
 function compiled(input: unknown): KeyframeSequenceDescription {
@@ -207,7 +209,58 @@ describe('rig GLB', () => {
     // The joint's offset in the HumanoidRootPart plus the keyed half-stud drop.
     expect(translations.slice(-3).map((value) => Math.round(value * 1000) / 1000)).toEqual([0, -1.5, 0]);
   });
+
+  // The viewer stands a model on its floor, and frames it, by measuring it
+  // before it plays: the file's own pose has to be the rig standing. R6's
+  // joints are turned, so a joint node without C0's turn laid the figure on
+  // its back, and the preview sank its legs two studs under the floor.
+  test.each([
+    ['R15', raise(false), R15_RIG],
+    ['R6', compiled({
+      name: 'WaveR6', rig: 'R6', loop: true, keyframes: [
+        { time: 0, joints: { RightShoulder: { aim: [1, 0.5, 0.2] } } },
+        { time: 0.35, joints: { RightShoulder: { aim: [1, 1.4, 0.2] } } },
+        { time: 0.7, joints: { RightShoulder: { aim: [1, 0.5, 0.2] } } },
+      ],
+    }), R6_RIG],
+  ])('stands %s at rest as the rig does, before the animation plays', (_name, sequence, rig) => {
+    const glb = parseGlb(renderRigGlb(sequence, sequence.name, undefined, rig));
+    const nodes: { name: string; translation?: number[]; rotation?: number[]; children?: number[] }[] = glb.json.nodes;
+    const atRest = new Map<string, Frame>();
+    const visit = (index: number, parent: Frame) => {
+      const node = nodes[index];
+      const own = multiply(translation((node.translation ?? [0, 0, 0]) as [number, number, number]), quaternionFrame(node.rotation ?? [0, 0, 0, 1]));
+      const world = multiply(parent, own);
+      atRest.set(node.name, world);
+      for (const child of node.children ?? []) visit(child, world);
+    };
+    // Under the root's half turn, which only faces the figure the way the viewer expects.
+    for (const child of nodes[glb.json.scenes[0].nodes[0]].children ?? []) visit(child, IDENTITY_FRAME);
+
+    for (const [part, expected] of restPose(rig)) {
+      const actual = atRest.get(part);
+      if (!actual) continue;
+      actual.p.forEach((value, axis) => expect(value).toBeCloseTo(expected.p[axis], 5));
+      expect(degreesBetween(actual.r, expected.r)).toBeLessThan(1e-3);
+    }
+    // The soles on the rig's ground, where the viewer puts its floor.
+    for (const foot of rig.feet) {
+      expect(pointToWorld(atRest.get(foot)!, [0, -rig.parts[foot][1] / 2, 0])[1]).toBeCloseTo(rig.ground, 2);
+    }
+  });
 });
+
+/** A unit quaternion, [x, y, z, w], as a rotation. */
+function quaternionFrame([x, y, z, w]: number[]): Frame {
+  return {
+    p: [0, 0, 0],
+    r: [
+      1 - 2 * (y * y + z * z), 2 * (x * y - z * w), 2 * (x * z + y * w),
+      2 * (x * y + z * w), 1 - 2 * (x * x + z * z), 2 * (y * z - x * w),
+      2 * (x * z - y * w), 2 * (y * z + x * w), 1 - 2 * (x * x + y * y),
+    ],
+  };
+}
 
 describe('held weapon', () => {
   const slash = compiled({

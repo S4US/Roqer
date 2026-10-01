@@ -107,6 +107,13 @@ test("an animation reads as checking or building, whatever its summary says", ()
   assert.equal(activityLabel("animation", rig, false), "Making an NPC");
   assert.equal(activityLabel("animation", rig, true), "Made an NPC");
   assert.equal(activityKind("animation", rig), "edit");
+  // An action the tool refuses was no check: it reads as a call, and not as a read.
+  for (const args of [{ action: "help" }, {}]) {
+    const unknown = activityTarget("animation", summarizeToolCall("animation", args));
+    assert.equal(activityLabel("animation", unknown, true), "Called the animation tool");
+    assert.equal(activityLabel("animation", unknown, false), "Calling the animation tool");
+    assert.equal(activityKind("animation", unknown), "edit");
+  }
 });
 
 test("every phase can name itself in both tenses", () => {

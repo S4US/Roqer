@@ -296,7 +296,16 @@ function summarizeAnimation(args: Record<string, unknown>): string {
     }
     return `animation · wire ${id} to the ${slot} slot of every character${replaces}`;
   }
-  const action = args.action === "build" ? "build" : args.action === "verify" ? "verify" : "check";
+  // An action the tool does not have is refused before it does anything.
+  // Summarised as a check, it read in the timeline, and on the approval card,
+  // as a harmless check it never was. Named only when it is a plain word.
+  if (args.action !== "check" && args.action !== "build" && args.action !== "verify") {
+    if (args.action === undefined) return "animation · unknown action: none given";
+    return typeof args.action === "string" && /^[A-Za-z_-]{1,20}$/.test(args.action)
+      ? `animation · unknown action: ${args.action}`
+      : "animation · unknown action";
+  }
+  const action = args.action;
   const animation = typeof args.animation === "object" && args.animation !== null && !Array.isArray(args.animation)
     ? args.animation as Record<string, unknown>
     : {};
