@@ -14,8 +14,11 @@ import * as path from 'path';
 import { SKIN_SLOTS, type MeshSkin, type PartMesh } from './box-rig.js';
 import type { Rig, Vec3 } from './rig.js';
 
-/** The most triangles in one mesh a preview draws; Studio refuses larger ones before sending them. */
-export const MAX_MODEL_MESH_TRIANGLES = 3000;
+/**
+ * The most triangles in one mesh a preview draws, Roblox's own limit for a
+ * mesh it imports; Studio refuses larger ones before sending them.
+ */
+export const MAX_MODEL_MESH_TRIANGLES = 20_000;
 /** The most meshes one read from Studio asks for. */
 export const MAX_MESHES_PER_READ = 8;
 /** The most triangles of meshes one preview draws; past it, parts are drawn as their boxes. */
@@ -59,14 +62,28 @@ const finiteList = (value: unknown): value is number[] =>
 
 /**
  * A mesh Studio sent, checked and made ready to draw, or undefined when it is
- * malformed or too large. Every triangle is turned to face the way its
- * corners' normals do, whatever winding the source used.
+ * malformed or too large. It comes as vertices and the triangles' `indices`
+ * into them, or, from a plugin that predates them, as each triangle's corners
+ * in turn. Every triangle is turned to face the way its corners' normals do,
+ * whatever winding the source used.
  */
 export function normalizeModelMesh(raw: unknown): ModelMesh | undefined {
   if (!isRecord(raw) || !finiteList(raw.positions) || !finiteList(raw.normals) || !finiteList(raw.min) || !finiteList(raw.max)) return undefined;
   const { positions, normals, min, max } = raw;
-  const triangles = positions.length / 9;
-  if (positions.length === 0 || positions.length % 9 !== 0 || normals.length !== positions.length || triangles > MAX_MODEL_MESH_TRIANGLES) return undefined;
+  const vertices = positions.length / 3;
+  if (positions.length === 0 || positions.length % 3 !== 0 || normals.length !== positions.length) return undefined;
+  let corners: number[];
+  if (raw.indices === undefined) {
+    if (vertices % 3 !== 0) return undefined;
+    corners = Array.from({ length: vertices }, (_unused, index) => index);
+  } else {
+    if (!finiteList(raw.indices) || raw.indices.length === 0 || raw.indices.length % 3 !== 0) return undefined;
+    if (!raw.indices.every((index) => Number.isInteger(index) && index >= 0 && index < vertices)) return undefined;
+    corners = raw.indices;
+  }
+  const triangles = corners.length / 3;
+  // No more vertices than the triangles' corners, so a mesh's size is bounded by its triangles.
+  if (triangles > MAX_MODEL_MESH_TRIANGLES || vertices > corners.length) return undefined;
   if (min.length !== 3 || max.length !== 3 || min.some((value, axis) => value > max[axis])) return undefined;
   // Every corner inside its bounds, give or take the rounding it was sent with.
   for (let index = 0; index < positions.length; index += 1) {
@@ -75,7 +92,7 @@ export function normalizeModelMesh(raw: unknown): ModelMesh | undefined {
   }
   const indices: number[] = [];
   for (let triangle = 0; triangle < triangles; triangle += 1) {
-    const [a, b, c] = [triangle * 3, triangle * 3 + 1, triangle * 3 + 2];
+    const [a, b, c] = [corners[triangle * 3], corners[triangle * 3 + 1], corners[triangle * 3 + 2]];
     const edge1 = [0, 1, 2].map((axis) => positions[b * 3 + axis] - positions[a * 3 + axis]);
     const edge2 = [0, 1, 2].map((axis) => positions[c * 3 + axis] - positions[a * 3 + axis]);
     const face = [
@@ -89,7 +106,7 @@ export function normalizeModelMesh(raw: unknown): ModelMesh | undefined {
   }
   let skin: MeshSkin | undefined;
   if (raw.skin !== undefined) {
-    skin = normalizeSkin(raw.skin, positions.length / 3);
+    skin = normalizeSkin(raw.skin, vertices);
     if (!skin) return undefined;
   }
   return { positions, normals, indices, min: [min[0], min[1], min[2]], max: [max[0], max[1], max[2]], ...(skin ? { skin } : {}) };
@@ -120,8 +137,9 @@ const known = new Map<string, ModelMesh>();
 const refused = new Map<string, string>();
 
 function meshFile(directory: string, id: string): string {
-  // The second layout: a skinned mesh is kept with its skin, which the first never read.
-  return path.join(directory, 'model-meshes-2', `${createHash('sha256').update(id, 'utf8').digest('hex').slice(0, 32)}.json`);
+  // The third layout: vertices and their triangles' indices, which the second,
+  // each triangle's corners in turn, never read.
+  return path.join(directory, 'model-meshes-3', `${createHash('sha256').update(id, 'utf8').digest('hex').slice(0, 32)}.json`);
 }
 
 /** A mesh already read: from this process, or from the disk cache when it is sound and is this mesh's. */
@@ -164,7 +182,7 @@ export function storeModelMesh(id: string, raw: unknown, directory: string): Mod
     if (fs.readdirSync(folder).length < MAX_CACHED_MESHES) {
       const file = meshFile(directory, id);
       const temporary = `${file}.${process.pid}.tmp`;
-      fs.writeFileSync(temporary, JSON.stringify({ id, positions: mesh.positions, normals: mesh.normals, min: mesh.min, max: mesh.max, ...(mesh.skin ? { skin: mesh.skin } : {}) }));
+      fs.writeFileSync(temporary, JSON.stringify({ id, positions: mesh.positions, normals: mesh.normals, indices: mesh.indices, min: mesh.min, max: mesh.max, ...(mesh.skin ? { skin: mesh.skin } : {}) }));
       fs.renameSync(temporary, file);
     }
   } catch {

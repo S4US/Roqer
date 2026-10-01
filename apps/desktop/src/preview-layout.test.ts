@@ -1,11 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
-  ANIMATION_NAME_LABEL, ANIMATION_PREVIEW_TITLE, ANIMATION_RIG_LABEL, BLENDER_MODEL_LABEL, BLENDER_PREVIEW_TITLE, RIG_RANGE_SHEET_TITLE, SCREENSHOT_VIEW_LABEL,
+  ANIMATION_BOXES_LABEL, ANIMATION_NAME_LABEL, ANIMATION_PREVIEW_TITLE, ANIMATION_RIG_LABEL, BLENDER_MODEL_LABEL, BLENDER_PREVIEW_TITLE, RIG_RANGE_SHEET_TITLE, SCREENSHOT_VIEW_LABEL,
   SCREENSHOT_VIEW_PLAYTEST, type RunChange, type RunEvidence,
 } from "../shared/run-events";
 import {
-  animationRigCaption, hasModelPreview, keptPreviewIds, previewCaption, previewLayout, previewSource, previewSourceLabel, previewSubject, previewTileLabel,
+  animationRigCaption, hasModelPreview, keptPreviewIds, previewBoxesNote, previewCaption, previewLayout, previewSource, previewSourceLabel, previewSubject, previewTileLabel,
   previewVersions, shortTarget,
 } from "./preview-layout";
 
@@ -127,6 +127,21 @@ test("the picture budget keeps the latest of every thing before any earlier vers
   assert.deepEqual([...keptPreviewIds(images, 2)].sort(), ["c", "w4"]);
   assert.equal(keptPreviewIds(images, 0).size, 0);
   assert.equal(keptPreviewIds(images, 99).size, images.length);
+});
+
+test("an animation's preview or a rig's range sheet that drew parts as boxes says so, and nothing else does", () => {
+  const boxes = { label: ANIMATION_BOXES_LABEL, value: "Octopus (it has 30000 triangles; a preview draws a mesh of at most 20000)" };
+  const animation: RunEvidence = { id: "a", kind: "inspection", title: ANIMATION_PREVIEW_TITLE, imageDataUrl: image, metadata: [boxes] };
+  const range: RunEvidence = { id: "b", kind: "inspection", title: RIG_RANGE_SHEET_TITLE, imageDataUrl: image, metadata: [boxes] };
+  const note = "Drawn as boxes, not their meshes: Octopus (it has 30000 triangles; a preview draws a mesh of at most 20000)";
+  assert.equal(previewBoxesNote(animation), note);
+  assert.equal(previewBoxesNote(range), note);
+  // Every part drawn as itself, or a preview recorded before boxes were noted.
+  assert.equal(previewBoxesNote({ ...animation, metadata: [] }), undefined);
+  assert.equal(previewBoxesNote({ ...animation, metadata: undefined }), undefined);
+  // Only an animation's or a rig's preview is drawn by the MCP from a rig.
+  assert.equal(previewBoxesNote(shot("c", { metadata: [boxes] })), undefined);
+  assert.equal(previewBoxesNote({ ...animation, title: BLENDER_PREVIEW_TITLE }), undefined);
 });
 
 test("a rig's range sheet is its own source, labelled by the model, and each model's sheets are versions of one", () => {

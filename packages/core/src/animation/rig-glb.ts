@@ -70,8 +70,13 @@ class BinaryBuilder {
       type,
     };
     if (options.bounds) {
-      const min = Array.from({ length: size }, (_unused, axis) => Math.min(...values.filter((_v, index) => index % size === axis)));
-      const max = Array.from({ length: size }, (_unused, axis) => Math.max(...values.filter((_v, index) => index % size === axis)));
+      // A loop, not a spread: a large mesh has more values than a call takes arguments.
+      const min = new Array<number>(size).fill(Infinity);
+      const max = new Array<number>(size).fill(-Infinity);
+      values.forEach((value, index) => {
+        min[index % size] = Math.min(min[index % size], value);
+        max[index % size] = Math.max(max[index % size], value);
+      });
       accessor.min = min;
       accessor.max = max;
     }

@@ -611,9 +611,9 @@ built:
   size at rest, in cells up to twice R15's width for a long body, with a
   shadow that follows its footprint. Parts are drawn as Roblox shapes them,
   welded parts with the part they move with, and MeshParts from their own
-  meshes, read through `EditableMesh` and cached by mesh ID: at most 3,000
+  meshes, read through `EditableMesh` and cached by mesh ID: at most 20,000
   triangles a mesh and 40,000 a preview, a part past either drawn as its box
-  and named in the result.
+  and named in the result, and on the preview in Roqer.
 - **Building on the model.** `build` previews on a copy of the model while its
   rig's revision is the one the checks used, and refuses a model a copy would
   not preview faithfully (spike question 4). A keyframe's poses and nesting

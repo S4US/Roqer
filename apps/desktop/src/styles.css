@@ -1024,6 +1024,11 @@ a.small-button:focus-visible { outline: 2px solid var(--accent); outline-offset:
 .preview-caption em + .previews-not-kept { margin-left: 0; }
 .preview-caption em + .previews-not-kept::before { content: "· "; }
 .previews-not-kept { cursor: help; }
+/* A preview that drew some of the model's parts as boxes says so, so a box is never taken for the model. */
+.preview-boxes { display: inline-flex; flex: 0 1 auto; align-items: center; gap: 5px; min-width: 0; overflow: hidden; color: var(--warning); cursor: help; }
+.preview-boxes > svg { flex: 0 0 auto; align-self: center; }
+.preview-caption .preview-boxes, .preview-caption .preview-boxes > span { color: var(--warning); }
+.preview-boxes > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* A picture's versions: one animation checked again and again is one picture. */
 .preview-versions { display: inline-flex; flex: 0 0 auto; align-items: center; gap: 2px; margin-left: auto; color: var(--muted); font-size: var(--type-meta); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .preview-caption .preview-versions { overflow: visible; align-self: center; }
@@ -1045,6 +1050,7 @@ a.small-button:focus-visible { outline: 2px solid var(--accent); outline-offset:
 .preview-viewer-title strong { display: inline-flex; align-items: center; gap: 7px; font-size: var(--type-heading); font-weight: var(--weight-medium); }
 .preview-viewer-title strong > svg { flex: 0 0 auto; color: #9299a5; }
 .preview-viewer-title span { overflow: hidden; color: #9299a5; font-size: 12.5px; text-overflow: ellipsis; white-space: nowrap; }
+.preview-viewer-title .preview-boxes, .preview-viewer-title .preview-boxes > span { color: #d2a451; }
 .preview-viewer-mode { display: flex; flex: 0 0 auto; gap: 2px; margin-left: auto; padding: 3px; background: #111318; border: 1px solid #282c34; border-radius: 9px; }
 .preview-viewer-mode button { display: inline-flex; align-items: center; gap: 6px; height: 26px; padding: 0 10px; color: #9299a5; background: transparent; border: 0; border-radius: 6px; font-size: 12px; font-weight: var(--weight-medium); }
 .preview-viewer-mode button:hover { color: #c2c7d0; }

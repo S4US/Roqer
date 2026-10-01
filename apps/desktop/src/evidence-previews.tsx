@@ -1,10 +1,10 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { Box, Camera, ChevronLeft, ChevronRight, Gamepad2, ImageIcon, Maximize2, PersonStanding, Rotate3d, X } from "lucide-react";
+import { Box, Camera, ChevronLeft, ChevronRight, Gamepad2, ImageIcon, Maximize2, PersonStanding, Rotate3d, TriangleAlert, X } from "lucide-react";
 import { MAX_RECORDED_EVIDENCE_IMAGES, type RunChange, type RunEvidence } from "../shared/run-events";
 import { ModelViewer } from "./model-viewer";
 import {
-  animationRigCaption, hasModelPreview, pictureCategory, previewCaption, previewLayout, previewSource, previewSourceLabel, previewTileLabel,
+  animationRigCaption, hasModelPreview, pictureCategory, previewBoxesNote, previewCaption, previewLayout, previewSource, previewSourceLabel, previewTileLabel,
   previewVersions, type PictureCategory, type PreviewTile,
 } from "./preview-layout";
 import { evidenceImages, previewsNotShown } from "./run-view";
@@ -71,6 +71,7 @@ export const PreviewsPanel = memo(function PreviewsPanel({ category, evidence, c
   const latest = images[images.length - 1];
   const latestVersions = versions.get(latest.id);
   const caption = previewCaption(onShow(choice, latest), changes);
+  const boxes = previewBoxesNote(onShow(choice, latest));
   const tile = (item: PreviewTile, role: "lead" | "rail" | "even") => (
     role === "lead" && playsInline(onShow(choice, item.evidence))
       ? <LiveAnimationTile key={item.evidence.id} tile={item} count={images.length} choice={choice} paused={open !== null} onOpen={show} />
@@ -87,6 +88,7 @@ export const PreviewsPanel = memo(function PreviewsPanel({ category, evidence, c
       <div className="preview-caption">
         <strong>{latest.title}</strong>
         {caption && <span>{caption}</span>}
+        {boxes && <BoxesNote note={boxes} />}
         {latestVersions !== undefined && <VersionStepper evidence={latest} choice={choice} />}
         {images.length > 1 && <em>Latest of {images.length}</em>}
         {notShown > 0 && <em
@@ -101,6 +103,11 @@ export const PreviewsPanel = memo(function PreviewsPanel({ category, evidence, c
     {open !== null && <PreviewViewer images={images} changes={changes} choice={choice} index={open} onIndex={setOpen} onClose={close} />}
   </div>;
 });
+
+/** That a preview drew some of the model's parts as boxes, not their meshes; the full reason on hover. */
+function BoxesNote({ note }: { note: string }) {
+  return <span className="preview-boxes" title={note}><TriangleAlert size={13} aria-hidden="true" /><span>{note}</span></span>;
+}
 
 function SourceIcon({ evidence, size }: { evidence: RunEvidence; size: number }) {
   switch (previewSource(evidence)) {
@@ -237,6 +244,7 @@ function PreviewViewer({ images, changes, choice, index, onIndex, onClose }: {
   const atStart = index <= 0;
   const atEnd = index >= images.length - 1;
   const caption = previewCaption(current, changes);
+  const boxes = previewBoxesNote(current);
   // The picture the reader switched to the still for; any other opens in 3D.
   const [pictureAt, setPictureAt] = useState<number | null>(null);
   const pictureButton = useRef<HTMLButtonElement>(null);
@@ -282,6 +290,7 @@ function PreviewViewer({ images, changes, choice, index, onIndex, onClose }: {
             : inModel
               ? "The job's model in 3D, on Roblox's axes; not in the place yet"
               : "Rendered by Blender from the job's output; not in the place yet")}</span>
+        {boxes && <BoxesNote note={boxes} />}
       </div>
       {choice.versions.has(picture.id) && <VersionStepper evidence={picture} choice={choice} />}
       {model && <div className="preview-viewer-mode" role="group" aria-label="Show as">

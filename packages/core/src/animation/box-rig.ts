@@ -272,25 +272,27 @@ function placed(mesh: PartMesh, offset: RigAttachment['offset']): PartMesh {
 
 /** Several meshes as one. When one is skinned, the others' vertices get no weights, so they move with the part. */
 function merged(meshes: readonly PartMesh[]): PartMesh {
-  const result: PartMesh = { positions: [], normals: [], indices: [] };
   const skinned = meshes.find((mesh) => mesh.skin);
-  const skin: MeshSkin | undefined = skinned?.skin ? { bones: skinned.skin.bones, joints: [], weights: [] } : undefined;
-  for (const mesh of meshes) {
-    const base = result.positions.length / 3;
-    result.positions.push(...mesh.positions);
-    result.normals.push(...mesh.normals);
-    result.indices.push(...mesh.indices.map((index) => index + base));
-    if (!skin) continue;
-    if (mesh === skinned) {
-      skin.joints.push(...mesh.skin!.joints);
-      skin.weights.push(...mesh.skin!.weights);
-    } else {
-      const slots = (mesh.positions.length / 3) * SKIN_SLOTS;
-      skin.joints.push(...new Array<number>(slots).fill(0));
-      skin.weights.push(...new Array<number>(slots).fill(0));
-    }
-  }
-  return skin ? { ...result, skin } : result;
+  // Joined, not pushed with a spread: a large mesh has more values than a call takes arguments.
+  let base = 0;
+  const offsetIndices = meshes.map((mesh) => {
+    const shifted = mesh.indices.map((index) => index + base);
+    base += mesh.positions.length / 3;
+    return shifted;
+  });
+  const result: PartMesh = {
+    positions: meshes.flatMap((mesh) => mesh.positions),
+    normals: meshes.flatMap((mesh) => mesh.normals),
+    indices: offsetIndices.flat(),
+  };
+  if (!skinned?.skin) return result;
+  const slots = (mesh: PartMesh) => (mesh.positions.length / 3) * SKIN_SLOTS;
+  const skin: MeshSkin = {
+    bones: skinned.skin.bones,
+    joints: meshes.flatMap((mesh) => (mesh === skinned ? skinned.skin!.joints : new Array<number>(slots(mesh)).fill(0))),
+    weights: meshes.flatMap((mesh) => (mesh === skinned ? skinned.skin!.weights : new Array<number>(slots(mesh)).fill(0))),
+  };
+  return { ...result, skin };
 }
 
 /**
