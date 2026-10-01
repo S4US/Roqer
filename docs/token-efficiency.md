@@ -77,9 +77,11 @@ these rules on top of the MCP response contract:
   the provider reuses its own tool results, prompt cache, and compaction. A
   replayed transcript (`conversation-prompt.ts`, bounded to 64,000 characters)
   is the fallback when no current session exists.
-- **Schemas on demand.** The tool description spells out the frequent
-  operations; any other operation's schema is answered locally with
-  `{help: true}` and never reaches Studio.
+- **Schemas on demand.** The Studio tool guide (`studioToolGuide`, sent in
+  the developer instructions) spells out the frequent operations; any other
+  operation's schema is answered locally with `{help: true}` and never reaches
+  Studio. Tool descriptions stay within 2,048 characters, because Claude Code
+  silently keeps only that much of an MCP tool's description.
 - **The bridge contract is in the instructions.** `apps/desktop/agent/developer.md`
   carries what every Studio task needs, so a run does not spend a model turn
   loading `roblox-studio-mcp` before it starts; that skill holds only the deeper

@@ -22,7 +22,7 @@ Roqer exposes the bridge as one `roblox_studio` tool:
 {"operation":"get_place_info","arguments":{}}
 ```
 
-Use operation names and argument fields from this skill and the live tool description. Roqer injects the selected `instance_id` when it is absent, then applies its own read-only/approval policy before dispatch. Never try to bypass that boundary or treat a successful request as proof of the intended result.
+Use operation names and argument fields from this skill and the `<roblox-studio-tool>` guide in your instructions. Roqer injects the selected `instance_id` when it is absent, then applies its own read-only/approval policy before dispatch. Never try to bypass that boundary or treat a successful request as proof of the intended result.
 
 Some other `roblox-brain` domain skills use official or bridge-neutral MCP names. Translate those recommendations by capability to the operations listed here; do not call a name that the live `roblox_studio` schema does not expose.
 

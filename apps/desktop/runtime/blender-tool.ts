@@ -21,7 +21,9 @@ export function blenderToolDefinition(): Readonly<{ name: typeof BLENDER_TOOL_NA
     name: BLENDER_TOOL_NAME,
     description: [
       "Run a Python script in the user's local Blender to model a mesh Roblox's own parts cannot make (organic or curved shapes, a hero prop, a vehicle body), or to render a PNG such as an item icon for UI.",
-      "The script runs in background Blender with bpy imported, OUTPUT_DIR defined, and roqer helpers that place parts by their ends (roqer.box, roqer.box_between, roqer.cylinder_between, roqer.cone_between, roqer.join). It starts on an empty scene, or, with continue_from set to an earlier job's id, on the scene that job saved: every job whose script finishes saves its scene, and its result lists that scene's objects by name, size and centre. Build a detailed model in stages, one job per stage (for a vehicle: frame, body, running gear, details), each continuing from the last and checked in its preview before the next; fix a stage with a short script that changes the objects already there by name. A job that fails saves nothing; to undo a step, continue from an earlier job.",
+      // Claude Code keeps only a tool description's first 2,048 characters, so
+      // how the helpers and staged jobs work is told on `script` and `continue_from`.
+      "Build a detailed model in stages, one job per stage, each continuing from the last (see continue_from).",
       "Export into OUTPUT_DIR when the model is ready to upload, for example bpy.ops.export_scene.gltf(filepath=os.path.join(OUTPUT_DIR, 'kart.glb'), export_format='GLB', export_apply=True, use_visible=True), or render a PNG there; a job that exports nothing still returns a preview of its scene. Write nowhere else and fetch nothing from the network.",
       "Roqer does not trust the script's own report: it re-imports each exported .glb/.gltf/.fbx/.obj (or, when nothing was exported, the saved scene), returns its triangles, meshes, materials, size, where its colour lives, its layout (pieces that float or pass into each other) and any smooth shading across hard edges, and attaches four views of it in one preview; a PNG is attached as itself with its pixel size. Look at them before using them.",
       `Each job is irreversible: the user approves it unless they run in Full auto, so make each job a real stage rather than a probe. A failed script returns Blender's traceback. A script may be at most ${MAX_BLENDER_SCRIPT_CHARACTERS.toLocaleString("en-US")} characters: build repeated parts (wheels, bolts, tubes, panels) with loops and functions rather than writing each out.`,
@@ -34,12 +36,12 @@ export function blenderToolDefinition(): Readonly<{ name: typeof BLENDER_TOOL_NA
           type: "string",
           minLength: 1,
           maxLength: MAX_BLENDER_SCRIPT_CHARACTERS,
-          description: "The complete Python script. bpy, OUTPUT_DIR and the roqer helpers are already defined.",
+          description: "The complete Python script, run in background Blender. bpy is imported, OUTPUT_DIR is defined, and roqer helpers place parts by their ends: roqer.box, roqer.box_between, roqer.cylinder_between, roqer.cone_between, roqer.join.",
         },
         continue_from: {
           type: "string",
           pattern: BLENDER_JOB_ID_PATTERN,
-          description: "The id of an earlier job in this chat whose saved scene the script starts from, as that job's result gave it. Leave it out to start from an empty scene, as a chat's first job always does: no id stands for an empty scene.",
+          description: "The id of an earlier job in this chat whose saved scene the script starts from, as that job's result gave it. Leave it out to start from an empty scene, as a chat's first job always does: no id stands for an empty scene. Every job whose script finishes saves its scene, and its result lists that scene's objects by name, size and centre. Build a detailed model in stages (for a vehicle: frame, body, running gear, details), each continuing from the last and checked in its preview before the next; fix a stage with a short script that changes the objects already there by name. A job that fails saves nothing; to undo a step, continue from an earlier job.",
         },
         timeout_seconds: {
           type: "number",

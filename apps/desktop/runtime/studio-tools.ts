@@ -120,11 +120,11 @@ function numberField(value: unknown, key: string): number | undefined {
 }
 
 /**
- * The operations whose signatures the tool description carries.
+ * The operations whose signatures the tool guide carries.
  *
  * The `operation` enum names every tool the server has, but a bare name is not
  * something a model can call correctly, and spelling all of them out would put
- * the whole catalog in front of the model on every turn. So the description
+ * the whole catalog in front of the model on every turn. So the guide
  * documents the build-inspect-playtest loop an ordinary run walks, and every
  * other operation is discovered the cheap way: call it, and a call whose
  * arguments do not fit comes back with that operation's schema attached.
@@ -158,20 +158,43 @@ const DOCUMENTED_OPERATIONS = [
   "upload_asset",
 ];
 
+/**
+ * The most of a tool description Claude Code passes on: it cuts an MCP tool's
+ * description to its first 2,048 characters, silently. Everything the model
+ * needs beyond a short summary is therefore in `studioToolGuide`, which every
+ * provider receives in its developer instructions.
+ */
+export const MAX_TOOL_DESCRIPTION_CHARS = 2_048;
+
 export function studioToolDescription(): string {
+  return [
+    "Call the connected Roblox Studio through Roqer, which validates risk, routes the selected instance, asks the user when required, and bounds the result.",
+    "A rejected action is returned as a normal tool result. Do not repeat the same effective action; choose a permitted alternative or explain the limitation.",
+    "Pass {operation, arguments}. The arguments of the operations a run leans on, and the rules for using them, are in the developer instructions under <roblox-studio-tool>; read them before a first call.",
+    "To read any operation's schema, call it with {help: true} as its only argument: that is answered locally, never reaches Studio, and is not a failed call.",
+  ].join("\n");
+}
+
+/**
+ * How to use `roblox_studio`: the signatures of the operations an ordinary run
+ * walks and the rules that keep its writes reviewable and verified.
+ *
+ * Too long for a tool description (see `MAX_TOOL_DESCRIPTION_CHARS`), so it
+ * travels in the developer instructions of every provider instead.
+ */
+export function studioToolGuide(): string {
   const signatures = DOCUMENTED_OPERATIONS
     .map((operation) => toolSignature(operation))
     .filter((signature): signature is string => signature !== undefined);
   return [
-    "Call the connected Roblox Studio through Roqer, which validates risk, routes the selected instance, asks the user when required, and bounds the result.",
-    "A rejected action is returned as a normal tool result. Do not repeat the same effective action; choose a permitted alternative or explain the limitation.",
+    `Every operation below is called through the ${STUDIO_TOOL_NAME} tool as {operation, arguments}.`,
     "Important operations and arguments:",
     ...signatures,
     "Other operations in the enum are called the same way. To read one's schema first, call it with {help: true} as its only argument: that is answered locally, never reaches Studio, and is not a failed call. Calling with arguments that do not fit also returns the schema.",
     "Always read a script and its sourceRevision before changing it. Roqer automatically reads back every successful script mutation and tells you whether its reported revision was verified.",
     "When one script needs several exact edits, send them as one edit_script_batch rather than several edit_script_lines calls: each separate write costs its own approval, revision, and read-back, and every write after the first is resolved against source you can no longer describe.",
     "Never write a script's source inside execute_luau; that call is refused before it runs. Create the instance there when nothing structured can, then write its body with set_script_source: only the structured script operations produce the diff the user reviews and the read-back that verifies the write.",
-    "Build geometry and other instances with build_instances rather than execute_luau. For edits to existing physical 3D build geometry, prefer a bounded build_instances set under the smallest containing build root; reserve set_properties for non-build properties or cases the build operation cannot express. Each step is {op: 'create'|'clone'|'set'|'remove', id?, className?, source?, parent?, target?, name?, properties?, position?: [x, y, z], rotation?: [x, y, z] degrees, transforms?: [{position?, rotation?, scale?}], tags?, attributes?}. create needs className; clone needs source and makes one copy per transform; set and remove need target. Refer to an earlier step's instance as \"$id\". A transform's rotation sets the clone's pivot orientation outright; a Model this tool creates gets an upright pivot, but a template from elsewhere keeps its own, so read its pivot before turning clones of it. Color3 is [r, g, b] from 0 to 1. A CFrame is {position, rotation?} in those forms. Every parent and target stays inside path, the whole batch applies or none of it does, and it is one Studio undo step.",
+    "Build geometry and other instances with build_instances rather than execute_luau. For edits to existing physical 3D build geometry, prefer a bounded build_instances set under the smallest containing build root; reserve set_properties for non-build properties or cases the build operation cannot express. Each step is {op: 'create'|'clone'|'set'|'remove', id?, className?, source?, parent?, target?, name?, properties?, position?: [x, y, z], rotation?: [x, y, z] degrees, transforms?: [{position?, rotation?, scale?}], tags?, attributes?}. create needs className; clone needs source and makes one copy per transform; set and remove need target. Refer to an earlier step's instance as \"$id\". A transform's rotation sets the clone's pivot orientation outright; a Model build_instances creates gets an upright pivot, but a template from elsewhere keeps its own, so read its pivot before turning clones of it. Color3 is [r, g, b] from 0 to 1. A CFrame is {position, rotation?} in those forms. Every parent and target stays inside path, the whole batch applies or none of it does, and it is one Studio undo step.",
     // Every recorded world run aimed its screenshots by writing the camera in
     // execute_luau, which is classed irreversible and so asks the user outside
     // Full auto, although this read operation frames a view deterministically.

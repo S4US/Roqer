@@ -1,9 +1,19 @@
 import assert from "node:assert/strict";
+import { fileURLToPath } from "node:url";
 import test from "node:test";
+import { blenderToolDefinition } from "./blender-tool";
+import { iconToolDefinition } from "./icon-tool";
+import { questionToolDefinition } from "./question-tool";
+import { openSkillLibrary } from "./skill-library";
+import { skillToolDefinition } from "./skill-tool";
+import { taskToolDefinition } from "./task-tool";
 import type { McpToolOutcome } from "./mcp-types";
 import type { PlannerContext } from "./run-engine";
 import type { RunEvidence } from "../shared/run-events";
-import { createStudioToolRunner, parseStudioToolInput, studioToolDescription, studioToolResultText } from "./studio-tools";
+import { runDeveloperInstructions } from "./run-instructions";
+import {
+  createStudioToolRunner, MAX_TOOL_DESCRIPTION_CHARS, parseStudioToolInput, studioToolDescription, studioToolGuide, studioToolResultText,
+} from "./studio-tools";
 import { previewVersions } from "../src/preview-layout";
 
 const ok = (data: Record<string, unknown>): McpToolOutcome => ({
@@ -1280,9 +1290,29 @@ test("verifying a model's wiring alone says so, and with the animation says it p
   ]);
 });
 
-test("the Studio tool description stays inside a model turn's tool limit", () => {
-  // turn-contract refuses a tool description over 8,192 characters.
-  assert.ok(studioToolDescription().length <= 8_192, `${studioToolDescription().length} characters`);
+test("the Studio tool description fits what Claude Code passes on", () => {
+  // Claude Code silently keeps only an MCP tool description's first 2,048
+  // characters; everything past that never reached the model.
+  assert.ok(studioToolDescription().length <= MAX_TOOL_DESCRIPTION_CHARS, `${studioToolDescription().length} characters`);
+  assert.match(studioToolDescription(), /<roblox-studio-tool>/);
+});
+
+test("every tool Roqer grants fits what Claude Code passes on", async () => {
+  const library = await openSkillLibrary(fileURLToPath(new URL("../agent/skills", import.meta.url)));
+  const tools = [
+    { name: "roblox_studio", description: studioToolDescription() },
+    skillToolDefinition(library), iconToolDefinition(), taskToolDefinition(), questionToolDefinition(), blenderToolDefinition(),
+  ];
+  for (const tool of tools) {
+    assert.ok(tool.description.length <= MAX_TOOL_DESCRIPTION_CHARS, `${tool.name}: ${tool.description.length} characters`);
+  }
+});
+
+test("every provider's developer instructions carry the Studio tool guide", () => {
+  const developer = runDeveloperInstructions("BASE", true);
+  assert.ok(developer.startsWith("BASE"));
+  assert.ok(developer.includes(`<roblox-studio-tool>\n${studioToolGuide()}\n</roblox-studio-tool>`));
+  assert.match(runDeveloperInstructions("BASE", false), /<roblox-studio-tool>/);
 });
 
 test("an animation that was only checked, or refused, records nothing", async () => {
@@ -1557,8 +1587,8 @@ test("arbitrary Luau that only creates instances is left alone", async () => {
   assert.doesNotMatch(result.text, /set_script_source/);
 });
 
-test("the tool description spells out the arguments of the operations a run leans on", () => {
-  const description = studioToolDescription();
+test("the tool guide spells out the arguments of the operations a run leans on", () => {
+  const description = studioToolGuide();
 
   // A recorded forest run started a playtest without mode in two runs, because
   // the signature showed mode as optional, before the error revealed the rule.
