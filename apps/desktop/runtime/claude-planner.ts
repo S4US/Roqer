@@ -14,7 +14,7 @@ import { blenderToolDefinition, parseBlenderToolInput } from "./blender-tool";
 import { BLENDER_TOOL_NAME } from "../shared/blender";
 import { createSkillToolRunner, skillToolDefinition, SKILL_TOOL_NAME, type SkillToolRunner } from "./skill-tool";
 import {
-  createStudioToolRunner, parseStudioToolInput, studioToolDescription, studioToolInputSchema,
+  createStudioToolRunner, MalformedToolCallError, malformedCallsEndRun, MAX_CONSECUTIVE_MALFORMED_CALLS, parseStudioToolInput, studioToolDescription, studioToolInputSchema,
   STUDIO_TOOL_NAME,
 } from "./studio-tools";
 import { runTaskTool, taskToolDefinition, TASK_TOOL_NAME } from "./task-tool";
@@ -493,6 +493,8 @@ export function createClaudePlanner(options: ClaudePlannerOptions): Planner {
       let responseCharacters = 0;
       /** The latest main-agent response's context, as Claude Code reported it. */
       let contextReading: { usedTokens: number; model: string | null } | null = null;
+      /** Malformed Studio or Blender calls since the last well-formed one. */
+      let malformedCalls = 0;
 
       const finish = (summary: string) => {
         if (settled) return;
@@ -554,15 +556,26 @@ export function createClaudePlanner(options: ClaudePlannerOptions): Planner {
             return { ok: false, text: error instanceof Error ? error.message : String(error) };
           }
         }
+        let call: { operation: string; args: JsonRecord };
         try {
-          const call = options.blender === true && name === BLENDER_TOOL_NAME
+          call = options.blender === true && name === BLENDER_TOOL_NAME
             ? parseBlenderToolInput(args)
             : parseStudioToolInput(args);
+        } catch (error) {
+          // A malformed call is the model's mistake to correct, answered like
+          // any failed call; only a run of them that is not converging ends it.
+          const text = error instanceof Error ? error.message : String(error);
+          if (!(error instanceof MalformedToolCallError)) fail(error);
+          else if (++malformedCalls >= MAX_CONSECUTIVE_MALFORMED_CALLS) fail(malformedCallsEndRun(text));
+          return { ok: false, text };
+        }
+        malformedCalls = 0;
+        try {
           return await runStudioTool(call.operation, call.args);
         } catch (error) {
           // Policy/user rejections are ordinary results from runStudioTool.
-          // Only malformed calls, cancellation, or an unexpected host error
-          // reaches this boundary and ends the provider turn.
+          // Only cancellation or an unexpected host error reaches this
+          // boundary and ends the provider turn.
           fail(error);
           return { ok: false, text: error instanceof Error ? error.message : String(error) };
         }

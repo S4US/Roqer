@@ -219,19 +219,97 @@ export function studioToolInputSchema(): JsonRecord {
   };
 }
 
-/** An argument object a model wrote out as JSON text, read back; anything else as it came. */
-function argumentObject(value: unknown): unknown {
-  if (typeof value !== "string" || !value.trim().startsWith("{")) return value;
-  try {
-    return JSON.parse(value) as unknown;
-  } catch {
-    return value;
-  }
+/**
+ * A tool call whose shape is wrong: the model's mistake to correct on its next
+ * call, never a reason to end the run. Providers answer it as an ordinary
+ * failed tool result; anything else thrown at that boundary is a host failure.
+ */
+export class MalformedToolCallError extends Error {
+  override readonly name = "MalformedToolCallError";
 }
 
 /**
- * Validate the `{operation, arguments}` envelope a model supplied. Throws so
- * every provider reports the same message back to the model.
+ * How many malformed calls in a row a run answers before it ends. Each one is
+ * answered with what was wrong, so a model that can correct itself does so on
+ * the next call; one that sends the same broken shape again and again is not
+ * converging, and would otherwise spend the user's allowance until stopped.
+ */
+export const MAX_CONSECUTIVE_MALFORMED_CALLS = 3;
+
+export function malformedCallsEndRun(lastMessage: string): Error {
+  return new Error(`The model sent ${MAX_CONSECUTIVE_MALFORMED_CALLS} malformed tool calls in a row, so the run stopped. The last one: ${lastMessage}`);
+}
+
+/**
+ * JSON text with the raw line breaks and tabs inside its strings escaped.
+ *
+ * A model that writes an argument object out as text often leaves a Luau
+ * body's newlines raw inside its strings. JSON forbids those characters there
+ * and they can mean nothing but themselves, so escaping them changes no value;
+ * it only lets the text parse. Characters outside strings are left alone.
+ */
+function escapeRawControlCharacters(text: string): string {
+  let result = "";
+  let inString = false;
+  let escaped = false;
+  for (const character of text) {
+    if (inString && !escaped && (character === "\n" || character === "\r" || character === "\t")) {
+      result += character === "\n" ? "\\n" : character === "\r" ? "\\r" : "\\t";
+      continue;
+    }
+    result += character;
+    if (escaped) escaped = false;
+    else if (inString && character === "\\") escaped = true;
+    else if (character === "\"") inString = !inString;
+  }
+  return result;
+}
+
+type ArgumentReading = { value: unknown; parseError?: string };
+
+/** An argument object a model wrote out as JSON text, read back; anything else as it came. */
+function argumentObject(value: unknown): ArgumentReading {
+  if (typeof value !== "string" || !value.trim().startsWith("{")) return { value };
+  try {
+    return { value: JSON.parse(value) as unknown };
+  } catch (error) {
+    try {
+      return { value: JSON.parse(escapeRawControlCharacters(value)) as unknown };
+    } catch {
+      return { value, parseError: error instanceof Error ? error.message : String(error) };
+    }
+  }
+}
+
+const ENVELOPE_RULE = `${STUDIO_TOOL_NAME} requires an operation and argument object.`;
+const ENVELOPE_SHAPE = "Call it as {operation: \"<name>\", arguments: {...}}, with every argument of the operation inside arguments.";
+const MAX_LISTED_STRAY_KEYS = 8;
+
+/** What was wrong with an envelope, in words the model can act on. */
+function envelopeProblem(value: unknown, reading: ArgumentReading | undefined): string {
+  if (!isRecord(value)) return "The call was not an object.";
+  if (typeof value.operation !== "string" || value.operation === "") {
+    return "operation is missing; it must name one operation as a string.";
+  }
+  const stray = Object.keys(value).filter((key) => key !== "operation" && key !== "arguments");
+  if (value.arguments === undefined || value.arguments === null) {
+    if (stray.length === 0) return `arguments is missing; send arguments: {} when ${value.operation} needs none.`;
+    const listed = stray.slice(0, MAX_LISTED_STRAY_KEYS).map((key) => truncateText(key, 60)).join(", ");
+    const more = stray.length > MAX_LISTED_STRAY_KEYS ? ` and ${stray.length - MAX_LISTED_STRAY_KEYS} more` : "";
+    return `arguments is missing, and ${listed}${more} arrived beside operation; move ${stray.length === 1 ? "it" : "them"} inside arguments.`;
+  }
+  if (reading?.parseError !== undefined) {
+    return `arguments arrived as text that is not valid JSON (${truncateText(reading.parseError, 200)}); send the object itself, not a string.`;
+  }
+  if (typeof value.arguments === "string") return "arguments arrived as text, not an object; send the object itself.";
+  if (Array.isArray(value.arguments)) return "arguments arrived as an array; it must be an object of named arguments.";
+  return `arguments arrived as a ${typeof value.arguments}; it must be an object of named arguments.`;
+}
+
+/**
+ * Validate the `{operation, arguments}` envelope a model supplied. Throws a
+ * `MalformedToolCallError` so every provider reports the same message back to
+ * the model, saying what arrived wrong rather than only what the rule is.
  *
  * Values a model wrote as JSON text are read back into the types the operation
  * declares here, before anything else sees the call, so the risk check, the
@@ -239,12 +317,14 @@ function argumentObject(value: unknown): unknown {
  * arguments. See `restoreArgumentTypes`.
  */
 export function parseStudioToolInput(value: unknown): { operation: string; args: JsonRecord } {
-  const args = isRecord(value) ? argumentObject(value.arguments) : undefined;
-  if (!isRecord(value) || typeof value.operation !== "string" || !isRecord(args)) {
-    throw new Error("roblox_studio requires an operation and argument object.");
+  const reading = isRecord(value) ? argumentObject(value.arguments) : undefined;
+  if (!isRecord(value) || typeof value.operation !== "string" || value.operation === "" || !isRecord(reading?.value)) {
+    throw new MalformedToolCallError(`${ENVELOPE_RULE} ${envelopeProblem(value, reading)} ${ENVELOPE_SHAPE}`);
   }
-  if (!isKnownTool(value.operation)) throw new Error(`Unknown Roblox Studio operation: ${value.operation}`);
-  return { operation: value.operation, args: restoreArgumentTypes(value.operation, args) };
+  if (!isKnownTool(value.operation)) {
+    throw new MalformedToolCallError(`Unknown Roblox Studio operation: ${truncateText(value.operation, 120)}`);
+  }
+  return { operation: value.operation, args: restoreArgumentTypes(value.operation, reading.value) };
 }
 
 /**

@@ -429,6 +429,47 @@ test("ChatGPT keeps tool handlers alive through a retryable error", async () => 
   assert.equal(appServer.disconnectListener, null);
 });
 
+test("ChatGPT answers a malformed Studio call to the model instead of ending the run", async () => {
+  const appServer = new ManualAppServer();
+  const run = lifecycleRun(appServer);
+  await appServer.turnStarted.promise;
+  appServer.turnResponse.resolve({ turn: { id: "turn-1" } });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.ok(appServer.requestHandler);
+  const studio = (id: string, args: Record<string, unknown>) => appServer.requestHandler!({
+    id, method: "item/tool/call", params: { threadId: "thread-1", tool: "roblox_studio", arguments: args },
+  });
+
+  const malformed = JSON.stringify(await studio("bad-1", { operation: "insert_asset", assetId: 100967450390171 }));
+  assert.match(malformed, /"success":false/);
+  assert.match(malformed, /assetId arrived beside operation; move it inside arguments/);
+  const corrected = JSON.stringify(await studio("good-1", { operation: "get_place_info", arguments: {} }));
+  assert.match(corrected, /"success":true/);
+
+  appServer.notificationListener?.({
+    method: "turn/completed", params: { threadId: "thread-1", turn: { id: "turn-1", status: "completed" } },
+  });
+  assert.equal(await run, "ChatGPT turn completed.");
+  assert.equal(appServer.requests.some(({ method }) => method === "turn/interrupt"), false);
+});
+
+test("ChatGPT ends a run whose model keeps sending malformed Studio calls", async () => {
+  const appServer = new ManualAppServer();
+  const run = lifecycleRun(appServer);
+  const rejected = assert.rejects(run, /3 malformed tool calls in a row.*arguments is missing/);
+  await appServer.turnStarted.promise;
+  appServer.turnResponse.resolve({ turn: { id: "turn-1" } });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.ok(appServer.requestHandler);
+  for (let index = 0; index < 3; index += 1) {
+    await appServer.requestHandler({
+      id: `bad-${index}`, method: "item/tool/call",
+      params: { threadId: "thread-1", tool: "roblox_studio", arguments: { operation: "get_place_info" } },
+    });
+  }
+  await rejected;
+});
+
 for (const [type, described] of [
   ["commandExecution", "shell"],
   ["mcpToolCall", "MCP servers"],

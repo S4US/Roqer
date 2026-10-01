@@ -7,6 +7,7 @@ import {
   MAX_BLENDER_SCRIPT_CHARACTERS,
   isBlenderJobId,
 } from "../shared/blender";
+import { MalformedToolCallError } from "./studio-tools";
 
 type JsonRecord = Record<string, unknown>;
 
@@ -59,17 +60,17 @@ export function blenderToolDefinition(): Readonly<{ name: typeof BLENDER_TOOL_NA
 /** The engine operation for a `blender` call. Throws so every provider reports the same message. */
 export function parseBlenderToolInput(value: unknown): { operation: string; args: JsonRecord } {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    throw new Error("blender requires an object with a script.");
+    throw new MalformedToolCallError("blender requires an object with a script.");
   }
   const record = value as JsonRecord;
   if (typeof record.script !== "string" || record.script.trim() === "") {
-    throw new Error("blender requires script: the complete Python to run.");
+    throw new MalformedToolCallError("blender requires script: the complete Python to run.");
   }
   const args: JsonRecord = { script: record.script };
   if (typeof record.timeout_seconds === "number") args.timeout_seconds = record.timeout_seconds;
   if (record.continue_from !== undefined && record.continue_from !== null) {
     if (!isBlenderJobId(record.continue_from)) {
-      throw new Error("blender continue_from must be the id of an earlier job, exactly as that job's result gave it (8 hexadecimal characters).");
+      throw new MalformedToolCallError("blender continue_from must be the id of an earlier job, exactly as that job's result gave it (8 hexadecimal characters).");
     }
     args.continue_from = record.continue_from;
   }
