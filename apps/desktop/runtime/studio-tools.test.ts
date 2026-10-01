@@ -12,7 +12,7 @@ import type { PlannerContext } from "./run-engine";
 import { ANIMATION_BOXES_LABEL, ANIMATION_NAME_LABEL, ANIMATION_RIG_LABEL, RIG_RANGE_SHEET_TITLE, type RunEvidence } from "../shared/run-events";
 import { runDeveloperInstructions } from "./run-instructions";
 import {
-  createStudioToolRunner, MAX_TOOL_DESCRIPTION_CHARS, parseStudioToolInput, studioToolDescription, studioToolGuide, studioToolResultText,
+  createStudioToolRunner, MalformedToolCallError, MAX_TOOL_DESCRIPTION_CHARS, parseStudioToolInput, studioToolDescription, studioToolGuide, studioToolResultText,
 } from "./studio-tools";
 import { previewVersions } from "../src/preview-layout";
 
@@ -1806,4 +1806,39 @@ test("a preview that drew MeshParts as their boxes says which and why, so a box 
   const bounded = previews[3].metadata?.find((entry) => entry.label === ANIMATION_BOXES_LABEL)?.value ?? "";
   assert.equal(bounded.length, 400);
   assert.ok(bounded.endsWith("…"));
+});
+
+test("a malformed envelope is refused saying what arrived wrong", () => {
+  const refusal = (value: unknown) => {
+    try {
+      parseStudioToolInput(value);
+    } catch (error) {
+      assert.ok(error instanceof MalformedToolCallError);
+      return error.message;
+    }
+    assert.fail("the envelope was accepted");
+  };
+
+  assert.match(refusal({ operation: "insert_asset", assetId: 1, parent: "game.Workspace" }),
+    /arguments is missing, and assetId, parent arrived beside operation; move them inside arguments/);
+  assert.match(refusal({ operation: "get_place_info" }), /arguments is missing; send arguments: \{\} when get_place_info needs none/);
+  assert.match(refusal({ arguments: {} }), /operation is missing/);
+  assert.match(refusal({ operation: "get_place_info", arguments: [1] }), /arguments arrived as an array/);
+  assert.match(refusal({ operation: "get_place_info", arguments: "{\"path\": " }), /arguments arrived as text that is not valid JSON \(/);
+  assert.match(refusal({ operation: "no_such_operation", arguments: {} }), /Unknown Roblox Studio operation: no_such_operation/);
+  for (const message of [refusal("text"), refusal({ operation: "get_place_info" })]) {
+    assert.match(message, /^roblox_studio requires an operation and argument object\./);
+  }
+});
+
+test("arguments written as JSON text with raw line breaks in a string are read as the object meant", () => {
+  // Quotes and a trailing backslash inside the Luau keep the string tracking honest.
+  const code = "local part = Instance.new(\"Part\")\n\tpart.Name = \"C:\\\\\"\r\nprint(part)";
+  const raw = JSON.stringify({ code }).replace(/\\n/g, "\n").replace(/\\t/g, "\t").replace(/\\r/g, "\r");
+  assert.ok(raw.includes("\n") && raw.includes("\t"), "the text carries raw control characters");
+  assert.throws(() => JSON.parse(raw));
+
+  const parsed = parseStudioToolInput({ operation: "execute_luau", arguments: raw });
+
+  assert.equal(parsed.args.code, code);
 });

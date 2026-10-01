@@ -1069,3 +1069,68 @@ test("Claude reports the context as each response ends, and a kept process knows
   assert.deepEqual(readings[0], { usedTokens: 20_050, windowTokens: 200_000 });
   await sessions.closeAll();
 });
+
+test("Claude answers a malformed Studio call to the model, and the run goes on", async () => {
+  const controller = new AbortController();
+  const { context, recorded } = makeContext(controller);
+  let flattened = "";
+  let asText = "";
+
+  const planner = createClaudePlanner({
+    ...PLANNER_DEFAULTS,
+    launcher: {
+      launch: async (args) => {
+        const child = new FakeChildProcess();
+        void (async () => {
+          child.writeLine({ type: "system", subtype: "init", tools: PROVIDER_TOOLS });
+          const target = await mcpTarget(args);
+          // The arguments beside operation rather than inside arguments.
+          flattened = await callTool(target, { operation: "insert_asset", assetId: 100967450390171 });
+          // The arguments as JSON text whose Luau string kept its line breaks raw.
+          asText = await callTool(target, {
+            operation: "execute_luau",
+            arguments: "{\"code\": \"local slime = workspace.Slime\nprint(slime)\"}",
+          });
+          child.writeLine({ type: "result", subtype: "success", is_error: false, result: "Inserted." });
+          child.finish(0);
+        })();
+        return child.asChild();
+      },
+    },
+  });
+
+  assert.equal(await planner.run(context), "Inserted.");
+  assert.match(flattened, /assetId arrived beside operation; move it inside arguments/);
+  assert.match(flattened, /\{operation: "<name>", arguments: \{\.\.\.\}\}/);
+  assert.doesNotMatch(asText, /requires an operation/);
+  assert.deepEqual(recorded.calls, ["execute_luau"], "only the well-formed call reaches Studio");
+});
+
+test("Claude ends a run whose model keeps sending malformed Studio calls", async () => {
+  const controller = new AbortController();
+  const { context, recorded } = makeContext(controller);
+  let child: FakeChildProcess | null = null;
+
+  const planner = createClaudePlanner({
+    ...PLANNER_DEFAULTS,
+    launcher: {
+      launch: async (args) => {
+        child = new FakeChildProcess();
+        const running = child;
+        void (async () => {
+          running.writeLine({ type: "system", subtype: "init", tools: PROVIDER_TOOLS });
+          const target = await mcpTarget(args);
+          // The third ends the run, which closes this endpoint under its own reply.
+          for (let index = 0; index < 3; index += 1) {
+            await callTool(target, { operation: "get_place_info", arguments: "not an object" }).catch(() => "");
+          }
+        })();
+        return running.asChild();
+      },
+    },
+  });
+
+  await assert.rejects(() => planner.run(context), /3 malformed tool calls in a row.*arguments arrived as text/);
+  assert.deepEqual(recorded.calls, []);
+  assert.equal((child as FakeChildProcess | null)?.killed, true);
+});

@@ -8,7 +8,8 @@ import { blenderToolDefinition, parseBlenderToolInput } from "./blender-tool";
 import { BLENDER_TOOL_NAME } from "../shared/blender";
 import { createSkillToolRunner, skillToolDefinition, SKILL_TOOL_NAME, type SkillToolRunner } from "./skill-tool";
 import {
-  createStudioToolRunner, parseStudioToolInput, studioToolDescription, studioToolInputSchema,
+  createStudioToolRunner, MalformedToolCallError, malformedCallsEndRun, MAX_CONSECUTIVE_MALFORMED_CALLS,
+  parseStudioToolInput, studioToolDescription, studioToolInputSchema,
   STUDIO_TOOL_NAME,
 } from "./studio-tools";
 import { runTaskTool, taskToolDefinition, TASK_TOOL_NAME } from "./task-tool";
@@ -325,6 +326,8 @@ export function createChatGptPlanner(options: ChatGptPlannerOptions): Planner {
       let interruptSent = false;
       let forwardingSteers = false;
       let steerTimer: ReturnType<typeof setInterval> | null = null;
+      /** Malformed Studio or Blender calls since the last well-formed one. */
+      let malformedCalls = 0;
 
       const finish = (status: string, summary: string) => {
         if (settled) return;
@@ -474,8 +477,21 @@ export function createChatGptPlanner(options: ChatGptPlannerOptions): Planner {
             }
           }
         }
-        const call = parseDynamicCall(request, threadId, options.blender === true);
+        let call: ReturnType<typeof parseDynamicCall>;
+        try {
+          call = parseDynamicCall(request, threadId, options.blender === true);
+        } catch (error) {
+          if (!(error instanceof MalformedToolCallError)) {
+            fail(error);
+            throw error;
+          }
+          // The model's mistake to correct, answered like any failed call;
+          // only a run of them that is not converging ends the run.
+          if (++malformedCalls >= MAX_CONSECUTIVE_MALFORMED_CALLS) fail(malformedCallsEndRun(error.message));
+          return { success: false, contentItems: [{ type: "inputText", text: error.message }] };
+        }
         if (!call) return undefined;
+        malformedCalls = 0;
 
         try {
           const result = await runStudioTool(call.operation, call.args);
