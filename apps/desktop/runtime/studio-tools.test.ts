@@ -1,5 +1,12 @@
 import assert from "node:assert/strict";
+import { fileURLToPath } from "node:url";
 import test from "node:test";
+import { blenderToolDefinition } from "./blender-tool";
+import { iconToolDefinition } from "./icon-tool";
+import { questionToolDefinition } from "./question-tool";
+import { openSkillLibrary } from "./skill-library";
+import { skillToolDefinition } from "./skill-tool";
+import { taskToolDefinition } from "./task-tool";
 import type { McpToolOutcome } from "./mcp-types";
 import type { PlannerContext } from "./run-engine";
 import type { RunEvidence } from "../shared/run-events";
@@ -1288,6 +1295,17 @@ test("the Studio tool description fits what Claude Code passes on", () => {
   // characters; everything past that never reached the model.
   assert.ok(studioToolDescription().length <= MAX_TOOL_DESCRIPTION_CHARS, `${studioToolDescription().length} characters`);
   assert.match(studioToolDescription(), /<roblox-studio-tool>/);
+});
+
+test("every tool Roqer grants fits what Claude Code passes on", async () => {
+  const library = await openSkillLibrary(fileURLToPath(new URL("../agent/skills", import.meta.url)));
+  const tools = [
+    { name: "roblox_studio", description: studioToolDescription() },
+    skillToolDefinition(library), iconToolDefinition(), taskToolDefinition(), questionToolDefinition(), blenderToolDefinition(),
+  ];
+  for (const tool of tools) {
+    assert.ok(tool.description.length <= MAX_TOOL_DESCRIPTION_CHARS, `${tool.name}: ${tool.description.length} characters`);
+  }
 });
 
 test("every provider's developer instructions carry the Studio tool guide", () => {
