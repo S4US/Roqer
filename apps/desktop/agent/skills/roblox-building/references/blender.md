@@ -271,6 +271,13 @@ weights, so nothing about the rig has to be carried to Studio by hand.
   "Tail2"])` for one that bends between several. A part left unbound is
   weighted among every bone by which lie nearest, which is right for a single
   tube and wrong for a leg beside a belly.
+- **Run a limb up into the body it hangs from.** A part bound to several
+  bones keeps its top with the bone above them: whatever of a leg lies above
+  its hip stays with the spine, and blends into the leg just below the hip,
+  so the thigh does not swing out of the rump as the leg turns. So start a
+  leg's mesh a little above its upper bone's head, inside the body, and put
+  that bone's head where the leg should turn. A part bound to one bone moves
+  rigidly with it.
 - **A part bends only where it has vertices.** A box has them at its ends, so
   build a bending length from several short segments end to end (a tail of six
   boxes, a snake of twenty), all bound to the same list of bones.

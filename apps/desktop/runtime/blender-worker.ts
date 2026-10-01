@@ -403,6 +403,8 @@ def export_animation(name, source, rig, start=None, end=None, loop=True, rest_fr
 
 
 _MAX_INFLUENCES = 4
+# The share of a chain's first bone, either side of its head, over which a part's weight passes to the bone above.
+_ROOT_BLEND = 0.25
 
 
 def bind(obj, bones):
@@ -500,8 +502,27 @@ def skin(obj, bones, name="Armature"):
         most = max(weight for weight, _ in raw)
         kept = [(weight, bone_name) for weight, bone_name in raw if weight >= most * 0.05]
         total = sum(weight for weight, _ in kept)
-        for weight, bone_name in kept:
-            groups[bone_name].add([vertex.index], weight / total, "REPLACE")
+        shares = {bone_name: weight / total for weight, bone_name in kept}
+        # Where a part that bends along several bones runs up into what it hangs from, as a
+        # thigh into the rump or a tail's root into the back, it stays with that: around the
+        # first bone's head its weight passes to that bone's parent, so the top of a leg does
+        # not swing out of the body as the leg turns. A part bound to one bone stays rigid.
+        if allowed is not None and len(allowed) > 1:
+            for bone_name, head, tail, parent in entries:
+                if bone_name not in shares or parent is None or parent in allowed:
+                    continue
+                along = (tail - head).normalized()
+                margin = _ROOT_BLEND * (tail - head).length
+                up = max(0.0, min(1.0, 0.5 - (point - head).dot(along) / (2 * margin)))
+                if up > 0:
+                    shares[parent] = shares.get(parent, 0.0) + shares[bone_name] * up
+                    shares[bone_name] *= 1 - up
+            ranked = sorted(((weight, bone_name) for bone_name, weight in shares.items() if weight > 1e-4), reverse=True)[:_MAX_INFLUENCES]
+            total = sum(weight for weight, _ in ranked)
+            shares = {bone_name: weight / total for weight, bone_name in ranked}
+        for bone_name, weight in shares.items():
+            if weight > 0:
+                groups[bone_name].add([vertex.index], weight, "REPLACE")
 
     for modifier in list(obj.modifiers):
         if modifier.type == "ARMATURE":

@@ -1036,13 +1036,19 @@ What follows from it, in the order it is built:
 
 Known and left as they are:
 
-- **The T20 wolf's legs look off as it walks** (reported after its second
-  run, not yet looked into): the way they bend, and the way they turn away
-  from the body at the hip. Two things to check first. Its leg mesh is bound
-  only to the leg's own bones, so the top of a leg swings rigidly out of the
-  torso instead of blending into it. And the quadruped plan folds a front
-  knee back and a hind knee forward, which may not be how the leg was
-  modelled to read.
+- **The T20 wolf's legs turned off its body as it walked** (reported after
+  its second run), fixed. Posed in Studio at four moments of its walk, the
+  body no longer crouched, but the top of each thigh swung out of the rump
+  and the shoulder: the run had bound each leg's mesh to the leg's own bones
+  only, so the part of it above the hip turned with the thigh. `roqer.skin`
+  now keeps the top of a part bound to several bones with the bone above
+  them, passing its weight over around the first bone's head. On that run's
+  own script, a thigh turned 33° moved its top ring 0.06 studs, where the
+  ring below the hip moved 0.35. Not seen in Studio since: that needs a new
+  upload.
+
+  How the knees fold was looked at and left: a front knee folds back and a
+  hind knee forward, as the plan declares and as the legs were modelled.
 
 - **The range sheet of a deep chain curls out of frame.** Every joint turned
   30° adds up along twenty nested bones.
