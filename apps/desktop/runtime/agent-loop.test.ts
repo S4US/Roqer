@@ -50,13 +50,15 @@ type Recorded = {
   statuses: Array<{ label: string; detail?: string }>;
   /** Every output count the loop reported, in order. */
   outputTokens: Array<{ tokens: number; exact: boolean }>;
+  /** Every context reading the loop reported, in order. */
+  contextUsage: Array<{ usedTokens: number; windowTokens: number | null }>;
   /** Notes queued for the planner, drained by `takeSteers` the way the engine's are. */
   steers: string[];
 };
 
 function makeContext(controller: AbortController, outcome?: (tool: string) => McpToolOutcome) {
   const recorded: Recorded = {
-    calls: [], said: [], tasks: [], changes: [], evidence: [], questions: [], progress: [], progressDetails: [], statuses: [], outputTokens: [], steers: [],
+    calls: [], said: [], tasks: [], changes: [], evidence: [], questions: [], progress: [], progressDetails: [], statuses: [], outputTokens: [], contextUsage: [], steers: [],
   };
   let currentTasks: RunTask[] = [];
   const context: PlannerContext = {
@@ -72,6 +74,7 @@ function makeContext(controller: AbortController, outcome?: (tool: string) => Mc
       recorded.progressDetails.push(detail);
     },
     outputTokens: (tokens, exact) => recorded.outputTokens.push({ tokens, exact }),
+    contextUsage: (usedTokens, windowTokens) => recorded.contextUsage.push({ usedTokens, windowTokens }),
     say: (text) => recorded.said.push(text),
     recordChange: (change) => {
       recorded.changes.push({ ...change, id: `change_${recorded.changes.length + 1}` });
@@ -950,6 +953,9 @@ test("a turn's output is counted as it streams, then replaced by the provider's 
     { tokens: 19, exact: false },
     { tokens: 57, exact: true },
   ]);
+  // The endpoint's count of what the turn read and wrote is the context in use;
+  // with no window set for the model, none is claimed.
+  assert.deepEqual(recorded.contextUsage, [{ usedTokens: 957, windowTokens: null }]);
 });
 
 /** A planner that keeps its chat's conversation in `sessions`, as the Custom provider does. */
@@ -1127,11 +1133,17 @@ test("a conversation crowding a model's context window is folded before the mode
       transport: bridge, runId: "run_test", modelId: "local-model", effort: "medium", agent: AGENT, skillLibrary: SKILLS,
       ...(contextWindow === undefined ? {} : { contextWindow }),
     }).run(context);
-    return { bridge, folded: recorded.statuses.some((status) => status.label === "Earlier conversation folded") };
+    return {
+      bridge,
+      folded: recorded.statuses.some((status) => status.label === "Earlier conversation folded"),
+      contextUsage: recorded.contextUsage,
+    };
   };
 
   const small = await run(16_000);
   assert.equal(small.folded, true);
+  // The meter is told the window the user set for the model.
+  assert.deepEqual(small.contextUsage[0], { usedTokens: 13_050, windowTokens: 16_000 });
   const lengths = small.bridge.requests.map((request) => request.messages.length);
   // Folded down to the request, the record, and six exchanges once there were enough to fold.
   assert.ok(Math.max(...lengths) <= 1 + (6 + 4) * 2 + 2, `requests grew to ${Math.max(...lengths)} messages`);
@@ -1140,6 +1152,7 @@ test("a conversation crowding a model's context window is folded before the mode
   // Without a known window the usual bound applies, and twelve exchanges are nowhere near it.
   const unknown = await run(undefined);
   assert.equal(unknown.folded, false);
+  assert.deepEqual(unknown.contextUsage[0], { usedTokens: 13_050, windowTokens: null });
 });
 
 test("a tool call Roqer cannot use is sent back to the model with why, not made the end of the run", async () => {

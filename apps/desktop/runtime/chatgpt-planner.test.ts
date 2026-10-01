@@ -5,7 +5,7 @@ import { PassThrough } from "node:stream";
 import test from "node:test";
 
 import { CodexAppServerClient, type AppServerNotification, type AppServerRequest, type AppServerRequestHandler } from "./codex-app-server";
-import { codexStreamedOutput, createChatGptPlanner, type ChatGptAppServer, type CodexThread, type CodexThreadStore } from "./chatgpt-planner";
+import { codexContextUsage, codexStreamedOutput, createChatGptPlanner, type ChatGptAppServer, type CodexThread, type CodexThreadStore } from "./chatgpt-planner";
 import { ProviderSessionStore } from "./provider-sessions";
 import type { AgentDefinition } from "./agent-definition";
 import type { PlannerContext } from "./run-engine";
@@ -130,6 +130,7 @@ test("ChatGPT planner routes Studio calls through PlannerContext and records ver
     status: (label, detail) => statuses.push({ label, detail }),
     progress: () => undefined,
     outputTokens: () => undefined,
+    contextUsage: () => undefined,
     say: (text) => said.push(text),
     recordChange: (change) => changes.push(change),
     recordEvidence: (item) => evidence.push(item),
@@ -254,6 +255,7 @@ test("ChatGPT keeps an empty history prompt byte-for-byte unchanged", async () =
     status: () => undefined,
     progress: () => undefined,
     outputTokens: () => undefined,
+    contextUsage: () => undefined,
     say: () => undefined,
     recordChange: () => undefined,
     recordEvidence: () => undefined,
@@ -295,6 +297,7 @@ test("ChatGPT receives user-attached images in the opening turn", async () => {
     status: () => undefined,
     progress: () => undefined,
     outputTokens: () => undefined,
+    contextUsage: () => undefined,
     say: () => undefined,
     recordChange: () => undefined,
     recordEvidence: () => undefined,
@@ -346,7 +349,7 @@ function lifecycleRun(
   const context: PlannerContext = {
     prompt: "Inspect Studio", conversation: { messages: [], truncated: false }, images: [],
     instanceId: null, autoPlaytest: false, signal,
-    progress: () => undefined, outputTokens: () => undefined, status: overrides.status ?? (() => undefined), say: () => undefined,
+    progress: () => undefined, outputTokens: () => undefined, contextUsage: () => undefined, status: overrides.status ?? (() => undefined), say: () => undefined,
     recordChange: () => undefined, recordEvidence: () => undefined, setTasks: () => undefined,
     tasks: () => [], changes: () => [], evidence: () => [], decisions: () => [], takeSteers: () => [],
     askUser: overrides.askUser ?? (async (_question, options) => options[0]),
@@ -642,7 +645,7 @@ function sessionRun(
   const context: PlannerContext = {
     prompt, conversation: { messages, truncated: false }, images: [],
     instanceId, autoPlaytest: false, signal: new AbortController().signal,
-    progress: () => undefined, outputTokens: () => undefined, status: () => undefined, say: () => undefined,
+    progress: () => undefined, outputTokens: () => undefined, contextUsage: () => undefined, status: () => undefined, say: () => undefined,
     recordChange: () => undefined, recordEvidence: () => undefined, setTasks: () => undefined,
     tasks: () => [], changes: () => [], evidence: () => [], decisions: () => [], takeSteers: () => [],
     askUser: async (_question, options) => options[0],
@@ -826,4 +829,17 @@ test("Codex's stream is counted for the waiting line: what streamed, then Codex'
   assert.equal(note("item/started", { item: { type: "reasoning", id: "r2" } }), null);
   assert.equal(note("item/agentMessage/delta", { itemId: "m1", delta: "" }), null);
   assert.equal(note("thread/tokenUsage/updated", { tokenUsage: { last: { outputTokens: "400" } } }), null);
+});
+
+test("Codex's context is its last response's total, against the window it reports", () => {
+  const usage = (tokenUsage: unknown) => codexContextUsage({ method: "thread/tokenUsage/updated", params: { threadId: "thread-1", turnId: "turn-1", tokenUsage } });
+  const last = { totalTokens: 3_000, inputTokens: 2_600, cachedInputTokens: 2_000, outputTokens: 400, reasoningOutputTokens: 300 };
+  const total = { totalTokens: 9_000, inputTokens: 8_000, cachedInputTokens: 0, outputTokens: 1_000, reasoningOutputTokens: 800 };
+
+  assert.deepEqual(usage({ total, last, modelContextWindow: 272_000 }), { usedTokens: 3_000, windowTokens: 272_000 }, "not the thread's running total");
+  assert.deepEqual(usage({ total, last, modelContextWindow: null }), { usedTokens: 3_000, windowTokens: null });
+  assert.deepEqual(usage({ total, last, modelContextWindow: -5 }), { usedTokens: 3_000, windowTokens: null });
+  assert.equal(usage({ total, last: { ...last, totalTokens: "3000" }, modelContextWindow: 272_000 }), null);
+  assert.equal(usage({ total }), null);
+  assert.equal(codexContextUsage({ method: "item/agentMessage/delta", params: { threadId: "thread-1", delta: "Hi" } }), null);
 });

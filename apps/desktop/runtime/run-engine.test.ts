@@ -121,6 +121,43 @@ test("output counts travel as valid events and never as steps", async () => {
   );
 });
 
+test("context readings travel as valid events, each one once, and a malformed one never", async () => {
+  const events: RunEvent[] = [];
+  const session = new RunSession({
+    caller: makeCaller(async () => outcome()),
+    planner: planner(async (ctx) => {
+      ctx.contextUsage(10_050, null);
+      ctx.contextUsage(10_050, 200_000);
+      ctx.contextUsage(10_050, 200_000);
+      ctx.contextUsage(-1, 200_000);
+      ctx.contextUsage(1.5, null);
+      ctx.contextUsage(20_000, 0);
+      ctx.contextUsage(20_000, 200_000);
+      return "done";
+    }),
+    request: makeRequest(),
+    emit: (event) => events.push(event),
+  });
+
+  await session.execute();
+  assertAllValid(events);
+  assert.deepEqual(
+    events.flatMap((event) => event.type === "context-usage" ? [{ usedTokens: event.usedTokens, windowTokens: event.windowTokens }] : []),
+    [
+      { usedTokens: 10_050, windowTokens: null },
+      { usedTokens: 10_050, windowTokens: 200_000 },
+      { usedTokens: 20_000, windowTokens: 200_000 },
+    ],
+  );
+
+  // What arrives over IPC is checked the same way.
+  const base = { runId: "run_1", seq: 1, at: "2026-01-01T00:00:00.000Z", type: "context-usage" };
+  assert.equal(isRunEvent({ ...base, usedTokens: 5, windowTokens: null }), true);
+  assert.equal(isRunEvent({ ...base, usedTokens: 5 }), false, "an unknown window is null, never absent");
+  assert.equal(isRunEvent({ ...base, usedTokens: 5, windowTokens: 0 }), false);
+  assert.equal(isRunEvent({ ...base, usedTokens: "5", windowTokens: null }), false);
+});
+
 test("the planner receives the bounded conversation attached to its run", async () => {
   const conversation = {
     messages: [

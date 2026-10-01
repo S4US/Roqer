@@ -162,6 +162,23 @@ function isCompaction(notification: AppServerNotification): boolean {
 }
 
 /**
+ * How full the thread's context was at the latest model response, from
+ * Codex's own token report: the `last` response's total, which is what it read
+ * (cached included) plus what it wrote. The window is Codex's
+ * `modelContextWindow` when it reports one, and null when it does not.
+ */
+export function codexContextUsage(notification: AppServerNotification): { usedTokens: number; windowTokens: number | null } | null {
+  if (notification.method !== "thread/tokenUsage/updated") return null;
+  const usage = notification.params.tokenUsage;
+  if (!isRecord(usage) || !isRecord(usage.last)) return null;
+  const used = usage.last.totalTokens;
+  if (typeof used !== "number" || !Number.isSafeInteger(used) || used < 0) return null;
+  const window = usage.modelContextWindow;
+  const windowTokens = typeof window === "number" && Number.isSafeInteger(window) && window > 0 ? window : null;
+  return { usedTokens: used, windowTokens };
+}
+
+/**
  * What a Codex notification says about how much the model has written.
  *
  * `characters` is streamed reply or reasoning text; Codex streams reasoning
@@ -392,6 +409,8 @@ export function createChatGptPlanner(options: ChatGptPlannerOptions): Planner {
         }
         if (output?.exact !== undefined) context.outputTokens(output.exact, true);
         if (output?.exact !== undefined || output?.ended) responseCharacters = 0;
+        const contextReading = codexContextUsage(notification);
+        if (contextReading !== null) context.contextUsage(contextReading.usedTokens, contextReading.windowTokens);
         if (notification.method === "item/agentMessage/delta") {
           const delta = notification.params.delta;
           if (typeof delta !== "string" || delta === "") return;

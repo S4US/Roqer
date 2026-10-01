@@ -121,6 +121,13 @@ export type PlannerContext = {
    * second.
    */
   outputTokens(tokens: number, exact: boolean): void;
+  /**
+   * How full the model's context window was at its latest response, as the
+   * provider reported it, and the window's size when the provider said it
+   * (else null). Never an estimate: a planner whose provider reported nothing
+   * does not call this. Repeats of the same reading are dropped.
+   */
+  contextUsage(usedTokens: number, windowTokens: number | null): void;
   /** Record a change the agent made. */
   recordChange(change: Omit<RunChange, "id">): void;
   /** Record evidence supporting the result. */
@@ -342,6 +349,8 @@ export class RunSession {
 
   private readonly abortController = new AbortController();
   private readonly outputMeter = new OutputTokenMeter();
+  /** The last context reading passed on, so a repeat is not sent again. */
+  private lastContextUsage: { usedTokens: number; windowTokens: number | null } | null = null;
   private seq = 0;
   private completed = false;
   private cancelled = false;
@@ -429,6 +438,14 @@ export class RunSession {
         if (!Number.isSafeInteger(tokens) || tokens < 0) return;
         if (!this.outputMeter.admit(tokens, exact, Date.now())) return;
         this.emit({ type: "output-tokens", tokens, exact });
+      },
+      contextUsage: (usedTokens, windowTokens) => {
+        if (!Number.isSafeInteger(usedTokens) || usedTokens < 0) return;
+        if (windowTokens !== null && (!Number.isSafeInteger(windowTokens) || windowTokens <= 0)) return;
+        const last = this.lastContextUsage;
+        if (last !== null && last.usedTokens === usedTokens && last.windowTokens === windowTokens) return;
+        this.lastContextUsage = { usedTokens, windowTokens };
+        this.emit({ type: "context-usage", usedTokens, windowTokens });
       },
       recordChange: (change) => {
         const taskId = this.currentTasks.find((task) => task.status === "active")?.id;

@@ -98,6 +98,13 @@ export type RunView = {
    * approval, or the user clears it, since the next response counts afresh.
    */
   outputTokens: { tokens: number; exact: boolean } | null;
+  /**
+   * How full the model's context window was at its latest response, as the
+   * provider reported it. Null until the run's first report. Unlike
+   * `outputTokens` nothing clears it: it describes the conversation, not the
+   * response in progress.
+   */
+  contextUsage: { usedTokens: number; windowTokens: number | null } | null;
   text: string;
   activities: RunActivity[];
   /** What the agent did, in order. Resolve it with `activitySteps`. */
@@ -140,6 +147,7 @@ export function createRunView(runId: string, prompt: string, approvalMode: Appro
     approvalMode,
     status: null,
     outputTokens: null,
+    contextUsage: null,
     text: "",
     activities: [],
     timeline: [],
@@ -203,6 +211,8 @@ export function applyRunEvent(view: RunView, event: RunEvent): RunView {
       };
     case "output-tokens":
       return { ...base, outputTokens: { tokens: event.tokens, exact: event.exact } };
+    case "context-usage":
+      return { ...base, contextUsage: { usedTokens: event.usedTokens, windowTokens: event.windowTokens } };
     case "message-delta":
       return { ...base, text: base.text + event.text };
     case "tool-proposed":

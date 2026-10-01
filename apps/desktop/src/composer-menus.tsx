@@ -29,13 +29,19 @@ export function effortLabel(effort: ReasoningEffort): string {
   return `${effort[0].toUpperCase()}${effort.slice(1)}`;
 }
 
-/** A trigger and the panel it opens above the composer. Closes on Escape and on a click elsewhere. */
-function ComposerMenu({ className, label, trigger, disabled, title, children }: {
+/**
+ * A trigger and the panel it opens above the composer. Closes on Escape and on
+ * a click elsewhere. `chevron` is for a trigger that opens a choice; one that
+ * opens details only, like the context meter, goes without.
+ */
+export function ComposerMenu({ className, label, trigger, disabled, title, ariaLabel, chevron = true, children }: {
   className: string;
   label: string;
   trigger: ReactNode;
   disabled: boolean;
   title?: string;
+  ariaLabel?: string;
+  chevron?: boolean;
   children: (close: () => void) => ReactNode;
 }) {
   const [open, setOpen] = useState(false);
@@ -84,10 +90,11 @@ function ComposerMenu({ className, label, trigger, disabled, title, children }: 
       className="composer-menu-trigger"
       disabled={disabled}
       title={title}
+      aria-label={ariaLabel}
       aria-haspopup="dialog"
       aria-expanded={open}
       onClick={() => setOpen((current) => !current)}
-    >{trigger}<ChevronDown className="composer-menu-chevron" size={13} aria-hidden="true" /></button>
+    >{trigger}{chevron && <ChevronDown className="composer-menu-chevron" size={13} aria-hidden="true" />}</button>
     {open && <div className="composer-menu-panel" role="dialog" aria-label={label}>{children(() => close())}</div>}
   </div>;
 }
