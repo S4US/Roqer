@@ -72,7 +72,43 @@ export function parseSkins(value: unknown): InspectedSkin[] | undefined {
 }
 
 /** A quadruped's legs as the body plan names their bones: `<Leg>Upper`, `<Leg>Lower`, `<Leg>Foot`, or `<Leg>` alone. */
-const LEGS = ["FrontLeft", "FrontRight", "HindLeft", "HindRight"] as const;
+export const LEGS = ["FrontLeft", "FrontRight", "HindLeft", "HindRight"] as const;
+
+/** A leg of an upper and a lower part: where it hangs, where it bends and where it ends, in Blender coordinates. */
+export type LegShape = Readonly<{ leg: string; hip: readonly number[]; knee: readonly number[]; foot: readonly number[] }>;
+
+/** The share of a leg's length its knee must stand off its line for the leg to count as bent. */
+const BENT_SHARE = 0.04;
+
+/**
+ * What a walk needs of the legs' shape at rest. A leg modelled straight has
+ * no slack: a gait can only stride by lowering the body, so it walks crouched
+ * with every knee bent. A leg bent at rest strides by straightening. The
+ * quadruped plan folds a front leg's lower half back and a hind leg's forward,
+ * so a front knee stands forward of the line from hip to foot (toward -Y) and
+ * a hind knee behind it; a knee on the other side is bent against its fold.
+ */
+export function legShapeFlags(legs: readonly LegShape[], move: string): string[] {
+  const flags: string[] = [];
+  const straight: string[] = [];
+  for (const { leg, hip, knee, foot } of legs) {
+    const tall = hip[2] - foot[2];
+    if (tall <= 1e-3) continue;
+    const share = (hip[2] - knee[2]) / tall;
+    const off = knee[1] - (hip[1] + share * (foot[1] - hip[1]));
+    const front = leg.startsWith("Front");
+    const forward = front ? -off : off;
+    if (Math.abs(off) < BENT_SHARE * tall) straight.push(leg);
+    else if (forward < 0) {
+      flags.push(`${leg}'s knee stands ${Math.abs(off).toFixed(2)} ${front ? "behind" : "ahead of"} the line from its hip to its foot, against the way a ${front ? "front" : "hind"} leg folds, so it cannot straighten to stride: put it ${front ? "ahead of the line, toward -Y" : "behind the line, toward +Y"}`);
+    }
+  }
+  if (straight.length > 0) {
+    const tall = Math.max(...legs.filter((entry) => straight.includes(entry.leg)).map((entry) => entry.hip[2] - entry.foot[2]));
+    flags.push(`${straight.join(", ")} ${straight.length === 1 ? "is" : "are"} modelled straight, so a gait can only stride by lowering the body and walks crouched, every knee bent: bend each leg at rest by ${move} about ${(0.15 * tall).toFixed(2)} off the line from hip to foot, a front knee toward -Y and a hind knee toward +Y`);
+  }
+  return flags;
+}
 
 /** What would rig or animate badly, each naming the thing and what to change. */
 export function skinFlags(skins: readonly InspectedSkin[], bottom: number | undefined): string[] {
@@ -111,6 +147,10 @@ export function skinFlags(skins: readonly InspectedSkin[], bottom: number | unde
     }
     // A leg the quadruped plan would find: its foot bone is where it stands.
     const named = new Map(skin.bones.map((bone) => [bone.name, bone]));
+    flags.push(...legShapeFlags(LEGS.flatMap((leg): LegShape[] => {
+      const [upper, lower, foot] = [named.get(`${leg}Upper`), named.get(`${leg}Lower`), named.get(`${leg}Foot`)];
+      return upper && lower && foot ? [{ leg, hip: upper.head, knee: lower.head, foot: foot.head }] : [];
+    }), `moving ${"<Leg>"}Lower's head (and ${"<Leg>"}Upper's tail)`));
     for (const leg of LEGS) {
       if (!named.has(`${leg}Upper`) && !named.has(leg)) continue;
       const foot = named.get(`${leg}Foot`);

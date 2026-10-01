@@ -5,8 +5,11 @@ import { describeSkins, parseSkins, skinFlags, type InspectedSkin, type SkinBone
 
 const bone = (name: string, head: number[], tail: number[], parent?: string): SkinBone => ({ name, head, tail, ...(parent === undefined ? {} : { parent }) });
 
-/** A wolf facing -Y, standing on Z 0: a spine, a head, a tail, and four legs of an upper, a lower and a foot bone. */
-function wolf(change: (skin: InspectedSkin) => InspectedSkin = (skin) => skin): InspectedSkin[] {
+/**
+ * A wolf facing -Y, standing on Z 0: a spine, a head, a tail, and four legs of an upper, a lower and a foot bone,
+ * each knee `knee` studs off its leg's line the way the leg folds: a front knee forward, a hind knee back.
+ */
+function wolf(change: (skin: InspectedSkin) => InspectedSkin = (skin) => skin, knee = 0.3): InspectedSkin[] {
   const bones = [
     bone("Spine", [0, 1.4, 2.3], [0, -1.4, 2.3]),
     bone("Head", [0, -1.5, 2.7], [0, -2.9, 2.8], "Spine"),
@@ -15,8 +18,9 @@ function wolf(change: (skin: InspectedSkin) => InspectedSkin = (skin) => skin): 
   for (const [end, y] of [["Front", -1.1], ["Hind", 1.3]] as const) {
     for (const [side, x] of [["Left", 0.45], ["Right", -0.45]] as const) {
       const leg = `${end}${side}`;
-      bones.push(bone(`${leg}Upper`, [x, y, 1.9], [x, y, 0.95], "Spine"));
-      bones.push(bone(`${leg}Lower`, [x, y, 0.95], [x, y, 0], `${leg}Upper`));
+      const bend = end === "Front" ? -knee : knee;
+      bones.push(bone(`${leg}Upper`, [x, y, 1.9], [x, y + bend, 0.95], "Spine"));
+      bones.push(bone(`${leg}Lower`, [x, y + bend, 0.95], [x, y, 0], `${leg}Upper`));
       bones.push(bone(`${leg}Foot`, [x, y, 0], [x, y - 0.3, 0], `${leg}Lower`));
     }
   }
@@ -58,6 +62,17 @@ test("it flags what Roblox would not keep, naming the thing and what to change",
 
   const text = describeSkins(wolf(mesh({ unweighted: 12 })), 0);
   assert.match(text, /Fix before uploading, since an upload cannot be changed: 12 of Wolf's 152 vertices follow no bone/);
+});
+
+test("legs modelled straight, or bent against their fold, are flagged with how far to move the knee", () => {
+  const straight = skinFlags(wolf((skin) => skin, 0), 0);
+  assert.equal(straight.length, 1);
+  assert.match(straight[0], /^FrontLeft, FrontRight, HindLeft, HindRight are modelled straight, so a gait can only stride by lowering the body and walks crouched/);
+  assert.match(straight[0], /about 0\.28 off the line from hip to foot, a front knee toward -Y and a hind knee toward \+Y$/);
+  const backwards = skinFlags(wolf((skin) => skin, -0.3), 0);
+  assert.equal(backwards.length, 4);
+  assert.match(backwards[0], /^FrontLeft's knee stands 0\.30 behind the line from its hip to its foot, against the way a front leg folds, so it cannot straighten to stride: put it ahead of the line, toward -Y$/);
+  assert.match(backwards[2], /^HindLeft's knee stands 0\.30 ahead of the line .* put it behind the line, toward \+Y$/);
 });
 
 test("the inspection's skins are read as data, keeping only well-formed entries", () => {

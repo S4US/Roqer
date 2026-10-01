@@ -302,6 +302,11 @@ each cycle, and the cycle's length; Roqer places every foot 30 times a second.
 - **A leg needs a knee to stay on the ground.** A leg of one piece only
   swings from its hip, so its foot skims the ground and the foot-sliding
   check may fail.
+- **A leg needs slack to stride.** A leg built straight cannot reach forward
+  or back, so the body is lowered until it can and the creature walks
+  crouched. A leg built bent at rest, as an animal's is, strides by
+  straightening, and the body stays level. Roqer's check of a Blender model
+  points out legs built straight.
 - **The speed it was written for** is in the result, and the model's loader
   uses it to pace the gait to how fast the body moves.
 - **The gait check for many legs.** On a body with no pair of hips, the

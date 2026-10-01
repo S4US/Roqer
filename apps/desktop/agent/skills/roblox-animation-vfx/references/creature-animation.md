@@ -371,6 +371,14 @@ stride. Pass `locomotion: true` with it.
 - `stride`: studs a foot travels on the ground each cycle. Start near half
   the leg's length for a walk and up to its length for a run. Too long is
   refused with the longest it can reach. Negative walks backward.
+- **Legs need slack to stride.** A leg that is straight at rest cannot reach
+  forward or back, so the body is lowered until it can, and the creature
+  walks crouched with every knee bent, more the longer the stride. A leg
+  that is bent at rest strides by straightening and the body stays level. So
+  build legs bent: each knee off the line from hip to foot by about 15% of
+  the leg's height, a front knee forward and a hind knee back. On a body
+  already built straight, keep the stride short, or rebuild its legs. Look
+  at the sheet's side view: a body lower than it stands is this.
 - `duty`: the share of the cycle a foot is down. Defaults: walk 0.65, trot
   and pace 0.5, bound 0.4, gallop 0.35. Below 0.5 the body is airborne
   between steps.

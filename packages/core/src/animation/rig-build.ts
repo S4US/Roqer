@@ -9,6 +9,7 @@
 // in the body's own axes with no conversion.
 
 import { mergeDeclarations, planDeclarations, type BodyPlan, BODY_PLANS } from './body-plans.js';
+import { limbReach } from './limb-reach.js';
 import { frameFromComponents, multiply, pointToWorld, type Frame } from './motion.js';
 import { MAX_RIG_JOINTS, rigFromModel, type ModelRigReading } from './model-rig.js';
 import type { PartShape, Vec3 } from './rig.js';
@@ -527,9 +528,6 @@ export function planRigBuild(reading: PiecesReading, request: RigBuildRequest): 
   }
   const boneJoints = kept.map((bone) => ({ name: bone.name, part0: bone.parent, part1: bone.name, c0: bone.cframe.map(round), c1: [0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1] }));
 
-  // Declarations: the plan's, with the call's over them.
-  const planJoints = [...planned, ...boneJoints].map((joint) => ({ name: joint.name, parentPart: joint.part0, childPart: joint.part1 }));
-  const declarations = JSON.stringify(mergeDeclarations(planDeclarations(request.plan, planJoints), request.declarations));
 
   // The rig the model will read back as, checked as any rig read from a model is.
   const partEntry = (name: string) => {
@@ -537,7 +535,7 @@ export function planRigBuild(reading: PiecesReading, request: RigBuildRequest): 
     const part = reading.parts[indexOf.get(name)!];
     return { name, size: part.size, ...(part.shape ? { shape: part.shape } : {}), ...(part.mesh ? { mesh: part.mesh } : {}), ...(part.hidden ? { hidden: true } : {}) };
   };
-  const expected: ModelRigReading = {
+  const undeclared: ModelRigReading = {
     path: reading.path,
     revision: 'planned',
     rootPart: ROOT_PART,
@@ -548,8 +546,10 @@ export function planRigBuild(reading: PiecesReading, request: RigBuildRequest): 
       ...kept.map((bone) => ({ name: bone.name, size: BONE_SIZE, shape: 'Block' as PartShape, bone: true })),
     ],
     joints: [...planned, ...boneJoints],
-    declarations,
   };
+  // Declarations: the plan's, with the call's over them.
+  const declarations = declarationsFor(undeclared, request.plan, request.declarations);
+  const expected: ModelRigReading = { ...undeclared, declarations };
   const checked = rigFromModel(expected);
   if (!checked.ok) return refuse('invalid_rig', checked.errors);
 
@@ -579,6 +579,26 @@ export function planRigBuild(reading: PiecesReading, request: RigBuildRequest): 
   };
 }
 
+/**
+ * A rig's declarations: its plan's, read from its joints' names, with those
+ * given laid over them. A leg modelled bent at rest straightens to stride, so
+ * the plan's range for its knee is widened by as far as it straightens,
+ * measured on the rig the declarations make.
+ */
+function declarationsFor(reading: ModelRigReading, plan: BodyPlan, given: Record<string, unknown> | undefined): string {
+  const joints = reading.joints.map((joint) => ({ name: joint.name, parentPart: joint.part0, childPart: joint.part1 }));
+  const first = JSON.stringify(mergeDeclarations(planDeclarations(plan, joints), given));
+  const read = rigFromModel({ ...reading, declarations: first });
+  // What is wrong with them is said where the rig they make is checked.
+  if (!read.ok) return first;
+  const slack: Record<string, number> = {};
+  for (const [name, limb] of Object.entries(read.rig.limbs)) {
+    const straightens = limb.hinge ? -limbReach(read.rig, name).bend : 0;
+    if (limb.hinge && straightens > 0.5) slack[limb.hinge] = Math.ceil(straightens);
+  }
+  return Object.keys(slack).length === 0 ? first : JSON.stringify(mergeDeclarations(planDeclarations(plan, joints, slack), given));
+}
+
 export type RigAdoptResult =
   | { ok: true; declarations: string; notes: string[] }
   | { ok: false; errors: string[]; errorCode: string };
@@ -603,8 +623,7 @@ export function planRigAdopt(
   }
   const bare = rigFromModel({ ...reading, declarations: undefined });
   if (!bare.ok) return { ok: false, errorCode: 'invalid_rig', errors: bare.errors };
-  const planJoints = bare.rig.joints.map((joint) => ({ name: joint.name, parentPart: joint.parentPart, childPart: joint.childPart }));
-  const declarations = JSON.stringify(mergeDeclarations(planDeclarations(request.plan, planJoints), request.declarations));
+  const declarations = declarationsFor({ ...reading, declarations: undefined }, request.plan, request.declarations);
   const checked = rigFromModel({ ...reading, declarations });
   if (!checked.ok) return { ok: false, errorCode: 'invalid_declarations', errors: checked.errors };
   return { ok: true, declarations, notes: checked.notes };

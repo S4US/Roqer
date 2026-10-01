@@ -10,6 +10,8 @@
  * (-x, z, y) from the model's own origin.
  */
 
+import { LEGS, legShapeFlags, type LegShape } from "./blender-skin";
+
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
 const isNumber = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value);
@@ -164,6 +166,15 @@ export function articulationOf(objects: readonly InspectedObject[]): Articulatio
       if (!mirrored) flags.push(`${first.name}'s origin ${at(a)} and ${second.name}'s ${at(b)} do not mirror across X = ${plane.toFixed(2)}, so the two sides would turn differently`);
     }
   }
+
+  // A leg of an upper and a lower piece turns at their origins and ends at
+  // its foot piece's origin, or at the bottom of its lower piece.
+  flags.push(...legShapeFlags(LEGS.flatMap((leg): LegShape[] => {
+    const [upper, lower, foot] = [byName.get(`${leg}Upper`), byName.get(`${leg}Lower`), byName.get(`${leg}Foot`)];
+    if (!upper?.origin || !lower?.origin || lower.parent !== upper.name) return [];
+    const end = foot?.origin ?? (lower.low && lower.high ? [(lower.low[0] + lower.high[0]) / 2, (lower.low[1] + lower.high[1]) / 2, lower.low[2]] : undefined);
+    return end ? [{ leg, hip: upper.origin, knee: lower.origin, foot: end }] : [];
+  }), "moving its knee, the lower piece's pivot,"));
 
   // Parents before children, as the tree runs from the root.
   const joints: ArticulationJoint[] = [];

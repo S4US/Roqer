@@ -14,18 +14,18 @@ function piece(name: string, low: number[], high: number[], origin: number[], pa
   };
 }
 
-/** A wolf facing -Y: a body, a head, a tail, and four legs of two pieces, each origin at its joint. */
+/** A wolf facing -Y: a body, a head, a tail, and four legs of two pieces, each origin at its joint, each knee off its leg's line the way it folds. */
 function wolf(): InspectedObject[] {
   const pieces = [
     piece("Body", [-0.6, -1.6, 1.5], [0.6, 1.6, 2.5], [0, 0, 2]),
     piece("Head", [-0.5, -2.6, 2.0], [0.5, -1.4, 3.0], [0, -1.5, 2.4], "Body"),
     piece("Tail", [-0.15, 1.5, 2.0], [0.15, 2.8, 2.3], [0, 1.55, 2.2], "Body"),
   ];
-  for (const [end, y] of [["Front", -1.2], ["Hind", 1.2]] as const) {
+  for (const [end, y, knee] of [["Front", -1.2, -0.25], ["Hind", 1.2, 0.25]] as const) {
     for (const [side, x] of [["Left", 0.45], ["Right", -0.45]] as const) {
       // Blender +X is the model's left once it faces -Y: Roblox's -X.
-      pieces.push(piece(`${end}${side}Upper`, [x - 0.2, y - 0.2, 0.7], [x + 0.2, y + 0.2, 1.7], [x, y, 1.6], "Body"));
-      pieces.push(piece(`${end}${side}Lower`, [x - 0.18, y - 0.18, 0], [x + 0.18, y + 0.18, 0.85], [x, y, 0.8], `${end}${side}Upper`));
+      pieces.push(piece(`${end}${side}Upper`, [x - 0.2, y - 0.3, 0.7], [x + 0.2, y + 0.3, 1.7], [x, y, 1.6], "Body"));
+      pieces.push(piece(`${end}${side}Lower`, [x - 0.18, y - 0.3, 0], [x + 0.18, y + 0.3, 0.85], [x, y + knee, 0.8], `${end}${side}Upper`));
     }
   }
   return pieces;
@@ -41,7 +41,7 @@ test("a model whose objects hang from one another becomes rig's joints, pivots i
   assert.deepEqual(articulation.joints[0], { part: "Head", parent: "Body", pivot: [0, 2.4, -1.5], name: "Neck" });
   assert.deepEqual(articulation.joints[1], { part: "Tail", parent: "Body", pivot: [0, 2.2, 1.55] });
   assert.deepEqual(articulation.joints[2], { part: "FrontLeftUpper", parent: "Body", pivot: [-0.45, 1.6, -1.2], name: "FrontLeft" });
-  assert.deepEqual(articulation.joints[3], { part: "FrontLeftLower", parent: "FrontLeftUpper", pivot: [-0.45, 0.8, -1.2], name: "FrontLeftKnee" });
+  assert.deepEqual(articulation.joints[3], { part: "FrontLeftLower", parent: "FrontLeftUpper", pivot: [-0.45, 0.8, -1.45], name: "FrontLeftKnee" });
   assert.deepEqual(articulation.joints.map((joint) => joint.name ?? joint.part), [
     "Neck", "Tail", "FrontLeft", "FrontLeftKnee", "FrontRight", "FrontRightKnee", "HindLeft", "HindLeftKnee", "HindRight", "HindRightKnee",
   ]);
@@ -77,6 +77,9 @@ test("it flags what would rig badly, naming the object and what to change", () =
     flagsOf(swap("HindLeftUpper", { origin: [0.45, 1.2, 1.3] }))[0],
     /^HindLeftUpper's origin \(0\.45, 1\.20, 1\.30\) and HindRightUpper's \(-0\.45, 1\.20, 1\.60\) do not mirror across X = 0\.00/,
   );
+  // Legs with their knees on the line from hip to foot have no slack to stride with.
+  const straight = flagsOf((pieces) => pieces.map((entry) => entry.name.endsWith("Lower") ? { ...entry, origin: [entry.origin![0], entry.name.startsWith("Front") ? -1.2 : 1.2, 0.8] } : entry));
+  assert.match(straight[0], /^FrontLeft, FrontRight, HindLeft, HindRight are modelled straight, so a gait can only stride by lowering the body/);
   // A piece parented to nothing is a second tree.
   const loose = flagsOf(swap("Tail", { parent: undefined }));
   assert.match(loose[0], /^2 objects hang from nothing \(Body, Tail\): a rig is one tree/);

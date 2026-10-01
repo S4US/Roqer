@@ -9,7 +9,8 @@ import { mergeDeclarations, planDeclarations } from '../animation/body-plans.js'
 import { drawnParts } from '../animation/box-rig.js';
 import { rigFromModel, type ModelRigReading } from '../animation/model-rig.js';
 import { buildTracks, pointToWorld, poseRig, restPose } from '../animation/motion.js';
-import { planRigBuild, type RigBuildRequest } from '../animation/rig-build.js';
+import { limbReach } from '../animation/limb-reach.js';
+import { planRigAdopt, planRigBuild, type RigBuildRequest } from '../animation/rig-build.js';
 import type { Rig } from '../animation/rig.js';
 import { skinnedSnake, skinnedWolf, skinnedWolfPieces, SNAKE_BONES, WOLF_HIPS } from './fixtures/skinned.js';
 
@@ -80,6 +81,57 @@ describe('a skinned mesh\'s bones are a rig', () => {
       poses = poses[0].children;
     }
     expect(chain).toEqual(['SnakeGeometry', ...SNAKE_BONES]);
+  });
+});
+
+describe('a leg modelled bent at rest has slack to stride with', () => {
+  /** The wolf with each knee 0.3 studs off its leg's line, declared by the plan as rig declares it. */
+  const bentWolf = (): Rig => {
+    const result = planRigAdopt(skinnedWolf(undefined, 0.3), { plan: 'quadruped' });
+    if (!result.ok) throw new Error(result.errors.join('\n'));
+    return rigOf(skinnedWolf(JSON.parse(result.declarations), 0.3));
+  };
+  const trot = (rig: Rig, stride: number) => {
+    const result = prepareAnimation({ name: 'Trot', rig: rig.name, loop: true, priority: 'Movement', duration: 0.6, gait: { pattern: 'trot', stride, bob: 0 } }, { locomotion: true }, rig);
+    if (!result.ok) throw new Error(result.errors.join('\n'));
+    return result.value;
+  };
+  /** How far the body rides below where it stands, at its lowest. */
+  const lowest = (sequence: ReturnType<typeof trot>['sequence']) => Math.min(...sequence.keyframes.map((keyframe) => keyframe.root.children[0].cframe[1]));
+
+  test('it reaches past its rest by straightening, and the plan lets its knee turn that far', () => {
+    const rig = bentWolf();
+    for (const leg of ['FrontLeftUpper', 'HindRightUpper']) {
+      const reach = limbReach(rig, leg);
+      // Two bones of 0.9 and a knee 0.3 off the line: 1.8 studs standing, 1.897 straight.
+      expect(reach.length).toBeCloseTo(2 * Math.hypot(0.9, 0.3), 3);
+      expect(reach.bend).toBeCloseTo(-2 * Math.atan2(0.3, 0.9) * (180 / Math.PI), 1);
+    }
+    // 37° to straighten, and 10° past it: a front knee folds back (-), a hind knee forward (+).
+    expect(rig.limits.FrontLeftLower).toEqual({ min: -160, max: 47, offAxis: 35 });
+    expect(rig.limits.HindLeftLower).toEqual({ min: -47, max: 160, offAxis: 35 });
+    // A leg modelled straight has none, and keeps the plan's own range.
+    const straight = plannedWolf();
+    expect(limbReach(straight, 'FrontLeftUpper')).toEqual({ bend: 0, length: 1.8 });
+    expect(straight.limits.FrontLeftLower).toEqual({ min: -160, max: 10, offAxis: 35 });
+  });
+
+  test('so a gait strides without lowering the body, where a straight leg must crouch', () => {
+    const bent = trot(bentWolf(), 0.9);
+    expect(bent.report.checks.filter((check) => check.status !== 'pass').map((check) => `${check.id}: ${check.detail}`)).toEqual([]);
+    expect(lowest(bent.sequence)).toBeCloseTo(0, 6);
+    const straight = trot(plannedWolf(), 0.9);
+    expect(lowest(straight.sequence)).toBeLessThan(-0.08);
+    // Its planted feet stay on the ground all the same.
+    const rig = bentWolf();
+    for (let step = 0; step < 36; step += 1) {
+      const parts = poseRig(buildTracks(bent.sequence), (bent.sequence.duration * step) / 36, rig).parts;
+      for (const foot of rig.feet) expect(parts.get(foot)!.p[1] - rig.ground).toBeGreaterThan(-0.02);
+    }
+  });
+
+  test('a longer stride than its slack covers lowers it only by the rest', () => {
+    expect(lowest(trot(bentWolf(), 1.6).sequence)).toBeGreaterThan(lowest(trot(plannedWolf(), 1.6).sequence) + 0.05);
   });
 });
 

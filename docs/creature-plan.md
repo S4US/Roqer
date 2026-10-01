@@ -1038,11 +1038,25 @@ Known and left as they are:
 
 - **The range sheet of a deep chain curls out of frame.** Every joint turned
   30° adds up along twenty nested bones.
-- **A gait crouches a straight-legged body.** A leg modelled straight has no
-  slack to stride with, so the generator lowers the body and every knee stays
-  bent, about 49° on the T20 wolf at its stride. Studio shows exactly what
-  the sheet shows. Legs modelled with a bend at rest would stride without it;
-  neither recipe says so yet.
+- **A gait crouches a straight-legged body**, fixed after T20. The run's
+  walk looked off: the wolf's legs were modelled straight, a straight leg has
+  no slack to stride with, so the generator lowered the body and every knee
+  stayed bent, about 49° at its stride. Studio showed exactly what the sheet
+  showed. Three changes:
+  - The solver and the gait took a leg's rest as its longest reach. They now
+    find the bend at which it is longest, which on a leg modelled bent at
+    rest is below 0, and let `aimAt` straighten it that far. R15 and R6 are
+    unchanged.
+  - The quadruped plan widens such a knee's range by as far as it
+    straightens, measured on the rig, so the joint limits still pass.
+  - The Blender check flags legs modelled straight, and legs bent against
+    the way they fold, with how far to move the knee; both recipes and the
+    gait guidance say to model legs bent.
+
+  The building skill's wolf of pieces, run through the worker and rigged
+  from its inspection, walks a 0.8-stud stride with no drop and a 1.5-stud
+  one with 0.1, where its straight-legged version dropped 0.2. No eval has
+  been rerun with it.
 
 What changed from the proposal, and why:
 

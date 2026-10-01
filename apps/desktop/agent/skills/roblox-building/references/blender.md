@@ -193,14 +193,20 @@ body plan needs.
   middle makes it spin in place.
 - **Overlap pieces at their joints** by a tenth of a stud or more, so a turn
   opens no gap. The layout does not report those overlaps.
-- **Model it standing as it rests**: legs straight down, feet at Z 0, front
-  toward −Y.
+- **Model it standing as it rests**: feet at Z 0, front toward −Y.
+- **Bend each leg at rest**, as an animal's are. A leg modelled straight has
+  no slack, so a walk can only stride by lowering the body and every knee
+  stays bent: the creature walks crouched. Put each knee off the line from
+  hip to foot by about 15% of the leg's height, a front knee forward (toward
+  −Y) and a hind knee back (toward +Y), which is the way each folds. The leg
+  then strides by straightening.
 - Export one GLB as usual.
 
 Read the result's **moving pieces** line. It lists anything that would rig
 badly (an origin left at a piece's middle or outside both pieces it joins,
 left and right pivots that do not mirror, a mesh named apart from its object,
-a piece with two materials, a piece parented to nothing), each with what to
+a piece with two materials, a piece parented to nothing, legs modelled
+straight or bent against their fold), each with what to
 change: fix those in the next job before uploading, since an upload cannot be
 changed. It ends with the `joints` to pass to `rig`, pivots included.
 
@@ -226,16 +232,18 @@ roqer.piece(head, (0, -1.5, 2.7), body)          # the neck, inside the chest
 tail = roqer.join("Tail", [roqer.box_between("t", (0, 1.6, 2.5), (0, 3.0, 2.0), 0.3, 0.3, rgba=DARK)])
 roqer.piece(tail, (0, 1.6, 2.5), body)
 
-# Blender +X is the wolf's left once it faces -Y.
-for end, y in (("Front", -1.1), ("Hind", 1.3)):
+# Blender +X is the wolf's left once it faces -Y. Each leg is bent at rest: its
+# knee stands 0.3 off the line from hip to paw, a front knee forward, a hind knee back.
+for end, y, bend in (("Front", -1.1, -0.3), ("Hind", 1.3, 0.3)):
     for side, x in (("Left", 0.45), ("Right", -0.45)):
-        upper = roqer.join(f"{end}{side}Upper", [roqer.box("u", (0.42, 0.5, 1.1), (x, y, 1.45), FUR)])
+        knee = (x, y + bend, 0.95)
+        upper = roqer.join(f"{end}{side}Upper", [roqer.box_between("u", (x, y, 2.0), (x, y + bend * 1.1, 0.85), 0.42, 0.5, rgba=FUR)])
         lower = roqer.join(f"{end}{side}Lower", [
-            roqer.box("l", (0.34, 0.4, 1.0), (x, y, 0.5), FUR),
+            roqer.box_between("l", (x, y + bend * 1.1, 1.05), (x, y, 0.1), 0.34, 0.4, rgba=FUR),
             roqer.box("paw", (0.4, 0.55, 0.2), (x, y - 0.08, 0.1), PALE),
         ])
         roqer.piece(upper, (x, y, 1.9), body)     # the hip or shoulder, inside the body
-        roqer.piece(lower, (x, y, 0.95), upper)   # the knee, where the two overlap
+        roqer.piece(lower, knee, upper)           # the knee, where the two overlap
 
 bpy.ops.export_scene.gltf(filepath=os.path.join(OUTPUT_DIR, "wolf.glb"), export_format="GLB", export_apply=True, use_visible=True)
 ```
@@ -267,12 +275,18 @@ weights, so nothing about the rig has to be carried to Studio by hand.
   `FrontLeftFoot` for each leg. The foot bone's head is at the sole, on Z 0:
   it is where the leg ends and where the foot meets the ground. Do not name a
   bone `Root`, or after the mesh; name the spine `Spine`.
+- **Bend each leg at rest**, the mesh and its bones alike: the knee, which is
+  the lower bone's head, off the line from hip to foot by about 15% of the
+  leg's height, a front knee toward −Y and a hind knee toward +Y. A straight
+  leg has no slack, and the creature walks crouched (see "A creature of
+  moving pieces").
 - Model it at rest, front toward −Y, feet on Z 0, and export one GLB as usual.
 
 Read the result's **skinned** line. It names the mesh and its bones, and
 lists what Roblox would not keep, each with what to change: a vertex no bone
 holds, a vertex held by more than four bones, more than one mesh or armature,
-a leg with no foot bone. It ends with the `rig` call, which takes no joints.
+a leg with no foot bone, legs modelled straight. It ends with the `rig` call,
+which takes no joints.
 
 ```python
 import bpy, os

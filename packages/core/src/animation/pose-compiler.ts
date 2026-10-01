@@ -22,6 +22,7 @@ import {
   type PoseEasingStyle,
 } from './easing.js';
 import { buildTracks, pointToWorld, poseRig, restTurn, slerpRotation, transformFromBody, transformInBody, type Frame } from './motion.js';
+import { applyRows as apply, limbEndAt, straightest, turned } from './limb-reach.js';
 import { R15_RIG } from './r15-rig.js';
 import type { Rig, RigHinge, RigJoint, RigLimb } from './rig.js';
 import { RIGS } from './rigs.js';
@@ -613,18 +614,6 @@ function checkFirstKeys(keyframes: ParsedKeyframe[], complete: boolean, rig: Rig
   }
 }
 
-/** The turn a hinge flexes by about its axis, as rows: Rx(degrees) for an elbow or knee. */
-function hingeTurn(axis: RigHinge['axis'], degrees: number): Vec[] {
-  const radians = (degrees * Math.PI) / 180;
-  const c = Math.cos(radians), s = Math.sin(radians);
-  if (axis === 'Y') return [[c, 0, s], [0, 1, 0], [-s, 0, c]];
-  if (axis === 'Z') return [[c, -s, 0], [s, c, 0], [0, 0, 1]];
-  return [[1, 0, 0], [0, c, -s], [0, s, c]];
-}
-
-function apply(rows: Vec[], v: Vec): Vec {
-  return [dot3(rows[0], v), dot3(rows[1], v), dot3(rows[2], v)];
-}
 
 type Solved = {
   rotation: Matrix3;
@@ -665,10 +654,6 @@ function transposeRotation(a: readonly number[]): Matrix3 {
   return [a[0], a[3], a[6], a[1], a[4], a[7], a[2], a[5], a[8]];
 }
 
-/** A vector turned by a part's rest turn, or as it is when the part rests upright. */
-function turned(rest: readonly number[] | undefined, v: Vec): Vec {
-  return rest ? apply([[rest[0], rest[1], rest[2]], [rest[3], rest[4], rest[5]], [rest[6], rest[7], rest[8]]], v) : v;
-}
 
 /**
  * A joint's child part's orientation, from its parent part's and the joint's
@@ -715,16 +700,10 @@ function solveLimb(
   // The limb's end from its pivot, in the body's axes, as a bend puts it:
   // each part's offsets turned as the part rests, which on R15 and R6, whose
   // limbs hang in their parents' orientation, is not at all.
-  const pivotInLimb = joint.childOffset as Vec;
-  const upperRest = restTurn(rig, joint.childPart);
-  const lowerRest = hinge ? restTurn(rig, hinge.childPart) : undefined;
-  const endAt = (bend: number): Vec => {
-    if (!hinge || !bending) return turned(upperRest, [0, 1, 2].map((axis) => end[axis] - pivotInLimb[axis]) as Vec);
-    const upper = turned(upperRest, [0, 1, 2].map((axis) => hinge.parentOffset[axis] - pivotInLimb[axis]) as Vec);
-    const lower = apply(hingeTurn(bending.axis, bending.flex * bend), turned(lowerRest, [0, 1, 2].map((axis) => end[axis] - hinge.childOffset[axis]) as Vec));
-    return [0, 1, 2].map((axis) => upper[axis] + lower[axis]) as Vec;
-  };
-  const longest = length3(endAt(0));
+  const endAt = limbEndAt(rig, joint, end);
+  // A limb bent at rest reaches furthest straightened, a bend below 0.
+  const straight = straightest(rig, endAt);
+  const longest = straight.length;
   const shortest = hinge && bending ? length3(endAt(POSE_LIMITS.maxAimAtBend)) : 0;
   const what = !rig.words ? 'limb' : joint.name.endsWith('Hip') ? 'leg' : 'arm';
   const studs = (value: number) => Math.round(value * 100) / 100;
@@ -735,9 +714,9 @@ function solveLimb(
     return `is ${studs(distance)} studs from ${joint.name}; the ${what} cannot fold nearer than ${studs(shortest)} at ${studs(time)} s`;
   }
   // The bend whose reach is the distance: reach shrinks as the hinge folds.
-  let bend = 0;
+  let bend = straight.bend;
   if (hinge && bending && distance < longest) {
-    let low = 0;
+    let low = straight.bend;
     let high: number = POSE_LIMITS.maxAimAtBend;
     for (let step = 0; step < 60; step += 1) {
       const middle = (low + high) / 2;

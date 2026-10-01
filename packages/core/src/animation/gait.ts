@@ -4,13 +4,16 @@
 // along the ground under the body, as the ground does under a body that
 // walks in place, and while it is up it swings forward along an arc. The body
 // rides just low enough for the legs to reach the stride, and bobs twice a
-// cycle.
+// cycle. A leg modelled straight has no slack, so any stride lowers the body
+// and bends its knees; a leg modelled bent at rest strides by straightening,
+// and the body stays where it stands.
 //
 // The legs are the rig's limbs that end in one of its feet. Which leg steps
 // when comes from the pattern and from where each leg stands at rest: its
 // side, and its place from front to back.
 
 import type { Generator } from './generators.js';
+import { limbReach } from './limb-reach.js';
 import { pointToWorld, restPose } from './motion.js';
 import type { Rig } from './rig.js';
 
@@ -166,7 +169,8 @@ export function parseGait(value: unknown, rig: Rig, fail: AddIssue): Generator |
     const limb = rig.limbs[joint.name];
     const end = pointToWorld(rest.get(endPart(joint.name))!, limb.end);
     const pivot = pointToWorld(rest.get(joint.parentPart)!, joint.parentOffset);
-    return { joint: joint.name, hinged: limb.hinge !== undefined, end, pivot, length: Math.hypot(end[0] - pivot[0], end[1] - pivot[1], end[2] - pivot[2]) };
+    // A leg modelled bent at rest reaches further than it stands: its length is its straightest.
+    return { joint: joint.name, hinged: limb.hinge !== undefined, end, pivot, length: limbReach(rig, joint.name).length };
   });
   const phases = patternPhases(pattern, measured);
   if (value.phases !== undefined) {

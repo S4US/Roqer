@@ -48,12 +48,16 @@ const QUADRUPED_LIMITS = {
   tail: { turn: 90 },
 } as const;
 
-/** A lower leg's range, signed about X: up to 160° the way it folds, 10° the other. */
-function foldRange(flex: 1 | -1) {
-  return flex === 1 ? { min: -10, max: 160 } : { min: -160, max: 10 };
+/**
+ * A lower leg's range, signed about X: up to 160° the way it folds, and the
+ * other way 10° past straight, which on a leg modelled bent at rest is its
+ * `slack`, the degrees it straightens by, further from rest.
+ */
+function foldRange(flex: 1 | -1, slack = 0) {
+  return flex === 1 ? { min: -10 - slack, max: 160 } : { min: -160, max: 10 + slack };
 }
 
-function quadruped(joints: readonly PlanJoint[]): RigDeclarations {
+function quadruped(joints: readonly PlanJoint[], slack: Readonly<Record<string, number>>): RigDeclarations {
   const moving = new Map(joints.map((joint) => [joint.childPart, joint]));
   const feet: string[] = [];
   const limbs: Record<string, Record<string, unknown>> = {};
@@ -71,7 +75,7 @@ function quadruped(joints: readonly PlanJoint[]): RigDeclarations {
     limits[upper.name] = QUADRUPED_LIMITS.leg;
     if (knee) {
       hinges[knee.name] = { axis: 'X', flex };
-      limits[knee.name] = foldRange(flex);
+      limits[knee.name] = foldRange(flex, slack[knee.name]);
     }
     if (foot) limits[foot.name] = QUADRUPED_LIMITS.foot;
     feet.push((foot ?? knee ?? upper).childPart);
@@ -90,9 +94,13 @@ function quadruped(joints: readonly PlanJoint[]): RigDeclarations {
   };
 }
 
-/** What a plan declares for a rig's joints, before anything given with it. */
-export function planDeclarations(plan: BodyPlan, joints: readonly PlanJoint[]): RigDeclarations {
-  return plan === 'quadruped' ? quadruped(joints) : { version: 1 };
+/**
+ * What a plan declares for a rig's joints, before anything given with it.
+ * `slack` gives, by knee, the degrees a leg modelled bent at rest straightens
+ * by, which its range must let it reach.
+ */
+export function planDeclarations(plan: BodyPlan, joints: readonly PlanJoint[], slack: Readonly<Record<string, number>> = {}): RigDeclarations {
+  return plan === 'quadruped' ? quadruped(joints, slack) : { version: 1 };
 }
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>

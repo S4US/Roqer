@@ -81,9 +81,12 @@ export const WOLF_HIPS: Record<string, V> = { FrontLeft: [-0.5, -0.2, -1.3], Fro
  * bones are a `Spine` from the hips forward, a `Head`, a `Tail` of two bones,
  * and four legs of an upper bone, a lower bone and a `Foot` bone at the paw,
  * named as the quadruped plan names a leg's pieces. The mesh's box is 4 studs
- * tall and its paws stand 2 studs below its centre.
+ * tall and its paws stand 2 studs below its centre. With `knee`, its legs are
+ * modelled bent at rest, as a dog's are: each knee that many studs off the
+ * line from hip to paw, a front knee forward and a hind knee back, the way
+ * each already folds.
  */
-export function skinnedWolf(declarations?: unknown): ModelRigReading {
+export function skinnedWolf(declarations?: unknown, knee = 0): ModelRigReading {
   const mesh = cf([0, 0, 0]);
   const parts: ModelRigPart[] = [
     { name: 'HumanoidRootPart', size: [1.4, 1.2, 4], hidden: true },
@@ -101,7 +104,7 @@ export function skinnedWolf(declarations?: unknown): ModelRigReading {
   add('Tail2', tail, cf([0, 0.2, 2.5], ALONG_BACK));
   for (const [leg, [x, y, z]] of Object.entries(WOLF_HIPS)) {
     const upper = add(`${leg}Upper`, spine, cf([x, y, z], ALONG_DOWN));
-    const lower = add(`${leg}Lower`, upper, cf([x, y - 0.9, z], ALONG_DOWN));
+    const lower = add(`${leg}Lower`, upper, cf([x, y - 0.9, z + (leg.startsWith('Front') ? -knee : knee)], ALONG_DOWN));
     add(`${leg}Foot`, lower, cf([x, -2, z], ALONG_DOWN));
   }
   return {
