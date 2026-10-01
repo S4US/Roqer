@@ -158,13 +158,36 @@ const DOCUMENTED_OPERATIONS = [
   "upload_asset",
 ];
 
+/**
+ * The most of a tool description Claude Code passes on: it cuts an MCP tool's
+ * description to its first 2,048 characters, silently. Everything the model
+ * needs beyond a short summary is therefore in `studioToolGuide`, which every
+ * provider receives in its developer instructions.
+ */
+export const MAX_TOOL_DESCRIPTION_CHARS = 2_048;
+
 export function studioToolDescription(): string {
+  return [
+    "Call the connected Roblox Studio through Roqer, which validates risk, routes the selected instance, asks the user when required, and bounds the result.",
+    "A rejected action is returned as a normal tool result. Do not repeat the same effective action; choose a permitted alternative or explain the limitation.",
+    "Pass {operation, arguments}. The arguments of the operations a run leans on, and the rules for using them, are in the developer instructions under <roblox-studio-tool>; read them before a first call.",
+    "To read any operation's schema, call it with {help: true} as its only argument: that is answered locally, never reaches Studio, and is not a failed call.",
+  ].join("\n");
+}
+
+/**
+ * How to use `roblox_studio`: the signatures of the operations an ordinary run
+ * walks and the rules that keep its writes reviewable and verified.
+ *
+ * Too long for a tool description (see `MAX_TOOL_DESCRIPTION_CHARS`), so it
+ * travels in the developer instructions of every provider instead.
+ */
+export function studioToolGuide(): string {
   const signatures = DOCUMENTED_OPERATIONS
     .map((operation) => toolSignature(operation))
     .filter((signature): signature is string => signature !== undefined);
   return [
-    "Call the connected Roblox Studio through Roqer, which validates risk, routes the selected instance, asks the user when required, and bounds the result.",
-    "A rejected action is returned as a normal tool result. Do not repeat the same effective action; choose a permitted alternative or explain the limitation.",
+    `Every operation below is called through the ${STUDIO_TOOL_NAME} tool as {operation, arguments}.`,
     "Important operations and arguments:",
     ...signatures,
     "Other operations in the enum are called the same way. To read one's schema first, call it with {help: true} as its only argument: that is answered locally, never reaches Studio, and is not a failed call. Calling with arguments that do not fit also returns the schema.",
