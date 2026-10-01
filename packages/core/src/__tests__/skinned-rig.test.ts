@@ -93,11 +93,16 @@ describe('rig builds around a skinned mesh', () => {
     const { plan, expected } = result;
     // One joint to make: the root's, to the mesh. The bones are not the plugin's to make.
     expect(plan.joints.map((joint) => [joint.name, joint.part0, joint.part1])).toEqual([['Root', 'HumanoidRootPart', 'Wolf']]);
-    expect(plan.root.make?.size).toEqual([1.4, 4, 6]);
+    // The root covers the body, not the legs: from the spine up, around the bones at that height
+    // (the hips' width, the head to the tail's end), where the mesh's own box is 1.4 by 4 by 6.
+    expect(plan.root.make?.size).toEqual([1, 1, 4.3]);
+    expect(plan.root.make?.cframe.slice(0, 3)).toEqual([0, 2.7, 0.35]);
     expect(plan.replaceImporter).toBe(true);
     expect(plan.rootAnchored).toBe(false);
-    // The paws stand on the ground the mesh's box stands on, so the root rides at its own bottom.
-    expect(plan.controller).toEqual({ className: 'Humanoid', hipHeight: 0 });
+    // So a Humanoid holds its bottom the spine's height above the ground the paws stand on.
+    expect(plan.controller).toEqual({ className: 'Humanoid', hipHeight: 2.2 });
+    // The root's joint is still at the mesh's centre.
+    expect(plan.joints[0].c1.slice(0, 3)).toEqual([0, 0, 0]);
     // The rig it will read back as has every bone, and the plan's declarations from their names.
     expect(expected.joints).toHaveLength(1 + 16);
     expect(expected.parts.filter((part) => part.bone).map((part) => part.name)).toContain('HindRightFoot');

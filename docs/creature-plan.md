@@ -1,6 +1,6 @@
 # Creature and NPC animation plan
 
-Status as of 2026-10-01: steps 1 to 6 are done. Step 1, the creature spike,
+Status as of 2026-10-01: steps 1 to 7 are done. Step 1, the creature spike,
 answered its questions in [Live results](#live-results), and the design below
 follows them. Step 2 made NPCs on stock rigs, and eval T18 passes. Step 3
 reads a rig from any rigged model, and a dog rigged by hand in Studio plays
@@ -8,8 +8,8 @@ its animation as checked. Step 4 rigs a model's loose pieces, and `aim` and
 `aimAt` move the legs of a dog it rigged. Step 5 added the `wave` and `gait`
 generators, and eval T19 passes. Step 6 carries a Blender creature's pivots
 to `rig`, and eval T17 passes. Step 7, skinned creatures, is built on what its
-live test found, that an upload keeps its bones and weights; its eval T20 has
-not been run. Step 8 is proposed and not yet
+live test found, that an upload keeps its bones and weights, and eval T20
+passes. Step 8 is proposed and not yet
 scheduled. The
 plan details steps 12 to 14 of the [animation plan](animation-plan.md)
 (creatures made of rigid parts, skinned creatures, animating in Blender), adds
@@ -905,7 +905,7 @@ What changed from the proposal, and why:
   varies. The skill says to read the range sheet and generate again when a
   piece is split badly.
 
-### 7. Skinned creatures — in progress
+### 7. Skinned creatures — done 2026-10-01
 
 Some creatures bend along their skin instead of hinging between pieces: a
 snake, a tentacle, a dragon's neck. That needs a Blender armature with skin
@@ -1003,7 +1003,7 @@ What follows from it, in the order it is built:
    with. Bones are never made, moved or removed. A quadruped's legs are bones
    named `<Leg>Upper`, `<Leg>Lower` and `<Leg>Foot`, the foot bone at the
    paw's sole. Live, the uploaded snake was built around under a `Humanoid`.
-4. **Done, but for its eval: the Blender side.** `roqer.bind(part, bones)`
+4. **Done: the Blender side.** `roqer.bind(part, bones)`
    says which bones a part follows, and `roqer.skin(obj, bones)` makes the
    armature and weights the joined mesh: each vertex among the bones its part
    was bound to, or among all of them, by nearness to the fourth power, at
@@ -1016,12 +1016,33 @@ What follows from it, in the order it is built:
    ends with the `rig` call. Run through the worker in Blender 5.2, a skinned
    wolf of 16 bones and the skill's snake of 8 exported, re-imported and came
    back whole, with nothing flagged.
-5. **Eval T20** `creature-skinned` is T17's prompt asking for one skinned
-   mesh. It has not been run: it needs an agent run with Blender on, a
-   published place and an Open Cloud key (`npm run eval -- --task
-   T20-creature-skinned --blender auto`). It is also the first upload of a
-   skinned mesh that Blender exported; the spike's was written by hand to
-   match one.
+5. **Done: eval T20** `creature-skinned`, T17's prompt asking for one skinned
+   mesh, passed on its first run on 2026-10-01: in 55 tool calls and six
+   minutes the agent modelled a wolf of 20 bones with `roqer.bind` and
+   `roqer.skin`, uploaded it, rigged it with the one `rig` call, built an idle
+   of waves and a walk gait, and published and wired both. It was the first
+   upload of a skinned mesh Blender exported, and it arrived as the spike's
+   hand-written one did: the bones where they were modelled, named and nested
+   as the armature, the skin read and the sheets bent by it.
+
+   The run found one defect, since fixed. `rig` made the root as large as the
+   mesh's whole box, legs included, with a hip height of 0, and in the
+   playtest the wolf flew off at 270 studs a second, in free fall. The agent
+   resized the root and set the hip height by hand. `rig` now makes a skinned
+   creature's root around its body: from the lowest bone directly in the mesh
+   up, around the bones at that height or above, at least a stud each way,
+   and the hip height follows. With it, that same wolf stood still in a
+   playtest and walked where `MoveTo` sent it, its paws on the ground.
+
+Known and left as they are:
+
+- **The range sheet of a deep chain curls out of frame.** Every joint turned
+  30° adds up along twenty nested bones.
+- **A gait crouches a straight-legged body.** A leg modelled straight has no
+  slack to stride with, so the generator lowers the body and every knee stays
+  bent, about 49° on the T20 wolf at its stride. Studio shows exactly what
+  the sheet shows. Legs modelled with a bend at rest would stride without it;
+  neither recipe says so yet.
 
 What changed from the proposal, and why:
 

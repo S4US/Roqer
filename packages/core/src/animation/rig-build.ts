@@ -65,6 +65,10 @@ export interface PieceBone {
   cframe: number[];
 }
 
+/** The least a skinned creature's root measures along each axis, in studs, where its mesh allows. */
+const MIN_SKINNED_ROOT = 1;
+/** How far below its lowest top bone a bone may lie and still be of the body the root covers: a hip under a spine. */
+const SKINNED_BODY_SLACK = 0.6;
 /** The size a bone is read with, as the plugin's rig reading gives one. */
 const BONE_SIZE: [number, number, number] = [0.1, 0.1, 0.1];
 
@@ -396,6 +400,31 @@ export function planRigBuild(reading: PiecesReading, request: RigBuildRequest): 
     const local = corners(frameOf(topIndex), reading.parts[topIndex].size).map((point) => pointToWorld(inverse(axes), point));
     const low = [0, 1, 2].map((axis) => Math.min(...local.map((point) => point[axis])));
     const high = [0, 1, 2].map((axis) => Math.max(...local.map((point) => point[axis])));
+    // A skinned mesh is the whole creature, legs and all, and a root that
+    // size reaches the ground, where a Humanoid cannot hold it up. Its root
+    // covers its body instead: from the lowest bone that is directly in the
+    // mesh up, around the bones at that height or above.
+    const inTop = bones.filter((bone) => bone.part === topIndex);
+    if (inTop.length > 0) {
+      const world = new Map<string, Frame>();
+      const points = inTop.map((bone) => {
+        const parent = world.get(bone.parent) ?? frameOf(topIndex);
+        const frame = multiply(parent, frameFromComponents(bone.cframe));
+        world.set(bone.name, frame);
+        return { top: !world.has(bone.parent), at: pointToWorld(inverse(axes), frame.p) };
+      });
+      const floor = Math.min(...points.filter((point) => point.top).map((point) => point.at[1]));
+      const body = points.filter((point) => point.at[1] >= floor - SKINNED_BODY_SLACK).map((point) => point.at);
+      for (const axis of [0, 2]) {
+        const [from, to] = [Math.min(...body.map((point) => point[axis])), Math.max(...body.map((point) => point[axis]))];
+        const half = Math.max(to - from, MIN_SKINNED_ROOT) / 2;
+        const middle = (from + to) / 2;
+        [low[axis], high[axis]] = [Math.max(low[axis], middle - half), Math.min(high[axis], middle + half)];
+      }
+      const bottom = Math.min(Math.max(floor, low[1]), high[1] - MIN_SKINNED_ROOT / 2);
+      const top = Math.max(...body.map((point) => point[1]));
+      [low[1], high[1]] = [bottom, Math.min(high[1], Math.max(top, bottom + MIN_SKINNED_ROOT))];
+    }
     const middle = pointToWorld(axes, [0, 1, 2].map((axis) => (low[axis] + high[axis]) / 2) as unknown as Vec3);
     rootFrame = { p: middle, r: turn };
     rootSize = [0, 1, 2].map((axis) => round(high[axis] - low[axis])) as [number, number, number];

@@ -295,7 +295,8 @@ T20 is T17 for a skinned creature (the creature plan's step 7): the same
 prompt, asking for one skinned mesh that bends at bones. In place of five
 MeshParts it wants exactly one, which Roblox reports as skinned, holding the
 bones of four legs and a body, with the one `Motor6D` of the root `rig` makes
-around it.
+around it. It passed on 2026-10-01 in 55 calls; the creature plan's step 7
+records the root it found too large.
 
 ```bash
 npm run eval -- --task T20-creature-skinned --provider claude --model opus --blender auto
