@@ -356,6 +356,8 @@ function checkLoopContinuity(sequence: MotionSequence, data: Sampled, rig: Rig):
 function footCorners(rig: Rig, foot: string): readonly Vec3[] {
   const declared = rig.footPoints?.[foot];
   if (declared) return declared;
+  // A bone has no box: it meets the ground where it is.
+  if (rig.bones?.includes(foot)) return [[0, 0, 0]];
   const [x, y, z] = rig.parts[foot].map((size) => size / 2);
   const corners: Vec3[] = [];
   for (const sx of [-1, 1]) for (const sy of [-1, 1]) for (const sz of [-1, 1]) corners.push([sx * x, sy * y, sz * z]);

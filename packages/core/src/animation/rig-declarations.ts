@@ -96,6 +96,7 @@ export function declareRig(rig: Rig, text: string): DeclaredRig {
 
   const joints = new Map(rig.joints.map((joint) => [joint.name, joint]));
   const moved = new Set(rig.joints.map((joint) => joint.childPart));
+  const bones = new Set(rig.bones ?? []);
   const jointNamed = (name: string, path: string) => {
     if (!joints.has(name)) at(path, `names no joint of the rig; its joints are ${rig.joints.map((joint) => joint.name).join(', ')}`);
     return joints.get(name);
@@ -171,13 +172,23 @@ export function declareRig(rig: Rig, text: string): DeclaredRig {
             at(`${path}.end`, 'must be [x, y, z] in studs, in the frame of the limb\'s last part');
             continue;
           }
-          if (point.some((component, axis) => Math.abs(component) > size[axis] / 2 + POINT_SLACK)) {
+          if (!bones.has(last) && point.some((component, axis) => Math.abs(component) > size[axis] / 2 + POINT_SLACK)) {
             at(`${path}.end`, `lies outside ${last}, whose size is [${size.join(', ')}]; give it in ${last}'s own frame`);
             continue;
           }
           end = point;
+        } else if (footPivot) {
+          end = [...footPivot] as V;
+        } else if (bones.has(last)) {
+          // A bone has no box to end at: it ends where the one bone below it begins.
+          const below = rig.joints.filter((joint) => joint.parentPart === last);
+          if (below.length !== 1) {
+            at(`${path}.end`, `${last} is a bone with ${below.length === 0 ? 'no bone' : `${below.length} bones`} below it, so where it ends cannot be read; give end, the point in ${last}'s frame the limb reaches with`);
+            continue;
+          }
+          end = [...below[0].parentOffset] as V;
         } else {
-          end = footPivot ? [...footPivot] as V : farEnd(rig.parts[last], ownJoint.childOffset);
+          end = farEnd(rig.parts[last], ownJoint.childOffset);
         }
 
         // The limb's axis runs from its root's pivot to its end at rest.
@@ -280,7 +291,7 @@ export function declareRig(rig: Rig, text: string): DeclaredRig {
           at(path, `must be 1 to ${MAX_FOOT_POINTS} points [x, y, z] in the part's frame`);
           continue;
         }
-        if (list.some((point) => point!.some((component, axis) => Math.abs(component) > size[axis] / 2 + POINT_SLACK))) {
+        if (!bones.has(part) && list.some((point) => point!.some((component, axis) => Math.abs(component) > size[axis] / 2 + POINT_SLACK))) {
           at(path, `has a point outside ${part}, whose size is [${size.join(', ')}]`);
           continue;
         }

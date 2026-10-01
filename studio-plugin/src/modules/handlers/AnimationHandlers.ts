@@ -200,7 +200,8 @@ function componentsOf(cframe: CFrame): number[] {
 /**
  * A rig's animated joints, by the name of the part each moves: a Motor6D, or
  * an AnimationConstraint, which Roblox's avatar joint upgrade builds stock
- * bodies with instead.
+ * bodies with instead; and a skinned mesh's Bones, each by its own name, which
+ * an Animator drives through the same Transform.
  */
 function animatedJoints(rig: Instance): Map<string, Instance> {
 	const joints = new Map<string, Instance>();
@@ -210,6 +211,8 @@ function animatedJoints(rig: Instance): Map<string, Instance> {
 			if (attachment && attachment.Parent) joints.set(attachment.Parent.Name, descendant);
 		} else if (descendant.IsA("Motor6D") && descendant.Part1) {
 			joints.set(descendant.Part1.Name, descendant);
+		} else if (descendant.IsA("Bone")) {
+			joints.set(descendant.Name, descendant);
 		}
 	}
 	return joints;
@@ -1381,7 +1384,12 @@ const MAX_WELDED_PARTS = 256;
 /** A part at least this transparent is not drawn, as a HumanoidRootPart is not. */
 const HIDDEN_TRANSPARENCY = 0.95;
 
-type RigJointReading = { name: string; part0: BasePart; part1: BasePart; c0: CFrame; c1: CFrame };
+/** What a joint joins: two parts, or, for a skinned mesh's bone, the bone and the bone or part it hangs from. */
+type RigNode = BasePart | Bone;
+type PartJointReading = { name: string; part0: BasePart; part1: BasePart; c0: CFrame; c1: CFrame };
+type RigJointReading = { name: string; part0: RigNode; part1: RigNode; c0: CFrame; c1: CFrame };
+/** The size a bone is read with: it has no box, and is never drawn. */
+const BONE_SIZE = [0.1, 0.1, 0.1];
 type WeldedReading = { name: string; to: string; offset: number[]; size: number[]; shape: string; mesh?: string };
 type RigReading = {
 	path: string;
@@ -1389,7 +1397,7 @@ type RigReading = {
 	rootPart: string;
 	controller: "Humanoid" | "AnimationController";
 	hipHeight?: number;
-	parts: { name: string; size: number[]; shape: string; mesh?: string; hidden?: boolean }[];
+	parts: { name: string; size: number[]; shape: string; mesh?: string; hidden?: boolean; bone?: boolean }[];
 	joints: { name: string; part0: string; part1: string; c0: number[]; c1: number[] }[];
 	declarations?: string;
 	welded?: WeldedReading[];
@@ -1417,12 +1425,12 @@ function sizeOf(part: BasePart): number[] {
 }
 
 /**
- * The joints the Animator drives in a model: its Motor6Ds, and its
- * AnimationConstraints, whose frames are their attachments'. Only joints
- * between two of the model's own parts are the model's rig.
+ * The joints between a model's parts that the Animator drives: its Motor6Ds,
+ * and its AnimationConstraints, whose frames are their attachments'. Only
+ * joints between two of the model's own parts are the model's rig.
  */
-function modelJoints(model: Model): RigJointReading[] {
-	const joints: RigJointReading[] = [];
+function partJoints(model: Model): PartJointReading[] {
+	const joints: PartJointReading[] = [];
 	for (const descendant of model.GetDescendants()) {
 		if (descendant.IsA("Motor6D")) {
 			const [part0, part1] = [descendant.Part0, descendant.Part1];
@@ -1440,13 +1448,32 @@ function modelJoints(model: Model): RigJointReading[] {
 	return joints;
 }
 
+/**
+ * Every joint the Animator drives in a model: the joints between its parts,
+ * and its skinned meshes' Bones. A bone is a joint named after itself, from
+ * the bone or part it is in to itself: its CFrame is the joint's frame in its
+ * parent, as a Motor6D's C0 is, and it has no frame of its own, as a C1 of
+ * the identity. A keyframe's pose finds it by its name, as it finds a part.
+ */
+function modelJoints(model: Model): RigJointReading[] {
+	const joints: RigJointReading[] = [...partJoints(model)];
+	for (const descendant of model.GetDescendants()) {
+		if (!descendant.IsA("Bone")) continue;
+		const parent = descendant.Parent;
+		if (!parent || !(parent.IsA("Bone") || parent.IsA("BasePart"))) continue;
+		joints.push({ name: descendant.Name, part0: parent, part1: descendant, c0: descendant.CFrame, c1: new CFrame() });
+	}
+	return joints;
+}
+
 /** The parts joints hang from that no joint moves: one, on a rig that is one tree. */
 function jointRoots(joints: RigJointReading[]): BasePart[] {
-	const moved = new Set<BasePart>();
+	const moved = new Set<RigNode>();
 	for (const joint of joints) moved.add(joint.part1);
 	const roots: BasePart[] = [];
 	for (const joint of joints) {
-		if (!moved.has(joint.part0) && !roots.includes(joint.part0)) roots.push(joint.part0);
+		const from = joint.part0;
+		if (from.IsA("BasePart") && !moved.has(from) && !roots.includes(from)) roots.push(from);
 	}
 	return roots;
 }
@@ -1539,7 +1566,7 @@ function formatComponents(values: number[]): string {
  */
 function rigRevision(reading: Omit<RigReading, "revision">): string {
 	const out: string[] = [`c:${reading.controller}:${reading.rootPart}:${formatNumber(reading.hipHeight ?? 0)}`];
-	for (const part of reading.parts) out.push(`p:${part.name}:${formatComponents(part.size)}:${part.shape}:${tostring(part.hidden === true)}`);
+	for (const part of reading.parts) out.push(`p:${part.name}:${formatComponents(part.size)}:${part.shape}:${tostring(part.hidden === true)}${part.bone === true ? ":bone" : ""}`);
 	for (const joint of reading.joints) out.push(`j:${joint.name}:${joint.part0}:${joint.part1}:${formatComponents(joint.c0)}:${formatComponents(joint.c1)}`);
 	// A welded part's offset is left out: a WeldConstraint stores none, so it is
 	// worked out from where the two parts are, and moving the model changes its
@@ -1560,28 +1587,31 @@ function readModelRig(target: AnimatedModel): RigReading | Refusal {
 	const path = getInstancePath(model);
 	const joints = modelJoints(model);
 	if (joints.size() === 0) {
-		return { error: `${path} has no Motor6D or AnimationConstraint joints between its parts to animate.`, errorCode: "model_not_rigged" };
+		return { error: `${path} has no Motor6D or AnimationConstraint joints between its parts, and no Bones, to animate.`, errorCode: "model_not_rigged" };
 	}
 	if (joints.size() > MAX_RIG_JOINTS) {
 		return { error: `${path} has ${joints.size()} joints; Roqer animates a rig of at most ${MAX_RIG_JOINTS}.`, errorCode: "rig_too_large" };
 	}
 	const root = rigRoot(model, controller, joints);
 	if (typeIs(root, "string")) return { error: `${root}.`, errorCode: "rig_root" };
-	const rigParts = new Set<BasePart>([root]);
+	const rigNodes = new Set<RigNode>([root]);
 	for (const joint of joints) {
-		rigParts.add(joint.part0);
-		rigParts.add(joint.part1);
+		rigNodes.add(joint.part0);
+		rigNodes.add(joint.part1);
 	}
-	if (rigParts.size() > MAX_RIG_PARTS) {
-		return { error: `${path}'s joints join ${rigParts.size()} parts; Roqer animates a rig of at most ${MAX_RIG_PARTS}.`, errorCode: "rig_too_large" };
+	if (rigNodes.size() > MAX_RIG_PARTS) {
+		return { error: `${path}'s joints join ${rigNodes.size()} parts and bones; Roqer animates a rig of at most ${MAX_RIG_PARTS}.`, errorCode: "rig_too_large" };
 	}
+	const rigParts = new Set<BasePart>();
+	for (const node of rigNodes) if (node.IsA("BasePart")) rigParts.add(node);
 	const declared = model.GetAttribute(RIG_ATTRIBUTE);
 	if (declared !== undefined && !typeIs(declared, "string")) {
 		return { error: `${path}'s ${RIG_ATTRIBUTE} attribute is a ${typeOf(declared)}; it must be the declarations' JSON text.`, errorCode: "invalid_declarations" };
 	}
 	const parts: RigReading["parts"] = [];
-	for (const part of rigParts) {
-		parts.push({ name: part.Name, size: sizeOf(part), shape: partShape(part), ...meshOf(part), ...(part.Transparency >= HIDDEN_TRANSPARENCY ? { hidden: true } : {}) });
+	for (const part of rigNodes) {
+		if (part.IsA("Bone")) parts.push({ name: part.Name, size: BONE_SIZE, shape: "Block", bone: true });
+		else parts.push({ name: part.Name, size: sizeOf(part), shape: partShape(part), ...meshOf(part), ...(part.Transparency >= HIDDEN_TRANSPARENCY ? { hidden: true } : {}) });
 	}
 	parts.sort((a, b) => a.name < b.name);
 	const { welded, leftOut } = weldedParts(model, rigParts);
@@ -1734,7 +1764,7 @@ type ImporterReading = { root: BasePart; motors: Motor6D[]; initialPoses: Instan
 type Pieces = {
 	model: Model;
 	parts: BasePart[];
-	joints: RigJointReading[];
+	joints: PartJointReading[];
 	welds: WeldReading[];
 	controllers: (Humanoid | AnimationController)[];
 	importer?: ImporterReading;
@@ -1745,7 +1775,7 @@ type Pieces = {
  * part, each with its frame at the centre of the piece it moves, under an
  * AnimationController, as an uploaded model or a generated one arrives.
  */
-function importerRig(model: Model, joints: RigJointReading[], controllers: (Humanoid | AnimationController)[]): ImporterReading | undefined {
+function importerRig(model: Model, joints: PartJointReading[], controllers: (Humanoid | AnimationController)[]): ImporterReading | undefined {
 	if (joints.size() === 0) return undefined;
 	const motors: Motor6D[] = [];
 	for (const descendant of model.GetDescendants()) {
@@ -1790,7 +1820,7 @@ function modelPieces(path: unknown): Pieces | Refusal {
 	for (const child of target.GetChildren()) {
 		if (child.IsA("Humanoid") || child.IsA("AnimationController")) controllers.push(child);
 	}
-	const joints = modelJoints(target);
+	const joints = partJoints(target);
 	return { model: target, parts, joints, welds, controllers, importer: importerRig(target, joints, controllers) };
 }
 

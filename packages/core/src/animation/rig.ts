@@ -144,6 +144,11 @@ export interface Rig {
   scale?: { factor: number; basis: string };
   /** Parts not drawn, such as an invisible root; absent, every part but the root part is drawn. */
   hidden?: readonly string[];
+  /**
+   * The "parts" that are a skinned mesh's Bones: each moved by the joint that
+   * is the bone itself, with no box to end at or stand on, and never drawn.
+   */
+  bones?: readonly string[];
   /** Each part's shape, on a rig read from a model; absent, parts are drawn as rounded boxes. */
   shapes?: Readonly<Record<string, PartShape>>;
   /** Parts welded to each jointed part, by the part they move with. */

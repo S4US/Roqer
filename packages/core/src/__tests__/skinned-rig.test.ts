@@ -1,0 +1,134 @@
+// A skinned mesh's Bones read as a rig (docs/creature-plan.md, step 7): each
+// bone is a joint named after itself, never drawn, whose rest frame is not the
+// body's axes. The compiler, the generators and the checks take it as they
+// take a rig of parts, and its keyframes nest a pose for each bone as the
+// bones nest, which is the only shape Roblox drives bones from.
+import { describe, expect, test } from '@jest/globals';
+import { prepareAnimation } from '../animation/animation-tool.js';
+import { mergeDeclarations, planDeclarations } from '../animation/body-plans.js';
+import { drawnParts } from '../animation/box-rig.js';
+import { rigFromModel, type ModelRigReading } from '../animation/model-rig.js';
+import { buildTracks, pointToWorld, poseRig, restPose } from '../animation/motion.js';
+import type { Rig } from '../animation/rig.js';
+import { skinnedSnake, skinnedWolf, SNAKE_BONES, WOLF_HIPS } from './fixtures/skinned.js';
+
+function rigOf(reading: ModelRigReading): Rig {
+  const result = rigFromModel(reading);
+  if (!result.ok) throw new Error(result.errors.join('\n'));
+  return result.rig;
+}
+
+/** The wolf as `rig` declares it: the quadruped plan read from its bones' names. */
+function plannedWolf(given?: Record<string, unknown>): Rig {
+  const bare = rigOf(skinnedWolf());
+  return rigOf(skinnedWolf(mergeDeclarations(planDeclarations('quadruped', bare.joints), given)));
+}
+
+const snakeLimits = { version: 1, limits: Object.fromEntries(SNAKE_BONES.slice(1).map((name) => [name, { turn: 60 }])) };
+
+describe('a skinned mesh\'s bones are a rig', () => {
+  test('each bone is a joint named after itself, hung from the mesh, and only the mesh is drawn', () => {
+    const rig = rigOf(skinnedSnake());
+    expect(rig.rootPart).toBe('SnakeGeometry');
+    expect(rig.joints.map((joint) => joint.name)).toEqual(SNAKE_BONES);
+    expect(rig.joints.map((joint) => joint.childPart)).toEqual(SNAKE_BONES);
+    expect(rig.joints[0].parentPart).toBe('SnakeGeometry');
+    expect(rig.joints[3].parentPart).toBe('Bone002');
+    expect(rig.bones).toEqual(SNAKE_BONES);
+    expect(drawnParts(rig)).toEqual(['SnakeGeometry']);
+    // The ground is under the mesh's box, not a bone's token one.
+    expect(rig.ground).toBeCloseTo(-0.4, 6);
+    // At rest each bone stands where it was modelled.
+    const rest = restPose(rig);
+    expect(rest.get('Bone000')!.p).toEqual([0, 0, 4]);
+    expect(rest.get('Bone007')!.p.map((value) => Math.round(value * 1e6) / 1e6)).toEqual([0, 0, -3]);
+  });
+
+  test('a rotation is written in the body\'s axes, whatever way the bone lies', () => {
+    const rig = rigOf(skinnedSnake(snakeLimits));
+    // A yaw about the body's Y at one bone swings everything ahead of it sideways, and keeps it level.
+    const result = prepareAnimation({
+      name: 'Bend', rig: rig.name, loop: false,
+      keyframes: [{ time: 0, joints: { Bone004: { rotation: [0, 0, 0] } } }, { time: 1, joints: { Bone004: { rotation: [0, 30, 0] } } }],
+    }, {}, rig);
+    if (!result.ok) throw new Error(result.errors.join('\n'));
+    const parts = poseRig(buildTracks(result.value.sequence), 1, rig).parts;
+    const pivot = parts.get('Bone004')!.p;
+    const ahead = parts.get('Bone007')!.p;
+    expect(pivot).toEqual(restPose(rig).get('Bone004')!.p);
+    expect(ahead[1]).toBeCloseTo(0, 5);
+    // Three studs ahead of the pivot, turned 30° about Y: left of the line it lay on.
+    expect(ahead[0] - pivot[0]).toBeCloseTo(-3 * Math.sin(Math.PI / 6), 4);
+    expect(ahead[2] - pivot[2]).toBeCloseTo(-3 * Math.cos(Math.PI / 6), 4);
+  });
+
+  test('its keyframes nest a pose for each bone as the bones nest, under the mesh', () => {
+    const rig = rigOf(skinnedSnake(snakeLimits));
+    const result = prepareAnimation({
+      name: 'Slither', rig: rig.name, loop: true, duration: 2,
+      waves: [{ joints: SNAKE_BONES.slice(1), axis: 'Y', amplitude: 20, lag: 0.14 }],
+    }, {}, rig);
+    if (!result.ok) throw new Error(result.errors.join('\n'));
+    expect(result.value.report.checks.filter((check) => check.status === 'fail')).toEqual([]);
+    // From the top pose down: the mesh, then each bone inside the one before.
+    const chain: string[] = [];
+    let poses = [result.value.sequence.keyframes[1].root];
+    while (poses.length > 0) {
+      expect(poses).toHaveLength(1);
+      chain.push(poses[0].part);
+      poses = poses[0].children;
+    }
+    expect(chain).toEqual(['SnakeGeometry', ...SNAKE_BONES]);
+  });
+});
+
+describe('a skinned quadruped is declared from its bones\' names', () => {
+  test('the plan finds legs of an upper bone, a lower bone and a foot bone', () => {
+    const rig = plannedWolf();
+    expect(rig.feet).toEqual(['FrontLeftFoot', 'FrontRightFoot', 'HindLeftFoot', 'HindRightFoot']);
+    expect(Object.keys(rig.limbs)).toEqual(['FrontLeftUpper', 'FrontRightUpper', 'HindLeftUpper', 'HindRightUpper']);
+    expect(rig.limbs.FrontLeftUpper).toMatchObject({ hinge: 'FrontLeftLower', foot: 'FrontLeftFoot' });
+    // A leg ends where its foot bone begins, in its lower bone's frame: 0.9 studs along it.
+    expect(rig.limbs.FrontLeftUpper.end.map((value) => Math.round(value * 1e6) / 1e6)).toEqual([0, 0.9, 0]);
+    // It points down in the body's axes, though its bones' own axes do not.
+    expect(rig.limbs.FrontLeftUpper.axis.map((value) => Math.round(value * 1e6) / 1e6)).toEqual([0, -1, 0]);
+    // The feet stand on the ground under the mesh.
+    const rest = restPose(rig);
+    for (const foot of rig.feet) expect(pointToWorld(rest.get(foot)!, [0, 0, 0])[1]).toBeCloseTo(rig.ground, 6);
+    expect(rig.scale?.basis).toBe('its hips\' height at rest');
+    expect(rig.scale!.factor).toBeCloseTo((WOLF_HIPS.FrontLeft[1] + 2) / 2.19, 1);
+  });
+
+  test('a bone with no bone below it needs its end given', () => {
+    const bare = rigOf(skinnedWolf());
+    const planned = planDeclarations('quadruped', bare.joints);
+    // Taking a leg's foot out of the plan leaves its lower bone ending at the one bone below it.
+    const withoutFoot = mergeDeclarations(planned, { limbs: { FrontLeftUpper: { hinge: 'FrontLeftLower' } } });
+    expect(rigOf(skinnedWolf(withoutFoot)).limbs.FrontLeftUpper.end.map((value) => Math.round(value * 1e6) / 1e6)).toEqual([0, 0.9, 0]);
+    // The tail's last bone has none below it.
+    const tail = rigFromModel(skinnedWolf(mergeDeclarations(planned, { limbs: { Tail2: {} } })));
+    expect(tail.ok).toBe(false);
+    if (!tail.ok) expect(tail.errors.join('\n')).toMatch(/Tail2 is a bone with no bone below it, so where it ends cannot be read; give end/);
+    // Given, it may lie anywhere: a bone has no box to hold it in.
+    expect(rigOf(skinnedWolf(mergeDeclarations(planned, { limbs: { Tail2: { end: [0, 1.2, 0] } } }))).limbs.Tail2.end).toEqual([0, 1.2, 0]);
+  });
+
+  test('a gait walks it with every check passing, its feet planted', () => {
+    const rig = plannedWolf();
+    const result = prepareAnimation({
+      name: 'WolfTrot', rig: rig.name, loop: true, priority: 'Movement', duration: 0.6,
+      gait: { pattern: 'trot', stride: 1.2 },
+      waves: [{ joints: ['Tail', 'Tail2'], axis: 'Y', amplitude: [8, 14], lag: 0.15, cycles: 2 }],
+    }, { locomotion: true }, rig);
+    if (!result.ok) throw new Error(result.errors.join('\n'));
+    const { report, sequence } = result.value;
+    expect(report.checks.filter((check) => check.status !== 'pass').map((check) => `${check.id}: ${check.detail}`)).toEqual([]);
+    expect(report.checks.find((check) => check.id === 'gaitSymmetry')!.detail).toMatch(/landing FrontLeftFoot with HindRightFoot, then FrontRightFoot with HindLeftFoot$/);
+    expect(report.groundSpeed).toBeCloseTo(4, 1);
+    // No foot bone dips under the ground at any moment.
+    for (let step = 0; step < 36; step += 1) {
+      const parts = poseRig(buildTracks(sequence), (sequence.duration * step) / 36, rig).parts;
+      for (const foot of rig.feet) expect(parts.get(foot)!.p[1] - rig.ground).toBeGreaterThan(-0.02);
+    }
+  });
+});

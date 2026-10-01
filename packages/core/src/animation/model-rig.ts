@@ -34,6 +34,11 @@ export interface ModelRigPart {
   mesh?: string;
   /** Not drawn: fully transparent, as a HumanoidRootPart is. */
   hidden?: boolean;
+  /**
+   * A skinned mesh's Bone, read as a part: its joint is the bone itself, it
+   * has no box, and it is never drawn. Its size is a token one.
+   */
+  bone?: boolean;
 }
 
 /** A visible part no joint moves, welded to one that is, directly or through other welded parts. */
@@ -171,6 +176,7 @@ export function rigFromModel(input: unknown): ModelRigResult {
   const shapes = new Map<string, PartShape>();
   const meshIds = new Map<string, string>();
   const hidden: string[] = [];
+  const bones: string[] = [];
   const partList = Array.isArray(reading.parts) ? reading.parts : [];
   if (!Array.isArray(reading.parts)) errors.push('parts: must be a list');
   if (partList.length > MAX_RIG_PARTS) errors.push(`parts: a rig may have at most ${MAX_RIG_PARTS} parts; this one has ${partList.length}`);
@@ -189,7 +195,8 @@ export function rigFromModel(input: unknown): ModelRigResult {
     if (sizes.has(part.name)) repeatedParts.add(part.name);
     sizes.set(part.name, [size[0], size[1], size[2]]);
     shapes.set(part.name, SHAPES.includes(part.shape as PartShape) ? part.shape as PartShape : 'Block');
-    if (part.hidden === true) hidden.push(part.name);
+    if (part.hidden === true || part.bone === true) hidden.push(part.name);
+    if (part.bone === true) bones.push(part.name);
   }
   if (repeatedParts.size > 0) {
     errors.push(`parts: a keyframe's poses find their parts by name, so each must be named once; these repeat: ${[...repeatedParts].join(', ')}`);
@@ -200,7 +207,7 @@ export function rigFromModel(input: unknown): ModelRigResult {
   // Joints, each moving its own part.
   const jointList = Array.isArray(reading.joints) ? reading.joints : [];
   if (!Array.isArray(reading.joints) || jointList.length === 0) {
-    errors.push('joints: the model has no Motor6D or AnimationConstraint joints to animate');
+    errors.push('joints: the model has no Motor6D or AnimationConstraint joints, and no Bones, to animate');
   }
   if (jointList.length > MAX_RIG_JOINTS) errors.push(`joints: a rig may have at most ${MAX_RIG_JOINTS} joints; this one has ${jointList.length}`);
   const joints: RigJoint[] = [];
@@ -303,6 +310,7 @@ export function rigFromModel(input: unknown): ModelRigResult {
     hinges: {},
     limits,
     hidden: hidden.filter((part) => reached.has(part)),
+    ...(bones.some((part) => reached.has(part)) ? { bones: bones.filter((part) => reached.has(part)) } : {}),
     shapes: Object.fromEntries(Object.keys(parts).map((part) => [part, shapes.get(part)!])),
     ...([...meshIds.keys()].some((part) => reached.has(part))
       ? { meshIds: Object.fromEntries([...meshIds].filter(([part]) => reached.has(part))) }

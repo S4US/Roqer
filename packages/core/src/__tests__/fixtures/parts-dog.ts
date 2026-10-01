@@ -13,8 +13,8 @@ export interface CF { p: V; r: number[] }
 export const cf = (p: V, r: number[] = IDENTITY): CF => ({ p, r });
 const rotate = (r: number[], v: number[]): V => [0, 1, 2].map((row) => r[row * 3] * v[0] + r[row * 3 + 1] * v[1] + r[row * 3 + 2] * v[2]) as V;
 const transpose = (r: number[]) => [r[0], r[3], r[6], r[1], r[4], r[7], r[2], r[5], r[8]];
-const inverse = (a: CF): CF => ({ p: rotate(transpose(a.r), a.p).map((value) => -value) as V, r: transpose(a.r) });
-const times = (a: CF, b: CF): CF => ({
+export const inverse = (a: CF): CF => ({ p: rotate(transpose(a.r), a.p).map((value) => -value) as V, r: transpose(a.r) });
+export const times = (a: CF, b: CF): CF => ({
   p: rotate(a.r, b.p).map((value, axis) => value + a.p[axis]) as V,
   r: Array.from({ length: 9 }, (_unused, index) => [0, 1, 2].reduce((sum, k) => sum + a.r[Math.floor(index / 3) * 3 + k] * b.r[k * 3 + (index % 3)], 0)),
 });

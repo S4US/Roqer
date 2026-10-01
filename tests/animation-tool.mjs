@@ -321,8 +321,41 @@ return {
 }
 `;
 }
+// A skinned mesh's rig without the skin (docs/creature-plan.md step 7): one
+// part under an AnimationController with a chain of eight Bones, the root at
+// the tail's end and turned so its +Y runs forward along the chain, each child
+// a stud up its parent's +Y, as the skinned spike found an upload's bones.
+const BONES_NAME = '__RoqerAnimationTestBones';
+const BONES = `game.Workspace.${BONES_NAME}`;
+const BUILD_BONES = `
+local existing = workspace:FindFirstChild(${JSON.stringify(BONES_NAME)})
+if existing then existing:Destroy() end
+local model = Instance.new("Model")
+model.Name = ${JSON.stringify(BONES_NAME)}
+local part = Instance.new("Part")
+part.Name = "SnakeGeometry"
+part.Size = Vector3.new(0.8, 0.8, 8)
+part.CFrame = CFrame.new(-60, 0.4, 180)
+part.Anchored = true
+part.Parent = model
+local above = part
+for index = 0, 7 do
+  local bone = Instance.new("Bone")
+  bone.Name = string.format("Bone%03d", index)
+  bone.CFrame = index == 0 and CFrame.new(0, 0, 4, -1, 0, 0, 0, 0, -1, 0, -1, 0) or CFrame.new(0, 1, 0)
+  bone.Parent = above
+  above = bone
+end
+model.PrimaryPart = part
+local controller = Instance.new("AnimationController")
+controller.Parent = model
+Instance.new("Animator").Parent = controller
+model.Parent = workspace
+game:GetService("ChangeHistoryService"):SetWaypoint("Roqer test bones")
+return true
+`;
 const REMOVE_PUPS = `
-for _, name in { ${JSON.stringify(PUP_NAME)}, ${JSON.stringify(IMPORTED_NAME)}, ${JSON.stringify(NESTED_NAME)} } do
+for _, name in { ${JSON.stringify(PUP_NAME)}, ${JSON.stringify(IMPORTED_NAME)}, ${JSON.stringify(NESTED_NAME)}, ${JSON.stringify(BONES_NAME)} } do
   local model = workspace:FindFirstChild(name)
   if model then model:Destroy() end
 end
@@ -806,6 +839,25 @@ const passed = await runTest('animation tool', async ({ track }) => {
     const nestedAgain = await client.callTool('animation', { ...nestedArgs, replace: undefined, expected_revision: nestedRig.revision }, 120_000);
     assert(nestedMoved === true && nestedAgain.rigged === true && nestedAgain.readBack?.matches === true, `moved and turned, it too is rigged again from the same pivots (${nestedAgain.errorCode ?? 'ok'}: ${JSON.stringify(nestedAgain.errors ?? nestedAgain.error)})`);
 
+    // Step 7: a skinned mesh's Bones are its joints. A chain of bones laid out as an upload's arrive, each +Y along the chain.
+    assert(await luau(client, BUILD_BONES) === true, 'a chain of bones under one part is in Workspace');
+    const boneNames = Array.from({ length: 8 }, (_unused, index) => `Bone00${index}`);
+    const bonesRig = await client.callTool('animation', {
+      action: 'rig', model: BONES, plan: 'custom',
+      declarations: { limits: Object.fromEntries(boneNames.slice(1).map((name) => [name, { turn: 60 }])) },
+    }, 120_000);
+    assert(
+      bonesRig.declared === true && bonesRig.readBack?.matches === true && bonesRig.rig?.position === 'Bone000' && bonesRig.rig?.joints?.[1] === 'Bone001',
+      `rig reads the bones as joints and declares their ranges (${bonesRig.errorCode ?? 'ok'}: ${JSON.stringify(bonesRig.errors ?? bonesRig.error ?? bonesRig.rig)})`,
+    );
+    const slither = await client.callTool('animation', {
+      action: 'build',
+      animation: { name: 'BoneSlither', rig: BONES, loop: true, duration: 2, waves: [{ joints: boneNames.slice(1), axis: 'Y', amplitude: 20, lag: 0.14 }] },
+      parent: PARENT,
+    }, 120_000);
+    assert(slither.built === true && slither.readBack?.matchesCompiled === true && slither.checks?.passed === true, `a wave down the bones builds with its checks passing (${slither.error ?? JSON.stringify(slither.errors ?? slither.checks)})`);
+    assert(slither.playback?.verified === true && slither.playback.samples > 0, `a copy played the wave on its bones as checked (within ${slither.playback?.maxDegrees}°; ${slither.playback?.reason ?? 'ok'})`);
+
     // -- Step 8: publish, wire, verify -------------------------------------
     // The hand-edited sequence stays refused; start it afresh to publish from.
     await luau(client, `game:GetService("ServerStorage")[${JSON.stringify(FOLDER_NAME)}].Wave:Destroy() return true`);
@@ -903,6 +955,12 @@ const passed = await runTest('animation tool', async ({ track }) => {
       // The rig rig built, on the playtest server.
       const pupPlayed = await client.callTool('animation', { action: 'verify', model: PUP, animation: pawLift() }, 90_000);
       assert(pupPlayed.verified === true, `verify plays the paw lift on the rigged dog as checked (${pupPlayed.error ?? `within ${pupPlayed.played?.maxDegrees}°; ${pupPlayed.played?.reason ?? 'ok'}`})`);
+      // Bones, on the playtest server.
+      const bonesPlayed = await client.callTool('animation', {
+        action: 'verify', model: BONES,
+        animation: { name: 'BoneSlither', rig: BONES, loop: true, duration: 2, waves: [{ joints: Array.from({ length: 7 }, (_unused, index) => `Bone00${index + 1}`), axis: 'Y', amplitude: 20, lag: 0.14 }] },
+      }, 90_000);
+      assert(bonesPlayed.verified === true, `verify plays the wave on the bones themselves as checked (${bonesPlayed.error ?? `within ${bonesPlayed.played?.maxDegrees}°; ${bonesPlayed.played?.reason ?? 'ok'}`})`);
     } finally {
       if (playtestStarted) await safeStopPlaytest(client);
     }
