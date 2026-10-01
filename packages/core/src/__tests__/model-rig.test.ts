@@ -340,7 +340,7 @@ describe('a rig read from a model', () => {
       parts: [...base.parts, { name: 'A', size: [1, 1, 1] }, { name: 'B', size: [1, 1, 1] }],
       joints: [...base.joints, { ...base.joints[1], name: 'AB', part0: 'A', part1: 'B' }, { ...base.joints[1], name: 'BA', part0: 'B', part1: 'A' }],
     }))).toEqual(['joints: AB, BA do not hang from HumanoidRootPart, directly or through other joints; a rig is one tree of joints from its root part']);
-    expect(errorsOf(dog({ joints: [] }))).toEqual(['joints: the model has no Motor6D or AnimationConstraint joints to animate']);
+    expect(errorsOf(dog({ joints: [] }))).toEqual(['joints: the model has no Motor6D or AnimationConstraint joints, and no Bones, to animate']);
     expect(errorsOf(dog({ joints: [{ ...base.joints[1], c0: [0, 0.4, -2, 2, 0, 0, 0, 1, 0, 0, 0, 1] }, ...base.joints.slice(2)] })))
       .toEqual(['joint Neck (Body to Head): C0 and C1 must be rotations without scale']);
     expect(errorsOf(dog({ controller: 'Nothing' as 'Humanoid' })))
