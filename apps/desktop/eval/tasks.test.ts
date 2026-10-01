@@ -5,7 +5,7 @@ import {
   ANIMATION_ALL_CHECKS_PASSED, ANIMATION_CHECKED_AS_GAIT, ANIMATION_GAIT_CHECKS_LABEL, ANIMATION_MOTION_CHECKS_LABEL,
   ANIMATION_NAME_LABEL, ANIMATION_PLAYED_FROM_LABEL, ANIMATION_PLAYED_PUBLISHED, ANIMATION_PREVIEW_TITLE, animationSlotLabel,
   MODEL_MOVED_BY_GAME, MODEL_MOVED_BY_LABEL, MODEL_MOVED_BY_VERIFY, MODEL_WHILE_MOVING_LABEL, MODEL_WHILE_STANDING_LABEL,
-  type RunEvidence,
+  RIG_RANGE_SHEET_TITLE, type RunEvidence,
 } from "../shared/run-events";
 import { EVAL_TASKS, findEvalTask, needsPublishedPlace, needsUploadKey, type EvalOracleInput } from "./tasks";
 
@@ -622,7 +622,7 @@ test("T15 passes a run that meets every one of the plan's conditions", () => {
 });
 
 test("only the tasks that judge an owner against the place's need a published place", () => {
-  assert.deepEqual(EVAL_TASKS.filter((task) => needsPublishedPlace([task])).map((task) => task.id), ["T15-animation-run", "T18-npc-patrol"]);
+  assert.deepEqual(EVAL_TASKS.filter((task) => needsPublishedPlace([task])).map((task) => task.id), ["T15-animation-run", "T18-npc-patrol", "T19-creature-parts"]);
   assert.match(animationRun({ place: { id: 0, type: "User" } }).detail, /The place is not published/);
 });
 
@@ -728,6 +728,55 @@ test("T18 wants a playtest after the last wiring that watched the guard's own pa
   // A playtest before the last wire saw states that are no longer wired.
   const [p1, p2, p3, p4, p5, p6, p7] = evidence;
   assert.match(patrol({}, [p1, p2, p3, p4, p5, p7, p6]).detail, /No playtest after the last wiring/);
+});
+
+const DOG_PATH = "game.Workspace.WorkbenchEvalDog";
+const DOG_PROBE = {
+  dog: "Model", humanoid: true, loader: "Script", enabled: true, idle: "601", walk: "602",
+  idleOwner: OWNED, walkOwner: OWNED, walkGroundSpeed: 1.85, place: { id: 42, type: "User" }, sequences: 2,
+  motors: 11, meshParts: 0, feet: 4, rigStamp: "rr1:4300:eacf5e7cde01a843",
+};
+
+/** A finished dog run: the rig's read-back and range sheet, then what a guard run records, on the dog. */
+function dogEvidence(): RunEvidence[] {
+  const onDog = patrolEvidence().map((item) => ({ ...item, title: item.title.replace("game.Workspace.WorkbenchEvalGuard", DOG_PATH) }));
+  return [
+    { id: "d1", kind: "verification", changeKind: "instance", title: DOG_PATH, passed: true },
+    { id: "d2", kind: "inspection", title: RIG_RANGE_SHEET_TITLE, subject: DOG_PATH, passed: true, imageDataUrl: "data:image/png;base64,QUJD", modelPreviewId: "a1b2c3d4-1" },
+    ...onDog,
+  ];
+}
+
+function creature(probe: Record<string, unknown> = {}, evidence: RunEvidence[] = dogEvidence(), verified = true) {
+  return verdict("T19-creature-parts", {
+    probe: { ...DOG_PROBE, ...probe }, outcome: "completed", verified, toolCalls: [], changedTargets: [], evidence,
+  });
+}
+
+test("T19 passes a dog of Parts that rig rigged, whose own idle and walk played through its own wandering", () => {
+  const result = creature();
+  assert.equal(result.passed, true, result.detail);
+});
+
+test("T19 wants the dog built from Parts, with a rig that rig built, read back, declared four feet on and drew", () => {
+  assert.match(creature({ dog: false }).detail, /no WorkbenchEvalDog/);
+  assert.match(creature({ meshParts: 2 }).detail, /built from Parts/);
+  // Joints made in hand-written Luau carry no stamp, and no pivot of theirs was checked.
+  assert.match(creature({ rigStamp: false }).detail, /not built by rig/);
+  assert.match(creature({}, dogEvidence().filter((item) => item.id !== "d1")).detail, /No rig call built/);
+  assert.match(creature({}, dogEvidence().map((item) => item.id === "d1" ? { ...item, passed: false } : item)).detail, /did not read back/);
+  assert.match(creature({ feet: 0 }).detail, /declares 0 feet on 11 joints/);
+  assert.match(creature({}, dogEvidence().filter((item) => item.id !== "d2")).detail, /No range sheet/);
+  // A range sheet of some other model is not the dog's.
+  assert.match(creature({}, dogEvidence().map((item) => item.id === "d2" ? { ...item, subject: "game.Workspace.Cat" } : item)).detail, /No range sheet/);
+});
+
+test("T19 then holds the dog to what T18 holds the guard to", () => {
+  assert.match(creature({ walk: "507777826" }).detail, /The dog's walk holds 507777826, which this run did not publish/);
+  assert.match(creature({ walkGroundSpeed: false }).detail, /The dog's walk was wired without its ground speed/);
+  assert.match(creature({}, withMetadata(dogEvidence(), "p7", MODEL_MOVED_BY_LABEL, MODEL_MOVED_BY_VERIFY)).detail, /watched the dog's own wandering/);
+  assert.match(creature({}, withMetadata(dogEvidence(), "p3", ANIMATION_GAIT_CHECKS_LABEL, "Not checked as a gait")).detail, /checked as a gait/);
+  assert.match(creature({}, dogEvidence(), false).detail, /completion gate/);
 });
 
 test("T18 wants a 3D preview, both sequences kept with every check passed, a gait among them, and the completion gate", () => {

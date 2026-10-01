@@ -289,6 +289,14 @@ export function declareRig(rig: Rig, text: string): DeclaredRig {
       feet.push(part);
     }
   }
+  // A leg with no ankle cannot lay its last part flat: it stands on its end,
+  // and its box's corners dip under the ground whenever it leans. So a foot
+  // that is such a limb's last part meets the ground at the limb's end,
+  // unless its points were given.
+  for (const [name, limb] of Object.entries(limbs)) {
+    const last = joints.get(limb.hinge ?? name)?.childPart;
+    if (!limb.foot && last !== undefined && feet.includes(last) && !footPoints[last]) footPoints[last] = [limb.end];
+  }
 
   let hips: [string, string] | undefined;
   if (parsed.hips !== undefined) {

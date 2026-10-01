@@ -213,6 +213,15 @@ test("mcp-tools - an animation call is summarised in words, not as its pose JSON
     summarizeToolCall("animation", { action: "check", animation: { ...animation, duration: 0.6, waves: [{ joints: ["Neck"], axis: "X", amplitude: "wide" }] } }),
     "animation · check Run: 2 keyframes, 1 wave, 0.6 s, loops, moves 4 joints",
   );
+  // A gait is named by its pattern, never by raw text.
+  assert.strictEqual(
+    summarizeToolCall("animation", { action: "build", animation: { name: "Trot", rig: "game.Workspace.Dog", loop: true, duration: 0.6, gait: { pattern: "trot", stride: 1.4 }, waves: [waves[0]] } }),
+    "animation · build Trot for game.Workspace.Dog: a trot gait, 1 wave, 0.6 s, loops, moves 3 joints",
+  );
+  assert.strictEqual(
+    summarizeToolCall("animation", { action: "check", animation: { name: "Odd", rig: "R15", duration: 1, gait: { pattern: "{\"x\":1}" } } }),
+    "animation · check Odd: a gait, 1 s",
+  );
   // Whatever the model sent, the summary never throws and never shows raw JSON.
   assert.strictEqual(summarizeToolCall("animation", { action: "build", animation: "not an object" }), "animation · build an animation: 0 keyframes");
 });

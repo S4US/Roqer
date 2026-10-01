@@ -21,6 +21,7 @@ Load when implementing character animation, particle or beam effects, tweens, ca
 ## Quick Reference
 
 - To author a new R15 or R6 animation in Roqer, use the `animation` tool and load `references/character-animation.md` first: it has the pose format, how to animate a held weapon, and tested recipes to adapt (R15 wave, idle, walk, run, jump, sword slash and lunge; R6 walk and wave). Use `aimAt` to plant feet and put hands on things, and `grounded: true` for anything done standing. Check which rig the place's players use first. For an NPC, its NPCs section makes a stock body with `rig` and has the model's loader play its idle and walk.
+- For a creature or any model that is not a stock body (a dog, a spider, a snake, a bird, an octopus), also load `references/creature-animation.md`: `rig` joins its loose pieces into a rig or adopts the rig it has, `waves` sway tails, tentacles, wings and spines, `gait` walks any number of legs, and it has tested recipes (a dog's idle, walk, trot and run, a six-legged walk, a slither, a wing flap).
 - Load tracks through an `Animator` on a `Humanoid` or `AnimationController`; set `AnimationTrack.Priority` deliberately.
 - Use `GetMarkerReachedSignal()` for named gameplay or presentation cues, then disconnect or replace the listener when the track ends. The `animation` tool writes the markers it listens for from a keyframe's `markers`; a keyframe's `name` is not a marker.
 - A burst `ParticleEmitter` usually has `Rate = 0` and uses `:Emit(count)` with a bounded lifetime; use pooling for frequent effects.
@@ -29,4 +30,4 @@ Load when implementing character animation, particle or beam effects, tweens, ca
 - In Server Authority projects, keep synchronized animation logic in `RunService:BindToSimulation()` (requires `Workspace.UseFixedSimulation` enabled in Studio), query current tracks instead of caching handles across rollback, and make predicted effects reversible.
 - Profile particle counts, lights, post-processing, and per-frame camera work on the target device class.
 
-**Need the details?** Load `references/character-animation.md` to author a character animation, and `references/full.md` for animation playback and effect recipes.
+**Need the details?** Load `references/character-animation.md` to author a character animation, `references/creature-animation.md` to rig and animate a creature, and `references/full.md` for animation playback and effect recipes.

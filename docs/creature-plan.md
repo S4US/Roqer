@@ -5,8 +5,9 @@ answered its questions in [Live results](#live-results), and the design below
 follows them. Step 2 made NPCs on stock rigs, and eval T18 passes. Step 3
 reads a rig from any rigged model, and a dog rigged by hand in Studio plays
 its animation as checked. Step 4 rigs a model's loose pieces, and `aim` and
-`aimAt` move the legs of a dog it rigged. Steps 5 to 8 are proposed and not
-yet scheduled. The
+`aimAt` move the legs of a dog it rigged. Step 5, the `wave` and `gait`
+generators, is built, and its eval T19 has not been run. Steps 6 to 8 are
+proposed and not yet scheduled. The
 plan details steps 12 to 14 of the [animation plan](animation-plan.md)
 (creatures made of rigid parts, skinned creatures, animating in Blender), adds
 NPCs, and orders the work anew. Update each step's status here as it lands.
@@ -728,8 +729,59 @@ What changed from the proposal, and why:
 **Done when** T19 passes, including the loader switching tracks as the dog
 moves.
 
-**Status, 2026-10-01.** The `wave` generator is built; `gait`, planting along
-a line, the gait-pattern check, the per-plan recipes and T19 are not.
+**Status, 2026-10-01.** Everything is built, and T19 is written but has not
+been run: it needs an agent run against a published place with an Open Cloud
+key (`npm run eval -- --task T19-creature-parts`). The step is done when it
+passes.
+
+- **`gait` on the pose description.** A pattern (`walk`, `trot`, `pace`,
+  `bound`, `gallop`), a stride, and optionally lift, duty, bob, crouch, each
+  leg's phase and which limbs step. One cycle fills the animation. Its legs
+  are the rig's limbs that end in a declared foot, ordered by where they
+  stand at rest, so one description walks two legs, four, six or eight.
+- **Planting along a line.** Each leg's end is placed with `aimAt` every
+  1/30 s: straight back along the ground while its foot is down, forward on
+  an arc while it is up. The body rides just low enough for every leg to
+  reach both ends of its stride, at most half its legs' height; a longer
+  stride is refused with the longest that fits. The checks then report the
+  ground speed it was written for, as for a hand-written gait.
+- **The gait-pattern check.** On a rig with feet but no pair of hips,
+  `gaitSymmetry` judges the feet: every foot steps each cycle, the least time
+  on the ground is at least 60% of the most, and the result gives the share
+  each foot is down and the order they land in.
+- **One shared path.** `waves` and `gait` are both written out by
+  `generators.ts` before anything else reads the description. A joint either
+  drives is refused in hand keyframes and in the other.
+- **Recipes**, in the skill's new `creature-animation.md`, each held to its
+  checks and gesture by `creature-recipes.test.ts` on fixture bodies: a dog's
+  idle (a tail sway), walk, trot and run, a six-legged walk, a slither and a
+  wing flap.
+- **T19** `creature-parts`: T18's conditions on the dog, after four of its
+  own: made of Parts, a rig that `rig` built and read back, four declared
+  feet, and its range sheet shown.
+- **Live.** The animation suite built a trot on the pup that `rig` rigged:
+  every check passed and none was skipped, at 4 studs a second, its diagonal
+  feet landing together, each foot down 53% of the cycle; a copy played it
+  within 0.06° of the poses it was checked with.
+
+What changed from the proposal, and why:
+
+- **A foot on a leg with no ankle meets the ground at the leg's end**, not at
+  its box's corners, unless its points are declared. A leaning lower leg's
+  corners dip under the ground at any gait, which failed the ground check on
+  every walk of a kneed dog. This changed `RoqerRig`'s reading, not its
+  format.
+- **Legs of one piece only swing from the hip.** They are pointed with `aim`
+  at where the foot would be; the foot skims, and the foot-sliding check may
+  fail. The body does not sink or bob for them.
+- **The body bobs but does not pitch.** No gait here needed it; a pitch can
+  be added to the gait when a bound looks stiff without one.
+- **The pattern check is not compared with a named gait.** A hand-written
+  gait names no pattern, so the check judges what every gait shares and
+  reports the order it found.
+- **The skill's creature material moved to its own reference**, since the
+  one file passed the 45,000 characters a skill resource may be.
+- **The catalog budget** rose to 50,750 characters for `gait`.
 
 - **`waves` on the pose description.** Each wave names a chain of joints, a
   body axis, an amplitude, and optionally cycles, the lag from one joint to

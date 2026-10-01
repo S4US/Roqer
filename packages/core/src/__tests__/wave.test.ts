@@ -185,7 +185,7 @@ describe('what a wave cannot do is refused', () => {
     expect(errorsOf({ duration: 0.5, keyframes: [{ time: 0, joints: { Arm2: {} } }, { time: 1, joints: { Arm2: {} } }], waves: [wave()] }, rig))
       .toEqual(['duration: must not be before the last keyframe (1)']);
     expect(errorsOf({ duration: 1, keyframes: [{ time: 0, joints: { Arm2: {} } }] }, rig))
-      .toEqual(['duration: goes with waves; without them the last keyframe\'s time is the animation\'s length']);
+      .toEqual(['duration: goes with waves or gait; without them the last keyframe\'s time is the animation\'s length']);
   });
 
   test('more keys than an animation may have are refused', () => {

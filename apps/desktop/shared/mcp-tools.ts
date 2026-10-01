@@ -328,8 +328,14 @@ function summarizeAnimation(args: Record<string, unknown>): string {
     }
   }
   const length = Math.max(...times, typeof animation.duration === "number" && Number.isFinite(animation.duration) ? animation.duration : 0);
+  // A gait is named by its pattern; the legs it steps are the rig's to say.
+  const gait = typeof animation.gait === "object" && animation.gait !== null && !Array.isArray(animation.gait)
+    ? animation.gait as Record<string, unknown>
+    : undefined;
+  const gaitWords = gait ? [`a ${typeof gait.pattern === "string" && /^[a-z]{1,12}$/.test(gait.pattern) ? `${gait.pattern} ` : ""}gait`] : [];
   const facts = [
-    ...(keyframes.length > 0 || waves.length === 0 ? [`${keyframes.length} keyframe${keyframes.length === 1 ? "" : "s"}`] : []),
+    ...(keyframes.length > 0 || (waves.length === 0 && !gait) ? [`${keyframes.length} keyframe${keyframes.length === 1 ? "" : "s"}`] : []),
+    ...gaitWords,
     ...(waves.length > 0 ? [`${waves.length} wave${waves.length === 1 ? "" : "s"}`] : []),
     ...(length > 0 || times.length > 0 ? [`${Math.round(length * 100) / 100} s`] : []),
     ...(animation.loop === true ? ["loops"] : []),

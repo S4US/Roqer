@@ -108,7 +108,8 @@ describe('RoqerRig declarations', () => {
     expect(checks.groundContact.status).toBe('pass');
     expect(checks.groundContact.detail).toMatch(/; its limits are R15's scaled by 0\.73 for its hips' height at rest$/);
     expect(checkMotion(over, { locomotion: true }, rig).checks.find((check) => check.id === 'gaitSymmetry')!.detail)
-      .toBe('not checked: the rig declares no pair of hips to compare');
+      // With no pair of hips, a gait is judged by its feet: here only one lifts.
+      .toBe('FrontRightLower, HindLeftLower and HindRightLower never leave the ground; in a gait every foot steps');
   });
 
   it('measure the ground under declared foot points, not the box', () => {

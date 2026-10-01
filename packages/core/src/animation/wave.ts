@@ -7,6 +7,7 @@
 // A joint a wave drives may not also be keyed by hand. Two waves may share a
 // joint only about different axes, which is how an arm sways two ways at once.
 
+import type { Generator } from './generators.js';
 import type { Rig } from './rig.js';
 
 export const WAVE_LIMITS = {
@@ -15,8 +16,6 @@ export const WAVE_LIMITS = {
   samplesPerCycle: 12,
   maxAmplitudeDegrees: 180,
   maxCycles: 20,
-  /** A hand keyframe this close to a wave's key carries it, so no two keyframes crowd. */
-  snapSeconds: 1 / 240,
 } as const;
 
 const AXES = ['X', 'Y', 'Z'] as const;
@@ -133,94 +132,40 @@ const round = (value: number, places: number) => {
   return rounded === 0 ? 0 : rounded;
 };
 
+
 /**
- * Writes a description's waves out as rotation keys. Returns the keyframes
- * to compile: the hand keyframes with the waves' keys among them. Every
- * problem is reported through `add`; with any, the hand keyframes come back
- * as they were given, and `failed` is true.
+ * Reads a description's waves as a generator of rotation keys. Every problem
+ * is reported through `fail`; undefined means the waves cannot be written.
  */
-export function expandWaves(
-  input: Record<string, unknown>,
-  rig: Rig,
-  maxKeyframes: number,
-  maxDurationSeconds: number,
-  add: AddIssue,
-): { keyframes: unknown; failed: boolean } {
-  let failed = false;
-  const fail = (path: string, message: string) => { failed = true; add(path, message); };
-  const given = input.keyframes;
-  if (input.waves === undefined) {
-    fail('duration', 'goes with waves; without them the last keyframe\'s time is the animation\'s length');
-    return { keyframes: given, failed };
-  }
+export function parseWaves(value: unknown, rig: Rig, loop: boolean, fail: AddIssue): Generator | undefined {
   const waves: ParsedWave[] = [];
-  if (!Array.isArray(input.waves) || input.waves.length === 0 || input.waves.length > WAVE_LIMITS.maxWaves) {
-    fail('waves', `must list 1 to ${WAVE_LIMITS.maxWaves} waves: { joints, axis, amplitude, cycles?, lag?, offset?, phase? }`);
-  } else {
-    input.waves.forEach((entry, index) => {
-      const wave = parseWave(entry, rig, input.loop === true, `waves[${index}]`, fail);
-      if (!wave) return;
-      for (const name of wave.joints) {
-        const other = waves.findIndex((earlier) => earlier.axis === wave.axis && earlier.joints.includes(name));
-        if (other >= 0) fail(`waves[${index}].joints`, `"${name}" already turns about ${AXES[wave.axis]} in waves[${other}]; two waves share a joint only about different axes`);
-      }
-      waves.push(wave);
-    });
+  let ok = true;
+  const add: AddIssue = (path, message) => { ok = false; fail(path, message); };
+  if (!Array.isArray(value) || value.length === 0 || value.length > WAVE_LIMITS.maxWaves) {
+    add('waves', `must list 1 to ${WAVE_LIMITS.maxWaves} waves: { joints, axis, amplitude, cycles?, lag?, offset?, phase? }`);
+    return undefined;
   }
-  const driven = new Map<string, number>();
-  waves.forEach((wave, index) => wave.joints.forEach((name) => { if (!driven.has(name)) driven.set(name, index); }));
-
-  // The hand keyframes, as far as they can be read; the compiler reports what
-  // is wrong with them.
-  if (given !== undefined && !Array.isArray(given)) return { keyframes: given, failed };
-  const hand = (given ?? []) as unknown[];
-  let lastTime = 0;
-  hand.forEach((keyframe, index) => {
-    if (!isRecord(keyframe)) return;
-    if (finite(keyframe.time)) lastTime = Math.max(lastTime, keyframe.time);
-    if (!isRecord(keyframe.joints)) return;
-    for (const name of Object.keys(keyframe.joints)) {
-      const wave = driven.get(name);
-      if (wave !== undefined) fail(`keyframes[${index}].joints.${name}`, `waves[${wave}] drives this joint; take it out of the wave or do not key it by hand`);
+  value.forEach((entry, index) => {
+    const wave = parseWave(entry, rig, loop, `waves[${index}]`, add);
+    if (!wave) return;
+    for (const name of wave.joints) {
+      const other = waves.findIndex((earlier) => earlier.axis === wave.axis && earlier.joints.includes(name));
+      if (other >= 0) add(`waves[${index}].joints`, `"${name}" already turns about ${AXES[wave.axis]} in waves[${other}]; two waves share a joint only about different axes`);
     }
+    waves.push(wave);
   });
-  let duration = lastTime;
-  if (input.duration !== undefined) {
-    if (!finite(input.duration) || input.duration <= 0 || input.duration > maxDurationSeconds) {
-      fail('duration', `must be seconds, more than 0 and at most ${maxDurationSeconds}`);
-    } else if (input.duration < lastTime) {
-      fail('duration', `must not be before the last keyframe (${lastTime})`);
-    } else {
-      duration = input.duration;
-    }
-  } else if (lastTime <= 0) {
-    fail('duration', 'waves need the animation\'s length: give duration in seconds, or a last keyframe');
-  }
-  if (failed) return { keyframes: given, failed };
-
-  const steps = Math.ceil(WAVE_LIMITS.samplesPerCycle * Math.max(...waves.map((wave) => wave.cycles)));
-  const keyframes: Array<Record<string, unknown>> = hand.map((keyframe) => (isRecord(keyframe)
-    ? { ...keyframe, joints: isRecord(keyframe.joints) ? { ...keyframe.joints } : keyframe.joints }
-    : keyframe as Record<string, unknown>));
-  const sampled: Array<Record<string, unknown>> = [];
-  for (let step = 0; step <= steps; step += 1) {
-    const time = step === steps ? duration : round((duration * step) / steps, 6);
-    let keyframe = keyframes.find((candidate) => isRecord(candidate) && finite(candidate.time) && Math.abs(candidate.time - time) <= WAVE_LIMITS.snapSeconds);
-    if (!keyframe) {
-      keyframe = { time, joints: {} };
-      keyframes.push(keyframe);
-    }
-    if (!sampled.includes(keyframe)) sampled.push(keyframe);
-  }
-  if (keyframes.length > maxKeyframes) {
-    fail('waves', `their keys make ${keyframes.length} keyframes, over the ${maxKeyframes} an animation may have; use fewer cycles`);
-    return { keyframes: given, failed };
-  }
-  for (const keyframe of sampled) {
-    if (!isRecord(keyframe.joints)) continue;
-    // A loop's last key is its first, exactly.
-    const time = input.loop === true && keyframe.time === duration ? 0 : keyframe.time as number;
-    for (const name of driven.keys()) {
+  if (!ok) return undefined;
+  const owners = new Map<string, string>();
+  waves.forEach((wave, index) => wave.joints.forEach((name) => {
+    if (!owners.has(name)) owners.set(name, `waves[${index}] drives this joint; take it out of the wave or do not key it by hand`);
+  }));
+  return {
+    name: 'waves',
+    joints: [...owners.keys()],
+    owners,
+    steps: () => Math.ceil(WAVE_LIMITS.samplesPerCycle * Math.max(...waves.map((wave) => wave.cycles))),
+    tooMany: 'use fewer cycles',
+    pose: (name, time, duration) => {
       const rotation = [0, 0, 0];
       for (const wave of waves) {
         const index = wave.joints.indexOf(name);
@@ -230,9 +175,7 @@ export function expandWaves(
         const offset = wave.offset[0] + (wave.offset[1] - wave.offset[0]) * along;
         rotation[wave.axis] += offset + amplitude * Math.sin(2 * Math.PI * ((wave.cycles * time) / duration - wave.lag * index + wave.phase));
       }
-      keyframe.joints[name] = { rotation: rotation.map((degrees) => round(degrees, 3)), easing: { style: 'Linear' } };
-    }
-  }
-  keyframes.sort((a, b) => (isRecord(a) && isRecord(b) && finite(a.time) && finite(b.time) ? a.time - b.time : 0));
-  return { keyframes, failed };
+      return { rotation: rotation.map((degrees) => round(degrees, 3)), easing: { style: 'Linear' } };
+    },
+  };
 }

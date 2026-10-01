@@ -74,7 +74,7 @@ tells you that publishing needs a key.
    | Loop continuity | a loop whose end does not meet its start |
    | Ground contact | feet sinking into the ground, or never touching it |
    | Foot sliding | a planted foot skating |
-   | Gait symmetry | legs that do not alternate evenly |
+   | Gait symmetry | legs that do not alternate evenly; on more than two legs, a foot that never steps |
 
    The last three run for walks, runs and other gaits. For any other
    animation performed on the ground, such as a crouching attack, the agent
@@ -251,6 +251,35 @@ cycle.
 - The keys are ordinary keys: the motion checks, the previews and Studio's
   playback comparison treat them as any others.
 - Waves work on R15 and R6 as well as on a model's own rig.
+
+## Gaits
+
+A walk, a trot or a run is written from a few numbers rather than by hand,
+for "Make my dog trot". The agent gives the pattern, how far a foot travels
+each cycle, and the cycle's length; Roqer places every foot 30 times a second.
+
+- **The legs** are the limbs that end in one of the body's declared feet: two
+  on R15 and R6, four on a dog, six or eight on an insect or a spider.
+- **Patterns**: `walk` (one foot after another), `trot` (diagonal feet
+  together; on six or eight legs, two alternating sets), `pace` (each side's
+  feet together), `bound` (hind feet, then front) and `gallop`. Which leg
+  steps when comes from where each stands at rest.
+- **Planted feet stay put.** While a foot is down it travels straight back
+  along the ground, as the ground does under a body walking in place. While
+  it is up it swings forward along an arc. The body rides just low enough for
+  the legs to reach, and a stride the legs cannot reach is refused with the
+  longest they can.
+- **A leg needs a knee to stay on the ground.** A leg of one piece only
+  swings from its hip, so its foot skims the ground and the foot-sliding
+  check may fail.
+- **The speed it was written for** is in the result, and the model's loader
+  uses it to pace the gait to how fast the body moves.
+- **The gait check for many legs.** On a body with no pair of hips, the
+  check that compared a biped's two hips looks at the feet instead: every
+  foot must step each cycle, the feet must share the ground evenly, and the
+  result says what order they land in.
+- The head, the tail and anything else the gait does not drive can be keyed
+  by hand or by a wave in the same animation.
 
 ## In the chat
 

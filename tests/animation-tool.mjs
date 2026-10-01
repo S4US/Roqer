@@ -707,6 +707,20 @@ const passed = await runTest('animation tool', async ({ track }) => {
     }, 120_000);
     assert(pupSway.built === true && pupSway.animation?.keyframes === 25 && pupSway.checks?.passed === true, `a wave down the tail and neck builds as 25 keys with its checks passing (${pupSway.error ?? JSON.stringify(pupSway.errors ?? pupSway.animation)})`);
     assert(pupSway.playback?.verified === true, `a copy of the rigged dog played the wave as checked (within ${pupSway.playback?.maxDegrees}°; ${pupSway.playback?.reason ?? 'ok'})`);
+    // A gait steps all four legs: every locomotion check passes on the pup, the feet land as a trot's do, and a copy plays it.
+    const pupTrot = await client.callTool('animation', {
+      action: 'build',
+      animation: { name: 'PupTrot', rig: PUP, loop: true, priority: 'Movement', duration: 0.6, gait: { pattern: 'trot', stride: 1.2 }, waves: [{ joints: ['Tail'], axis: 'Y', amplitude: 12, cycles: 2 }] },
+      parent: PARENT,
+      locomotion: true,
+    }, 120_000);
+    const trotPattern = pupTrot.checks?.results?.find((check) => check.id === 'gaitSymmetry');
+    assert(
+      pupTrot.built === true && pupTrot.checks?.passed === true && pupTrot.checks.results.every((check) => check.status === 'pass') && pupTrot.groundSpeed > 0,
+      `a trot written by gait builds with every check passing, none skipped, at ${pupTrot.groundSpeed} studs a second (${pupTrot.error ?? JSON.stringify(pupTrot.errors ?? pupTrot.checks?.results?.filter((check) => check.status !== 'pass'))})`,
+    );
+    assert(/FrontLeftLower with HindRightLower, then FrontRightLower with HindLeftLower$/.test(trotPattern?.detail ?? ''), `its diagonal feet land together (${trotPattern?.detail})`);
+    assert(pupTrot.playback?.verified === true, `a copy of the rigged dog played the trot as checked (within ${pupTrot.playback?.maxDegrees}°; ${pupTrot.playback?.reason ?? 'ok'})`);
     await luau(client, `local motor = workspace[${JSON.stringify(PUP_NAME)}].Tail.Tail motor.C0 = motor.C0 * CFrame.new(0, 0.05, 0) return true`);
     const pupEdited = await client.callTool('animation', { ...pupArgs, expected_revision: pupRebuilt.revision }, 120_000);
     assert(pupEdited.errorCode === 'rig_edited_since_build', `a rig edited since rig built it is left alone (${pupEdited.errorCode})`);

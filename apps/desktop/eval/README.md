@@ -64,7 +64,8 @@ tasks also destroy and rebuild `Workspace.WorkbenchEvalIsland` or
 `Workspace.WorkbenchEvalMeadow`, `Workspace.WorkbenchEvalRepair`, or
 `Workspace.WorkbenchEvalVillage`, `Workspace.WorkbenchEvalAdventure`, or `Workspace.WorkbenchEvalCart`; T8 adds
 Terrain that no reset removes, T15 removes `ServerScriptService.RoqerAnimate`, the loader that wires animations to characters,
-and T18 destroys and rebuilds `Workspace.WorkbenchEvalPosts` and removes `Workspace.WorkbenchEvalGuard`.
+T18 destroys and rebuilds `Workspace.WorkbenchEvalPosts` and removes `Workspace.WorkbenchEvalGuard`,
+and T19 destroys and rebuilds `Workspace.WorkbenchEvalYard` and removes `Workspace.WorkbenchEvalDog`.
 Point it at a scratch place, never at real work.
 
 Results land in `eval/results/<taskId>.jsonl` (gitignored). Each file is one
@@ -97,6 +98,7 @@ prompt processing, and only the second is something this end can fix.
 | `T14-ui-polished-shop` | "Make a simulator themed shop UI… Make it polished." | the harness's own layout audit of the shop, in its own playtest, comes back clean; at least four buttons; a screenshot after the last interface write; the completion gate |
 | `T15-animation-run` | "Make a running animation and set it up in R15." | the animation plan's goal: a published animation the place's owner owns, wired to the run slot, seen playing in a playtest, a 3D preview, and a gait whose motion checks all passed |
 | `T18-npc-patrol` | "Add a guard NPC who walks back and forth between the two posts, with idle and walk animations of its own." | the creature plan's step 2 goal: an idle and a walk the run published, owned by the place's owner, in the guard's loader with the walk's ground speed; a playtest of the guard's own patrol, after the last wiring, playing the walk while it moved and the idle while it stood; a 3D preview; and every kept build's checks passed, one as a gait |
+| `T19-creature-parts` | "Build a blocky four-legged dog from Parts and make it wander around the spawn, with idle and walk animations of its own." | the creature plan's Parts prompt: a dog of Parts whose rig `rig` built, read back, declared four feet on and drew a range sheet of; then T18's conditions on the dog |
 
 T7 and T8 are a pair. Either alone rewards a fixed preference; together they
 measure whether the agent chooses its construction from the requested style.
@@ -251,6 +253,24 @@ Its conditions:
 
 ```bash
 npm run eval -- --task T18-npc-patrol --provider claude --model opus
+```
+
+T19 is the creature plan's Parts prompt (step 5): "Build a blocky four-legged
+dog from Parts and make it wander around the spawn." It names the dog, the
+spawn and where the sequences go, so the reset owns them. Its seed builds a
+raised yard apart from the other tasks' builds, with a plain Part as its
+spawn, so no other task's playtest spawns a player there. It needs the same
+key and published place as T18. Its conditions are T18's, on the dog, after
+four of its own:
+
+- the dog is made of Parts, with no MeshPart;
+- its rig carries `rig`'s stamp, and the run's last `rig` call on it read
+  back as built;
+- the rig declares four feet, on at least five joints;
+- the rig's range sheet, with its 3D view, was shown in the chat.
+
+```bash
+npm run eval -- --task T19-creature-parts --provider claude --model opus
 ```
 
 The oracles read the run's evidence as well as its tool calls. So that

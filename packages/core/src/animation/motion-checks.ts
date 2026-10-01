@@ -484,8 +484,59 @@ function measureGroundSpeed(data: Sampled, rate: number, rig: Rig): number | und
   return speeds.length % 2 === 1 ? speeds[middle] : (speeds[middle - 1] + speeds[middle]) / 2;
 }
 
+/**
+ * A gait on a body that is not a biped: every declared foot must take a step
+ * each cycle, and the feet must share the ground evenly. Reports the share of
+ * the cycle each foot is down and the order they come down in.
+ */
+function checkGaitPattern(sequence: MotionSequence, data: Sampled, rig: Rig): MotionCheckResult {
+  if (!sequence.loop) return skipped('gaitSymmetry', 'a gait loops; this animation does not');
+  // One cycle, without the last sample, which repeats the first.
+  const count = data.poses.length - 1;
+  if (count < 4) return skipped('gaitSymmetry', 'the animation is too short to compare the feet');
+  const points = footPoints(data, rig);
+  const contact = scaled(rig, MOTION_LIMITS.contactTolerance);
+  const measured: Record<string, number> = {};
+  const feet = rig.feet.map((foot) => {
+    const down = points.get(foot)!.slice(0, count).map((corners) => Math.min(...corners.map((p) => p[1])) <= contact);
+    const share = down.filter(Boolean).length / count;
+    const landing = down.findIndex((on, index) => on && !down[(index + count - 1) % count]);
+    measured[`${foot}.down`] = round(share);
+    // A landing in the cycle's last moments belongs with those at its start.
+    const at = landing / count;
+    if (landing >= 0) measured[`${foot}.lands`] = round(at > 0.95 ? 0 : at);
+    return { foot, share, landing: landing < 0 ? undefined : at > 0.95 ? at - 1 : at };
+  });
+  const held = feet.filter((entry) => entry.share === 1).map((entry) => entry.foot);
+  if (held.length > 0) {
+    return result('gaitSymmetry', true, `${listed(held)} never ${held.length === 1 ? 'leaves' : 'leave'} the ground; in a gait every foot steps`, measured);
+  }
+  const lifted = feet.filter((entry) => entry.share === 0).map((entry) => entry.foot);
+  if (lifted.length > 0) {
+    return result('gaitSymmetry', true, `${listed(lifted)} never ${lifted.length === 1 ? 'touches' : 'touch'} the ground; in a gait every foot steps`, measured);
+  }
+  const least = feet.reduce((a, b) => (b.share < a.share ? b : a));
+  const most = feet.reduce((a, b) => (b.share > a.share ? b : a));
+  const percent = (share: number) => `${Math.round(share * 100)}%`;
+  if (least.share / most.share < MOTION_LIMITS.gaitAmplitudeRatio) {
+    return result('gaitSymmetry', true, `the feet share the ground unevenly: ${least.foot} is down ${percent(least.share)} of the cycle and ${most.foot} ${percent(most.share)}; the least must be at least ${Math.round(MOTION_LIMITS.gaitAmplitudeRatio * 100)}% of the most`, measured);
+  }
+  // Feet that land within a twentieth of a cycle of each other land together.
+  const order = [...feet].sort((a, b) => a.landing! - b.landing!);
+  const groups: string[][] = [];
+  let last = -Infinity;
+  for (const entry of order) {
+    if (entry.landing! - last <= 0.05) groups[groups.length - 1].push(entry.foot);
+    else groups.push([entry.foot]);
+    last = entry.landing!;
+  }
+  const down = least.share === most.share ? percent(most.share) : `${percent(least.share)} to ${percent(most.share)}`;
+  return result('gaitSymmetry', false, `${feet.length} feet step, each down ${down} of the cycle, landing ${groups.map((group) => group.join(' with ')).join(', then ')}`, measured);
+}
+
 function checkGaitSymmetry(sequence: MotionSequence, data: Sampled, rig: Rig): MotionCheckResult {
   const hips = rig.hips;
+  if (!hips && rig.feet.length >= 2) return checkGaitPattern(sequence, data, rig);
   if (!hips) return skipped('gaitSymmetry', 'not checked: the rig declares no pair of hips to compare');
   if (!sequence.loop) return skipped('gaitSymmetry', 'a gait loops; this animation does not');
   // One cycle, without the last sample, which repeats the first.

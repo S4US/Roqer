@@ -3,6 +3,7 @@ import { MAX_PNG_BASE64_CHARACTERS } from '../image-decode.js';
 import { ANIMATION_PRIORITIES } from '../animation/pose-compiler.js';
 import { ANIMATE_SLOTS, MOTION_CHECK_IDS } from '../animation/animation-tool.js';
 import { BODY_PLANS } from '../animation/body-plans.js';
+import { GAIT_PATTERNS } from '../animation/gait.js';
 
 // Styles and directions are listed in the tool guide and in the compiler's
 // errors; spelling the enums out twice here would cost more than they save.
@@ -198,7 +199,11 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
               description: 'Sines down joint chains: [{joints, axis, amplitude, cycles?, lag?, offset?, phase?}].',
               items: { type: 'object' },
             },
-            duration: { type: 'number', description: 'With waves: seconds; keyframes may be left out.' },
+            gait: {
+              type: 'object',
+              description: `Steps the legs: {pattern: ${GAIT_PATTERNS.join('|')}, stride}.`,
+            },
+            duration: { type: 'number', description: 'With waves or gait: seconds; keyframes may be left out.' },
           },
           required: ['name', 'rig'],
         },
