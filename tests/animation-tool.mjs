@@ -1024,6 +1024,14 @@ const passed = await runTest('animation tool', async ({ track }) => {
       assert(movement.reached === true && movement.moving?.played?.walk > 0 && movement.standing?.played?.idle > 0, `the NPC walked there, playing its walk and then its idle (${walked.error ?? JSON.stringify({ moving: movement.moving, standing: movement.standing })})`);
       assert(movement.pace?.state === 'walk' && movement.pace.kept === true, `its loader paced the walk to its speed (${JSON.stringify(movement.pace ?? movement.reason)})`);
       assert(walked.verified === true && walked.wiring?.matches === true, `verify passes the NPC on the playtest server (${walked.error ?? movement.reason ?? 'ok'})`);
+      // The wiring alone says it left the motion uncompared; with an animation, the published asset is played on the model too.
+      const wiredOnly = await client.callTool('animation', { action: 'verify', model: GUARD, slot: 'idle', animation_id: defaults.idle }, 60_000);
+      assert(wiredOnly.wiring?.matches === true && wiredOnly.played === undefined && /how it plays/.test(wiredOnly.unchecked ?? ''), `a model's wiring alone is checked, and says the motion was not (${JSON.stringify(wiredOnly.unchecked ?? wiredOnly.error)})`);
+      const assetOnModel = await client.callTool('animation', { action: 'verify', model: GUARD, animation: wave(100), slot: 'idle', animation_id: defaults.idle }, 90_000);
+      assert(
+        assetOnModel.wiring?.matches === true && assetOnModel.played?.source === 'published' && typeof assetOnModel.played?.maxDegrees === 'number' && assetOnModel.unchecked === undefined,
+        `the published asset in a model's state is played on the model and compared, in the same call (${assetOnModel.error ?? JSON.stringify(assetOnModel.played)})`,
+      );
 
       // Its own patrol, at a WalkSpeed of 8 over 30 studs, pausing 3 s at each end.
       const started = await client.callTool('execute_luau', {
