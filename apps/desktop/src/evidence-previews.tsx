@@ -4,8 +4,8 @@ import { Box, Camera, ChevronLeft, ChevronRight, Gamepad2, ImageIcon, Maximize2,
 import { MAX_RECORDED_EVIDENCE_IMAGES, type RunChange, type RunEvidence } from "../shared/run-events";
 import { ModelViewer } from "./model-viewer";
 import {
-  animationRigCaption, hasModelPreview, previewCaption, previewLayout, previewSource, previewSourceLabel, previewTileLabel, previewVersions,
-  type PreviewTile,
+  animationRigCaption, hasModelPreview, pictureCategory, previewCaption, previewLayout, previewSource, previewSourceLabel, previewTileLabel,
+  previewVersions, type PictureCategory, type PreviewTile,
 } from "./preview-layout";
 import { evidenceImages, previewsNotShown } from "./run-view";
 import { EvidencePicture } from "./evidence-picture";
@@ -30,23 +30,29 @@ function onShow(choice: VersionChoice, evidence: RunEvidence): RunEvidence {
 }
 
 /**
- * The pictures a run produced: Studio screenshots, Blender previews and
- * animation checks, as the Previews tab of the run's Results card.
+ * One kind of the pictures a run produced, as a tab of the run's Results card:
+ * its screenshots of Studio and playtests in the Screenshots tab, or its
+ * Blender, rig and animation previews in the Previews tab.
  *
  * Every picture is a preview the host made from what a tool returned; nothing
  * here comes from the model. The newest one leads, the earlier ones sit beside
  * it, and any picture opens the viewer at itself. Previews of one animation are
  * one picture whose versions step back and forth, not a tile each.
  */
-export const PreviewsPanel = memo(function PreviewsPanel({ evidence, changes, chosen, onChoose }: {
+export const PreviewsPanel = memo(function PreviewsPanel({ category, evidence, changes, chosen, onChoose }: {
+  /** Which of the run's pictures this panel shows: its screenshots or its previews. */
+  category: PictureCategory;
   evidence: readonly RunEvidence[];
   changes: readonly RunChange[];
   /** The version on show of each picture with several; held by the Results card so it outlives this panel. */
   chosen: Readonly<Record<string, number>>;
   onChoose: (id: string, at: number) => void;
 }) {
-  const { shown: images, versions } = useMemo(() => previewVersions(evidenceImages(evidence)), [evidence]);
-  const notShown = useMemo(() => previewsNotShown(evidence), [evidence]);
+  const { shown: images, versions } = useMemo(
+    () => previewVersions(evidenceImages(evidence).filter((item) => pictureCategory(item) === category)),
+    [category, evidence],
+  );
+  const notShown = useMemo(() => previewsNotShown(evidence, category), [category, evidence]);
   const layout = useMemo(() => previewLayout(images), [images]);
   const choice = useMemo<VersionChoice>(() => ({ versions, chosen, onChoose }), [versions, chosen, onChoose]);
   const [open, setOpen] = useState<number | null>(null);

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { ANIMATION_NAME_LABEL, ANIMATION_PREVIEW_TITLE, type RunChange, type RunEvidence } from "../shared/run-events";
+import { ANIMATION_NAME_LABEL, ANIMATION_PREVIEW_TITLE, BLENDER_PREVIEW_TITLE, SCREENSHOT_VIEW_LABEL, SCREENSHOT_VIEW_PLAYTEST, type RunChange, type RunEvidence } from "../shared/run-events";
 import { groupChangesByTarget } from "./diff-view";
 import {
   arrivedTab, initialResultsView, openingTab, rememberResults, resultsSummary, runResults, settleFileDefaults, shownTab, uploadEntry,
@@ -62,19 +62,29 @@ test("the Changes tab counts files and each file's latest write, not every write
   assert.deepEqual(results.tabs[0], { id: "changes", count: 2, added: 8, removed: 3 });
 });
 
-test("pictures are counted the way the previews panel shows them: an animation's versions are one", () => {
-  const animation = (id: string) => shot(id, {
-    title: ANIMATION_PREVIEW_TITLE,
-    metadata: [{ label: ANIMATION_NAME_LABEL, value: "Slash" }],
-  });
-  const results = runResults([], [shot("s1"), animation("v1"), animation("v2"), { id: "log", kind: "logs", title: "Output" }]);
-  assert.deepEqual(results.tabs, [{ id: "previews", count: 2 }]);
+function animation(id: string): RunEvidence {
+  return shot(id, { title: ANIMATION_PREVIEW_TITLE, metadata: [{ label: ANIMATION_NAME_LABEL, value: "Slash" }] });
+}
+
+test("pictures are counted the way their panel shows them: an animation's versions are one", () => {
+  const results = runResults([], [animation("v1"), animation("v2"), { id: "log", kind: "logs", title: "Output" }]);
+  assert.deepEqual(results.tabs, [{ id: "previews", count: 1 }]);
 });
 
-test("a finished run opens on its pictures, then its code, then its uploads", () => {
-  const all = runResults([script("s", "game.A", 1, 0), upload("u", "1")], [shot("p")]).tabs;
-  assert.deepEqual(tabIds(all), ["changes", "uploads", "previews"]);
+test("screenshots and previews of what the run built get a tab each", () => {
+  const playtest = shot("p1", { metadata: [{ label: SCREENSHOT_VIEW_LABEL, value: SCREENSHOT_VIEW_PLAYTEST }] });
+  const blender = shot("b1", { title: BLENDER_PREVIEW_TITLE });
+  const results = runResults([], [shot("s1"), blender, animation("v1"), playtest, animation("v2")]);
+  assert.deepEqual(results.tabs, [{ id: "screenshots", count: 2 }, { id: "previews", count: 2 }]);
+  assert.deepEqual(tabIds(runResults([], [shot("s1")]).tabs), ["screenshots"]);
+  assert.deepEqual(tabIds(runResults([], [blender]).tabs), ["previews"]);
+});
+
+test("a finished run opens on its previews, then its screenshots, then its code, then its uploads", () => {
+  const all = runResults([script("s", "game.A", 1, 0), upload("u", "1")], [shot("p"), animation("a")]).tabs;
+  assert.deepEqual(tabIds(all), ["changes", "uploads", "screenshots", "previews"]);
   assert.equal(openingTab(all), "previews");
+  assert.equal(openingTab(runResults([script("s", "game.A", 1, 0)], [shot("p")]).tabs), "screenshots");
   assert.equal(openingTab(runResults([script("s", "game.A", 1, 0), upload("u", "1")], []).tabs), "changes");
   assert.equal(openingTab(runResults([upload("u", "1")], []).tabs), "uploads");
 });
@@ -83,7 +93,8 @@ test("a live run follows whatever arrived last", () => {
   const before = runResults([script("s", "game.A", 1, 0)], []).tabs;
   assert.equal(arrivedTab(before, before), null);
   assert.equal(arrivedTab(before, runResults([script("s", "game.A", 1, 0), upload("u", "1")], []).tabs), "uploads");
-  assert.equal(arrivedTab(before, runResults([script("s", "game.A", 1, 0)], [shot("p")]).tabs), "previews");
+  assert.equal(arrivedTab(before, runResults([script("s", "game.A", 1, 0)], [shot("p")]).tabs), "screenshots");
+  assert.equal(arrivedTab(before, runResults([script("s", "game.A", 1, 0)], [animation("a")]).tabs), "previews");
   // A second write to a file already listed adds no file, so nothing new arrived.
   assert.equal(arrivedTab(before, runResults([script("s", "game.A", 1, 0), script("s2", "game.A", 2, 0)], []).tabs), null);
   assert.equal(arrivedTab([], before), "changes");
@@ -91,15 +102,15 @@ test("a live run follows whatever arrived last", () => {
 
 test("the reader's tab wins over the followed one, and a tab that no longer exists gives way", () => {
   const tabs = runResults([script("s", "game.A", 1, 0), upload("u", "1")], [shot("p")]).tabs;
-  assert.equal(shownTab(tabs, "uploads", "previews"), "uploads");
+  assert.equal(shownTab(tabs, "uploads", "screenshots"), "uploads");
   assert.equal(shownTab(tabs, null, "changes"), "changes");
   const noPictures = runResults([script("s", "game.A", 1, 0)], []).tabs;
-  assert.equal(shownTab(noPictures, "previews", "uploads"), "changes");
+  assert.equal(shownTab(noPictures, "screenshots", "uploads"), "changes");
 });
 
 test("the card's summary counts each kind in words", () => {
-  const tabs = runResults([script("s", "game.A", 1, 0), upload("u1", "1"), upload("u2", "2")], [shot("p")]).tabs;
-  assert.equal(resultsSummary(tabs), "1 file, 2 uploads, 1 image");
+  const tabs = runResults([script("s", "game.A", 1, 0), upload("u1", "1"), upload("u2", "2")], [shot("p"), animation("a")]).tabs;
+  assert.equal(resultsSummary(tabs), "1 file, 2 uploads, 1 screenshot, 1 preview");
 });
 
 test("an upload tile reads its name from the host's summary and its state from moderation", () => {
@@ -155,7 +166,7 @@ test("a run's card is remembered by run id, newest last, and the oldest is forgo
 test("a finished run's card starts where its tabs say, folded when it is an earlier run", () => {
   const tabs = runResults([script("s", "game.A", 1, 0)], [shot("p")]).tabs;
   assert.deepEqual(initialResultsView(tabs, true), {
-    open: false, picked: null, following: "previews", visited: [], versions: {}, files: {},
+    open: false, picked: null, following: "screenshots", visited: [], versions: {}, files: {},
   });
 });
 

@@ -1,6 +1,6 @@
 import { memo, useCallback, useEffect, useId, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import {
-  AudioLines, Box, Check, ChevronRight, CloudUpload, Copy, ExternalLink, FileBox, FileCode2, Film, ImageIcon, PersonStanding,
+  AudioLines, Box, Camera, Check, ChevronRight, CloudUpload, Copy, ExternalLink, FileBox, FileCode2, Film, ImageIcon, PersonStanding,
 } from "lucide-react";
 import type { RunChange, RunEvidence } from "../shared/run-events";
 import type { ChangeGroup } from "./diff-view";
@@ -13,7 +13,8 @@ import {
 const TAB_ICON: Record<ResultsTab, ReactNode> = {
   changes: <FileCode2 size={14} aria-hidden="true" />,
   uploads: <CloudUpload size={14} aria-hidden="true" />,
-  previews: <ImageIcon size={14} aria-hidden="true" />,
+  screenshots: <Camera size={14} aria-hidden="true" />,
+  previews: <Box size={14} aria-hidden="true" />,
 };
 
 /** Every run's card as the reader left it, by run id. See `ResultsViewState`. */
@@ -146,7 +147,7 @@ export const ResultsCard = memo(function ResultsCard({ runId, changes, evidence,
       </div>
     </div>
     {/* Mounted on first visit: a folded card in a long chat builds none of
-        its diffs, tiles or pictures. A hidden Previews panel is display:none,
+        its diffs, tiles or pictures. A hidden pictures panel is display:none,
         so its inline animation leaves view and gives up its WebGL context. */}
     {tabs.filter((tab) => view.visited.includes(tab.id)).map((tab) => <div
       key={tab.id}
@@ -159,7 +160,13 @@ export const ResultsCard = memo(function ResultsCard({ runId, changes, evidence,
     >
       {tab.id === "changes" && renderFiles(results.files, expansion)}
       {tab.id === "uploads" && <UploadsPanel uploads={results.uploads} />}
-      {tab.id === "previews" && <PreviewsPanel evidence={evidence} changes={changes} chosen={view.versions} onChoose={onChooseVersion} />}
+      {(tab.id === "screenshots" || tab.id === "previews") && <PreviewsPanel
+        category={tab.id}
+        evidence={evidence}
+        changes={changes}
+        chosen={view.versions}
+        onChoose={onChooseVersion}
+      />}
     </div>)}
   </section>;
 });

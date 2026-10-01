@@ -1,6 +1,6 @@
 import type { RunChange, RunEvidence } from "../shared/run-events";
 import { groupChangesByTarget, splitChangeGroup, type ChangeGroup } from "./diff-view";
-import { previewVersions } from "./preview-layout";
+import { pictureCategory, previewVersions } from "./preview-layout";
 import { evidenceImages } from "./run-view";
 
 /**
@@ -19,11 +19,11 @@ import { evidenceImages } from "./run-view";
  * without React.
  */
 
-export type ResultsTab = "changes" | "uploads" | "previews";
+export type ResultsTab = "changes" | "uploads" | "screenshots" | "previews";
 
 export type ResultsTabInfo = {
   id: ResultsTab;
-  /** Files changed, assets uploaded, or pictures shown. */
+  /** Files changed, assets uploaded, or pictures shown in the tab. */
   count: number;
   /** Lines added and removed across the files, by each file's latest write. */
   added?: number;
@@ -35,18 +35,21 @@ export type RunResults = {
   files: ChangeGroup[];
   /** Every upload, one group per asset, in event order. */
   uploads: ChangeGroup[];
-  /** The run's pictures, as the previews panel shows them. */
-  pictures: number;
   tabs: ResultsTabInfo[];
 };
 
-/** Tabs in the order they read, left to right: what changed, what went up, what it looks like. */
-const TAB_ORDER: readonly ResultsTab[] = ["changes", "uploads", "previews"];
+/**
+ * Tabs in the order they read, left to right: what changed, what went up, what
+ * the place looks like, and what the things the run built look like.
+ */
+const TAB_ORDER: readonly ResultsTab[] = ["changes", "uploads", "screenshots", "previews"];
 
 export function runResults(changes: readonly RunChange[], evidence: readonly RunEvidence[]): RunResults {
   const files = groupChangesByTarget(changes.filter((change) => change.kind !== "asset"));
   const uploads = groupChangesByTarget(changes.filter((change) => change.kind === "asset"));
-  const pictures = previewVersions(evidenceImages(evidence)).shown.length;
+  const images = evidenceImages(evidence);
+  const pictures = (category: "screenshots" | "previews") =>
+    previewVersions(images.filter((item) => pictureCategory(item) === category)).shown.length;
 
   let added = 0;
   let removed = 0;
@@ -58,18 +61,21 @@ export function runResults(changes: readonly RunChange[], evidence: readonly Run
     removed += latest?.removedLines ?? 0;
   }
 
-  const counts: Record<ResultsTab, number> = { changes: files.length, uploads: uploads.length, previews: pictures };
+  const counts: Record<ResultsTab, number> = {
+    changes: files.length, uploads: uploads.length, screenshots: pictures("screenshots"), previews: pictures("previews"),
+  };
   const tabs = TAB_ORDER.filter((id) => counts[id] > 0).map((id): ResultsTabInfo => (
     id === "changes" ? { id, count: counts[id], added, removed } : { id, count: counts[id] }
   ));
-  return { files, uploads, pictures, tabs };
+  return { files, uploads, tabs };
 }
 
 /**
- * The tab a finished run opens on: the pictures when there are any, since they
- * show what the run made; otherwise the code; otherwise the uploads.
+ * The tab a finished run opens on: the previews of what it built when there are
+ * any, then its screenshots, since pictures show what the run made; otherwise
+ * the code; otherwise the uploads.
  */
-const OPENING_PRIORITY: readonly ResultsTab[] = ["previews", "changes", "uploads"];
+const OPENING_PRIORITY: readonly ResultsTab[] = ["previews", "screenshots", "changes", "uploads"];
 
 export function openingTab(tabs: readonly ResultsTabInfo[]): ResultsTab | null {
   return OPENING_PRIORITY.find((id) => tabs.some((tab) => tab.id === id)) ?? null;
@@ -96,10 +102,11 @@ export function shownTab(tabs: readonly ResultsTabInfo[], picked: ResultsTab | n
 export const TAB_NAME: Record<ResultsTab, { one: string; many: string; title: string }> = {
   changes: { one: "file", many: "files", title: "Changes" },
   uploads: { one: "upload", many: "uploads", title: "Uploads" },
-  previews: { one: "image", many: "images", title: "Previews" },
+  screenshots: { one: "screenshot", many: "screenshots", title: "Screenshots" },
+  previews: { one: "preview", many: "previews", title: "Previews" },
 };
 
-/** The card's accessible summary, for a reader who cannot see the tabs: "3 files, 6 uploads, 5 images". */
+/** The card's accessible summary, for a reader who cannot see the tabs: "3 files, 6 uploads, 2 screenshots, 3 previews". */
 export function resultsSummary(tabs: readonly ResultsTabInfo[]): string {
   return tabs.map((tab) => `${tab.count} ${tab.count === 1 ? TAB_NAME[tab.id].one : TAB_NAME[tab.id].many}`).join(", ");
 }

@@ -730,6 +730,10 @@ test("the inline budget goes to distinct things before earlier versions of one",
   assert.deepEqual(kept, ["arena", "shield", "sword-4", "sword-5", "sword-6", "sword-7"]);
   assert.deepEqual(evidenceImages(finished.evidence).map((item) => item.id), kept);
   assert.equal(previewsNotShown(record.evidence), 3);
+  // Each tab counts only its own: the three were all sword previews.
+  assert.equal(previewsNotShown(record.evidence, "previews"), 3);
+  assert.equal(previewsNotShown(record.evidence, "screenshots"), 0);
+  assert.equal(previewsNotShown(finished.evidence, "previews"), 3);
 });
 
 test("a run whose pictures are stored keeps forty, each by its ref alone", () => {
