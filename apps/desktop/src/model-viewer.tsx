@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import {
   Clock, Layers, Loader2, MonitorOff, Pause, Play, Rotate3d, RotateCcw, RotateCw, Ruler, Triangle, TriangleAlert,
 } from "lucide-react";
-import { ANIMATION_PREVIEW_TITLE, type RunEvidence } from "../shared/run-events";
+import { ANIMATION_PREVIEW_TITLE, RIG_RANGE_SHEET_TITLE, type RunEvidence } from "../shared/run-events";
 import { MODEL_OBJECTS_LABEL, MODEL_SIZE_LABEL, MODEL_TRIANGLES_LABEL } from "../shared/model-preview";
 import { hasDesktopRuntime, loadModelPreview } from "./platform";
 import { EvidencePicture } from "./evidence-picture";
@@ -400,7 +400,7 @@ export function ModelViewer({ evidence, onShowPicture, compact = false, autoplay
   const size = fact(evidence, MODEL_SIZE_LABEL);
   const triangles = fact(evidence, MODEL_TRIANGLES_LABEL);
   const objects = fact(evidence, MODEL_OBJECTS_LABEL);
-  const animation = evidence.title === ANIMATION_PREVIEW_TITLE;
+  const animation = evidence.title === ANIMATION_PREVIEW_TITLE || evidence.title === RIG_RANGE_SHEET_TITLE;
   const notice = status === "expired"
     ? {
       icon: <Clock size={17} />,

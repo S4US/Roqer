@@ -514,7 +514,8 @@ cannot: which parts stand on the ground, which joints are limbs and hinges,
 and how far each may turn. Set it as a string attribute on the model, for
 example with a `build_instances` set step's `attributes`. Only version 1 is
 read, and a declaration with any error refuses the whole rig, saying what is
-wrong. A dog whose legs bend at the knee, the front knees folding back and
+wrong. `rig` writes it for you, from a body plan or from `declarations`
+(next section). A dog whose legs bend at the knee, the front knees folding back and
 the hind forward:
 
 ```text
@@ -558,6 +559,68 @@ With limbs declared, `aim: [right, up, forward]` points a limb, `bendToward`
 chooses where its hinge folds, `bend: degrees` folds it, and
 `aimAt: [right, up, forward]` puts its end on a point in studs from the root
 part's centre, as on R15.
+
+## Rigging a creature: action rig
+
+A creature made of loose pieces, such as Parts you built or an uploaded
+model, is joined into a rig by `rig` rather than by Luau. The pieces stay
+where they are. Each joint names the piece it moves, the piece it hangs
+from, and the pivot: the point in the world, in studs, where the piece turns.
+
+```text
+{
+  "action": "rig", "model": "game.Workspace.Dog",
+  "controller": "Humanoid", "plan": "quadruped",
+  "joints": [
+    { "part": "Head", "parent": "Body", "pivot": [0, 3.1, -1.6], "name": "Neck", "with": ["EarLeft", "EarRight"] },
+    { "part": "FrontLeftUpper", "parent": "Body", "pivot": [-0.6, 2.4, -1.2], "name": "FrontLeft" },
+    { "part": "FrontLeftLower", "parent": "FrontLeftUpper", "pivot": [-0.6, 1.6, -1.2], "name": "FrontLeftKnee" },
+    { "part": "Tail", "parent": "Body", "pivot": [0, 2.9, 1.9] }
+  ]
+}
+```
+
+- **Name the pieces before rigging.** Part names must be unique in the model,
+  and the `quadruped` plan reads them. A leg is one piece named `FrontLeft`,
+  `FrontRight`, `HindLeft` or `HindRight`, or pieces named with `Upper`,
+  `Lower` and optionally `Foot` after that, such as `FrontLeftUpper`. `Head`,
+  `Jaw` and `Tail`, `Tail2` and so on get ranges. The plan declares the feet,
+  limbs, knees (front folding back, hind forward) and ranges, so `aim`, `bend`
+  and `aimAt` work on the legs. Give `declarations` to add to or override it
+  per joint. `plan: "custom"` declares only what `declarations` gives.
+- **Put each pivot where the piece meets its parent**: a hip at the top of
+  the leg, a knee between the two leg pieces, a neck at the back of the head.
+  A pivot at a piece's centre makes it spin in place. A pivot outside both
+  pieces is refused, naming the joint.
+- **Every part needs a place.** A piece is moved by exactly one joint. A part
+  that only rides along (an ear, an eye) goes in its piece's `with`, or is
+  already welded to it. A part left loose, a weld holding two jointed pieces
+  together, or joints that do not form one tree refuse the call, listing
+  every problem; nothing is changed.
+- **Controller.** `Humanoid` for a creature that walks or is moved with
+  `MoveTo`: its root is left free and its hip height is set from the rest
+  pose. `AnimationController` for one that flies, swims or stays put: its root
+  is anchored, and a script moves it by its root's CFrame.
+- **The root.** The piece every other hangs from (`Body` above) is jointed to
+  an invisible `HumanoidRootPart` that `rig` makes, by a joint named `Root`,
+  which is the joint that takes `position`. Do not name a joint `Root`.
+- **An uploaded or generated model** arrives with a rig of its own: every
+  piece hung from a `RootPart` at the piece's centre. `rig` refuses with
+  `importer_rig`; pass `replace: "importer"` to take that rig out and build
+  yours.
+- **Look at the range sheet.** The result carries `rangeSheet`, an image and a
+  3D preview with every joint turned 30° each way. A piece that swings away
+  from the body, or opens a gap at its joint, has its pivot in the wrong
+  place: fix the pivot and rig again.
+- **Rigging again** needs `expected_revision`, the `revision` the last `rig`
+  returned. A rig that `rig` did not build, or that was edited since, is left
+  alone (`rig_not_built_here`, `rig_edited_since_build`).
+- **A model already rigged**, by hand or from the Creator Store: leave
+  `joints` out. `rig {model, plan}` or `rig {model, declarations}` writes only
+  the `RoqerRig` attribute and changes no joint; `rig {model}` alone reads the
+  rig and draws its range sheet.
+
+Then animate it with the model's path as the animation's `rig`, as above.
 
 ## Reading the result
 

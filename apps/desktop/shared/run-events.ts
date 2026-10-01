@@ -465,6 +465,13 @@ export const ANIMATION_NAME_LABEL = "Animation";
 export const ANIMATION_RIG_LABEL = "Rig";
 
 /**
+ * The title of a rig's range sheet: every joint of a creature's rig at rest and
+ * turned a little each way, which the animation tool's rig action draws. It is
+ * not an animation of the creature, and no check judged it.
+ */
+export const RIG_RANGE_SHEET_TITLE = "Rig range sheet";
+
+/**
  * Metadata on a Blender preview: the file the pictured model was written to,
  * or "scene.blend" when the job exported nothing and its scene was pictured.
  * Which previews are versions of one model is the evidence's `subject`; runs

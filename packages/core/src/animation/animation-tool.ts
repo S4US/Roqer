@@ -557,6 +557,33 @@ export function describeRig(rig: Rig, notes: readonly string[] = []) {
   };
 }
 
+/** How far the range sheet turns each joint, in degrees. */
+export const RANGE_SHEET_TURN = 30;
+
+/**
+ * A rig's range sheet, as a pose description: every joint but the root's at
+ * rest, then turned a little each way about X and about Z, so a pivot in the
+ * wrong place shows as a piece swinging off the body rather than about its
+ * end. Nothing checks it; it is only drawn.
+ */
+export function rangeSheetAnimation(rig: Rig) {
+  const turned = rig.joints.filter((joint) => joint.name !== rig.rootJoint && !joint.optional);
+  const every = (rotation: [number, number, number]) => Object.fromEntries(turned.map((joint) => [joint.name, { rotation }]));
+  const t = RANGE_SHEET_TURN;
+  return {
+    name: 'RangeSheet',
+    rig: rig.name,
+    easing: { style: 'Linear' },
+    keyframes: [
+      { time: 0, name: 'rest', joints: every([0, 0, 0]) },
+      { time: 0.5, name: `every joint +${t} about X`, joints: every([t, 0, 0]) },
+      { time: 1, name: `every joint -${t} about X`, joints: every([-t, 0, 0]) },
+      { time: 1.5, name: `every joint +${t} about Z`, joints: every([0, 0, t]) },
+      { time: 2, name: `every joint -${t} about Z`, joints: every([0, 0, -t]) },
+    ],
+  };
+}
+
 /** Poses in a compiled sequence, placeholders included: what a read-back must find. */
 export function expectedCounts(sequence: KeyframeSequenceDescription) {
   return { keyframes: sequence.keyframes.length, poses: sequence.poseCount, markers: sequence.markerCount };

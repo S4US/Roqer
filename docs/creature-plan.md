@@ -1,10 +1,12 @@
 # Creature and NPC animation plan
 
-Status as of 2026-09-30: steps 1 to 3 are done. Step 1, the creature spike,
+Status as of 2026-10-01: steps 1 to 4 are done. Step 1, the creature spike,
 answered its questions in [Live results](#live-results), and the design below
 follows them. Step 2 made NPCs on stock rigs, and eval T18 passes. Step 3
 reads a rig from any rigged model, and a dog rigged by hand in Studio plays
-its animation as checked. Steps 4 to 8 are proposed and not yet scheduled. The
+its animation as checked. Step 4 rigs a model's loose pieces, and `aim` and
+`aimAt` move the legs of a dog it rigged. Steps 5 to 8 are proposed and not
+yet scheduled. The
 plan details steps 12 to 14 of the [animation plan](animation-plan.md)
 (creatures made of rigid parts, skinned creatures, animating in Blender), adds
 NPCs, and orders the work anew. Update each step's status here as it lands.
@@ -181,8 +183,8 @@ that need feet or ranges say they could not run.
 
 A new action on the `animation` tool rather than a new tool: a rig exists to be
 animated, and the tool's revision, read-back and approval handling fit it. It
-takes the model, its root part, the joints (each a child part, its parent part
-and its pivot, in the model's space), the controller and a body plan. The
+takes the model, the joints (each a child part, its parent part and its pivot,
+in the world), the controller and a body plan. The
 pieces stay where they are: an upload keeps its layout (spike question 7).
 
 In one undo step, all or nothing, it:
@@ -631,7 +633,7 @@ What changed from the proposal, and why:
   with the rig: the reading stays small, and a mesh read once serves every
   later call and every part that shows it.
 
-### 4. Building rigs — proposed
+### 4. Building rigs — done 2026-10-01
 
 - `rig`'s build and adopt forms: body plans, the range sheet and preview, the
   physics and controller, replacement by revision, and replacing an
@@ -649,6 +651,67 @@ What changed from the proposal, and why:
 
 **Done when** the tool can rig a Parts dog, and `aim` and `aimAt` move its legs
 with every check passing.
+
+**Status, 2026-10-01.** Done. The live animation suite's rig section passed
+(`npm run test:studio:animation`); the run is in
+[Live results](#a-dog-rigged-by-the-tool). `rig` joined a dog of loose Parts
+into a rig, and a paw lift posed with `aim` and `aimAt` passed every check,
+played as checked on a copy, and played on the dog itself in a playtest. What
+was built:
+
+- **Core plans, the plugin applies.** A read-only endpoint reads the model's
+  pieces: every part's size, shape and place, the welds and joints between
+  them, the controller, and a revision of all of it, at most 512 parts. Core
+  validates the call against that reading and works out every C0, C1, weld,
+  physics setting and declaration. The plugin applies the plan in one undo
+  step, only while the pieces' revision is the one read, and cancels the step
+  on any error. Core then compares the rig read back with the plan and says
+  how they differ.
+- **Refusals**, all listed at once: joints that are not one tree, a cycle, a
+  piece moved by two joints, a repeated joint name, a part name missing or
+  shared, a pivot more than 0.1 studs outside both pieces it joins, a part
+  left loose, a weld holding two jointed pieces together, and a joint named
+  `Root`.
+- **The root.** `rig` makes an invisible `HumanoidRootPart` over the piece
+  every other hangs from, joined to it by `Root`, with the model pivot's
+  heading as the body's axes. Every joint frame is lined up with it.
+- **Replacement.** A rebuild needs the rig's revision, and takes out the
+  rig's joints with only the root and welds `rig` made. A rig it did not build, or one edited since, is
+  left alone. An importer's rig is recognised by its shape (every `Motor6D`
+  from one part to a piece's own centre, under an `AnimationController`) and
+  replaced only with `replace: "importer"`; the result names what was removed.
+- **Adopt.** With no `joints`, `rig` writes only `RoqerRig`, at the revision it
+  read, and reads the rig back. With neither a plan nor
+  declarations it only reads the rig and draws its range sheet.
+- **The `quadruped` body plan** declares feet, limbs, knees and ranges from
+  part names; given declarations override it joint by joint.
+- **The range sheet** and its 3D preview come with every result. The desktop
+  shows it as a preview of its own, titled apart from an animation's, so it is
+  never taken for a checked animation.
+- **Every layer.** Schema, handler, three plugin endpoints (none served by
+  the inspector edition), the approval card's words, the skill's creature
+  section, and
+  [the animation guide](animation.md#rigging-a-model).
+
+What changed from the proposal, and why:
+
+- **Two body plans, `quadruped` and `custom`.** Bipeds, birds, fish and
+  many-armed bodies get plans with step 5, whose generators decide what a
+  plan must declare.
+- **No `root` argument.** The root is the piece every joint's tree hangs from;
+  `rig` always makes the `HumanoidRootPart` above it unless that piece is
+  already one.
+- **One range sheet.** It turns every joint but the root's together, 30° each
+  way about X and then about Z, rather than a sheet per joint: one image
+  shows a misplaced pivot, and it costs one preview.
+- **The controller sets the root's anchoring.** A `Humanoid`'s root is free to
+  walk; an `AnimationController`'s is anchored, since nothing else holds it
+  up.
+- **The tool catalog's budget rose** from 49,900 to 50,400 characters for the
+  five new arguments ([token efficiency](token-efficiency.md)).
+- **Pieces made by untracked Luau undo with the rig.** Studio folds changes
+  made outside an undo step into the next one, so the live test gives its
+  pieces a step of their own. Pieces made by `build_instances` have one.
 
 ### 5. Motion for any body — proposed
 
@@ -854,3 +917,23 @@ body, and no `RoqerRig`. Its animation wags the head and the tail.
 | `build` previews on a copy | The copy played the animation within 0.23° of the poses it was checked with. The dog stayed where it was, and the copy left nothing in Workspace |
 | A weld reaching outside | A `WeldConstraint` from the tail to a post outside the dog was refused before anything was built (`model_not_copyable`), naming the weld and the post, and the post did not move |
 | `verify` in a playtest | The animation played on the dog itself within 0.27° of the poses it was checked with |
+
+### A dog rigged by the tool
+
+On 2026-10-01 the live animation suite passed with its rig section. Its pup is
+14 loose anchored Parts: a body, a head with two wedge ears and a ball nose,
+four legs of two pieces each, and a tail. The run did not print Studio's
+version.
+
+| Run | Result |
+| --- | --- |
+| `rig` joins the pieces | 11 `Motor6D`s, the ears and nose welded to the head, a hidden root free to walk, a `Humanoid` with hip height 1.6, `RoqerRig` and its stamp. The rig read back matched the plan, and the body had not moved |
+| The `quadruped` plan | Four feet, four limbs and four knees declared from the part names, and every joint but the root given a range |
+| Undo | One undo took the root, joints, welds, controller and declarations out and left the pieces |
+| Rebuilding | Refused with no revision (`revision_required`) and with a stale one (`revision_conflict`); with the current one it rebuilt in place, leaving one root and three welds |
+| A pivot outside its pieces | Refused (`invalid_rig`), naming the tail's joint |
+| `aim` and `aimAt` on its legs | A paw lift passed every check, the joint ranges included, and a copy played it within 0.58° of the poses it was checked with |
+| A rig edited since | Left alone (`rig_edited_since_build`) |
+| Adopting the hand-rigged dog | `RoqerRig` written as a quadruped, four feet declared, and no joint's C0 changed. Doing it again needed the revision |
+| An upload's rig | Left alone without `replace` (`importer_rig`). With it, the 14 `Motor6D`s, `RootPart`, `InitialPoses` and controller were removed and the new rig built under an `AnimationController`, its root anchored |
+| `verify` in a playtest | The paw lift played on the rigged pup itself within 0.64° of the poses it was checked with |

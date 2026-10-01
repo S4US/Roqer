@@ -30,6 +30,15 @@
 // checked and leaves the dog where it was; a weld to a part outside the dog is
 // refused before anything is copied; and in the playtest, verify plays it on
 // the dog on the server as checked.
+//
+// And rig's build and adopt forms (docs/creature-plan.md step 4): rig joins a
+// second dog's loose pieces at their pivots as a quadruped, in one undo step,
+// and reads the rig back; a rebuild needs the rig's current revision, and a
+// rig edited since is left alone; aim and aimAt move the rigged legs with
+// every check passing, on a copy and in the playtest; adopting the first dog
+// declares its legs and changes none of its joints; and a dog rigged as an
+// upload arrives is re-rigged only when the call says to replace the
+// importer's rig.
 
 import { McpClient, assert, runTest, safeStopPlaytest, startPlaytestAndWait } from './lib/mcp-client.mjs';
 
@@ -162,6 +171,158 @@ for _, name in { ${JSON.stringify(DOG_NAME)}, ${JSON.stringify(OUTSIDE_NAME)} } 
 end
 return true
 `;
+
+// A second dog, of loose pieces for rig to join (docs/creature-plan.md step 4):
+// a body, a head with wedge ears and a ball nose, legs of an upper and a lower
+// piece, and a tail, with no joint, weld or controller. IMPORTED_NAME is the
+// same pieces as an upload arrives: each hung from a RootPart at the model's
+// origin by a Motor6D at its own centre, under an AnimationController with no
+// Animator, beside an InitialPoses folder.
+const PUP_NAME = '__RoqerAnimationTestPup';
+const PUP = `game.Workspace.${PUP_NAME}`;
+const IMPORTED_NAME = '__RoqerAnimationTestImported';
+const IMPORTED = `game.Workspace.${IMPORTED_NAME}`;
+const PUP_LEGS = { FrontLeft: [-0.7, -0.6, -1.4], FrontRight: [0.7, -0.6, -1.4], HindLeft: [-0.7, -0.6, 1.4], HindRight: [0.7, -0.6, 1.4] };
+/** Each piece: its name, size, centre from the body's, and shape. */
+function pupPieces() {
+  const pieces = [
+    ['Body', [2, 1.2, 4], [0, 0, 0]],
+    ['Head', [1.2, 1.2, 1.4], [0, 0.8, -2.6]],
+    ['Tail', [0.3, 0.3, 1.6], [0, 0.3, 2.7]],
+    ['LeftEar', [0.3, 0.5, 0.3], [-0.4, 1.65, -2.4], 'Wedge'],
+    ['RightEar', [0.3, 0.5, 0.3], [0.4, 1.65, -2.4], 'Wedge'],
+    ['Nose', [0.4, 0.4, 0.4], [0, 0.7, -3.4], 'Ball'],
+  ];
+  for (const [leg, [x, y, z]] of Object.entries(PUP_LEGS)) {
+    pieces.push([`${leg}Upper`, [0.5, 0.8, 0.5], [x, y - 0.4, z]], [`${leg}Lower`, [0.5, 0.8, 0.5], [x, y - 1.2, z]]);
+  }
+  return pieces;
+}
+/** The rig call's joints for a pup whose body's centre stands at `at`: neck, hips, knees and tail at their pivots. */
+function pupJoints(at) {
+  const place = ([x, y, z]) => [at[0] + x, at[1] + y, at[2] + z];
+  const joints = [{ part: 'Head', parent: 'Body', pivot: place([0, 0.4, -2]), name: 'Neck', with: ['LeftEar', 'RightEar', 'Nose'] }];
+  for (const [leg, [x, y, z]] of Object.entries(PUP_LEGS)) {
+    joints.push({ part: `${leg}Upper`, parent: 'Body', pivot: place([x, y, z]), name: leg });
+    joints.push({ part: `${leg}Lower`, parent: `${leg}Upper`, pivot: place([x, y - 0.8, z]), name: `${leg}Knee` });
+  }
+  joints.push({ part: 'Tail', parent: 'Body', pivot: place([0, 0.3, 1.9]) });
+  return joints;
+}
+const PUP_AT = [-60, 2.2, 90];
+const IMPORTED_AT = [-60, 2.2, 120];
+function buildPieces(name, at, imported) {
+  const pieces = pupPieces().map(([piece, size, centre, shape]) => `{ ${JSON.stringify(piece)}, Vector3.new(${size.join(', ')}), Vector3.new(${centre.join(', ')}), ${shape ? JSON.stringify(shape) : 'nil'} }`);
+  return `
+local existing = workspace:FindFirstChild(${JSON.stringify(name)})
+if existing then existing:Destroy() end
+local model = Instance.new("Model")
+model.Name = ${JSON.stringify(name)}
+local at = Vector3.new(${at.join(', ')})
+local made = {}
+for _, piece in { ${pieces.join(', ')} } do
+  local part = Instance.new(piece[4] == "Wedge" and "WedgePart" or "Part")
+  part.Name = piece[1]
+  part.Size = piece[2]
+  part.CFrame = CFrame.new(at + piece[3])
+  if piece[4] == "Ball" then part.Shape = Enum.PartType.Ball end
+  part.Anchored = true
+  part.Parent = model
+  table.insert(made, part)
+end
+${imported ? `
+local root = Instance.new("Part")
+root.Name = "RootPart"
+root.Size = Vector3.new(0.1, 0.1, 0.1)
+root.Transparency = 1
+root.CFrame = CFrame.new(at.X, 0, at.Z)
+root.Anchored = true
+root.Parent = model
+local poses = Instance.new("Folder")
+poses.Name = "InitialPoses"
+poses.Parent = model
+for _, part in made do
+  local motor = Instance.new("Motor6D")
+  motor.Name = part.Name
+  motor.Part0 = root
+  motor.Part1 = part
+  motor.C0 = root.CFrame:Inverse() * part.CFrame
+  motor.C1 = CFrame.identity
+  motor.Parent = root
+  local pose = Instance.new("CFrameValue")
+  pose.Name = part.Name .. "_Initial"
+  pose.Value = motor.C0
+  pose.Parent = poses
+  part.Anchored = false
+end
+Instance.new("AnimationController").Parent = model
+model.PrimaryPart = root` : ''}
+model.Parent = workspace
+-- Its own undo step: Studio would otherwise undo the pieces with the rig.
+game:GetService("ChangeHistoryService"):SetWaypoint("Roqer test pieces")
+return true
+`;
+}
+function inspectPieces(name) {
+  return `
+local model = workspace:FindFirstChild(${JSON.stringify(name)})
+if not model then return { exists = false } end
+local motors, welds, c0s = 0, 0, {}
+for _, descendant in model:GetDescendants() do
+  if descendant:IsA("Motor6D") then
+    motors += 1
+    c0s[descendant.Name] = { descendant.C0:GetComponents() }
+  elseif descendant:IsA("WeldConstraint") then
+    welds += 1
+  end
+end
+local root = model:FindFirstChild("HumanoidRootPart")
+local humanoid = model:FindFirstChildOfClass("Humanoid")
+local controller = model:FindFirstChildOfClass("AnimationController")
+local body = model:FindFirstChild("Body")
+return {
+  exists = true,
+  motors = motors,
+  welds = welds,
+  c0s = c0s,
+  root = root ~= nil,
+  roots = #model:GetChildren() > 0 and (function() local n = 0 for _, c in model:GetChildren() do if c.Name == "HumanoidRootPart" then n += 1 end end return n end)() or 0,
+  rootHidden = root ~= nil and root.Transparency == 1,
+  rootAnchored = root ~= nil and root.Anchored,
+  primary = model.PrimaryPart and model.PrimaryPart.Name or false,
+  controller = humanoid and "Humanoid" or controller and "AnimationController" or false,
+  animator = (humanoid or controller) ~= nil and (humanoid or controller):FindFirstChildOfClass("Animator") ~= nil,
+  hipHeight = humanoid and math.round(humanoid.HipHeight * 1000) / 1000 or false,
+  declared = model:GetAttribute("RoqerRig") ~= nil,
+  stamp = model:GetAttribute("RoqerRigRevision") or false,
+  importerRoot = model:FindFirstChild("RootPart") ~= nil,
+  initialPoses = model:FindFirstChild("InitialPoses") ~= nil,
+  body = body and { math.round(body.Position.X * 100) / 100, math.round(body.Position.Y * 100) / 100, math.round(body.Position.Z * 100) / 100 } or false,
+}
+`;
+}
+const REMOVE_PUPS = `
+for _, name in { ${JSON.stringify(PUP_NAME)}, ${JSON.stringify(IMPORTED_NAME)} } do
+  local model = workspace:FindFirstChild(name)
+  if model then model:Destroy() end
+end
+return true
+`;
+/** A front paw lifted by aimAt and a hind leg swung by aim, on the pup's own rig: the quadruped plan declared both. */
+function pawLift() {
+  // The paw at rest, under its hip: [right, up, forward] from the root's centre.
+  const rest = { FrontLeft: { aimAt: [-0.7, -2.2, 1.4] }, HindRight: { rotation: [0, 0, 0] }, Neck: { rotation: [0, 0, 0] } };
+  return {
+    name: 'PupPawLift',
+    rig: PUP,
+    loop: true,
+    keyframes: [
+      { time: 0, joints: rest },
+      { time: 0.6, joints: { FrontLeft: { aimAt: [-0.7, -1.7, 1.9] }, HindRight: { aim: [0, -1, 0.3] }, Neck: { rotation: [20, 0, 0] } } },
+      { time: 1.2, joints: rest },
+    ],
+  };
+}
 
 /** The dog's head nodding and tail wagging, written with rotation only: no declarations needed. */
 function wag() {
@@ -505,6 +666,66 @@ const passed = await runTest('animation tool', async ({ track }) => {
     assert(JSON.stringify(postAfter.post) === JSON.stringify(postBefore.post), 'the part outside the dog did not move');
     await luau(client, `workspace[${JSON.stringify(DOG_NAME)}].Tail.Leash:Destroy() workspace[${JSON.stringify(OUTSIDE_NAME)}]:Destroy() return true`);
 
+    // -- Step 4: rig builds a rig from loose pieces --------------------------
+    assert(await luau(client, buildPieces(PUP_NAME, PUP_AT, false)) === true, 'a dog of loose pieces is in Workspace');
+    const pupArgs = { action: 'rig', model: PUP, joints: pupJoints(PUP_AT), controller: 'Humanoid', plan: 'quadruped' };
+    const pupRigged = await client.callTool('animation', pupArgs, 120_000);
+    assert(pupRigged.rigged === true && pupRigged.readBack?.matches === true && pupRigged.undoable === true, `rig joins the pieces and reads the rig back as built (${pupRigged.error ?? JSON.stringify(pupRigged.readBack ?? pupRigged.errors)})`);
+    assert(pupRigged.rig?.feet?.length === 4 && pupRigged.rig?.limbs?.length === 4 && pupRigged.rangeSheet?.reading !== undefined, `the quadruped plan declares its legs, and the result draws its range sheet (${JSON.stringify(pupRigged.rig)})`);
+    const pupMade = await luau(client, inspectPieces(PUP_NAME));
+    assert(
+      pupMade.motors === 11 && pupMade.welds === 3 && pupMade.rootHidden === true && pupMade.primary === 'HumanoidRootPart' && pupMade.rootAnchored === false
+        && pupMade.controller === 'Humanoid' && pupMade.animator === true && Math.abs(pupMade.hipHeight - 1.6) < 0.01 && pupMade.declared === true
+        && pupMade.stamp === pupRigged.revision && JSON.stringify(pupMade.body) === JSON.stringify(PUP_AT),
+      `Studio holds the rig: 11 Motor6Ds, the ears and nose welded, a hidden root free to walk, a Humanoid standing 1.6 studs up, its declarations and its stamp (${JSON.stringify({ ...pupMade, c0s: undefined })})`,
+    );
+    const pupUndone = await luau(client, `game:GetService("ChangeHistoryService"):Undo() ${inspectPieces(PUP_NAME)}`);
+    assert(pupUndone.motors === 0 && pupUndone.welds === 0 && pupUndone.root === false && pupUndone.controller === false && pupUndone.declared === false, `one undo takes the whole rig out (${JSON.stringify({ ...pupUndone, c0s: undefined })})`);
+    const pupAgain = await client.callTool('animation', pupArgs, 120_000);
+    assert(pupAgain.rigged === true && pupAgain.readBack?.matches === true, `rig joins it again (${pupAgain.error ?? 'ok'})`);
+    const pupUnnamed = await client.callTool('animation', pupArgs, 120_000);
+    assert(pupUnnamed.errorCode === 'revision_required', `rigging it again needs the rig's revision (${pupUnnamed.errorCode})`);
+    const pupStale = await client.callTool('animation', { ...pupArgs, expected_revision: 'rr1:0:0000000000000000' }, 120_000);
+    assert(pupStale.errorCode === 'revision_conflict', `a stale revision is refused (${pupStale.errorCode})`);
+    const pupRebuilt = await client.callTool('animation', { ...pupArgs, expected_revision: pupAgain.revision }, 120_000);
+    const pupAfterRebuild = await luau(client, inspectPieces(PUP_NAME));
+    assert(pupRebuilt.rigged === true && pupRebuilt.readBack?.matches === true && pupAfterRebuild.motors === 11 && pupAfterRebuild.welds === 3 && pupAfterRebuild.roots === 1, `the current revision rebuilds it in place, its own root and welds taken again (${pupRebuilt.error ?? JSON.stringify({ motors: pupAfterRebuild.motors, welds: pupAfterRebuild.welds, roots: pupAfterRebuild.roots })})`);
+    const badPivot = pupJoints(PUP_AT).map((joint) => (joint.part === 'Tail' ? { ...joint, pivot: [PUP_AT[0], PUP_AT[1] + 0.3, PUP_AT[2] + 4] } : joint));
+    const pupPivot = await client.callTool('animation', { ...pupArgs, joints: badPivot, expected_revision: pupRebuilt.revision }, 120_000);
+    assert(pupPivot.errorCode === 'invalid_rig' && /Tail: its pivot/.test(pupPivot.errors?.join(' ') ?? ''), `a pivot outside the pieces it joins is refused, naming the joint (${pupPivot.errorCode})`);
+
+    // aim and aimAt move its legs, every check passes, and a copy plays it.
+    const pupLift = await client.callTool('animation', { action: 'build', animation: pawLift(), parent: PARENT, grounded: true }, 120_000);
+    const pupLimits = pupLift.checks?.results?.find((check) => check.id === 'jointLimits');
+    assert(pupLift.built === true && pupLift.checks?.passed === true && pupLift.checks.results.every((check) => check.status !== 'fail') && pupLimits?.status === 'pass', `aim and aimAt move the rigged legs with every check passing (${pupLift.error ?? JSON.stringify(pupLift.checks?.results)})`);
+    assert(pupLift.playback?.verified === true, `a copy of the rigged dog played it as checked (within ${pupLift.playback?.maxDegrees}°; ${pupLift.playback?.reason ?? 'ok'})`);
+    await luau(client, `local motor = workspace[${JSON.stringify(PUP_NAME)}].Tail.Tail motor.C0 = motor.C0 * CFrame.new(0, 0.05, 0) return true`);
+    const pupEdited = await client.callTool('animation', { ...pupArgs, expected_revision: pupRebuilt.revision }, 120_000);
+    assert(pupEdited.errorCode === 'rig_edited_since_build', `a rig edited since rig built it is left alone (${pupEdited.errorCode})`);
+
+    // Adopting the hand-rigged dog's own joints: declarations only.
+    const dogJointsBefore = await luau(client, inspectPieces(DOG_NAME));
+    const adopted = await client.callTool('animation', { action: 'rig', model: DOG, plan: 'quadruped' }, 120_000);
+    const dogJointsAfter = await luau(client, inspectPieces(DOG_NAME));
+    assert(adopted.declared === true && adopted.readBack?.matches === true && adopted.rig?.feet?.length === 4, `rig adopts the hand-rigged dog as a quadruped (${adopted.error ?? JSON.stringify(adopted.rig)})`);
+    assert(JSON.stringify(dogJointsAfter.c0s) === JSON.stringify(dogJointsBefore.c0s) && dogJointsAfter.declared === true, 'adopting changed none of its joints');
+    const adoptedAgain = await client.callTool('animation', { action: 'rig', model: DOG, plan: 'quadruped' }, 120_000);
+    assert(adoptedAgain.errorCode === 'revision_required', `replacing its declarations needs their revision (${adoptedAgain.errorCode})`);
+
+    // An upload's rig is replaced only when the call says so.
+    assert(await luau(client, buildPieces(IMPORTED_NAME, IMPORTED_AT, true)) === true, 'a dog rigged as an upload arrives is in Workspace');
+    const importedArgs = { action: 'rig', model: IMPORTED, joints: pupJoints(IMPORTED_AT), controller: 'AnimationController', plan: 'quadruped' };
+    const importedKept = await client.callTool('animation', importedArgs, 120_000);
+    assert(importedKept.errorCode === 'importer_rig', `an importer's rig is left alone unless replace says so (${importedKept.errorCode})`);
+    const replaced = await client.callTool('animation', { ...importedArgs, replace: 'importer' }, 120_000);
+    const importedMade = await luau(client, inspectPieces(IMPORTED_NAME));
+    assert(replaced.rigged === true && replaced.readBack?.matches === true && replaced.removed?.includes('RootPart') && replaced.removed?.includes('InitialPoses'), `replace takes the importer's rig out and builds the new one (${replaced.error ?? JSON.stringify(replaced.removed)})`);
+    assert(
+      importedMade.importerRoot === false && importedMade.initialPoses === false && importedMade.motors === 11 && importedMade.controller === 'AnimationController'
+        && importedMade.animator === true && importedMade.rootAnchored === true && JSON.stringify(importedMade.body) === JSON.stringify(IMPORTED_AT),
+      `Studio holds the new rig under an AnimationController, its root anchored, and nothing of the importer's (${JSON.stringify({ ...importedMade, c0s: undefined })})`,
+    );
+
     // -- Step 8: publish, wire, verify -------------------------------------
     // The hand-edited sequence stays refused; start it afresh to publish from.
     await luau(client, `game:GetService("ServerStorage")[${JSON.stringify(FOLDER_NAME)}].Wave:Destroy() return true`);
@@ -599,6 +820,9 @@ const passed = await runTest('animation tool', async ({ track }) => {
       // The dog's own animation, played on the dog on the playtest server and compared on its own rig.
       const dogPlayed = await client.callTool('animation', { action: 'verify', model: DOG, animation: wag() }, 90_000);
       assert(dogPlayed.verified === true && dogPlayed.played?.source === 'temporary clip', `verify plays the dog's animation on the dog as checked (${dogPlayed.error ?? `within ${dogPlayed.played?.maxDegrees}°; ${dogPlayed.played?.reason ?? 'ok'}`})`);
+      // The rig rig built, on the playtest server.
+      const pupPlayed = await client.callTool('animation', { action: 'verify', model: PUP, animation: pawLift() }, 90_000);
+      assert(pupPlayed.verified === true, `verify plays the paw lift on the rigged dog as checked (${pupPlayed.error ?? `within ${pupPlayed.played?.maxDegrees}°; ${pupPlayed.played?.reason ?? 'ok'}`})`);
     } finally {
       if (playtestStarted) await safeStopPlaytest(client);
     }
@@ -613,6 +837,7 @@ const passed = await runTest('animation tool', async ({ track }) => {
     assert(modified.errorCode === 'loader_modified', `an edited loader is left alone (${modified.errorCode})`);
   } finally {
     await luau(client, REMOVE_DOG).catch((error) => console.error(`  dog cleanup failed: ${error.message}`));
+    await luau(client, REMOVE_PUPS).catch((error) => console.error(`  rigged dog cleanup failed: ${error.message}`));
     await luau(client, REMOVE_GUARD).catch((error) => console.error(`  NPC cleanup failed: ${error.message}`));
     await luau(client, REMOVE_LOADER).catch((error) => console.error(`  loader cleanup failed: ${error.message}`));
     await luau(client, `

@@ -37,6 +37,8 @@ import {
   prepareAnimation,
   previewProps,
   previewSampleTimes,
+  RANGE_SHEET_TURN,
+  rangeSheetAnimation,
   verifyLivePlayback,
   verifyPlayback,
   type AnimateSlot,
@@ -46,7 +48,9 @@ import {
 import { compilePoseAnimation, type KeyframeSequenceDescription } from '../animation/pose-compiler.js';
 import { renderContactSheet } from '../animation/contact-sheet.js';
 import { renderRigGlb } from '../animation/rig-glb.js';
-import { rigFromModel } from '../animation/model-rig.js';
+import { rigFromModel, type ModelRigReading } from '../animation/model-rig.js';
+import { BODY_PLANS } from '../animation/body-plans.js';
+import { builtRigMismatches, isBodyPlan, parseBuildJoints, planRigAdopt, planRigBuild, type PiecesReading } from '../animation/rig-build.js';
 import type { Rig } from '../animation/rig.js';
 import { RIGS, rigFor } from '../animation/rigs.js';
 import { cachedRigMeshes, currentRigMeshes, modelRigMeshes, rigMeshCacheDirectory, storeRigMeshes, type BoxedMeshPart } from '../animation/rig-meshes.js';
@@ -1936,6 +1940,7 @@ export class RobloxStudioTools {
     sequence: KeyframeSequenceDescription,
     locomotion: boolean,
     model?: { rig: Rig; notes: string[] },
+    kind: 'sheet' | 'rangeSheet' = 'sheet',
   ) {
     const rig = model?.rig ?? rigFor(sequence.rig);
     const drawn: { meshes: ReturnType<typeof currentRigMeshes>; boxes: BoxedMeshPart[] } = model
@@ -1951,7 +1956,7 @@ export class RobloxStudioTools {
           text: JSON.stringify({
             ...body,
             ...(model ? { rig: describeRig(model.rig, model.notes) } : {}),
-            sheet: {
+            [kind]: {
               times: sheet.times.map((time) => Math.round(time * 1000) / 1000),
               // What each column is, beside the even steps: its keyframe name, marker, or the fastest instant.
               ...(sheet.labels.some((label) => label !== '') ? { shows: sheet.labels } : {}),
@@ -1964,7 +1969,9 @@ export class RobloxStudioTools {
               ...(previewProps(sequence, rig).length > 0
                 ? { props: 'stand-ins: a 4-stud blade along each hand prop\'s +Y, a 3.8-stud sheath along SheathAttach\'s +Y' }
                 : {}),
-              reading: `One column per time, the key moments named in shows. Top row from the front three-quarter, bottom row ${locomotion ? 'from its right side facing right' : `straight at its front, its right ${model ? 'side' : 'hand'} on the left`}; the shadow marks the ground under the body.`,
+              reading: kind === 'rangeSheet'
+                ? `Each column a moment named in shows: at rest, then every joint but the root's turned ${RANGE_SHEET_TURN}° each way about X and about Z. Top row from the front three-quarter, bottom row straight at its front, its right side on the left.`
+                : `One column per time, the key moments named in shows. Top row from the front three-quarter, bottom row ${locomotion ? 'from its right side facing right' : `straight at its front, its right ${model ? 'side' : 'hand'} on the left`}; the shadow marks the ground under the body.`,
             },
           }),
         },
@@ -2139,10 +2146,14 @@ export class RobloxStudioTools {
    */
   private async _animationRig(args: Record<string, unknown>, instance_id?: string) {
     const model = args.model;
-    if (typeof model !== 'string' || model.trim() === '') throw new Error('model must be the path of the NPC to make, such as game.Workspace.Guard');
+    if (typeof model !== 'string' || model.trim() === '') throw new Error('model must be the path of the model to rig, such as game.Workspace.Dog');
     const stock = args.stock;
     if (stock === undefined) {
-      throw new Error('stock is required: rig makes a stock R15 or R6 NPC body, and rigging a model\'s own pieces is not available yet');
+      if (args.position !== undefined) throw new Error('position goes with stock: it is where a stock NPC\'s feet stand');
+      return args.joints === undefined ? this._animationAdoptRig(model, args, instance_id) : this._animationBuildRig(model, args, instance_id);
+    }
+    for (const key of ['joints', 'controller', 'plan', 'declarations', 'replace']) {
+      if (args[key] !== undefined) throw new Error(`${key} is for rigging a model's own pieces; a stock NPC takes model, stock and position`);
     }
     if (stock !== 'R15' && stock !== 'R6') throw new Error('stock must be R15 or R6');
     const position = args.position;
@@ -2164,6 +2175,127 @@ export class RobloxStudioTools {
           + 'For its own, check each (a gait with locomotion), build and publish it, then wire it with model, expected_id the default it replaces and, for a gait, ground_speed.'
         : 'Its body carried no default animations, so its loader holds none yet: wire its idle, walk and run with model.',
     });
+  }
+
+  /** The plan and declarations a rig call names, checked for shape. */
+  private _rigDeclarationArgs(args: Record<string, unknown>) {
+    const plan = args.plan ?? 'custom';
+    if (!isBodyPlan(plan)) throw new Error(`plan must be one of ${BODY_PLANS.join(', ')}`);
+    const declarations = args.declarations;
+    if (declarations !== undefined && asRecord(declarations) === undefined) {
+      throw new Error('declarations must be a RoqerRig object: { feet?, hips?, limbs?, hinges?, limits? }');
+    }
+    const expected = args.expected_revision;
+    if (expected !== undefined && (typeof expected !== 'string' || expected === '')) throw new Error('expected_revision must be the rig\'s revision, as rig or check returned it');
+    return { plan, declarations: asRecord(declarations), expectedRevision: expected as string | undefined };
+  }
+
+  /**
+   * Join a model's pieces into a rig at the pivots given: read its pieces,
+   * plan every change here, and have Studio make them in one undo step while
+   * the model is as read. The result reads the rig back and draws its range
+   * sheet, every joint turned a little each way.
+   */
+  private async _animationBuildRig(model: string, args: Record<string, unknown>, instance_id?: string) {
+    const joints = parseBuildJoints(args.joints);
+    if (!joints.ok) return this._textResult({ error: 'The joints are not valid; nothing was changed.', errorCode: 'invalid_arguments', errors: joints.errors });
+    const controller = args.controller;
+    if (controller !== 'Humanoid' && controller !== 'AnimationController') {
+      throw new Error('controller must be Humanoid, for a body that walks, or AnimationController, for one that swims, flies, slithers or stays put');
+    }
+    if (args.replace !== undefined && args.replace !== 'importer') throw new Error('replace must be "importer": the rig an upload or a generated model arrived with');
+    const { plan, declarations, expectedRevision } = this._rigDeclarationArgs(args);
+
+    const reading = await this._callSingle('/api/animation-read-pieces', { model }, undefined, instance_id);
+    if (typeof reading?.error === 'string') return this._textResult({ ...reading, error: `${reading.error} Nothing was changed.` });
+    const planned = planRigBuild(reading as PiecesReading, {
+      joints: joints.joints,
+      controller,
+      plan,
+      ...(declarations ? { declarations } : {}),
+      replaceImporter: args.replace === 'importer',
+      ...(expectedRevision !== undefined ? { expectedRevision } : {}),
+    });
+    if (!planned.ok) {
+      return this._textResult({ error: `${model} was not rigged; nothing was changed.`, errorCode: planned.errorCode, errors: planned.errors });
+    }
+    const built = await this._callSingle('/api/animation-build-rig', { plan: planned.plan }, undefined, instance_id);
+    if (typeof built?.error === 'string') return this._textResult(built);
+    const read = rigFromModel(built.rig);
+    const mismatches = builtRigMismatches(planned.expected, built.rig as ModelRigReading);
+    if (!read.ok) {
+      return this._textResult({ rigged: true, undoable: true, error: `${model} was rigged, but its rig does not read back as a rig: undo it and call rig again.`, errors: read.errors, readBack: { matches: false, mismatches } });
+    }
+    await this._fetchModelMeshes(read.rig, instance_id);
+    return this._rigResult({
+      rigged: true,
+      model: read.rig.name,
+      revision: read.rig.revision,
+      plan,
+      controller,
+      ...(controller === 'Humanoid' ? { hipHeight: planned.plan.controller.hipHeight } : {}),
+      root: {
+        part: planned.plan.root.name,
+        made: planned.plan.root.make !== undefined,
+        anchored: built.rootAnchored === true,
+      },
+      ...(Array.isArray(built.removed) && built.removed.length > 0 ? { removed: built.removed } : {}),
+      readBack: { matches: mismatches.length === 0, ...(mismatches.length > 0 ? { mismatches } : {}) },
+      undoable: built.undoable !== false,
+      note: 'Animate it with check and build, rig set to its path; pass revision as expected_revision to rig it again. '
+        + 'Look at the range sheet: a piece that swings off the body rather than about its end has its pivot in the wrong place.',
+    }, { rig: read.rig, notes: [...planned.notes, ...read.notes] });
+  }
+
+  /**
+   * Declare what a model rigged some other way is, from a plan and the
+   * declarations given, and change no joint: rig's adopt form. With neither,
+   * only read the rig and draw its range sheet.
+   */
+  private async _animationAdoptRig(model: string, args: Record<string, unknown>, instance_id?: string) {
+    for (const key of ['controller', 'replace']) {
+      if (args[key] !== undefined) throw new Error(`${key} goes with joints: rig without joints adopts the model's own joints and changes none of them`);
+    }
+    const { plan, declarations, expectedRevision } = this._rigDeclarationArgs(args);
+    const reading = await this._callSingle('/api/animation-read-rig', { model }, undefined, instance_id);
+    if (typeof reading?.error === 'string') {
+      return this._textResult({ ...reading, error: `${model}'s rig could not be read: ${reading.error} To join its pieces into a rig, pass joints.` });
+    }
+    const declaring = args.plan !== undefined || declarations !== undefined;
+    if (!declaring) {
+      const read = rigFromModel(reading);
+      if (!read.ok) return this._textResult({ error: `${model}'s rig cannot be animated as it is.`, errorCode: 'invalid_rig', errors: read.errors });
+      await this._fetchModelMeshes(read.rig, instance_id);
+      return this._rigResult({
+        declared: false,
+        model: read.rig.name,
+        revision: read.rig.revision,
+        note: 'Nothing was written. To declare its feet, limbs and ranges, call rig again with plan or declarations.',
+      }, { rig: read.rig, notes: read.notes });
+    }
+    const adopted = planRigAdopt(reading as ModelRigReading, { plan, ...(declarations ? { declarations } : {}), ...(expectedRevision !== undefined ? { expectedRevision } : {}) });
+    if (!adopted.ok) return this._textResult({ error: `${model}'s declarations were not written; nothing was changed.`, errorCode: adopted.errorCode, errors: adopted.errors });
+    const written = await this._callSingle('/api/animation-declare-rig', { model, revision: reading.revision, declarations: adopted.declarations }, undefined, instance_id);
+    if (typeof written?.error === 'string') return this._textResult(written);
+    const read = rigFromModel(written.rig);
+    if (!read.ok) return this._textResult({ declared: true, undoable: true, error: `${model}'s declarations were written, but its rig does not read back as a rig: undo it.`, errors: read.errors });
+    await this._fetchModelMeshes(read.rig, instance_id);
+    return this._rigResult({
+      declared: true,
+      model: read.rig.name,
+      revision: read.rig.revision,
+      plan,
+      readBack: { matches: written.rig?.declarations === adopted.declarations },
+      undoable: written.undoable !== false,
+      note: 'No joint was changed. Animate it with check and build, rig set to its path.',
+    }, { rig: read.rig, notes: [...adopted.notes, ...read.notes] });
+  }
+
+  /** A rig result with its summary, its range sheet and a 3D preview of it. */
+  private _rigResult(body: Record<string, unknown>, model: { rig: Rig; notes: string[] }) {
+    const compiled = compilePoseAnimation(rangeSheetAnimation(model.rig), model.rig);
+    if (!compiled.ok) return this._textResult({ ...body, rig: describeRig(model.rig, model.notes), rangeSheet: `not drawn: ${compiled.errors.join('; ')}` });
+    return this._animationResult(body, compiled.sequence, false, model, 'rangeSheet');
   }
 
   /**

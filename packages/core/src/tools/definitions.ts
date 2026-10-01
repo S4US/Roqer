@@ -2,6 +2,7 @@ import type { ToolAnnotations } from '@modelcontextprotocol/server';
 import { MAX_PNG_BASE64_CHARACTERS } from '../image-decode.js';
 import { ANIMATION_PRIORITIES } from '../animation/pose-compiler.js';
 import { ANIMATE_SLOTS, MOTION_CHECK_IDS } from '../animation/animation-tool.js';
+import { BODY_PLANS } from '../animation/body-plans.js';
 
 // Styles and directions are listed in the tool guide and in the compiler's
 // errors; spelling the enums out twice here would cost more than they save.
@@ -152,7 +153,7 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
   {
     name: 'animation',
     category: 'write',
-    description: 'Use to check, build, publish, wire, or verify animations for R15, R6 or a model, or rig an NPC.',
+    description: 'Use to check, build, publish, wire, or verify animations for R15, R6 or a model, or rig one.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -209,7 +210,7 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
         },
         expected_revision: {
           type: 'string',
-          description: 'Build: revision its last build returned; required to replace it.'
+          description: 'Build/rig: revision last returned; required to replace it.'
         },
         waive: {
           type: 'array',
@@ -249,6 +250,30 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
           type: 'string',
           enum: ['R15', 'R6'],
           description: 'Rig: make a stock NPC body of this rig type at model.'
+        },
+        joints: {
+          type: 'array',
+          items: { type: 'object' },
+          description: 'Rig: [{part, parent, pivot, name?, with?}]; pivot is [x,y,z].'
+        },
+        controller: {
+          type: 'string',
+          enum: ['Humanoid', 'AnimationController'],
+          description: 'Rig with joints: Humanoid for a walker.'
+        },
+        plan: {
+          type: 'string',
+          enum: [...BODY_PLANS],
+          description: 'Rig: body plan declaring limbs from part names.'
+        },
+        declarations: {
+          type: 'object',
+          description: 'Rig: RoqerRig {feet, hips, limbs, hinges, limits}.'
+        },
+        replace: {
+          type: 'string',
+          enum: ['importer'],
+          description: "Rig: replace the rig an upload arrived with."
         },
         position: {
           type: 'array',

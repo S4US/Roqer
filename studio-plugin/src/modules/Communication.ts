@@ -68,6 +68,9 @@ const routeMap: Record<string, Handler> = {
     "/api/animation-rig-meshes": AnimationHandlers.animationRigMeshes,
     "/api/animation-read-rig": AnimationHandlers.animationReadRig,
     "/api/animation-read-meshes": AnimationHandlers.animationReadMeshes,
+    "/api/animation-read-pieces": AnimationHandlers.animationReadPieces,
+    "/api/animation-build-rig": AnimationHandlers.animationBuildRig,
+    "/api/animation-declare-rig": AnimationHandlers.animationDeclareRig,
 
 	"/api/get-script-source": ScriptHandlers.getScriptSource,
 	"/api/set-script-source": ScriptHandlers.setScriptSource,

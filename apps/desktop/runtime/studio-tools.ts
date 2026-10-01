@@ -13,7 +13,7 @@ import {
 import { boundedCode, diffDeletedRange, diffText, normalizeNewlines } from "../shared/text-diff";
 import {
   ANIMATION_ALL_CHECKS_PASSED, ANIMATION_CHECKED_AS_GAIT, ANIMATION_GAIT_CHECKS_LABEL, ANIMATION_MOTION_CHECKS_LABEL,
-  ANIMATION_NAME_LABEL, ANIMATION_PLAYED_FROM_LABEL, ANIMATION_PLAYED_PUBLISHED, ANIMATION_PREVIEW_TITLE, ANIMATION_RIG_LABEL, animationSlotLabel,
+  ANIMATION_NAME_LABEL, ANIMATION_PLAYED_FROM_LABEL, ANIMATION_PLAYED_PUBLISHED, ANIMATION_PREVIEW_TITLE, ANIMATION_RIG_LABEL, animationSlotLabel, RIG_RANGE_SHEET_TITLE,
   BLENDER_MODEL_LABEL, BLENDER_PREVIEW_TITLE, MAX_EVIDENCE_SUBJECT_CHARS, MODEL_MOVED_BY_GAME, MODEL_MOVED_BY_LABEL,
   MODEL_MOVED_BY_VERIFY, MODEL_WHILE_MOVING_LABEL, MODEL_WHILE_STANDING_LABEL, SCREENSHOT_VIEW_LABEL, SCREENSHOT_VIEW_PLAYTEST,
   type RunChange, type RunEvidence, type RunMetadata,
@@ -1294,6 +1294,75 @@ function recordAnimationRig(context: PlannerContext, outcome: McpToolOutcome): v
   });
 }
 
+/**
+ * A creature's rig built or declared by rig: the change to the place, the
+ * read-back that confirms it, and its range sheet with its 3D view. A call
+ * that only read the rig records the range sheet alone.
+ */
+async function recordModelRig(context: PlannerContext, outcome: McpToolOutcome): Promise<void> {
+  const data = isRecord(outcome.data) ? outcome.data : {};
+  const model = stringField(data, "model");
+  if (!model || (data.rigged !== true && data.declared !== true && data.declared !== false)) return;
+  const rig = isRecord(data.rig) ? data.rig : {};
+  const joints = Array.isArray(rig.joints) ? rig.joints.length : undefined;
+  const plan = stringField(data, "plan");
+  const readBack = isRecord(data.readBack) ? data.readBack : {};
+  const mismatches = Array.isArray(readBack.mismatches) ? readBack.mismatches.filter((reason): reason is string => typeof reason === "string") : [];
+  const undo = { label: "Undo", value: data.undoable !== false ? "One Studio undo step" : "Not recorded in Studio's undo history" };
+  if (data.rigged === true) {
+    const controller = stringField(data, "controller") ?? "a controller";
+    const removed = Array.isArray(data.removed) ? data.removed.filter((item): item is string => typeof item === "string") : [];
+    context.recordChange({
+      kind: "instance",
+      target: model,
+      instanceId: context.instanceId ?? undefined,
+      summary: `Rigged ${model}${joints === undefined ? "" : ` with ${joints} joints`} under ${controller === "Humanoid" ? "a Humanoid" : `an ${controller}`}${plan && plan !== "custom" ? ` as a ${plan}` : ""}${removed.length > 0 ? `, taking out ${inWords(removed)}` : ""}, in one undoable step.`,
+    });
+    context.recordEvidence({
+      kind: "verification",
+      changeKind: "instance",
+      title: model,
+      passed: readBack.matches === true,
+      detail: readBack.matches === true
+        ? `Studio read the rig back as built: ${joints === undefined ? "its joints" : `${joints} joints`}, each at its pivot, and its declarations.`
+        : `Studio read the rig back, and it is not what was built: ${mismatches.length > 0 ? mismatches.join("; ") : "its joints, controller or declarations differ"}.`,
+      metadata: [undo],
+    });
+  } else if (data.declared === true) {
+    context.recordChange({
+      kind: "instance",
+      target: model,
+      instanceId: context.instanceId ?? undefined,
+      summary: `Declared ${model}'s rig${plan && plan !== "custom" ? ` as a ${plan}` : ""} in its RoqerRig attribute, changing none of its joints, in one undoable step.`,
+    });
+    context.recordEvidence({
+      kind: "verification",
+      changeKind: "instance",
+      title: model,
+      passed: readBack.matches === true,
+      detail: readBack.matches === true ? "Studio read the declarations back as written." : "Studio read the rig back, and its declarations are not the ones written.",
+      metadata: [undo],
+    });
+  }
+  const imageDataUrl = await evidencePreview(context, outcome);
+  if (imageDataUrl === undefined) return;
+  let modelPreviewId: string | undefined;
+  if (outcome.modelFile !== undefined && context.storeModelPreview !== undefined) {
+    modelPreviewId = await context.storeModelPreview(outcome.modelFile).catch(() => undefined);
+  }
+  context.recordEvidence({
+    kind: "inspection",
+    title: RIG_RANGE_SHEET_TITLE,
+    subject: model,
+    detail: `${model}'s joints at rest and turned a little each way, to show where each piece turns. No check judged it.`,
+    imageDataUrl,
+    ...(isModelPreviewId(modelPreviewId) ? { modelPreviewId } : {}),
+    metadata: [
+      { label: ANIMATION_RIG_LABEL, value: model },
+      ...(joints === undefined ? [] : [{ label: "Joints", value: String(joints) }]),
+    ],
+  });
+}
 /** How many of a phase's judging samples played which of the loader's states. */
 function playedTally(played: unknown): string {
   if (!isRecord(played)) return "Nothing sampled";
@@ -1695,7 +1764,8 @@ export function createStudioToolRunner(context: PlannerContext): StudioToolRunne
       else if (args.action === "publish") recordAnimationPublish(context, outcome);
       else if (args.action === "wire") recordAnimationWire(context, outcome);
       else if (args.action === "verify") recordAnimationVerify(context, args, outcome);
-      else if (args.action === "rig") recordAnimationRig(context, outcome);
+      else if (args.action === "rig" && args.stock !== undefined) recordAnimationRig(context, outcome);
+      else if (args.action === "rig") await recordModelRig(context, outcome);
     }
 
     if (operation === "upload_asset") {

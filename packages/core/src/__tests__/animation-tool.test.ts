@@ -558,8 +558,8 @@ describe('animating a model', () => {
   test('rig refuses what it cannot make before Studio sees it', async () => {
     const { tools, calls } = toolsAnswering(() => ({}));
     const rig = (args: Record<string, unknown>) => tools.animation({ action: 'rig', model: 'game.Workspace.Guard', stock: 'R15', ...args });
-    await expect(rig({ model: ' ' })).rejects.toThrow(/model must be the path of the NPC to make/);
-    await expect(rig({ stock: undefined })).rejects.toThrow(/^stock is required: rig makes a stock R15 or R6 NPC body/);
+    await expect(rig({ model: ' ' })).rejects.toThrow(/model must be the path of the model to rig/);
+    await expect(rig({ stock: undefined, position: [0, 0, 0] })).rejects.toThrow(/^position goes with stock/);
     await expect(rig({ stock: 'R16' })).rejects.toThrow('stock must be R15 or R6');
     for (const position of [[1, 2], [1, 2, '3'], [1, Number.NaN, 3], 'origin']) {
       await expect(rig({ position })).rejects.toThrow(/^position must be \[x, y, z\]: where the NPC's feet stand/);

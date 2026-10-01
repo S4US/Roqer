@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
-  ANIMATION_NAME_LABEL, ANIMATION_PREVIEW_TITLE, ANIMATION_RIG_LABEL, BLENDER_MODEL_LABEL, BLENDER_PREVIEW_TITLE, SCREENSHOT_VIEW_LABEL,
+  ANIMATION_NAME_LABEL, ANIMATION_PREVIEW_TITLE, ANIMATION_RIG_LABEL, BLENDER_MODEL_LABEL, BLENDER_PREVIEW_TITLE, RIG_RANGE_SHEET_TITLE, SCREENSHOT_VIEW_LABEL,
   SCREENSHOT_VIEW_PLAYTEST, type RunChange, type RunEvidence,
 } from "../shared/run-events";
 import {
@@ -127,6 +127,21 @@ test("the picture budget keeps the latest of every thing before any earlier vers
   assert.deepEqual([...keptPreviewIds(images, 2)].sort(), ["c", "w4"]);
   assert.equal(keptPreviewIds(images, 0).size, 0);
   assert.equal(keptPreviewIds(images, 99).size, images.length);
+});
+
+test("a rig's range sheet is its own source, labelled by the model, and each model's sheets are versions of one", () => {
+  const sheet = (id: string, model: string): RunEvidence => ({
+    id, kind: "inspection", title: RIG_RANGE_SHEET_TITLE, imageDataUrl: image, subject: model,
+    metadata: [{ label: ANIMATION_RIG_LABEL, value: model }],
+  });
+  const first = sheet("a", "game.Workspace.Dog");
+  assert.equal(previewSource(first), "rig");
+  assert.equal(previewSourceLabel(first), "Range sheet · Dog");
+  const again = sheet("b", "game.Workspace.Dog");
+  const other = sheet("c", "game.Workspace.Wolf");
+  const { shown, versions } = previewVersions([first, again, other]);
+  assert.deepEqual(shown.map((item) => item.id), ["b", "c"]);
+  assert.deepEqual(versions.get("b")?.map((item) => item.id), ["a", "b"]);
 });
 
 test("only a Blender result with a kept model opens in 3D, and its tile says so", () => {

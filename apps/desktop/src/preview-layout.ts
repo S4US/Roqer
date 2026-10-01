@@ -1,5 +1,5 @@
 import {
-  ANIMATION_NAME_LABEL, ANIMATION_PREVIEW_TITLE, ANIMATION_RIG_LABEL, BLENDER_MODEL_LABEL, BLENDER_PREVIEW_TITLE, SCREENSHOT_VIEW_LABEL,
+  ANIMATION_NAME_LABEL, ANIMATION_PREVIEW_TITLE, ANIMATION_RIG_LABEL, BLENDER_MODEL_LABEL, BLENDER_PREVIEW_TITLE, RIG_RANGE_SHEET_TITLE, SCREENSHOT_VIEW_LABEL,
   SCREENSHOT_VIEW_PLAYTEST, type RunChange, type RunEvidence,
 } from "../shared/run-events";
 
@@ -11,7 +11,7 @@ import {
  * describes; the earlier ones sit beside it, oldest first.
  */
 
-export type PreviewSource = "studio" | "playtest" | "blender" | "animation" | "other";
+export type PreviewSource = "studio" | "playtest" | "blender" | "animation" | "rig" | "other";
 
 export type PreviewTile = {
   /** Position in the run's pictures, oldest first; the viewer opens here. */
@@ -46,7 +46,7 @@ export function previewSubject(evidence: RunEvidence): string {
   // The host's own word on what the picture is of wins; the names below are
   // for runs saved before it gave one.
   if (evidence.subject !== undefined) return `${source}:subject:${evidence.subject}`;
-  const label = source === "animation" ? ANIMATION_NAME_LABEL : source === "blender" ? BLENDER_MODEL_LABEL : undefined;
+  const label = source === "animation" ? ANIMATION_NAME_LABEL : source === "blender" ? BLENDER_MODEL_LABEL : source === "rig" ? ANIMATION_RIG_LABEL : undefined;
   const name = label === undefined ? undefined : evidence.metadata?.find((entry) => entry.label === label)?.value;
   return name === undefined ? `picture:${evidence.id}` : `${source}:${name}`;
 }
@@ -110,6 +110,7 @@ export function previewLayout(images: readonly RunEvidence[]): PreviewLayout | n
 export function previewSource(evidence: RunEvidence): PreviewSource {
   if (evidence.title === BLENDER_PREVIEW_TITLE) return "blender";
   if (evidence.title === ANIMATION_PREVIEW_TITLE) return "animation";
+  if (evidence.title === RIG_RANGE_SHEET_TITLE) return "rig";
   if (evidence.kind !== "screenshot") return "other";
   const view = evidence.metadata?.find((entry) => entry.label === SCREENSHOT_VIEW_LABEL)?.value;
   return view === SCREENSHOT_VIEW_PLAYTEST ? "playtest" : "studio";
@@ -140,6 +141,10 @@ export function previewSourceLabel(evidence: RunEvidence): string {
     case "animation": {
       const rig = animationRig(evidence);
       return rig === undefined ? "Animation" : `Animation · ${rig}`;
+    }
+    case "rig": {
+      const rig = animationRig(evidence);
+      return rig === undefined ? "Range sheet" : `Range sheet · ${rig}`;
     }
     case "playtest": return "Playtest";
     case "studio": return "Studio";

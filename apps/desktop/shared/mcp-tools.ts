@@ -255,6 +255,22 @@ function summarizeAnimation(args: Record<string, unknown>): string {
     const path = typeof args.path === "string" && args.path !== "" ? truncate(args.path, 80) : "an animation";
     return `animation · publish ${path} to Roblox`;
   }
+  if (args.action === "rig" && args.stock === undefined) {
+    const model = typeof args.model === "string" && args.model !== "" ? truncate(args.model, 60) : "a model";
+    const plan = args.plan === "quadruped" ? "a quadruped" : undefined;
+    if (!Array.isArray(args.joints)) {
+      const declaring = plan ?? (typeof args.declarations === "object" && args.declarations !== null ? "declared by hand" : undefined);
+      return declaring
+        ? `animation · declare ${model}'s rig ${plan ? `as ${plan}` : declaring}, changing none of its joints`
+        : `animation · read ${model}'s rig and draw its range sheet`;
+    }
+    const joints = args.joints.length;
+    const controller = args.controller === "Humanoid" || args.controller === "AnimationController" ? args.controller : "a controller";
+    const replacing = args.replace === "importer"
+      ? ", replacing the rig it was imported with"
+      : typeof args.expected_revision === "string" ? ", replacing the rig rig built before" : "";
+    return `animation · rig ${model}: ${joints} joint${joints === 1 ? "" : "s"}${plan ? `, ${plan}` : ""}, ${controller}${replacing}`;
+  }
   if (args.action === "rig") {
     const body = args.stock === "R15" || args.stock === "R6" ? `a stock ${args.stock} NPC` : "an NPC";
     const model = typeof args.model === "string" && args.model !== "" ? truncate(args.model, 60) : "a new path";

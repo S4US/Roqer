@@ -137,6 +137,31 @@ test("mcp-tools - rigging an NPC says what it makes and where, and is a mutation
   assert.strictEqual(riskForTool("animation", { action: "rig", model: "game.Workspace.Guard", stock: "R15" }), "mutation");
 });
 
+test("mcp-tools - rigging a creature says what it joins, what it declares and what it replaces", () => {
+  const joints = [{ part: "Head", parent: "Body", pivot: [0, 1, -2] }, { part: "Tail", parent: "Body", pivot: [0, 1, 2] }];
+  assert.strictEqual(
+    summarizeToolCall("animation", { action: "rig", model: "game.Workspace.Dog", joints, controller: "Humanoid", plan: "quadruped" }),
+    "animation · rig game.Workspace.Dog: 2 joints, a quadruped, Humanoid",
+  );
+  assert.strictEqual(
+    summarizeToolCall("animation", { action: "rig", model: "game.Workspace.Wolf", joints, controller: "AnimationController", replace: "importer" }),
+    "animation · rig game.Workspace.Wolf: 2 joints, AnimationController, replacing the rig it was imported with",
+  );
+  assert.strictEqual(
+    summarizeToolCall("animation", { action: "rig", model: "game.Workspace.Dog", joints, controller: "Humanoid", expected_revision: "rr1:a" }),
+    "animation · rig game.Workspace.Dog: 2 joints, Humanoid, replacing the rig rig built before",
+  );
+  assert.strictEqual(
+    summarizeToolCall("animation", { action: "rig", model: "game.Workspace.Dog", plan: "quadruped" }),
+    "animation · declare game.Workspace.Dog's rig as a quadruped, changing none of its joints",
+  );
+  assert.strictEqual(
+    summarizeToolCall("animation", { action: "rig", model: "game.Workspace.Dog" }),
+    "animation · read game.Workspace.Dog's rig and draw its range sheet",
+  );
+  assert.strictEqual(riskForTool("animation", { action: "rig", model: "game.Workspace.Dog", joints, controller: "Humanoid" }), "mutation");
+});
+
 test("mcp-tools - verifying a model says what it will do to it, and is a read", () => {
   assert.strictEqual(
     summarizeToolCall("animation", { action: "verify", model: "game.Workspace.Guard", position: [10.04, 0, -3] }),

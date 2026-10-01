@@ -198,6 +198,42 @@ gives the model's path as the animation's rig.
 
 The model's loader plays its idle, walk and run as an NPC's does.
 
+## Rigging a model
+
+Roqer can also make the rig, for "Rig my dog so it can walk". The model's
+pieces stay where they are, and the agent says which piece hangs from which
+and where each one turns.
+
+- **The whole rig is checked first.** Nothing is changed when the joints do
+  not form one tree, a part name repeats or is missing, a pivot lies outside
+  the pieces it joins, a part would be left loose, or a weld would hold a
+  joint still. The refusal lists every problem.
+- **One undo step.** Roqer adds an invisible root part, a `Motor6D` at each
+  pivot lined up with the body's axes, welds for the parts that ride along
+  (ears, eyes), the physics settings, a `Humanoid` or an
+  `AnimationController` with an `Animator`, and the `RoqerRig` declarations.
+  It then reads the rig back and compares it with what it planned. It refuses
+  if the model changed after it was read.
+- **Humanoid or AnimationController.** A `Humanoid` suits a creature that
+  walks: its root is free to move and its hip height is set from the rest
+  pose. An `AnimationController` suits one that flies, swims or stays put:
+  its root is anchored, for a script to move.
+- **Body plans.** The `quadruped` plan declares a four-legged body's feet,
+  legs, knees and ranges from its part names (`FrontLeft`, or
+  `FrontLeftUpper`, `FrontLeftLower` and `FrontLeftFoot`; likewise
+  `FrontRight`, `HindLeft` and `HindRight`; `Head`, `Jaw`, `Tail`). The
+  `custom` plan declares only what the agent gives.
+- **The range sheet.** The result shows every joint turned 30° each way, as
+  an image and a 3D preview. A pivot in the wrong place shows as a piece
+  swinging off the body.
+- **An uploaded model's rig.** An upload arrives with every piece hung from
+  one `RootPart` at the piece's own centre. Roqer replaces that rig only when
+  the call says to, and the approval card says so.
+- **Rigging again.** Replacing a rig Roqer built needs its current revision.
+  A rig Roqer did not build, or one edited since, is left alone.
+- **A model that is already rigged** can be given declarations without
+  changing a joint.
+
 ## In the chat
 
 The latest animation plays in the answer's previews card, with a play/pause
@@ -226,9 +262,9 @@ between versions ("Version 3 of 6"), and the newest is shown first.
   held item in each hand and a sheath at the hip. R6 has no elbows or knees, and the foot-sliding check is
   not applied to it. Faces, fingers, clothing and skinned-mesh rigs are not
   animated.
-- A model's own rig, which must be rigged already: Roqer does not make its
-  joints yet. It has at most 64 joints and 128 parts, and its `Bone`s are not
-  read. A preview draws at most 256 welded parts and 40,000 triangles of
+- A model's own rig has at most 64 joints and 128 parts, and its `Bone`s are
+  not read. Roqer rigs a model of at most 512 parts, made of rigid pieces; it
+  does not skin a mesh. The only body plan with names is `quadruped`. A preview draws at most 256 welded parts and 40,000 triangles of
   meshes, each mesh at most 3,000; a part past these is drawn as its box.
 - A prop is animated through a `Motor6D` the game adds when the weapon is
   equipped (or, for a sheath, when the character spawns), because Roblox's
