@@ -17,7 +17,7 @@ import {
   type PiecesReading,
   type RigBuildRequest,
 } from '../animation/rig-build.js';
-import { dogJoints, dogPieces } from './fixtures/dog-pieces.js';
+import { dogFrame, dogJoints, dogPieces } from './fixtures/dog-pieces.js';
 import { kneeDeclarations, partsDog, type V } from './fixtures/parts-dog.js';
 
 const request = (overrides: Partial<RigBuildRequest> = {}, at?: V, turn?: number): RigBuildRequest => ({
@@ -243,6 +243,52 @@ describe('rig replaces a rig only when it may', () => {
     // Its RootPart goes, so it is neither a piece nor left loose.
     expect(plan.joints.some((joint) => joint.part0 === 'RootPart')).toBe(false);
     expect(refused(dogPieces(), { replaceImporter: true }).errorCode).toBe('no_importer_rig');
+  });
+
+  test('pivots measured from an upload\'s own origin are placed where the upload was put', () => {
+    // The dog as it was modelled stands at [0, 2.2, 0]; inserted, it is moved and turned, its RootPart with it.
+    const [at, turn] = [[12, 7.2, -30] as V, 90];
+    const pieces = dogPieces({ at, turn });
+    pieces.parts.push({ name: 'RootPart', cframe: dogFrame(at, turn).cframe([0, -2.2, 0]), size: [0.1, 0.1, 0.1], hidden: true });
+    const root = pieces.parts.length - 1;
+    pieces.joints = pieces.parts.slice(0, root).map((_part, index) => ({ name: 'Motor6D', part0: root, part1: index }));
+    const upload: PiecesReading = { ...pieces, controllers: ['AnimationController'], importer: { rootPart: root, joints: root, initialPoses: 48 } };
+
+    const modelled = planned(upload, { replaceImporter: true, pivotSpace: 'import', joints: dogJoints() }).plan;
+    const inWorld = planned(upload, { replaceImporter: true, joints: dogJoints({ at, turn }) }).plan;
+    expect(modelled.joints.map((joint) => joint.name)).toEqual(inWorld.joints.map((joint) => joint.name));
+    modelled.joints.forEach((joint, index) => {
+      expect(close(joint.c0, inWorld.joints[index].c0, 1e-5)).toBe(true);
+      expect(close(joint.c1, inWorld.joints[index].c1, 1e-5)).toBe(true);
+    });
+    // The origin is kept either way, for a rebuild after the importer's root is gone.
+    expect(close(modelled.origin!, upload.parts[root].cframe)).toBe(true);
+    expect(close(inWorld.origin!, upload.parts[root].cframe)).toBe(true);
+
+    // A pivot outside its pieces says where it was given and where that is.
+    const off = dogJoints().map((joint) => (joint.part === 'Tail' ? { ...joint, pivot: [0, 2.5, 6] as V } : joint));
+    expect(refused(upload, { replaceImporter: true, pivotSpace: 'import', joints: off }).errors[0])
+      .toMatch(/^Tail: its pivot \[0, 2\.5, 6\], at \[18, 7\.5, -30\] in the world, lies outside Body and Tail/);
+  });
+
+  test('a rebuild takes them from the origin the first build kept', () => {
+    const [at, turn] = [[12, 7.2, -30] as V, 90];
+    const built: PiecesReading = {
+      ...dogPieces({ at, turn }),
+      joints: [{ name: 'Neck', part0: 0, part1: 1 }],
+      controllers: ['Humanoid'],
+      rig: { revision: 'rr1:a', builtRevision: 'rr1:a' },
+      origin: dogFrame(at, turn).cframe([0, -2.2, 0]),
+    };
+    const again = planned(built, { pivotSpace: 'import', joints: dogJoints(), expectedRevision: 'rr1:a' }).plan;
+    const inWorld = planned(built, { joints: dogJoints({ at, turn }), expectedRevision: 'rr1:a' }).plan;
+    again.joints.forEach((joint, index) => expect(close(joint.c0, inWorld.joints[index].c0, 1e-5)).toBe(true));
+    expect(again.origin).toEqual(inWorld.origin);
+
+    // A model that never was an upload has no origin to measure from.
+    const refusal = refused(dogPieces(), { pivotSpace: 'import' });
+    expect(refusal.errorCode).toBe('no_import_origin');
+    expect(planned(dogPieces()).plan.origin).toBeUndefined();
   });
 
   test('joints rig did not build are left alone', () => {

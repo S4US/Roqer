@@ -229,6 +229,12 @@ and where each one turns.
 - **An uploaded model's rig.** An upload arrives with every piece hung from
   one `RootPart` at the piece's own centre. Roqer replaces that rig only when
   the call says to, and the approval card says so.
+- **Pivots from Blender.** For a creature modelled in Blender, the pivots
+  come from Roqer's check of the exported file
+  ([Creatures that move](blender.md#creatures-that-move)), measured from the
+  model's own origin. `rig` places them wherever the model was inserted, and
+  keeps where that origin is, so the model can be rigged again from the same
+  pivots after it is moved.
 - **Rigging again.** Replacing a rig Roqer built needs its current revision.
   A rig Roqer did not build, or one edited since, is left alone.
 - **A model that is already rigged** can be given declarations without

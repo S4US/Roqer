@@ -44,10 +44,10 @@ export type ToolSchema = {
 };
 
 /** sha256 of `packages/core/src/tools/definitions.ts` with LF newlines. */
-export const TOOL_DEFINITIONS_DIGEST = "5ddbd8ef5a710f5c5967d3d50722804e35a70ed82696241d4f8ae54aa6f4d1e2";
+export const TOOL_DEFINITIONS_DIGEST = "a4195cd0ebe78e6d58e791bba20db9cef7ca50b5bf2574abe6dc6a9b95899a89";
 
 /** What a bridge built from these definitions reports as `toolCatalogDigest` on `/health`. */
-export const TOOL_CATALOG_DIGEST = "2d0519f3caac180866b7d31f5714f06f34dd13c5cf211f4e44f14a4bb2b5a624";
+export const TOOL_CATALOG_DIGEST = "e77c34676b3f9409858bc3a72d2ce0f6068f285ca5d35672306fac6a0990cb56";
 
 export const TOOL_SCHEMAS: Readonly<Record<string, ToolSchema>> = {
   animation: {
@@ -73,6 +73,7 @@ export const TOOL_SCHEMAS: Readonly<Record<string, ToolSchema>> = {
       { name: "plan", type: "string", required: false, enumValues: ["quadruped", "custom"], description: "Rig: body plan declaring limbs from part names." },
       { name: "declarations", type: "object", required: false, description: "Rig: RoqerRig {feet, hips, limbs, hinges, limits}." },
       { name: "replace", type: "string", required: false, enumValues: ["importer"], description: "Rig: replace the rig an upload arrived with." },
+      { name: "pivot_space", type: "string", required: false, enumValues: ["world", "import"], description: "Rig: import = pivots from an upload's own origin." },
       { name: "position", type: "number[]", required: false, description: "[x, y, z]. Rig: where its feet stand; verify: walk it there." },
       { name: "instance_id", type: "string", required: false, description: "Connected place ID; required with multiple places." },
     ],

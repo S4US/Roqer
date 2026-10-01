@@ -315,6 +315,45 @@ test("the layout reaches the model as facts in the script's own coordinates", as
   });
 });
 
+test("a model of moving pieces is given as rig's joints, and its joints' overlaps are not findings", async () => {
+  await withJobs(async (jobsRoot) => {
+    const object = (name: string, low: number[], high: number[], origin: number[], parent?: string) => ({
+      name, size: [high[0] - low[0], high[2] - low[2], high[1] - low[1]], origin, low, high, mesh: name, materials: 1, ...(parent ? { parent } : {}),
+    });
+    const outcome = await inspectedWorker(jobsRoot, {
+      min: [-0.6, -1.6, 0],
+      objects: [
+        object("Body", [-0.6, -1.6, 1.5], [0.6, 1.6, 2.5], [0, 0, 0]),
+        object("Tail", [-0.15, 1.5, 2.0], [0.15, 2.8, 2.3], [0, 1.55, 2.2], "Body"),
+        object("Flag", [-0.1, -0.1, 2.4], [0.1, 0.1, 3.4], [0, 0, 2.45], "Body"),
+      ],
+      layout: {
+        pieces: 3, complete: true, loose: [], looseCount: 0, isolated: [], isolatedCount: 0,
+        overlaps: [{ objects: ["Body", "Tail"], depth: 0.1, piece: { object: "Body", size: [1.2, 3.2, 1], center: [0, 0, 2] } }],
+        overlapCount: 1,
+      },
+    }).run({ script: "import bpy" });
+
+    assert.equal(outcome.ok, true, outcome.text);
+    const file = (outcome.data as { files: Array<{ articulation?: { root: string; joints: unknown[] } }> }).files[0];
+    assert.equal(file.articulation?.root, "Body");
+    assert.deepEqual(file.articulation?.joints, [
+      { part: "Tail", parent: "Body", pivot: [0, 2.2, 1.55] },
+      { part: "Flag", parent: "Body", pivot: [0, 2.45, 0] },
+    ]);
+    assert.match(outcome.text, /moving pieces: 3 pieces in a tree from Body/);
+    assert.match(outcome.text, /All 3 pieces connected, and separate objects pass into each other only where one hangs from the other\./);
+    assert.doesNotMatch(outcome.text, /fine where one is meant to sit inside the other/);
+  });
+});
+
+test("the runner's piece helper is one of Roqer's helpers", () => {
+  assert.match(HELPERS_SCRIPT, /^def piece\(obj, pivot, parent=None\):/m);
+  // It moves the origin without moving the shape, and names the mesh as Roblox will name the part.
+  assert.match(HELPERS_SCRIPT, /obj\.data\.transform\(Matrix\.Translation\(-local\)\)/);
+  assert.match(HELPERS_SCRIPT, /obj\.data\.name = obj\.name/);
+});
+
 test("smooth shading across hard edges is reported, and malformed entries are dropped", async () => {
   await withJobs(async (jobsRoot) => {
     const outcome = await inspectedWorker(jobsRoot, {

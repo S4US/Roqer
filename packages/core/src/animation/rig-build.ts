@@ -64,6 +64,12 @@ export interface PiecesReading {
   /** The Humanoids and AnimationControllers directly in it. */
   controllers: ('Humanoid' | 'AnimationController')[];
   importer?: ImporterRig;
+  /**
+   * Where the origin an upload was modelled about now is, as CFrame
+   * components in the world: kept by an earlier `rig` that replaced the
+   * importer's rig, so a rebuild can still take pivots measured from it.
+   */
+  origin?: number[];
   /** When it has joints: the revision its rig reads with, and the one `rig` stamped when it built it. */
   rig?: { revision: string; builtRevision?: string };
   declarations?: string;
@@ -85,6 +91,12 @@ export interface RigBuildRequest {
   plan: BodyPlan;
   declarations?: Record<string, unknown>;
   replaceImporter: boolean;
+  /**
+   * What the joints' pivots are measured in: the world, or `import`, the
+   * frame an upload was modelled in (Roblox's axes from the importer's root),
+   * as the Blender inspection gives them. Defaults to the world.
+   */
+  pivotSpace?: 'world' | 'import';
   expectedRevision?: string;
 }
 
@@ -102,6 +114,8 @@ export interface RigBuildPlan {
   welds: { part0: string; part1: string }[];
   controller: { className: 'Humanoid' | 'AnimationController'; hipHeight?: number };
   declarations: string;
+  /** The import's origin in the world, to keep on the model for a rebuild; absent when it has none. */
+  origin?: number[];
 }
 
 export type RigBuildResult =
@@ -250,8 +264,18 @@ export function planRigBuild(reading: PiecesReading, request: RigBuildRequest): 
   };
   const frameOf = (index: number) => frameFromComponents(reading.parts[index].cframe);
 
+  // Where an upload was modelled about: the importer's root, or what an
+  // earlier rig kept of it. Pivots given in the import's frame are placed by it.
+  const origin = importer ? reading.parts[importer.rootPart]?.cframe : reading.origin;
+  if (request.pivotSpace === 'import' && !origin) {
+    return refuse('no_import_origin', [`${reading.path} has no importer's rig, and no rig kept where one's origin was, so pivots cannot be measured from an import's origin; give them in the world and leave pivot_space out`]);
+  }
+  const placed = request.pivotSpace === 'import' && origin
+    ? request.joints.map((joint) => ({ ...joint, pivot: pointToWorld(frameFromComponents(origin), joint.pivot) as Vec3 }))
+    : request.joints;
+
   // The tree: each piece moved by one joint, all hanging from one root.
-  const joints = request.joints;
+  const joints = placed;
   const children = new Map<string, number>();
   const jointNames = new Map<string, number>();
   const tops = new Set<string>();
@@ -368,7 +392,9 @@ export function planRigBuild(reading: PiecesReading, request: RigBuildRequest): 
   for (const joint of ordered) {
     const outside = [joint.parent, joint.part].filter((part) => !touches(frames.get(part)!, sizes.get(part)!, joint.pivot));
     if (outside.length > 0) {
-      errors.push(`${joint.name ?? joint.part}: its pivot [${joint.pivot.map(round).join(', ')}] lies outside ${outside.join(' and ')}; a joint turns where the two pieces meet, such as the top of a leg, not a piece's middle`);
+      const given = request.joints.find((candidate) => candidate.part === joint.part)!.pivot;
+      const where = request.pivotSpace === 'import' ? `[${given.map(round).join(', ')}], at [${joint.pivot.map(round).join(', ')}] in the world,` : `[${joint.pivot.map(round).join(', ')}]`;
+      errors.push(`${joint.name ?? joint.part}: its pivot ${where} lies outside ${outside.join(' and ')}; a joint turns where the two pieces meet, such as the top of a leg, not a piece's middle`);
       continue;
     }
     addJoint(joint.name ?? joint.part, joint.parent, joint.part, joint.pivot);
@@ -461,6 +487,7 @@ export function planRigBuild(reading: PiecesReading, request: RigBuildRequest): 
       welds,
       controller: { className: request.controller, ...(hipHeight !== undefined ? { hipHeight } : {}) },
       declarations,
+      ...(origin ? { origin: origin.map(round) } : {}),
     },
     expected,
     notes: checked.notes,

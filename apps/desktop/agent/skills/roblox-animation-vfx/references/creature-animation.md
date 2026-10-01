@@ -153,7 +153,7 @@ from, and the pivot: the point in the world, in studs, where the piece turns.
 - **An uploaded or generated model** arrives with a rig of its own: every
   piece hung from a `RootPart` at the piece's centre. `rig` refuses with
   `importer_rig`; pass `replace: "importer"` to take that rig out and build
-  yours.
+  yours. See "From Blender" and "A generated body" below.
 - **Look at the range sheet.** The result carries `rangeSheet`, an image and a
   3D preview with every joint turned 30° each way. A piece that swings away
   from the body, or opens a gap at its joint, has its pivot in the wrong
@@ -167,6 +167,61 @@ from, and the pivot: the point in the world, in studs, where the piece turns.
   rig and draws its range sheet.
 
 Then animate it with the model's path as the animation's `rig`, as above.
+
+### From Blender
+
+A creature modelled in Blender as moving pieces (the building skill's
+`references/blender.md`, "A creature of moving pieces") is one upload and one
+`rig` call:
+
+1. The Blender job's result ends its **moving pieces** line with `joints`:
+   each piece, the piece it hangs from, its pivot, and for a leg the joint
+   names the recipes key. Fix anything that line flags before uploading.
+2. `upload_asset` the GLB as a Model, and `insert_asset` it where the
+   creature belongs. It arrives as one Model: a MeshPart for each piece,
+   named after it, where it was modelled, hung flat from a `RootPart`.
+3. Rig it with those joints as they are:
+
+```text
+{
+  "action": "rig", "model": "game.Workspace.Wolf",
+  "replace": "importer", "pivot_space": "import",
+  "controller": "Humanoid", "plan": "quadruped",
+  "joints": <the joints from the Blender job's result>
+}
+```
+
+`pivot_space: "import"` says the pivots are measured from the model's own
+origin, as Blender gave them, so they are right wherever the model was
+inserted and whichever way it faces. Rig it before scaling it. A later `rig`
+call on the same model, to fix a pivot, takes them the same way. Without it
+pivots are points in the world.
+
+### A generated body
+
+Without Blender, `generate_model` can make the body: pass the pieces as
+`schema_groups` (`Body`, `Head`, `Tail`, `FrontLeft`, `FrontRight`,
+`HindLeft`, `HindRight`), and each comes back as its own MeshPart named
+`<group>_geom`, hung flat from a root as an upload is. What comes back is
+rougher than a modelled body, so check it before rigging:
+
+- **Facing.** A generated body has come back facing +Z, backward. Turn the
+  model half a turn about Y if its head is toward +Z of its pivot.
+- **Size.** It has come back well under the size asked for. Scale the model
+  (`ScaleTo`) to the size it should be, then read each part's position and
+  size back.
+- **Pivots come from the pieces' boxes**, in the world: a leg's hip at the
+  top centre of its box, the neck where the head's box meets the body's, the
+  tail's root at the end of its box nearest the body. A generated leg is one
+  piece, so it has no knee: its gait swings from the hip, and
+  `footSliding` may need waiving.
+- **Names.** The `quadruped` plan reads part names, so rename `FrontLeft_geom`
+  to `FrontLeft` and so on before rigging, or give `declarations` yourself.
+- **Read the range sheet** before animating: a piece the generator split
+  badly, such as one leg half the height of the others, shows there. Generate
+  again rather than animate a body like that.
+
+Rig it with `replace: "importer"` and pivots in the world (no `pivot_space`).
 
 ## Waves: tails, tentacles, wings, spines
 

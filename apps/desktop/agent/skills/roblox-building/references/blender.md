@@ -83,6 +83,10 @@ get the direction of wrong, and they paint it when given a colour:
   wheel, a lid, a door) on its own.
 - `roqer.paint(obj, rgba)` and `roqer.vertex_color_material()`, for parts made
   another way.
+- `roqer.piece(obj, pivot, parent=None)`: makes a joined object a moving piece
+  of a creature (see "A creature of moving pieces"): its origin goes to
+  `pivot` without moving its shape, its mesh is named after it, and it hangs
+  from `parent`.
 
 Prefer them for any part that is not upright. Raw `bpy` is still available for
 shapes they do not cover; there, keep the model flat-shaded (no
@@ -158,6 +162,83 @@ size.
    name, or by the size Roqer listed if Roblox renamed it.
 6. **Register the kits** in the registry's `Kit` folder and place them by
    cloning, like any template.
+
+## A creature of moving pieces
+
+A creature that will be animated (a wolf, a spider, a bird, a robot) is
+modelled as separate pieces, one object for each part that moves on its own,
+and rigged in Studio by the `animation` tool's `rig` action. An upload keeps
+every piece where it was modelled but not where it turns, so the pivots leave
+Blender in the job's result. Load the animation skill's
+`references/creature-animation.md` before modelling: it names the pieces a
+body plan needs.
+
+- **One object per moving piece**, joined with `roqer.join`: the body; the
+  head; the tail, or each tail segment; each leg as an upper and a lower
+  piece, so it has a knee. Ears, eyes and teeth that never move on their own
+  are joined into their piece. Give each piece one material.
+- **Name pieces as the body plan does**, since each arrives as a MeshPart of
+  that name: `Body`, `Head`, `Tail`, and for a four-legged body
+  `FrontLeftUpper`, `FrontLeftLower`, `FrontRightUpper`, `FrontRightLower`,
+  `HindLeftUpper` and so on. With the front toward −Y, the creature's left is
+  Blender's +X.
+- **`roqer.piece(obj, pivot, parent)` for every piece but the body**, after
+  it is joined: `pivot` is the point the piece turns about, in the same
+  coordinates the piece was built in. A leg's upper piece turns at the hip,
+  inside the body; its lower piece at the knee, where the two overlap; the
+  head at the back of the skull; the tail at its root. A pivot at a piece's
+  middle makes it spin in place.
+- **Overlap pieces at their joints** by a tenth of a stud or more, so a turn
+  opens no gap. The layout does not report those overlaps.
+- **Model it standing as it rests**: legs straight down, feet at Z 0, front
+  toward −Y.
+- Export one GLB as usual.
+
+Read the result's **moving pieces** line. It lists anything that would rig
+badly (an origin left at a piece's middle or outside both pieces it joins,
+left and right pivots that do not mirror, a mesh named apart from its object,
+a piece with two materials, a piece parented to nothing), each with what to
+change: fix those in the next job before uploading, since an upload cannot be
+changed. It ends with the `joints` to pass to `rig`, pivots included.
+
+```python
+import bpy, os
+
+FUR, DARK, PALE = (0.45, 0.45, 0.48, 1), (0.2, 0.2, 0.22, 1), (0.8, 0.8, 0.78, 1)
+
+# A low-poly wolf facing -Y, standing on Z 0, about 5 studs long.
+body = roqer.join("Body", [
+    roqer.box("chest", (1.3, 1.6, 1.3), (0, -0.8, 2.3), FUR),
+    roqer.box("belly", (1.1, 1.8, 1.1), (0, 0.8, 2.25), FUR),
+])
+
+head = roqer.join("Head", [
+    roqer.box("skull", (1.0, 1.0, 1.0), (0, -2.0, 2.9), FUR),
+    roqer.box("snout", (0.5, 0.7, 0.45), (0, -2.8, 2.75), PALE),
+    roqer.cone_between("ear_l", (0.3, -1.8, 3.3), (0.3, -1.8, 3.8), 0.18, 0, DARK, vertices=4),
+    roqer.cone_between("ear_r", (-0.3, -1.8, 3.3), (-0.3, -1.8, 3.8), 0.18, 0, DARK, vertices=4),
+])
+roqer.piece(head, (0, -1.5, 2.7), body)          # the neck, inside the chest
+
+tail = roqer.join("Tail", [roqer.box_between("t", (0, 1.6, 2.5), (0, 3.0, 2.0), 0.3, 0.3, rgba=DARK)])
+roqer.piece(tail, (0, 1.6, 2.5), body)
+
+# Blender +X is the wolf's left once it faces -Y.
+for end, y in (("Front", -1.1), ("Hind", 1.3)):
+    for side, x in (("Left", 0.45), ("Right", -0.45)):
+        upper = roqer.join(f"{end}{side}Upper", [roqer.box("u", (0.42, 0.5, 1.1), (x, y, 1.45), FUR)])
+        lower = roqer.join(f"{end}{side}Lower", [
+            roqer.box("l", (0.34, 0.4, 1.0), (x, y, 0.5), FUR),
+            roqer.box("paw", (0.4, 0.55, 0.2), (x, y - 0.08, 0.1), PALE),
+        ])
+        roqer.piece(upper, (x, y, 1.9), body)     # the hip or shoulder, inside the body
+        roqer.piece(lower, (x, y, 0.95), upper)   # the knee, where the two overlap
+
+bpy.ops.export_scene.gltf(filepath=os.path.join(OUTPUT_DIR, "wolf.glb"), export_format="GLB", export_apply=True, use_visible=True)
+```
+
+Then upload and insert it as in "Getting it into Studio", and rig it: the
+creature reference's "From Blender" section has the call.
 
 ## Getting it into Studio
 

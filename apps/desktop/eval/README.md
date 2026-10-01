@@ -65,7 +65,8 @@ tasks also destroy and rebuild `Workspace.WorkbenchEvalIsland` or
 `Workspace.WorkbenchEvalVillage`, `Workspace.WorkbenchEvalAdventure`, or `Workspace.WorkbenchEvalCart`; T8 adds
 Terrain that no reset removes, T15 removes `ServerScriptService.RoqerAnimate`, the loader that wires animations to characters,
 T18 destroys and rebuilds `Workspace.WorkbenchEvalPosts` and removes `Workspace.WorkbenchEvalGuard`,
-and T19 destroys and rebuilds `Workspace.WorkbenchEvalYard` and removes `Workspace.WorkbenchEvalDog`.
+T19 destroys and rebuilds `Workspace.WorkbenchEvalYard` and removes `Workspace.WorkbenchEvalDog`,
+and T17 destroys and rebuilds `Workspace.WorkbenchEvalDen` and removes `Workspace.WorkbenchEvalWolf`.
 Point it at a scratch place, never at real work.
 
 Results land in `eval/results/<taskId>.jsonl` (gitignored). Each file is one
@@ -99,6 +100,7 @@ prompt processing, and only the second is something this end can fix.
 | `T15-animation-run` | "Make a running animation and set it up in R15." | the animation plan's goal: a published animation the place's owner owns, wired to the run slot, seen playing in a playtest, a 3D preview, and a gait whose motion checks all passed |
 | `T18-npc-patrol` | "Add a guard NPC who walks back and forth between the two posts, with idle and walk animations of its own." | the creature plan's step 2 goal: an idle and a walk the run published, owned by the place's owner, in the guard's loader with the walk's ground speed; a playtest of the guard's own patrol, after the last wiring, playing the walk while it moved and the idle while it stood; a 3D preview; and every kept build's checks passed, one as a gait |
 | `T19-creature-parts` | "Build a blocky four-legged dog from Parts and make it wander around the spawn, with idle and walk animations of its own." | the creature plan's Parts prompt: a dog of Parts whose rig `rig` built, read back, declared four feet on and drew a range sheet of; then T18's conditions on the dog |
+| `T17-creature-blender` | "Model a low-poly wolf in Blender, rig it, give it idle and walk animations, and make it walk around the den." | the creature plan's Blender prompt: a Blender job and an upload; a wolf of five or more MeshParts whose rig `rig` built, read back, declared four feet on and drew a range sheet of; then T18's conditions on the wolf. Needs `--blender` |
 
 T7 and T8 are a pair. Either alone rewards a fixed preference; together they
 measure whether the agent chooses its construction from the requested style.
@@ -273,6 +275,19 @@ four of its own:
 npm run eval -- --task T19-creature-parts --provider claude --model opus
 ```
 
+T17 is the creature plan's Blender prompt (step 6): "Model a low-poly wolf in
+Blender, rig it, give it idle and walk animations, and make it walk around."
+It needs `--blender`, and the same key and published place as T18, since it
+uploads the model as well as two animations. Its conditions are T19's, on the
+wolf, with the body's turned round: a Blender job and an upload succeeded, and
+the wolf is made of at least five MeshParts, the pieces it was modelled as.
+Its rig carrying `rig`'s stamp and reading back as built means the importer's
+rig was replaced, at pivots that lay in the pieces they join.
+
+```bash
+npm run eval -- --task T17-creature-blender --provider claude --model opus --blender auto
+```
+
 The oracles read the run's evidence as well as its tool calls. So that
 evidence matches the app's, the harness keeps each tool image with its
 evidence as the tool's own bytes; the app downsizes them with Electron, which
@@ -364,4 +379,4 @@ the reset-per-task harness above; no model-quality result is implied by its pres
   belong to whoever serves the model and are not inferred here.
 - No competitor baseline. "Roqer versus X" needs X driven through the same
   reset and oracles, which is a larger piece of work than this slice.
-- Seventeen tasks. T19 exists because the creature plan set a goal prompt for a creature built from Parts. T15 exists because the animation plan set its goal as one prompt with five conditions, and T18 because the creature plan did the same for an NPC. T9 exists because the first recorded world baselines exposed the need for a measured local visual-repair loop, T10 and T11 because the world-building plan's village and large-map baselines had no scored form, T12 because the first real Blender run brought in a model at the wrong scale and in one colour, T13 because a live map built from a reference image came out far from it, and T14 because a live shop passed its own screenshot review with overlapping text; add another only when a real failure or an outstanding baseline motivates it.
+- Eighteen tasks. T17 and T19 exist because the creature plan set goal prompts for a creature modelled in Blender and one built from Parts. T15 exists because the animation plan set its goal as one prompt with five conditions, and T18 because the creature plan did the same for an NPC. T9 exists because the first recorded world baselines exposed the need for a measured local visual-repair loop, T10 and T11 because the world-building plan's village and large-map baselines had no scored form, T12 because the first real Blender run brought in a model at the wrong scale and in one colour, T13 because a live map built from a reference image came out far from it, and T14 because a live shop passed its own screenshot review with overlapping text; add another only when a real failure or an outstanding baseline motivates it.

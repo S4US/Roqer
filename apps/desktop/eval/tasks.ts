@@ -1697,8 +1697,69 @@ ${EXTENT_LUAU}
       spawn.Parent = yard
       yard.Parent = workspace
     `,
-    probe: `
-      local dog = workspace:FindFirstChild("WorkbenchEvalDog")
+    probe: creatureProbe("WorkbenchEvalDog", "dog"),
+    allowedTargets: [],
+    // The wander script may live in the dog or in ServerScriptService, under a name of the run's choosing.
+    allowedRoots: [`game.${EVAL_ROOT}`, "game.Workspace.WorkbenchEvalDog", "game.ServerScriptService"],
+    oracle: ({ probe, verified, evidence }) => judgeBuiltCreature(probe, verified, evidence ?? [], DOG),
+  },
+  {
+    id: "T17-creature-blender",
+    prompt: "Model a low-poly wolf in Blender, rig it, give it idle and walk animations, and make it walk around the den. "
+      + "The den is game.Workspace.WorkbenchEvalDen.Den. Name the wolf game.Workspace.WorkbenchEvalWolf, "
+      + "and keep its KeyframeSequences under ServerStorage.WorkbenchEval.",
+    // The creature plan's Blender prompt (step 6), which the animation plan
+    // reserved T17 for. The den, the wolf's path and where its sequences go
+    // are added so the reset owns them. It is done on T19's conditions, the
+    // wolf in the dog's place, with the body's the other way round: a Blender
+    // job and an upload succeeded, and the wolf is made of the MeshParts its
+    // pieces arrived as. Its rig being one `rig` built and read back means
+    // the importer's rig was replaced and every pivot lay in its pieces. The
+    // den is raised and apart from the other tasks' builds.
+    needsBlender: true,
+    needsUploads: true,
+    needsPublishedPlace: true,
+    seed: `
+      for _, name in ipairs({ "WorkbenchEvalWolf", "WorkbenchEvalDen" }) do
+        local old = workspace:FindFirstChild(name)
+        if old then old:Destroy() end
+      end
+      local den = Instance.new("Model")
+      den.Name = "WorkbenchEvalDen"
+      local ground = Instance.new("Part")
+      ground.Name = "Ground"
+      ground.Anchored = true
+      ground.Size = Vector3.new(48, 1, 48)
+      ground.Position = Vector3.new(80, 0.5, 90)
+      ground.Material = Enum.Material.Ground
+      ground.Color = Color3.fromRGB(110, 95, 75)
+      ground.Parent = den
+      local mark = Instance.new("Part")
+      mark.Name = "Den"
+      mark.Anchored = true
+      mark.CanCollide = false
+      mark.Size = Vector3.new(6, 0.2, 6)
+      mark.Position = Vector3.new(80, 1.1, 90)
+      mark.Material = Enum.Material.Slate
+      mark.Parent = den
+      den.Parent = workspace
+    `,
+    probe: creatureProbe("WorkbenchEvalWolf", "wolf"),
+    allowedTargets: [],
+    // The wander script may live in the wolf or in ServerScriptService, under a name of the run's choosing.
+    allowedRoots: [`game.${EVAL_ROOT}`, "game.Workspace.WorkbenchEvalWolf", "game.ServerScriptService"],
+    oracle: ({ probe, verified, evidence, toolCalls }) => judgeBuiltCreature(probe, verified, evidence ?? [], WOLF, toolCalls),
+  },
+];
+
+/**
+ * What Studio holds of a creature a run built, rigged and animated: its loader
+ * and the animations in it, as for a guard, and its rig: who built it, how
+ * many feet it declares, and what it is made of.
+ */
+function creatureProbe(name: string, key: string): string {
+  return `
+      local dog = workspace:FindFirstChild("${name}")
       local humanoid = dog and dog:FindFirstChildOfClass("Humanoid")
       local loader = dog and dog:FindFirstChild("RoqerModelAnimate")
       local function asset(state)
@@ -1735,7 +1796,7 @@ ${EXTENT_LUAU}
       end
       local stamp = dog and dog:GetAttribute("RoqerRigRevision")
       return {
-        dog = dog and dog.ClassName or false,
+        ${key} = dog and dog.ClassName or false,
         humanoid = humanoid ~= nil,
         loader = loader and loader.ClassName or false,
         enabled = loader ~= nil and loader:IsA("Script") and loader.Enabled,
@@ -1751,13 +1812,8 @@ ${EXTENT_LUAU}
         feet = feet,
         rigStamp = type(stamp) == "string" and stamp or false,
       }
-    `,
-    allowedTargets: [],
-    // The wander script may live in the dog or in ServerScriptService, under a name of the run's choosing.
-    allowedRoots: [`game.${EVAL_ROOT}`, "game.Workspace.WorkbenchEvalDog", "game.ServerScriptService"],
-    oracle: ({ probe, verified, evidence }) => judgeCreatureParts(probe, verified, evidence ?? []),
-  },
-];
+  `;
+}
 
 /** Roblox's asset type number for an Animation. */
 const ANIMATION_ASSET_TYPE = 24;
@@ -1838,36 +1894,55 @@ function judgeAnimationRun(probe: unknown, verified: boolean, evidence: readonly
 }
 
 /**
- * The creature plan's Parts prompt: a dog the run built from Parts and rigged
- * with `rig`, then everything a patrolling guard must show. The rig's own
+ * The creature plan's prompts for a body the run makes: a dog built from
+ * Parts, or a wolf modelled in Blender and uploaded; rigged with `rig`; then
+ * everything a patrolling guard must show. The body's and the rig's own
  * conditions come first, since animations on a rig that is not the tool's
  * prove nothing about building one.
  */
-function judgeCreatureParts(probe: unknown, verified: boolean, evidence: readonly RunEvidence[]): EvalVerdict {
-  const path = `game.Workspace.${DOG.name}`;
-  if (field(probe, DOG.key) === "Model") {
-    if (Number(field(probe, "meshParts") ?? 0) > 0) return { passed: false, detail: "The dog has MeshParts; it was to be built from Parts." };
-    if (typeof field(probe, "rigStamp") !== "string") {
-      return { passed: false, detail: "The dog's rig was not built by rig, so no pivot of it was checked: it carries no RoqerRigRevision." };
+function judgeBuiltCreature(
+  probe: unknown,
+  verified: boolean,
+  evidence: readonly RunEvidence[],
+  subject: WalkingModel,
+  toolCalls?: EvalOracleInput["toolCalls"],
+): EvalVerdict {
+  const { noun } = subject;
+  const path = `game.Workspace.${subject.name}`;
+  if (toolCalls !== undefined) {
+    // Modelled in Blender: a job, an upload, and the pieces it arrived as.
+    const succeeded = (tool: string) => toolCalls.some((call) => call.tool === tool && call.ok);
+    if (!succeeded("run_blender_script")) return { passed: false, detail: `No Blender job succeeded; the ${noun} was not modelled.` };
+    if (!succeeded("upload_asset")) return { passed: false, detail: `The modelled ${noun} was never uploaded.` };
+  }
+  if (field(probe, subject.key) === "Model") {
+    const meshParts = Number(field(probe, "meshParts") ?? 0);
+    if (toolCalls === undefined && meshParts > 0) return { passed: false, detail: `The ${noun} has MeshParts; it was to be built from Parts.` };
+    if (toolCalls !== undefined && meshParts < 5) {
+      return { passed: false, detail: `The ${noun} has ${meshParts} MeshParts; a body modelled as moving pieces arrives as one for its body and one or more for each leg.` };
     }
-    // The last rig call on the dog is the rig it has; an edit after it would be a change the gate saw.
+    if (typeof field(probe, "rigStamp") !== "string") {
+      return { passed: false, detail: `The ${noun}'s rig was not built by rig, so no pivot of it was checked: it carries no RoqerRigRevision.` };
+    }
+    // The last rig call on it is the rig it has; an edit after it would be a change the gate saw.
     const rigs = evidence.filter((item) => item.kind === "verification" && item.changeKind === "instance" && item.title === path);
     if (rigs.length === 0 || rigs[rigs.length - 1].passed !== true) {
-      return { passed: false, detail: rigs.length === 0 ? "No rig call built the dog's rig in this run." : "The dog's rig did not read back from Studio as it was built." };
+      return { passed: false, detail: rigs.length === 0 ? `No rig call built the ${noun}'s rig in this run.` : `The ${noun}'s rig did not read back from Studio as it was built.` };
     }
     if (Number(field(probe, "feet") ?? 0) !== 4 || Number(field(probe, "motors") ?? 0) < 5) {
-      return { passed: false, detail: `The dog's rig declares ${String(field(probe, "feet") ?? 0)} feet on ${String(field(probe, "motors") ?? 0)} joints; a four-legged body needs four feet, each on a leg of its own.` };
+      return { passed: false, detail: `The ${noun}'s rig declares ${String(field(probe, "feet") ?? 0)} feet on ${String(field(probe, "motors") ?? 0)} joints; a four-legged body needs four feet, each on a leg of its own.` };
     }
     if (!evidence.some((item) => item.title === RIG_RANGE_SHEET_TITLE && item.subject === path && item.modelPreviewId !== undefined)) {
-      return { passed: false, detail: "No range sheet of the dog's rig, with its 3D view, was shown in the chat." };
+      return { passed: false, detail: `No range sheet of the ${noun}'s rig, with its 3D view, was shown in the chat.` };
     }
   }
-  return judgeNpcPatrol(probe, verified, evidence, DOG);
+  return judgeNpcPatrol(probe, verified, evidence, subject);
 }
 
 interface WalkingModel { /** The probe field holding its class. */ key: string; name: string; noun: string }
 const GUARD: WalkingModel = { key: "guard", name: "WorkbenchEvalGuard", noun: "guard" };
 const DOG: WalkingModel = { key: "dog", name: "WorkbenchEvalDog", noun: "dog" };
+const WOLF: WalkingModel = { key: "wolf", name: "WorkbenchEvalWolf", noun: "wolf" };
 
 /**
  * The creature plan's step 2 "done" conditions for the guard, each from

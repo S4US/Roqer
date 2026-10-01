@@ -1541,7 +1541,11 @@ function rigRevision(reading: Omit<RigReading, "revision">): string {
 	const out: string[] = [`c:${reading.controller}:${reading.rootPart}:${formatNumber(reading.hipHeight ?? 0)}`];
 	for (const part of reading.parts) out.push(`p:${part.name}:${formatComponents(part.size)}:${part.shape}:${tostring(part.hidden === true)}`);
 	for (const joint of reading.joints) out.push(`j:${joint.name}:${joint.part0}:${joint.part1}:${formatComponents(joint.c0)}:${formatComponents(joint.c1)}`);
-	for (const piece of reading.welded ?? []) out.push(`w:${piece.name}:${piece.to}:${formatComponents(piece.offset)}:${formatComponents(piece.size)}:${piece.shape}`);
+	// A welded part's offset is left out: a WeldConstraint stores none, so it is
+	// worked out from where the two parts are, and moving the model changes its
+	// last digits (a position is a 32-bit float). A model that was only moved
+	// must read as the same rig.
+	for (const piece of reading.welded ?? []) out.push(`w:${piece.name}:${piece.to}:${formatComponents(piece.size)}:${piece.shape}`);
 	out.push(`d:${reading.declarations ?? ""}`);
 	return `rr1:${sourceRevision(out.join("\n")).sub(5)}`;
 }
@@ -1713,6 +1717,12 @@ const RIG_REVISION_ATTRIBUTE = "RoqerRigRevision";
 /** Marks the root and the welds `rig` made, which a rebuild takes again or out. */
 const MADE_ROOT_ATTRIBUTE = "RoqerRigRoot";
 const MADE_WELD_ATTRIBUTE = "RoqerRigWeld";
+/**
+ * Where the origin an upload was modelled about is, as a CFrame in the rig's
+ * root part: kept when rig replaces an importer's rig, so a rebuild can still
+ * take pivots measured from that origin wherever the model has been moved.
+ */
+const RIG_ORIGIN_ATTRIBUTE = "RoqerRigOrigin";
 /** The most parts a model rig builds on may have: Roqer's bound, so a reading stays small. */
 const MAX_PIECE_PARTS = 512;
 const ROOT_PART_NAME = "HumanoidRootPart";
@@ -1823,6 +1833,8 @@ function animationReadPieces(requestData: Data) {
 		rig = { revision, ...(typeIs(built, "string") ? { builtRevision: built } : {}) };
 	}
 	const importer = pieces.importer;
+	const kept = model.GetAttribute(RIG_ORIGIN_ATTRIBUTE);
+	const madeRoot = parts.find((part) => part.GetAttribute(MADE_ROOT_ATTRIBUTE) === true) ?? parts.find((part) => part.Name === ROOT_PART_NAME);
 	return {
 		path: getInstancePath(model),
 		revision: piecesRevision(pieces),
@@ -1844,6 +1856,7 @@ function animationReadPieces(requestData: Data) {
 		})),
 		controllers: pieces.controllers.map((controller) => controller.ClassName),
 		...(importer ? { importer: { rootPart: index.get(importer.root)!, joints: importer.motors.size(), initialPoses: importer.initialPoses.size() } } : {}),
+		...(!importer && madeRoot && typeIs(kept, "CFrame") ? { origin: componentsOf(madeRoot.CFrame.mul(kept)) } : {}),
 		...(rig ? { rig } : {}),
 		...(typeIs(declared, "string") ? { declarations: declared } : {}),
 	};
@@ -1939,6 +1952,8 @@ function animationBuildRig(requestData: Data) {
 			part.Massless = part !== root;
 		}
 		model.PrimaryPart = root;
+		// Where the import's origin sits in the root, which moves with the model.
+		if (typeIs(plan.origin, "table")) model.SetAttribute(RIG_ORIGIN_ATTRIBUTE, root.CFrame.ToObjectSpace(cframeFrom(plan.origin, "the import's origin")));
 
 		// The joints, each in the part it moves, as Roblox's own rigs keep them.
 		for (const entry of plan.joints as Data[]) {

@@ -6,8 +6,9 @@ follows them. Step 2 made NPCs on stock rigs, and eval T18 passes. Step 3
 reads a rig from any rigged model, and a dog rigged by hand in Studio plays
 its animation as checked. Step 4 rigs a model's loose pieces, and `aim` and
 `aimAt` move the legs of a dog it rigged. Step 5 added the `wave` and `gait`
-generators, and eval T19 passes. Steps 6 to 8 are
-proposed and not yet scheduled. The
+generators, and eval T19 passes. Step 6, pivots from Blender, is built, and
+its eval T17 has not been run. Steps 7 and 8 are proposed and not yet
+scheduled. The
 plan details steps 12 to 14 of the [animation plan](animation-plan.md)
 (creatures made of rigid parts, skinned creatures, animating in Blender), adds
 NPCs, and orders the work anew. Update each step's status here as it lands.
@@ -808,7 +809,7 @@ What changed from the proposal, and why:
 - The skill has a waves section with an octopus idle and swim; the catalog
   budget rose to 50,600 characters for `waves` and `duration`.
 
-### 6. Blender and generated creatures — proposed
+### 6. Blender and generated creatures — in progress
 
 - The articulated recipe, and the inspection's origins, parents, pivot flags,
   mesh names and ready `rig` arguments.
@@ -823,6 +824,60 @@ What changed from the proposal, and why:
   plan reserved T17 for. It needs `--blender` and an Open Cloud key.
 
 **Done when** T17 passes.
+
+**Status, 2026-10-01.** Built, and T17 is written but has not been run: it
+needs an agent run with Blender on, against a published place with an Open
+Cloud key (`npm run eval -- --task T17-creature-blender --blender auto`). The
+step is done when it passes. No upload has gone through this path yet, so
+T17 is also the first test of how an upload's origin and axes arrive.
+
+- **The inspection reads the pivots.** Roqer's check of an exported file now
+  reads each mesh object's origin, box, parent (through any empties), mesh
+  name and material count. For a model whose objects hang from one another it
+  reports the pieces as a tree and ends with the `joints` for `rig`: each
+  piece by the name its MeshPart will have, the piece it hangs from, its
+  pivot in Roblox's axes from the model's origin, and for a body plan's leg
+  the joint names the recipes key (`FrontLeft`, `FrontLeftKnee`, `Neck`).
+- **It flags what would rig badly**, while the model can still be changed: an
+  origin in neither piece it joins, an origin at its piece's own middle, left
+  and right origins that do not mirror, a mesh named apart from its object,
+  two objects sharing a mesh, a piece with more than one material, and more
+  than one piece parented to nothing. Overlaps between a piece and the one it
+  hangs from are no longer layout findings.
+- **`roqer.piece(obj, pivot, parent)`** in the job's helpers moves an
+  object's origin to its pivot without moving its shape, names its mesh after
+  it, and parents it where it stands, so the recipe has no origin arithmetic.
+  Run through the worker in Blender 5.2, the skill's wolf (eleven pieces)
+  exported, re-imported and came back as ten joints with nothing flagged.
+- **`pivot_space: "import"` on `rig`.** The joints' pivots are then measured
+  from the upload's own origin, which the importer's `RootPart` marks, and
+  core places them in the world. `rig` keeps where that origin is, as a
+  `RoqerRigOrigin` attribute relative to the root it makes, so a rebuild
+  takes the same pivots after the model is moved or turned.
+- **Guidance**: the building skill's Blender reference has the creature
+  recipe; the creature reference has the upload-and-rig call and how to rig a
+  `generate_model` body from its pieces' boxes.
+- **T17** `creature-blender`: T19's conditions on a wolf, with a Blender job
+  and an upload in place of Parts, and five or more MeshParts.
+
+What changed from the proposal, and why:
+
+- **Pieces are named as the body plan names them** (`FrontLeftUpper`), not
+  `_L` and `_R`: the plan reads part names, and a MeshPart takes its mesh's
+  name. The mirror check reads both ways of naming a side.
+- **Pivots travel in the import's frame, not the world's.** The proposal had
+  the inspection give "ready" arguments, but an upload can be inserted
+  anywhere, so world pivots would be wrong as soon as it was. The new
+  argument added about 120 characters to the catalog, within its budget.
+- **A moved model is the same rig.** The rig's revision no longer includes a
+  welded part's offset: a `WeldConstraint` stores none, so the offset is
+  worked out from two world positions, and its last digits change when the
+  model moves. The live suite found a model that had only been moved and
+  turned refused as "edited since rig built it".
+- **No live test of a generated body.** `generate_model` is guidance only for
+  now: a live test would spend a generation on every run, and what comes back
+  varies. The skill says to read the range sheet and generate again when a
+  piece is split badly.
 
 ### 7. Skinned creatures — proposed
 

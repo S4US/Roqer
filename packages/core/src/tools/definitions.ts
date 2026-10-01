@@ -286,6 +286,11 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
           enum: ['importer'],
           description: "Rig: replace the rig an upload arrived with."
         },
+        pivot_space: {
+          type: 'string',
+          enum: ['world', 'import'],
+          description: "Rig: import = pivots from an upload's own origin."
+        },
         position: {
           type: 'array',
           items: { type: 'number' },

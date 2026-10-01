@@ -622,7 +622,7 @@ test("T15 passes a run that meets every one of the plan's conditions", () => {
 });
 
 test("only the tasks that judge an owner against the place's need a published place", () => {
-  assert.deepEqual(EVAL_TASKS.filter((task) => needsPublishedPlace([task])).map((task) => task.id), ["T15-animation-run", "T18-npc-patrol", "T19-creature-parts"]);
+  assert.deepEqual(EVAL_TASKS.filter((task) => needsPublishedPlace([task])).map((task) => task.id), ["T15-animation-run", "T18-npc-patrol", "T19-creature-parts", "T17-creature-blender"]);
   assert.match(animationRun({ place: { id: 0, type: "User" } }).detail, /The place is not published/);
 });
 
@@ -777,6 +777,39 @@ test("T19 then holds the dog to what T18 holds the guard to", () => {
   assert.match(creature({}, withMetadata(dogEvidence(), "p7", MODEL_MOVED_BY_LABEL, MODEL_MOVED_BY_VERIFY)).detail, /watched the dog's own wandering/);
   assert.match(creature({}, withMetadata(dogEvidence(), "p3", ANIMATION_GAIT_CHECKS_LABEL, "Not checked as a gait")).detail, /checked as a gait/);
   assert.match(creature({}, dogEvidence(), false).detail, /completion gate/);
+});
+
+const WOLF_PATH = "game.Workspace.WorkbenchEvalWolf";
+// The dog's probe under the wolf's key: `dog` set aside, so the judge reads the body by `wolf` alone.
+const WOLF_PROBE = { ...DOG_PROBE, dog: undefined, wolf: "Model", meshParts: 11 };
+const BLENDER_CALLS = [{ tool: "run_blender_script", ok: true }, { tool: "upload_asset", ok: true }];
+
+function wolf(probe: Record<string, unknown> = {}, evidence?: RunEvidence[], toolCalls = BLENDER_CALLS) {
+  const onWolf = dogEvidence().map((item) => ({
+    ...item,
+    title: item.title.replace(DOG_PATH, WOLF_PATH),
+    ...(item.subject === undefined ? {} : { subject: item.subject.replace(DOG_PATH, WOLF_PATH) }),
+  }));
+  return verdict("T17-creature-blender", {
+    probe: { ...WOLF_PROBE, ...probe }, outcome: "completed", verified: true, toolCalls, changedTargets: [], evidence: evidence ?? onWolf,
+  });
+}
+
+test("T17 passes a wolf modelled in Blender, uploaded as pieces and rigged by rig, that walks and idles on its own", () => {
+  const result = wolf();
+  assert.equal(result.passed, true, result.detail);
+});
+
+test("T17 wants a Blender job, an upload, and the pieces the upload arrived as, under a rig that rig built", () => {
+  assert.match(wolf({}, undefined, [{ tool: "upload_asset", ok: true }]).detail, /No Blender job succeeded; the wolf was not modelled/);
+  assert.match(wolf({}, undefined, [{ tool: "run_blender_script", ok: true }, { tool: "upload_asset", ok: false }]).detail, /never uploaded/);
+  // A wolf of Parts, or one uploaded as a single mesh, was not modelled as moving pieces.
+  assert.match(wolf({ meshParts: 0 }).detail, /The wolf has 0 MeshParts/);
+  assert.match(wolf({ meshParts: 1 }).detail, /The wolf has 1 MeshParts/);
+  // The importer's rig left in place carries no stamp.
+  assert.match(wolf({ rigStamp: false }).detail, /The wolf's rig was not built by rig/);
+  assert.match(wolf({ feet: 0 }).detail, /The wolf's rig declares 0 feet/);
+  assert.match(wolf({ walkGroundSpeed: false }).detail, /The wolf's walk was wired without its ground speed/);
 });
 
 test("T18 wants a 3D preview, both sequences kept with every check passed, a gait among them, and the completion gate", () => {

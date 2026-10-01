@@ -739,13 +739,31 @@ const passed = await runTest('animation tool', async ({ track }) => {
     const importedArgs = { action: 'rig', model: IMPORTED, joints: pupJoints(IMPORTED_AT), controller: 'AnimationController', plan: 'quadruped' };
     const importedKept = await client.callTool('animation', importedArgs, 120_000);
     assert(importedKept.errorCode === 'importer_rig', `an importer's rig is left alone unless replace says so (${importedKept.errorCode})`);
-    const replaced = await client.callTool('animation', { ...importedArgs, replace: 'importer' }, 120_000);
+    // Step 6: its pivots as Blender's inspection gives them, measured from the upload's own origin, which its RootPart marks.
+    const importPivots = pupJoints([0, PUP_AT[1], 0]);
+    const replaced = await client.callTool('animation', { ...importedArgs, joints: importPivots, pivot_space: 'import', replace: 'importer' }, 120_000);
     const importedMade = await luau(client, inspectPieces(IMPORTED_NAME));
     assert(replaced.rigged === true && replaced.readBack?.matches === true && replaced.removed?.includes('RootPart') && replaced.removed?.includes('InitialPoses'), `replace takes the importer's rig out and builds the new one (${replaced.error ?? JSON.stringify(replaced.removed)})`);
     assert(
       importedMade.importerRoot === false && importedMade.initialPoses === false && importedMade.motors === 11 && importedMade.controller === 'AnimationController'
         && importedMade.animator === true && importedMade.rootAnchored === true && JSON.stringify(importedMade.body) === JSON.stringify(IMPORTED_AT),
       `Studio holds the new rig under an AnimationController, its root anchored, and nothing of the importer's (${JSON.stringify({ ...importedMade, c0s: undefined })})`,
+    );
+
+    // Moved and turned, it is rigged again from the same pivots: the rig kept where the upload's origin is.
+    const movedTo = await luau(client, `
+      local model = workspace[${JSON.stringify(IMPORTED_NAME)}]
+      model:PivotTo(CFrame.new(-90, model:GetPivot().Position.Y, 150) * CFrame.Angles(0, math.rad(90), 0))
+      game:GetService("ChangeHistoryService"):SetWaypoint("Roqer test move")
+      local body = model.Body
+      return { math.round(body.Position.X * 100) / 100, math.round(body.Position.Y * 100) / 100, math.round(body.Position.Z * 100) / 100 }
+    `);
+    const movedCheck = await client.callTool('animation', { action: 'rig', model: IMPORTED }, 120_000);
+    const reRigged = await client.callTool('animation', { ...importedArgs, joints: importPivots, pivot_space: 'import', expected_revision: movedCheck.revision }, 120_000);
+    const afterMove = await luau(client, inspectPieces(IMPORTED_NAME));
+    assert(
+      reRigged.rigged === true && reRigged.readBack?.matches === true && afterMove.motors === 11 && JSON.stringify(afterMove.body) === JSON.stringify(movedTo),
+      `moved and turned, it is rigged again from the same pivots, where it now stands (${reRigged.errorCode ?? 'ok'}: ${JSON.stringify(reRigged.errors ?? reRigged.readBack ?? reRigged.error)})`,
     );
 
     // -- Step 8: publish, wire, verify -------------------------------------

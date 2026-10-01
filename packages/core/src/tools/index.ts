@@ -2152,7 +2152,7 @@ export class RobloxStudioTools {
       if (args.position !== undefined) throw new Error('position goes with stock: it is where a stock NPC\'s feet stand');
       return args.joints === undefined ? this._animationAdoptRig(model, args, instance_id) : this._animationBuildRig(model, args, instance_id);
     }
-    for (const key of ['joints', 'controller', 'plan', 'declarations', 'replace']) {
+    for (const key of ['joints', 'controller', 'plan', 'declarations', 'replace', 'pivot_space']) {
       if (args[key] !== undefined) throw new Error(`${key} is for rigging a model's own pieces; a stock NPC takes model, stock and position`);
     }
     if (stock !== 'R15' && stock !== 'R6') throw new Error('stock must be R15 or R6');
@@ -2204,6 +2204,9 @@ export class RobloxStudioTools {
       throw new Error('controller must be Humanoid, for a body that walks, or AnimationController, for one that swims, flies, slithers or stays put');
     }
     if (args.replace !== undefined && args.replace !== 'importer') throw new Error('replace must be "importer": the rig an upload or a generated model arrived with');
+    if (args.pivot_space !== undefined && args.pivot_space !== 'world' && args.pivot_space !== 'import') {
+      throw new Error('pivot_space must be world, or import for pivots measured from an upload\'s own origin, as the Blender inspection gives them');
+    }
     const { plan, declarations, expectedRevision } = this._rigDeclarationArgs(args);
 
     const reading = await this._callSingle('/api/animation-read-pieces', { model }, undefined, instance_id);
@@ -2214,6 +2217,7 @@ export class RobloxStudioTools {
       plan,
       ...(declarations ? { declarations } : {}),
       replaceImporter: args.replace === 'importer',
+      pivotSpace: args.pivot_space === 'import' ? 'import' : 'world',
       ...(expectedRevision !== undefined ? { expectedRevision } : {}),
     });
     if (!planned.ok) {
@@ -2253,7 +2257,7 @@ export class RobloxStudioTools {
    * only read the rig and draw its range sheet.
    */
   private async _animationAdoptRig(model: string, args: Record<string, unknown>, instance_id?: string) {
-    for (const key of ['controller', 'replace']) {
+    for (const key of ['controller', 'replace', 'pivot_space']) {
       if (args[key] !== undefined) throw new Error(`${key} goes with joints: rig without joints adopts the model's own joints and changes none of them`);
     }
     const { plan, declarations, expectedRevision } = this._rigDeclarationArgs(args);

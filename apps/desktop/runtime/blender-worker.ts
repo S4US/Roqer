@@ -9,6 +9,7 @@ import {
   MAX_BLENDER_JOB_SECONDS,
   MAX_BLENDER_SCRIPT_CHARACTERS,
 } from "../shared/blender";
+import { articulationOf, describeArticulation, MAX_LISTED_OBJECTS, parseObjects, type Articulation, type InspectedObject } from "./blender-articulation";
 import type { McpCallOptions, McpToolImage, McpToolOutcome } from "./mcp-types";
 import { isViewableGlb, JOB_RETENTION_MS, MAX_KEPT_JOBS, modelPreviewFileName, pruneJobFolders } from "./model-preview";
 import { modelPreviewId } from "../shared/model-preview";
@@ -239,6 +240,32 @@ def join(name, objects):
     first.data.polygons.foreach_set("use_smooth", [False] * len(first.data.polygons))
     first.data.update()
     return first
+
+
+def piece(obj, pivot, parent=None):
+    """Make an object a moving piece of a creature or a machine, to be rigged in Studio.
+
+    Its origin moves to pivot, the point it turns about (a leg's hip, a jaw's hinge), without
+    moving its shape; its mesh is named after it, as Roblox names the MeshPart; and, given
+    parent, it hangs from that piece, staying where it is. Call it after join, once per piece.
+    """
+    from mathutils import Matrix
+    pivot = _vector(pivot, "pivot")
+    world = obj.matrix_world.copy()
+    local = world.inverted() @ pivot
+    obj.data.transform(Matrix.Translation(-local))
+    obj.data.update()
+    placed = world @ Matrix.Translation(local)
+    obj.data.name = obj.name
+    if parent is not None:
+        if parent is obj:
+            raise ValueError(f"{obj.name} cannot hang from itself")
+        bpy.context.view_layer.update()
+        obj.parent = parent
+        obj.matrix_parent_inverse = parent.matrix_world.inverted()
+    obj.matrix_world = placed
+    bpy.context.view_layer.update()
+    return obj
 `;
 
 /**
@@ -449,12 +476,27 @@ color_source = "vertex" if vertex_colored else "texture" if textured else "mater
 # Each object's own name and size, so a kit set exported as one file can be told
 # apart after upload: Roblox keeps one MeshPart per object, named after it.
 objects = []
-for item in meshes[:16]:
+mesh_set = set(meshes)
+r3 = lambda vector: [round(vector.x, 3), round(vector.y, 3), round(vector.z, 3)]
+for item in meshes[:48]:
     corners = [item.matrix_world @ Vector(corner) for corner in item.bound_box]
     lo = Vector(map(min, *corners))
     hi = Vector(map(max, *corners))
     # Roblox axes: X, then Blender's up (Z) as Y, then Blender's Y as Z.
-    objects.append({"name": item.name, "size": [round(hi.x - lo.x, 2), round(hi.z - lo.z, 2), round(hi.y - lo.y, 2)]})
+    entry = {"name": item.name, "size": [round(hi.x - lo.x, 2), round(hi.z - lo.z, 2), round(hi.y - lo.y, 2)]}
+    # For a model of moving pieces: where the object's origin is, which is
+    # where it turns; its box; the mesh object it hangs from; and its mesh's
+    # own name, which is what Roblox names the MeshPart. In Blender coordinates.
+    entry["origin"] = r3(item.matrix_world.translation)
+    entry["low"], entry["high"] = r3(lo), r3(hi)
+    entry["mesh"] = item.data.name
+    entry["materials"] = sum(1 for slot in item.material_slots if slot.material is not None)
+    parent = item.parent
+    while parent is not None and parent not in mesh_set:
+        parent = parent.parent
+    if parent is not None:
+        entry["parent"] = parent.name
+    objects.append(entry)
 stats = {"meshes": len(meshes), "triangles": triangles, "materials": sorted(materials)[:32], "preview": False,
          "colorSource": color_source, "objects": objects}
 
@@ -857,7 +899,9 @@ export type InspectedFile = Readonly<{
    */
   colorSource?: "texture" | "vertex" | "material";
   /** Each mesh object's name and size in studs (Roblox axes), for splitting a kit set. */
-  objects?: ReadonlyArray<Readonly<{ name: string; size: readonly number[] }>>;
+  objects?: readonly InspectedObject[];
+  /** For a model whose objects hang from one another: its pieces as `rig` joints, and what would rig badly. */
+  articulation?: Articulation;
   /** Where the model's lowest point sits, in Blender units: 0 stands it on the ground. */
   bottom?: number;
   /** How the model's pieces sit against each other, in the script's Blender coordinates. */
@@ -1203,12 +1247,8 @@ export class BlenderWorker {
         materials: Array.isArray(stats.materials) ? stats.materials.filter((entry): entry is string => typeof entry === "string") : undefined,
         size: Array.isArray(stats.size) ? stats.size.filter((entry): entry is number => typeof entry === "number") : undefined,
         colorSource: stats.colorSource === "texture" || stats.colorSource === "vertex" || stats.colorSource === "material" ? stats.colorSource : undefined,
-        objects: Array.isArray(stats.objects) ? stats.objects.flatMap((entry: unknown) => {
-          const object = entry as { name?: unknown; size?: unknown };
-          return typeof object.name === "string" && Array.isArray(object.size) && object.size.every((value) => typeof value === "number")
-            ? [{ name: object.name, size: object.size as number[] }]
-            : [];
-        }) : undefined,
+        objects: parseObjects(stats.objects),
+        articulation: articulationOf(parseObjects(stats.objects) ?? []),
         bottom: Array.isArray(stats.min) && typeof stats.min[2] === "number" ? stats.min[2] : undefined,
         layout: parseLayout(stats.layout),
         smoothShaded: Array.isArray(stats.smoothShaded)
@@ -1346,14 +1386,16 @@ function describeFile(file: InspectedFile): string {
   const facts = file.inspectionError !== undefined
     ? file.inspectionError
     : `${file.triangles ?? "?"} triangles, ${file.meshes ?? "?"} mesh${file.meshes === 1 ? "" : "es"}, ${file.materials?.length ?? 0} material${file.materials?.length === 1 ? "" : "s"}${size}`;
+  const listed = file.objects?.slice(0, MAX_LISTED_OBJECTS) ?? [];
   const pieces = file.objects !== undefined && file.objects.length > 1
-    ? `\n  objects, each arriving as its own MeshPart named after it: ${file.objects.map((object) => `${object.name} ${object.size.map((value) => value.toFixed(2)).join(" × ")}`).join("; ")}`
+    ? `\n  objects, each arriving as its own MeshPart named after it: ${listed.map((object) => `${object.name} ${object.size.map((value) => value.toFixed(2)).join(" × ")}`).join("; ")}${more(listed.length, file.objects.length)}`
     : "";
-  const layout = file.inspectionError === undefined ? describeLayout(file.layout, file.bottom) : "";
+  const articulated = file.inspectionError === undefined ? describeArticulation(file.articulation) : "";
+  const layout = file.inspectionError === undefined ? describeLayout(file.layout, file.bottom, file.articulation) : "";
   const shading = file.smoothShaded !== undefined && file.smoothShaded.length > 0
     ? `\n  shading: smooth across hard edges on ${file.smoothShaded.map((entry) => `${entry.object} (${Math.round(entry.share * 100)}% of corners)`).join(", ")}, which makes boxes and panels look puffy in Roblox. Unless the object is meant to look rounded, remove shade_smooth; roqer.join keeps what it joins flat.`
     : "";
-  return `- ${file.path} (${Math.max(1, Math.round(file.bytes / 1024))} KB): ${facts}${file.colorSource === undefined ? "" : `; ${COLOR_SOURCE_NOTES[file.colorSource]}`}${pieces}${layout}${shading}`;
+  return `- ${file.path} (${Math.max(1, Math.round(file.bytes / 1024))} KB): ${facts}${file.colorSource === undefined ? "" : `; ${COLOR_SOURCE_NOTES[file.colorSource]}`}${pieces}${layout}${shading}${articulated}`;
 }
 
 const MAX_LAYOUT_ENTRIES = 8;
@@ -1411,7 +1453,15 @@ const more = (shown: number, total: number) => total > shown ? `; and ${total - 
  * line that placed the piece. Facts, not verdicts: a kit set is meant to be
  * apart, and a piece may be meant to sit inside another.
  */
-function describeLayout(layout: LayoutFacts | undefined, bottom: number | undefined): string {
+function describeLayout(layout: LayoutFacts | undefined, bottom: number | undefined, articulation?: Articulation): string {
+  // A moving piece is meant to pass into the piece it hangs from, at their
+  // joint, so that a turn opens no gap: those overlaps are not findings.
+  const jointed = new Set((articulation?.joints ?? []).flatMap((joint) => [`${joint.part}\n${joint.parent}`, `${joint.parent}\n${joint.part}`]));
+  if (layout !== undefined && jointed.size > 0) {
+    const kept = layout.overlaps.filter((entry) => !jointed.has(entry.objects.join("\n")));
+    // Past the listed ones nothing is known, so only what was listed is taken off the count.
+    layout = { ...layout, overlaps: kept, overlapCount: layout.overlapCount - (layout.overlaps.length - kept.length) };
+  }
   const lines: string[] = [];
   if (bottom !== undefined) lines.push(`lowest point at Z ${studs(bottom)}${Math.abs(bottom) > 0.05 ? "; 0 stands it on the ground" : ""}`);
   if (layout !== undefined && layout.skipped !== undefined) {
@@ -1434,7 +1484,9 @@ function describeLayout(layout: LayoutFacts | undefined, bottom: number | undefi
         .join("; ")}${more(layout.overlaps.length, layout.overlapCount)}`);
     }
     if (layout.looseCount === 0 && layout.isolatedCount === 0 && layout.overlapCount === 0) {
-      lines.push(layout.pieces === 1 ? "one piece" : `all ${layout.pieces} pieces connected, and no separate objects pass into each other`);
+      lines.push(layout.pieces === 1 ? "one piece" : jointed.size > 0
+        ? `all ${layout.pieces} pieces connected, and separate objects pass into each other only where one hangs from the other`
+        : `all ${layout.pieces} pieces connected, and no separate objects pass into each other`);
     }
     if (layout.complete === false) lines.push("the comparison stopped at its time limit, so pieces may be missing from these facts");
   }
