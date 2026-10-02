@@ -602,7 +602,12 @@ effect still for each capture instead of trying to catch it.
    - Is there something dark, so the bright parts read?
    - Do the shapes have hard silhouettes, or do they look like soft smudges?
    - Is the centre a white blob? Bring the stacked bright layers down until
-     the coloured shapes show through.
+     the coloured shapes show through. A pale effect on a light floor needs
+     its darks most (cobalt, navy, black accents).
+   - Does any texture look like clip art or an icon: radially symmetric,
+     evenly spaced, or drawn with even outlines?
+   - Does everything that moves carry its speed (streaks, wind rings, a
+     smear), or does it float?
    - Is a large half-transparent shell covering the view?
    - Does a light tint the whole floor?
    - Does the smoke beside the fire take its colour, or is it one flat tone?

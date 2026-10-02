@@ -671,6 +671,98 @@ def tex_ease(t, power=3.0):
     return 1.0 - (1.0 - numpy.clip(t, 0.0, 1.0)) ** power
 
 
+_WARP_NOISE = {}
+
+
+def tex_curve(points, samples=64, closed=False):
+    """A smooth curve through control points (Catmull-Rom), as an (n, 2) array of x, y in tex_coords units. closed=True joins the last point back to the first. Feed it to tex_stroke."""
+    import numpy
+    p = numpy.asarray(points, dtype=numpy.float32)
+    if p.ndim != 2 or p.shape[1] != 2 or len(p) < 2:
+        raise ValueError("points must be at least two (x, y) pairs")
+    if not isinstance(samples, int) or samples < 4 or samples > 1024:
+        raise ValueError(f"samples must be a whole number from 4 to 1024, got {samples!r}")
+    if closed:
+        p = numpy.concatenate([p[-1:], p, p[:2]])
+    else:
+        p = numpy.concatenate([p[:1] * 2 - p[1:2], p, p[-1:] * 2 - p[-2:-1]])
+    spans = len(p) - 3
+    out = []
+    for i in range(spans):
+        p0, p1, p2, p3 = p[i], p[i + 1], p[i + 2], p[i + 3]
+        t = numpy.linspace(0, 1, max(2, samples // spans), endpoint=(i == spans - 1))[:, None]
+        out.append(0.5 * ((2 * p1) + (-p0 + p2) * t + (2 * p0 - 5 * p1 + 4 * p2 - p3) * t ** 2 + (-p0 + 3 * p1 - 3 * p2 + p3) * t ** 3))
+    return numpy.concatenate(out)
+
+
+def tex_stroke(x, y, path, width=0.08, start=0.0, end=1.0):
+    """A stroke along a path, the way a brush draws it: positive inside, about the distance to its edge, so tex_edge cuts it.
+
+    path is an (n, 2) array of points in tex_coords units; tex_curve makes a smooth one. width is
+    the full width: a number, a list of widths spread evenly from head to tail, or a function of u
+    (0 at the head, 1 at the tail). Tapering it gives the thick-to-thin pen pressure of a drawn
+    claw, crescent, wisp or crack. Only the part from start to end (0 to 1 along the path) is drawn:
+    raise end over the frames to draw the stroke on, and start to erase it from the head. Combine
+    strokes and shapes with numpy.maximum (union) or numpy.minimum (intersection; subtract one with
+    numpy.minimum(a, -b)).
+    """
+    import numpy
+    path = numpy.asarray(path, dtype=numpy.float32)
+    if path.ndim != 2 or path.shape[1] != 2 or len(path) < 2:
+        raise ValueError("path must be at least two (x, y) points, as tex_curve returns")
+    if len(path) > 2048:
+        raise ValueError(f"path has {len(path)} points; use at most 2048 (fewer tex_curve samples)")
+    seg = numpy.linalg.norm(numpy.diff(path, axis=0), axis=1)
+    along = numpy.concatenate([[0.0], numpy.cumsum(seg)])
+    along = along / max(float(along[-1]), 1e-6)
+    if callable(width):
+        def profile(u):
+            return numpy.asarray(width(u), dtype=numpy.float32)
+    elif numpy.ndim(width) == 0:
+        def profile(u):
+            return numpy.full_like(u, float(width))
+    else:
+        keys = numpy.asarray(width, dtype=numpy.float32)
+
+        def profile(u):
+            return numpy.interp(u, numpy.linspace(0, 1, len(keys)), keys).astype(numpy.float32)
+    field = numpy.full(numpy.shape(x), -1.0, dtype=numpy.float32)
+    for i in range(len(path) - 1):
+        a, b = path[i], path[i + 1]
+        d = b - a
+        length2 = max(float(d @ d), 1e-12)
+        t = numpy.clip(((x - a[0]) * d[0] + (y - a[1]) * d[1]) / length2, 0.0, 1.0)
+        u = along[i] + (along[i + 1] - along[i]) * t
+        inside = profile(u) * 0.5 - numpy.hypot(x - (a[0] + d[0] * t), y - (a[1] + d[1] * t))
+        field = numpy.maximum(field, numpy.where((u >= start) & (u <= end), inside, -1.0))
+    return field
+
+
+def tex_warp(x, y, amount=0.1, scale=3, seed=0, t=0.0):
+    """x, y pushed around by smooth noise. Shapes drawn with the warped coordinates come out lopsided and organic instead of geometric; t drifts the noise to animate it."""
+    import numpy
+    key = (int(scale), int(seed))
+    if key not in _WARP_NOISE:
+        _WARP_NOISE[key] = (tex_noise(256, scale, 3, seed), tex_noise(256, scale, 3, seed + 101))
+    nx, ny = _WARP_NOISE[key]
+    u, v = x * 0.5 + 0.5 + t, y * 0.5 + 0.5
+    return x + (tex_sample(nx, u, v) - 0.5) * 2 * amount, y + (tex_sample(ny, u, v) - 0.5) * 2 * amount
+
+
+def tex_blob(x, y, radius=0.5, lumps=6, roughness=0.5, seed=0, centre=(0.0, 0.0)):
+    """A lumpy, asymmetric blob: overlapping circles scattered around a centre. Positive inside; tex_edge cuts it. More lumps and roughness give more lobes and overhangs."""
+    import numpy
+    rng = numpy.random.default_rng(seed)
+    field = numpy.full(numpy.shape(x), -1.0, dtype=numpy.float32)
+    for _ in range(max(1, int(lumps))):
+        angle = rng.uniform(0, 2 * numpy.pi)
+        reach = rng.uniform(0, radius * roughness * 1.6)
+        r = radius * rng.uniform(1 - min(roughness, 0.9), 1.0) * 0.75
+        cx, cy = centre[0] + numpy.cos(angle) * reach, centre[1] + numpy.sin(angle) * reach
+        field = numpy.maximum(field, r - numpy.hypot(x - cx, y - cy))
+    return field
+
+
 def _drawn_rgba(result, size, mode, where):
     """A drawing function's result as size x size x 4 floats: alpha alone, (alpha, value), or RGB / RGBA."""
     import numpy

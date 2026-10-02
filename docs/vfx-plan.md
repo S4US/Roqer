@@ -848,6 +848,44 @@ rigs.
 - **`references/blender-vfx.md`:** describes hand-drawn texture traits and
   drops the cell-fill claims.
 
+## After the ice spear run
+
+A third brief tested the new guidance: an ice spear for an anime battlegrounds
+game.
+
+**What improved:**
+- the palette held: five named colours, with cobalt and navy as the darks;
+- the shards were cel-shaded with lit and shadow faces;
+- textures were previewed in Studio and redrawn before upload, and only the
+  settled set of 7 was uploaded.
+
+The user called it a lot of progress, but not yet top notch.
+
+**What still separated it from the references:**
+- **Textures looked like clip art:** a perfectly radial impact star with even
+  outlines, a snowflake-symmetric frost patch, and a ring with gear-like
+  notches. The drawing helpers made geometry easy (polar rays and rings) and
+  gave nothing for drawn shapes.
+- **Little speed:** the spear was a thin sprite in flight, with few streaks
+  and no wind rings or smears.
+- **The core blew out:** a white blob again, pale on a light floor.
+
+**Changed:**
+- **Four drawing helpers:**
+  - `tex_curve`: smooth paths;
+  - `tex_stroke`: tapered brush strokes along a path, drawn on and erased by
+    `start` and `end`;
+  - `tex_blob`: lumpy, lopsided blobs;
+  - `tex_warp`: noise-warped coordinates.
+- **New examples in `blender-vfx.md`:** a claw slash, a lopsided cel-shaded
+  puff, a splinter burst and branching ground cracks. The radial star and the
+  Voronoi lava cracks are gone. The examples ran as written in Blender 5.2,
+  and look close to the hand-drawn set's claws, puffs and cracks.
+- **A "does it look drawn" checklist** in `blender-vfx.md`.
+- **Speed carriers** for anything that moves, in `vfx-design.md`.
+- **New checks in `vfx-craft.md`:** clip-art textures, floating projectiles,
+  and a pale effect needing its darks on a light floor.
+
 ## Deferred, and why
 
 - **Runtime EditableMesh/EditableImage effects** (UV scrolling on meshes,

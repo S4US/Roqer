@@ -121,7 +121,7 @@ test("the runner gives the script Roqer's placement helpers, and only those", ()
   assert.match(RUNNER_SCRIPT, /"roqer": roqer/);
   for (const helper of ["box", "box_between", "cylinder_between", "cone_between", "join", "paint", "vertex_color_material", "flipbook",
     "vfx_arc", "vfx_ring", "vfx_cone", "vfx_swirl", "vfx_shell", "vfx_surface",
-    "draw_flipbook", "draw_texture", "tex_coords", "tex_polar", "tex_noise", "tex_cells", "tex_sample", "tex_edge", "tex_ease"]) {
+    "draw_flipbook", "draw_texture", "tex_coords", "tex_polar", "tex_noise", "tex_cells", "tex_sample", "tex_edge", "tex_ease", "tex_curve", "tex_stroke", "tex_warp", "tex_blob"]) {
     assert.match(HELPERS_SCRIPT, new RegExp(`^def ${helper}\\(`, "m"), helper);
   }
   // A helper places a part by its ends; it never asks the model for a rotation angle.

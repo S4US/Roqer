@@ -62,79 +62,126 @@ The building blocks:
 | `tex_noise(size, scale, octaves, seed)` | Smooth noise in 0..1 that tiles |
 | `tex_cells(size, cells, seed)` | Voronoi `near, edge`: blobs, and cracks along `edge` near 0 |
 | `tex_sample(image, u, v)` | `image` looked up at 0..1 with wrapping, to scroll or warp noise per frame |
+| `tex_curve(points, samples, closed)` | A smooth path through control points |
+| `tex_stroke(x, y, path, width, start, end)` | A brush stroke along a path, with width tapering from head to tail, drawn on or erased by `start` and `end` |
+| `tex_blob(x, y, radius, lumps, roughness, seed)` | A lumpy, lopsided blob |
+| `tex_warp(x, y, amount, scale, seed, t)` | Coordinates pushed around by noise, so whatever is drawn with them is organic |
 | `tex_edge(value, at, soft)` | The hard edge: 0 below `at`, 1 above it, blended over `soft` |
 | `tex_ease(t, power)` | Ease out, for a burst that grows fast then slows |
 
-The pattern behind most stylised textures:
-1. **Describe the shape** as a signed distance or field from the coordinates:
-   `reach - r` for a star or ring, `half - abs(x - middle)` for a blade.
-2. **Break it up** by adding a little noise to that field.
-3. **Cut it** with `tex_edge` (soft about 0.01) for a crisp silhouette.
-4. **Animate it.** Grow it with `tex_ease(t)`, and eat it away with a rising
-   threshold on noise, such as `tex_edge(noise - t * 1.1)`, so it breaks into
-   pieces instead of fading.
+`tex_stroke`, `tex_blob` and the shapes below are fields: positive inside,
+negative outside. Combine them with `numpy.maximum` (union) and
+`numpy.minimum` (intersection), and subtract one with `numpy.minimum(a, -b)`.
 
-Three examples, each checked in Blender 5.2: an impact star that bursts and
-breaks apart, a cel-shaded smoke puff and lava cracks. Change the shapes,
-counts and curves freely; they show the pattern, not a house style.
+The pattern behind most stylised textures:
+1. **Draw the shape the way an artist would:**
+   - brush strokes that taper (`tex_stroke` along a `tex_curve`) for claws,
+     crescents, wisps, cracks and splinters;
+   - lumpy blobs (`tex_blob`) for puffs;
+   - a disc minus an offset disc for a crescent.
+2. **Make it lopsided.** Draw with `tex_warp` coordinates and uneven
+   random counts, lengths and widths. Even spacing, mirror symmetry and
+   uniform line width read as clip art.
+3. **Cut it** with `tex_edge` (soft about 0.006-0.01) for a crisp silhouette.
+4. **Animate it:**
+   - grow it with `tex_ease(t)`, or draw a stroke on by raising `end`;
+   - break it apart with a rising threshold on noise, such as
+     `tex_edge(noise - t * 1.1)`, or erase a stroke from its head by raising
+     `start`.
+
+Four examples, each run in Blender 5.2:
+- a claw slash that sweeps on and breaks off;
+- a lopsided cel-shaded puff;
+- a splinter burst;
+- branching ground cracks.
+
+Change the shapes, counts and curves freely; they show the pattern, not a
+house style.
 
 ```python
 import numpy
 
 NOISE = roqer.tex_noise(256, scale=6, seed=1)
-DETAIL = roqer.tex_noise(256, scale=12, seed=9)
 
-# Impact star: uneven spikes that burst out, then break apart.
-RNG = numpy.random.default_rng(3)
-COUNT = 11
-RAYS = (numpy.arange(COUNT) + RNG.uniform(-0.3, 0.3, COUNT)) / COUNT * 2 * numpy.pi
-LENGTH = 0.35 + 0.65 * RNG.random(COUNT) ** 1.5
-WIDTH = 0.08 + 0.12 * RNG.random(COUNT)                    # half-width of each spike, in radians
+# Claw slash: a fat crescent stroke with a sharp tail that sweeps on, then thins and breaks off from the head.
+CLAW = roqer.tex_curve([(-0.55, -0.45), (-0.6, 0.2), (-0.1, 0.62), (0.5, 0.45), (0.7, -0.05)])
 
-def star(t, size):
+def claw(t, size):
     x, y = roqer.tex_coords(size)
-    r, a = roqer.tex_polar(x, y)
-    turn = a + r * 0.3                                      # + r * 0.3 curves the spikes a little
-    spike = numpy.zeros_like(r)
-    for ray, length, width in zip(RAYS, LENGTH, WIDTH):
-        off = numpy.abs(numpy.angle(numpy.exp(1j * (turn - ray))))
-        spike = numpy.maximum(spike, length * numpy.clip(1 - off / width, 0, 1) ** 1.6)
-    reach = (0.28 + 0.7 * spike) * (0.4 + 0.6 * roqer.tex_ease(t * 2.5))
-    eaten = roqer.tex_sample(NOISE, x * 0.5, y * 0.5) - t ** 1.5 * 1.1 + (reach - r) * 1.5
-    return roqer.tex_edge(reach - r) * roqer.tex_edge(eaten, soft=0.03)
+    wx, wy = roqer.tex_warp(x, y, amount=0.06, scale=3, seed=2)
+    def width(u):                                           # fat near the head, tapering to a point
+        return 0.62 * (1 - u) ** 0.8 * numpy.sin(numpy.clip(u * 5, 0, 1) * numpy.pi / 2) * (1 - t * 0.7)
+    shape = roqer.tex_stroke(wx, wy, CLAW, width,
+                             start=numpy.clip((t - 0.45) * 1.6, 0, 1), end=0.15 + 0.85 * roqer.tex_ease(t * 3))
+    return roqer.tex_edge(shape, soft=0.006)
 
-# Cel-shaded smoke puff: merged blobs, a lit side and a shadow side, holes that grow.
-BLOBS = numpy.random.default_rng(11).uniform([-0.35, -0.35, 0.22], [0.35, 0.35, 0.4], (7, 3))
-
+# Cel-shaded puff: a lumpy blob with a lit side and a shadow side, holes that grow until it splits.
 def puff(t, size):
     x, y = roqer.tex_coords(size)
-    grow = 0.45 + 0.55 * roqer.tex_ease(t * 2)
-    body = numpy.full_like(x, -1.0)
-    light = numpy.full_like(x, -1.0)
-    for cx, cy, radius in BLOBS:
-        cy = cy + t * 0.2                                   # drifts up as it fades
-        body = numpy.maximum(body, 1 - numpy.hypot(x - cx * grow, y - cy * grow) / (radius * grow))
-        light = numpy.maximum(light, 1 - numpy.hypot(x - cx * grow + 0.12, y - cy * grow - 0.12) / (radius * grow))
-    wobble = (roqer.tex_sample(DETAIL, x * 0.35 + 0.5, y * 0.35 + t * 0.3) - 0.5) * 0.35
-    alpha = roqer.tex_edge(body + wobble * numpy.clip(body + 0.3, 0, 1), soft=0.015)
-    alpha *= roqer.tex_edge(roqer.tex_sample(NOISE, x * 0.3, y * 0.3) + body * 0.6 - t * 0.95, 0.05, soft=0.03)
-    lit = roqer.tex_edge(light + wobble, 0.12, soft=0.015)
-    return alpha, 0.45 + 0.55 * lit                         # two tones: shadow 0.45, lit 1
+    wx, wy = roqer.tex_warp(x, y, amount=0.08, scale=4, seed=5, t=t * 0.3)
+    radius = 0.22 + 0.38 * roqer.tex_ease(t * 2.2)
+    body = roqer.tex_blob(wx, wy, radius=radius, lumps=9, roughness=0.75, seed=4)
+    lit = roqer.tex_blob(wx + 0.1, wy - 0.1, radius=radius, lumps=9, roughness=0.75, seed=4)   # the same blob, offset toward the light
+    holes = roqer.tex_sample(NOISE, x * 0.45 + 0.3, y * 0.45 + t * 0.2) - t * 1.25 + 0.62
+    alpha = roqer.tex_edge(body, soft=0.006) * roqer.tex_edge(holes + body * 0.4, soft=0.01)
+    return alpha, 0.5 + 0.5 * roqer.tex_edge(lit, 0.03, soft=0.006)   # two tones: shadow 0.5, lit 1
 
-roqer.draw_flipbook("ImpactStar", star, grid=4, fps=40)
+# Splinter burst: uneven tapered strokes flung out at irregular angles and lengths, then erased from the centre.
+RNG = numpy.random.default_rng(11)
+SPLINTERS = [(RNG.uniform(0, 2 * numpy.pi), RNG.uniform(0.25, 0.85), RNG.uniform(0, 0.25), RNG.uniform(-0.15, 0.15), RNG.uniform(0.07, 0.16)) for _ in range(9)]
+
+def splinters(t, size):
+    x, y = roqer.tex_coords(size)
+    field = numpy.full_like(x, -1.0)
+    reach = roqer.tex_ease(t * 2.5)
+    for angle, length, inner, bend, width in SPLINTERS:
+        a = (numpy.cos(angle) * inner * reach, numpy.sin(angle) * inner * reach)
+        b = (numpy.cos(angle) * length * reach, numpy.sin(angle) * length * reach)
+        middle = ((a[0] + b[0]) / 2 - numpy.sin(angle) * bend, (a[1] + b[1]) / 2 + numpy.cos(angle) * bend)
+        w = width * (1 - t)
+        path = roqer.tex_curve([a, middle, b], 16)
+        field = numpy.maximum(field, roqer.tex_stroke(x, y, path, [w * 0.4, w, 0.0], start=numpy.clip(t * 1.4 - 0.3, 0, 1)))
+    return roqer.tex_edge(field, soft=0.005)
+
+roqer.draw_flipbook("ClawSlash", claw, grid=4, fps=30)
 roqer.draw_flipbook("SmokePuff", puff, grid=4, fps=16)
+roqer.draw_flipbook("Splinters", splinters, grid=4, fps=30)
 
-# Lava cracks: bright veins between cells, for embers glowing inside dark smoke.
-near, edge = roqer.tex_cells(512, cells=7, seed=4)
-x, y = roqer.tex_coords(512)
-roqer.draw_texture("LavaCracks", roqer.tex_edge(0.06 - edge, soft=0.02) * roqer.tex_edge(0.9 - numpy.hypot(x, y), soft=0.1))
+# Ground cracks: a few jagged strokes from the centre, each forking once, thick at the root and tapering out.
+def cracks(size):
+    x, y = roqer.tex_coords(size)
+    rng = numpy.random.default_rng(4)
+    field = numpy.full_like(x, -1.0)
+    for i in range(6):
+        angle = i / 6 * 2 * numpy.pi + rng.uniform(-0.4, 0.4)
+        steps = numpy.linspace(0.04, rng.uniform(0.55, 0.92), 7)
+        wander = numpy.cumsum(rng.uniform(-0.35, 0.35, 7)) * 0.25        # the crack drifts off its line
+        points = numpy.stack([numpy.cos(angle + wander) * steps, numpy.sin(angle + wander) * steps], 1)
+        root = rng.uniform(0.05, 0.08)
+        field = numpy.maximum(field, roqer.tex_stroke(x, y, points, [root, root * 0.6, 0.0]))
+        fork = points[rng.integers(2, 4)]                                 # one branch splits off part way
+        turn = angle + rng.choice([-1, 1]) * rng.uniform(0.5, 0.9)
+        tip = fork + numpy.array([numpy.cos(turn), numpy.sin(turn)]) * rng.uniform(0.15, 0.3)
+        kink = (fork + tip) / 2 + rng.uniform(-0.04, 0.04, 2)
+        field = numpy.maximum(field, roqer.tex_stroke(x, y, numpy.stack([fork, kink, tip]), [root * 0.5, 0.0]))
+    return roqer.tex_edge(field, soft=0.004)
+
+roqer.draw_texture("GroundCracks", cracks, size=512)
 ```
 
-It runs in seconds: the job above, two sheets and a texture, took about 5 s. Draw at the
-final size, since a sheet is 1024 x 1024: 256 px a frame at 4 x 4. Look at the
-attached sheet, then change what reads weakly: a shape too thin to survive at
-game distance, a soft edge where it should be crisp, or a fade where it should
-break apart.
+It runs in seconds. Draw at the final size: a sheet is 1024 x 1024, so a 4 x 4
+frame is 256 px.
+
+Look at the attached sheet and ask whether it looks drawn:
+- **Symmetry:** is anything radially or mirror symmetric, evenly spaced, or
+  of uniform line width? Break it up.
+- **Silhouette:** does the shape read as a silhouette at a glance, with a
+  thick-to-thin taper, lobes, notches and holes? Or is it an outline, an icon
+  or a gear?
+- **Edges:** are they crisp? Soft is for an accent glow only.
+- **Change:** does the shape change across the frames (grow, then break into
+  pieces), or does it only scale or fade?
+- **Distance:** would it survive at game distance, or is it too thin?
 
 ### Rendering the scene
 

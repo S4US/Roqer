@@ -215,9 +215,16 @@ How one orange shape renders under a new place's lighting *(verified)*:
     cell, and the particle's `Size` does the scaling.
 
   Either works; what matters is the edge and the motion.
-- **What made a generic texture look generic** (Roqer's first attempt): soft,
-  grey, rendered smoke with no silhouette, low contrast, and frames that
-  barely changed.
+- **What made a generic texture look generic:**
+  - Roqer's first attempt: soft, grey, rendered smoke with no silhouette, low
+    contrast, and frames that barely changed.
+  - A later attempt: a perfectly radial impact star with even, thin outlines,
+    a snowflake-symmetric frost patch, and a ring with gear-like notches. They
+    read as clip art and icons, not drawings.
+- **Not symmetric, not even.** Hand-drawn shapes are lopsided, with uneven
+  counts, lengths and spacing, and strokes that taper. Draw them as tapered
+  strokes, lumpy blobs and warped coordinates (`tex_stroke`, `tex_blob`,
+  `tex_warp`), not as rays and rings around a centre.
 
 Draw them with `roqer.draw_flipbook` (the `roblox-building` skill's
 `references/blender-vfx.md`).
@@ -359,6 +366,16 @@ Paths and volleys:
 - **Volleys:** 10-15 sources, one every 0.1 s, fanned ±20 studs behind and
   above the caster. Each source's emitters stop after 0.1-0.2 s, and their
   particles close it over 0.8-1.5 s.
+
+**Anything that moves carries its speed** *(measured)*:
+- `VelocityParallel` streaks shed behind it, with `Squash`;
+- flat wind rings shed backwards: negative Speed, growing to 7-12 studs over
+  0.3-0.6 s;
+- curved wind beams from head to tail;
+- a one-frame smear at launch.
+
+A projectile that is only a sprite with a thin trail reads as floating, not
+thrown.
 
 **Slashes are drawn in time, not only in space.** One crescent sprite (flat,
 about 6.6 studs, 0.2-0.3 s) plus about five invisible points along the arc.
