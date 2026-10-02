@@ -95,6 +95,50 @@ test("malformed nested records are salvaged visibly and require recovery", async
   await assert.rejects(store.save(loaded), /malformed|recovery/i);
 }));
 
+function chatWithRun(id: string, extra: Record<string, unknown> = {}): Chat {
+  const date = "2026-01-01T00:00:00.000Z";
+  const run = {
+    schemaVersion: RUN_EVENT_SCHEMA_VERSION, runId: `${id}-run`, planner: "claude-code", approvalMode: "Ask first", outcome: "completed",
+    startedAt: date, finishedAt: date, toolCalls: [], changes: [], evidence: [], failures: [], ...extra,
+  } as RunRecord;
+  return { ...chat(id), messages: [...chat(id).messages, { id: `reply-${id}`, role: "assistant", text: "done", createdAt: date, run }] };
+}
+
+const runOf = (state: WorkspaceState) => state.projects[0].chats[0].messages[1].run;
+
+test("a run's usage is saved with it, and a run saved before usage existed loads unchanged", async () => withDirectory(async (directory) => {
+  const usage = { inputTokens: 60_000, cacheReadTokens: 9_100_000, cacheWriteTokens: 120_000, outputTokens: 140_000, requests: 115, costUsd: 12.4 };
+  const store = new WorkspaceStore(directory);
+  await store.save(workspaceWithChats(chatWithRun("measured", { usage })));
+  const loaded = await new WorkspaceStore(directory).load() as WorkspaceState;
+  assert.deepEqual(runOf(loaded)?.usage, usage);
+
+  // What a build before this change wrote: a record with no usage at all.
+  const older = join(directory, "older");
+  await mkdir(older);
+  const legacy = workspaceWithChats(chatWithRun("older"));
+  await writeFile(join(older, "workspace-state.json"), JSON.stringify(legacy), "utf8");
+  const olderStore = new WorkspaceStore(older);
+  const olderLoaded = await olderStore.load() as WorkspaceState;
+  assert.deepEqual(olderStore.status(), { required: false, message: null });
+  assert.deepEqual(runOf(olderLoaded), runOf(legacy));
+  assert.equal(runOf(olderLoaded) !== undefined && "usage" in runOf(olderLoaded)!, false);
+}));
+
+test("a damaged usage figure costs only itself: the run loads without it and nothing needs recovery", async () => withDirectory(async (directory) => {
+  const damaged = workspaceWithChats(chatWithRun("damaged", { usage: { inputTokens: "lots", outputTokens: 1 } }));
+  assert.equal(workspaceNeedsRecovery(damaged), false);
+  await writeFile(join(directory, "workspace-state.json"), JSON.stringify(damaged), "utf8");
+
+  const store = new WorkspaceStore(directory);
+  const loaded = await store.load() as WorkspaceState;
+  assert.deepEqual(store.status(), { required: false, message: null });
+  const run = runOf(loaded);
+  assert.equal(run?.runId, "damaged-run", "the run is kept");
+  assert.equal(run !== undefined && "usage" in run, false, "its usage is not");
+  await store.save(loaded);
+}));
+
 test("a future workspace version can be exported but cannot be recovered or overwritten", async () => withDirectory(async (directory) => {
   const future = { ...createInitialWorkspace(), schemaVersion: 99 };
   const source = JSON.stringify(future);

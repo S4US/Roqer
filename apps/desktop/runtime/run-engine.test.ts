@@ -158,6 +158,55 @@ test("context readings travel as valid events, each one once, and a malformed on
   assert.equal(isRunEvent({ ...base, usedTokens: "5", windowTokens: null }), false);
 });
 
+test("the run's usage is the latest well-formed total, recorded with run-completed whatever the outcome", async () => {
+  const run = async (body: (ctx: PlannerContext) => Promise<string>) => {
+    const events: RunEvent[] = [];
+    await new RunSession({
+      caller: makeCaller(async () => outcome()),
+      planner: planner(body),
+      request: makeRequest(),
+      emit: (event) => events.push(event),
+    }).execute();
+    assertAllValid(events);
+    const completed = events.at(-1);
+    assert.equal(completed?.type, "run-completed");
+    return completed?.type === "run-completed" ? completed : undefined;
+  };
+
+  const finished = await run(async (ctx) => {
+    ctx.runUsage({ inputTokens: 10, outputTokens: 2 });
+    ctx.runUsage({ inputTokens: 60, cacheReadTokens: 9_000, cacheWriteTokens: 120, outputTokens: 140, requests: 3, costUsd: 0.42 });
+    // Malformed totals are ignored and the last good one stands.
+    ctx.runUsage({ inputTokens: -1, outputTokens: 2 });
+    ctx.runUsage({ inputTokens: 1, outputTokens: 2, costUsd: Number.NaN });
+    ctx.runUsage({ inputTokens: 1, outputTokens: 2, requests: 1.5 });
+    ctx.runUsage({ inputTokens: 1, outputTokens: 2, extra: "kept out" } as unknown as Parameters<PlannerContext["runUsage"]>[0]);
+    ctx.runUsage("lots" as unknown as Parameters<PlannerContext["runUsage"]>[0]);
+    return "done";
+  });
+  assert.deepEqual(finished?.usage, { inputTokens: 1, outputTokens: 2 }, "only the figures reach the record");
+
+  const failed = await run(async (ctx) => {
+    ctx.runUsage({ inputTokens: 5, cacheReadTokens: 50, outputTokens: 1, costUsd: 0.01 });
+    throw new Error("turn failed");
+  });
+  assert.equal(failed?.outcome, "failed");
+  assert.deepEqual(failed?.usage, { inputTokens: 5, cacheReadTokens: 50, outputTokens: 1, costUsd: 0.01 }, "a failed run was still paid for");
+
+  const silent = await run(async () => "done");
+  assert.equal(silent !== undefined && "usage" in silent, false, "a provider that reported nothing records nothing, not zero");
+
+  // What arrives over IPC is checked the same way.
+  const base = {
+    runId: "run_1", seq: 2, at: "2026-01-01T00:00:00.000Z", type: "run-completed",
+    outcome: "completed", summary: "done", verification: { verified: true, issues: [] },
+  };
+  assert.equal(isRunEvent(base), true);
+  assert.equal(isRunEvent({ ...base, usage: { inputTokens: 1, outputTokens: 2, costUsd: 0 } }), true);
+  assert.equal(isRunEvent({ ...base, usage: { inputTokens: 1 } }), false);
+  assert.equal(isRunEvent({ ...base, usage: { inputTokens: 1, outputTokens: 2, costUsd: -1 } }), false);
+});
+
 test("the planner receives the bounded conversation attached to its run", async () => {
   const conversation = {
     messages: [

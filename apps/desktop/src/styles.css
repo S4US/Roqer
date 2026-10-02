@@ -1303,6 +1303,7 @@ a.small-button:focus-visible { outline: 2px solid var(--accent); outline-offset:
 .diff-artifact > .card-details > .card-details-body { padding: 0 11px 9px; }
 .applied-status { display: inline-flex; align-items: center; gap: 6px; margin-top: 11px; color: var(--success); font-size: var(--type-meta); font-weight: var(--weight-medium); }
 .applied-status > svg { flex: 0 0 auto; }
+.run-usage { margin: 8px 0 0 !important; color: var(--muted) !important; font-size: var(--type-meta) !important; font-variant-numeric: tabular-nums; }
 
 /* -- Secondary card detail ------------------------------------------------ */
 .card-details { border-top: 1px solid var(--border); }

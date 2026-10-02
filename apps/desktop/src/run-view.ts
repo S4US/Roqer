@@ -10,8 +10,9 @@ import type { RunTask } from "../shared/tasks";
 import {
   MAX_INLINE_EVIDENCE_IMAGES, MAX_RECORDED_EVIDENCE_IMAGES, RUN_EVENT_SCHEMA_VERSION,
   type RunChange, type RunEvent, type RunEvidence, type RunFailure,
-  type RunOutcome, type RunRecord, type ToolProposal,
+  type RunOutcome, type RunRecord, type RunUsage, type ToolProposal,
 } from "../shared/run-events";
+import { compactTokenCount } from "./context-usage";
 import { keptPreviewIds, pictureCategory, type PictureCategory } from "./preview-layout";
 
 /**
@@ -128,6 +129,8 @@ export type RunView = {
    * displays this rather than deciding for itself whether a run is verified.
    */
   verification: CompletionVerification | null;
+  /** The tokens the run used, delivered with `run-completed` when the provider reported any. */
+  usage: RunUsage | null;
   startedAt: string;
   finishedAt: string;
   lastSeq: number;
@@ -162,6 +165,7 @@ export function createRunView(runId: string, prompt: string, approvalMode: Appro
     outcome: null,
     summary: "",
     verification: null,
+    usage: null,
     startedAt: "",
     finishedAt: "",
     lastSeq: 0,
@@ -323,6 +327,7 @@ export function applyRunEvent(view: RunView, event: RunEvent): RunView {
         outcome: event.outcome,
         summary: event.summary,
         verification: event.verification,
+        usage: event.usage ?? null,
         finishedAt: event.at,
         status: null,
         outputTokens: null,
@@ -541,7 +546,39 @@ export function toRunRecord(view: RunView): RunRecord | null {
     ...(view.verification ? { verification: view.verification } : {}),
     ...(view.decisions.length > 0 ? { decisions: view.decisions } : {}),
     ...(view.notes.length > 0 ? { notes: view.notes } : {}),
+    ...(view.usage !== null ? { usage: view.usage } : {}),
   };
+}
+
+/** "≈$0.42", "≈$12", "<$0.01": an estimate, with cents only where they still matter. */
+function estimatedDollars(amount: number): string {
+  if (amount > 0 && amount < 0.01) return "<$0.01";
+  return amount < 10 ? `≈$${amount.toFixed(2)}` : `≈$${Math.round(amount)}`;
+}
+
+/**
+ * One line saying what a finished run used, for measuring what runs cost:
+ * "Used 9.4M tokens: 9.1M read from cache, 120k written to cache, 60k new
+ * input, 140k output · 115 requests · ≈$12 at API prices".
+ *
+ * A figure the provider did not report is left out rather than shown as zero.
+ * When it did not split cached input out, the input is just "input". The
+ * price is the provider's own estimate, so it carries a "≈" and says what it
+ * is measured against.
+ */
+export function usageLabel(usage: RunUsage): string {
+  const cached = usage.cacheReadTokens !== undefined || usage.cacheWriteTokens !== undefined;
+  const total = usage.inputTokens + (usage.cacheReadTokens ?? 0) + (usage.cacheWriteTokens ?? 0) + usage.outputTokens;
+  const parts = [
+    ...(usage.cacheReadTokens === undefined ? [] : [`${compactTokenCount(usage.cacheReadTokens)} read from cache`]),
+    ...(usage.cacheWriteTokens === undefined ? [] : [`${compactTokenCount(usage.cacheWriteTokens)} written to cache`]),
+    `${compactTokenCount(usage.inputTokens)} ${cached ? "new input" : "input"}`,
+    `${compactTokenCount(usage.outputTokens)} output`,
+  ];
+  const line = [`Used ${compactTokenCount(total)} ${total === 1 ? "token" : "tokens"}: ${parts.join(", ")}`];
+  if (usage.requests !== undefined) line.push(`${usage.requests} ${usage.requests === 1 ? "request" : "requests"}`);
+  if (usage.costUsd !== undefined) line.push(`${estimatedDollars(usage.costUsd)} at API prices`);
+  return line.join(" · ");
 }
 
 /**

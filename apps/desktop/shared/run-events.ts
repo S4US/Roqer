@@ -192,6 +192,42 @@ export type RunFailure = {
   tool?: string;
 };
 
+/**
+ * How many tokens one run used, as its provider reported them, so the cost of
+ * a run can be measured after the fact. Every figure covers this run only,
+ * even when the provider's session carried on from an earlier message.
+ *
+ * Input is split the way prompt caching bills it. A figure the provider did
+ * not report is absent, never zero.
+ */
+export type RunUsage = {
+  /**
+   * Input the model read that was not served from the provider's prompt
+   * cache. Unlike a model transport's `inputTokens`, this never includes cache
+   * reads. When `cacheWriteTokens` is absent it does include any input written
+   * to the cache, because the provider did not count that apart.
+   */
+  inputTokens: number;
+  /** Input served from the prompt cache. Absent when the provider did not say. */
+  cacheReadTokens?: number;
+  /** Input written to the prompt cache. Absent when the provider does not count it apart. */
+  cacheWriteTokens?: number;
+  /** What the model wrote, reasoning included. */
+  outputTokens: number;
+  /**
+   * Model requests the provider counted for the run. Claude Code counts only
+   * its main agent's, so a subagent's requests are not in it, though its
+   * tokens are.
+   */
+  requests?: number;
+  /**
+   * The provider's own estimate of the run's price at API list prices, in US
+   * dollars. On a subscription this is not what the user pays; it is a
+   * yardstick for comparing runs.
+   */
+  costUsd?: number;
+};
+
 type RunEventBase = {
   runId: string;
   /** 1-based, strictly increasing within a run. */
@@ -298,6 +334,8 @@ export type RunEvent =
     summary: string;
     /** The host-owned gate's verdict. Absent only on pre-gate history. */
     verification: CompletionVerification;
+    /** The tokens the run used, when its provider reported any. */
+    usage?: RunUsage;
   });
 
 export type RunEventType = RunEvent["type"];
@@ -359,9 +397,16 @@ export type RunRecord = {
    * hear them. They are what the chat shows under the run once it has ended.
    */
   notes?: string[];
+  /**
+   * The tokens the run used. Optional for the same reason as `decisions`, and
+   * because a provider may report none. Unlike the other optional fields, a
+   * damaged one costs only itself: `withoutMalformedUsage` drops it before the
+   * record is judged, since a measurement says nothing about the work.
+   */
+  usage?: RunUsage;
 };
 
-const isRecord = (value: unknown): value is Record<string, unknown> =>
+const isRecord =(value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
 
 const isString = (value: unknown): value is string => typeof value === "string";
@@ -586,6 +631,33 @@ function isEvidence(value: unknown): value is RunEvidence {
     isMetadataList(value.metadata);
 }
 
+const isOptionalTokenCount = (value: unknown): boolean => value === undefined || isTokenCount(value);
+
+/** A run's usage as `RunUsage` describes it: whole, non-negative counts and a finite cost. */
+export function isRunUsage(value: unknown): value is RunUsage {
+  return isRecord(value) &&
+    isTokenCount(value.inputTokens) &&
+    isTokenCount(value.outputTokens) &&
+    isOptionalTokenCount(value.cacheReadTokens) &&
+    isOptionalTokenCount(value.cacheWriteTokens) &&
+    isOptionalTokenCount(value.requests) &&
+    (value.costUsd === undefined ||
+      (typeof value.costUsd === "number" && Number.isFinite(value.costUsd) && value.costUsd >= 0));
+}
+
+/**
+ * A saved run with a damaged `usage` removed, and anything else as it was.
+ *
+ * Applied before a stored record is validated, so a bad measurement drops the
+ * measurement rather than the run it was attached to.
+ */
+export function withoutMalformedUsage(value: unknown): unknown {
+  if (!isRecord(value) || value.usage === undefined || isRunUsage(value.usage)) return value;
+  const rest = { ...value };
+  delete rest.usage;
+  return rest;
+}
+
 function isFailure(value: unknown): value is RunFailure {
   return isRecord(value) &&
     isString(value.code) &&
@@ -678,7 +750,8 @@ export function isRunEvent(value: unknown): value is RunEvent {
     case "run-completed":
       return OUTCOMES.includes(value.outcome as string) &&
         isString(value.summary) &&
-        isCompletionVerification(value.verification);
+        isCompletionVerification(value.verification) &&
+        (value.usage === undefined || isRunUsage(value.usage));
     default:
       return false;
   }
@@ -703,5 +776,6 @@ export function isRunRecord(value: unknown): value is RunRecord {
     (value.decisions === undefined ||
       (Array.isArray(value.decisions) && value.decisions.every(isRunDecision))) &&
     (value.notes === undefined ||
-      (Array.isArray(value.notes) && value.notes.length <= MAX_STEERS_PER_RUN && value.notes.every(isSteerNote)));
+      (Array.isArray(value.notes) && value.notes.length <= MAX_STEERS_PER_RUN && value.notes.every(isSteerNote))) &&
+    (value.usage === undefined || isRunUsage(value.usage));
 }

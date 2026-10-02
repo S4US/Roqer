@@ -3,13 +3,15 @@ import test from "node:test";
 import { evaluateCompletion, type CompletionVerification } from "../shared/completion";
 import type { RunTask } from "../shared/tasks";
 import type {
-  RunChange, RunEvent, RunEventBody, RunEvidence, RunOutcome, ToolProposal,
+  RunChange, RunEvent, RunEventBody, RunEvidence, RunOutcome, RunUsage, ToolProposal,
 } from "../shared/run-events";
-import { BLENDER_MODEL_LABEL, BLENDER_PREVIEW_TITLE, isRunRecord, MAX_EVIDENCE_IMAGE_CHARACTERS } from "../shared/run-events";
+import {
+  BLENDER_MODEL_LABEL, BLENDER_PREVIEW_TITLE, isRunRecord, MAX_EVIDENCE_IMAGE_CHARACTERS, withoutMalformedUsage,
+} from "../shared/run-events";
 import {
   activitySteps, applyRunEvent, createRunView, describeActivityState, describeOutcome, evidenceImages, previewsNotShown,
   recordAppliedAndVerified, recordGateIssues, recordHasWarnings, recordOnlyAnswered, recordSteps,
-  runAppliedAndVerified, runGateIssues, runHasWarnings, runOnlyAnswered, toRunRecord,
+  runAppliedAndVerified, runGateIssues, runHasWarnings, runOnlyAnswered, toRunRecord, usageLabel,
   type RunView,
 } from "./run-view";
 
@@ -31,6 +33,7 @@ type CompletedBody = {
   outcome: RunOutcome;
   summary: string;
   verification?: CompletionVerification;
+  usage?: RunUsage;
 };
 
 type TestEventBody = Exclude<RunEventBody, { type: "run-completed" }> | CompletedBody;
@@ -318,6 +321,48 @@ test("a note the user added stays with the run once it has ended", () => {
   assert.equal(quiet?.notes, undefined);
   // And a stored note the engine could not have queued does not load.
   assert.equal(isRunRecord({ ...record, notes: [""] }), false);
+});
+
+test("the run's usage arrives with its end and is kept with the record", () => {
+  const usage: RunUsage = {
+    inputTokens: 60_000, cacheReadTokens: 9_100_000, cacheWriteTokens: 120_000, outputTokens: 140_000, requests: 115, costUsd: 12.4,
+  };
+  const finished = fold(stream(started, { type: "run-completed", outcome: "completed", summary: "done", usage }));
+  assert.deepEqual(finished.usage, usage);
+  const record = toRunRecord(finished);
+  assert.deepEqual(record?.usage, usage);
+  assert.equal(isRunRecord(record), true);
+
+  // A provider that reported nothing leaves nothing, not zeros.
+  const quiet = fold(stream(started, { type: "run-completed", outcome: "completed", summary: "done" }));
+  assert.equal(quiet.usage, null);
+  const quietRecord = toRunRecord(quiet);
+  assert.equal(quietRecord !== null && "usage" in quietRecord, false);
+
+  // A stored usage that is not one fails the record on its own, and is what
+  // loading strips so the run survives it.
+  assert.equal(isRunRecord({ ...record, usage: { inputTokens: "60k", outputTokens: 1 } }), false);
+  const withoutUsage: Record<string, unknown> = { ...record };
+  delete withoutUsage.usage;
+  assert.deepEqual(withoutMalformedUsage({ ...record, usage: { inputTokens: 1, outputTokens: 1, costUsd: Infinity } }), withoutUsage);
+  assert.equal(isRunRecord(withoutUsage), true);
+  assert.equal(withoutMalformedUsage(record), record, "a well-formed record is passed through untouched");
+});
+
+test("a run's usage reads as one line, and leaves out what the provider did not say", () => {
+  assert.equal(
+    usageLabel({ inputTokens: 60_000, cacheReadTokens: 9_100_000, cacheWriteTokens: 120_000, outputTokens: 140_000, requests: 115, costUsd: 12.4 }),
+    "Used 9.4M tokens: 9.1M read from cache, 120k written to cache, 60k new input, 140k output · 115 requests · ≈$12 at API prices",
+  );
+  assert.equal(
+    usageLabel({ inputTokens: 200, cacheReadTokens: 800, outputTokens: 100 }),
+    "Used 1.1k tokens: 800 read from cache, 200 new input, 100 output",
+  );
+  assert.equal(usageLabel({ inputTokens: 7, outputTokens: 1, requests: 1 }), "Used 8 tokens: 7 input, 1 output · 1 request");
+  assert.equal(usageLabel({ inputTokens: 1, outputTokens: 0 }), "Used 1 token: 1 input, 0 output");
+  assert.equal(usageLabel({ inputTokens: 10, outputTokens: 5, costUsd: 0.4231 }), "Used 15 tokens: 10 input, 5 output · ≈$0.42 at API prices");
+  assert.equal(usageLabel({ inputTokens: 10, outputTokens: 5, costUsd: 0.004 }), "Used 15 tokens: 10 input, 5 output · <$0.01 at API prices");
+  assert.equal(usageLabel({ inputTokens: 10, outputTokens: 5, costUsd: 0 }), "Used 15 tokens: 10 input, 5 output · ≈$0.00 at API prices");
 });
 
 test("a completed Roblox upload keeps its asset result in history", () => {

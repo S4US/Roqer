@@ -93,6 +93,18 @@ The ring turns amber at 70% and red at 90%, and clicking it shows the figures
 and who reported them. Readings are not saved: after a restart, the meter
 fills in again with the chat's next response.
 
+A finished run says under its result how many tokens it used, as the provider
+reported them, and the figure is saved with the chat: input read from the
+prompt cache, input written to it, new input, and output, then the number of
+requests and a price when the provider gives them. Claude Code reports every
+figure, its subagents' tokens included, though its request count is its main
+agent's alone; its price is its own estimate at API list prices, which on a
+subscription is a yardstick for comparing runs rather than what you pay. Codex
+reports cache reads but no cache writes, requests or price, and a configured
+endpoint reports what its responses counted, with any cache writes left in the
+new input. A run that was stopped before its provider reported anything shows
+no figure, never a zero.
+
 ChatGPT runs use a Codex home of Roqer's own, inside Roqer's data folder, so
 Roqer asks you to sign in to ChatGPT once even if the Codex CLI is already
 signed in, and your own Codex MCP servers and plugins are not loaded there.
