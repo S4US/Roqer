@@ -203,7 +203,7 @@ test("a flipbook sheet is checked from its pixels, apart from ordinary renders, 
     assert.equal(noise.report?.grid, 4);
     assert.match(outcome.text, /half-size copy of it is attached instead/);
     assert.deepEqual(outcome.images?.map((image) => image.data), [pngHeader(256, 256), burst, halfSize].map((bytes) => bytes.toString("base64")));
-    assert.match(outcome.text, /read FlipbookIncompatible back: it must be empty/);
+    assert.match(outcome.text, /Do not go by FlipbookIncompatible/);
   });
 });
 

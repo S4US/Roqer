@@ -64,10 +64,10 @@ test("16-bit sheets are read the same as 8-bit ones", () => {
   assert.equal(report.grid, 2);
 });
 
-test("a sheet that is not 1024 x 1024 is refused with the size Roblox needs", () => {
+test("a sheet that is not 1024 x 1024 is refused, naming the size that plays", () => {
   const report = analyzeFlipbook(sheet(4, () => 20, { side: 512 }), { grid: 4 });
   assert.equal(report.ok, false);
-  assert.match(report.problems[0], /512 x 512.*exactly 1024 x 1024/);
+  assert.match(report.problems[0], /512 x 512; make it 1024 x 1024, the size seen playing/);
 });
 
 test("a frame that runs into its neighbour fails the claimed grid and is named", () => {

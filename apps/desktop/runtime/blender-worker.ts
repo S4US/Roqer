@@ -430,7 +430,7 @@ def _write_png(path, rgba):
 def flipbook(name, grid=8, mode="alpha", start=None, end=None, loop=False, padding=4):
     """Render the scene's animation through its camera into one particle flipbook sheet.
 
-    The sheet is exactly 1024 x 1024, the only size Roblox plays a flipbook from. grid is 2, 4 or
+    The sheet is 1024 x 1024, the size seen playing as a flipbook in Roblox. grid is 2, 4 or
     8: 4, 16 or 64 frames. Frames from start to end (the scene's own by default) are sampled
     evenly to fill every cell, because Roblox plays every cell. mode "alpha" renders on a
     transparent film, for smoke, dust and anything that darkens (LightEmission 0); "additive"
@@ -1788,7 +1788,7 @@ export class BlenderWorker {
         "Flipbook sheets it made, checked by Roqer from their pixels (attached after any renders, in this order):",
         ...flipbooks.flatMap((flipbook) => flipbook.lines),
         ...(sheets.length > MAX_FLIPBOOKS ? [`${sheets.length - MAX_FLIPBOOKS} more flipbook sheets were not checked.`] : []),
-        "To use a sheet: fix every problem first, then upload_asset {action: 'upload', filePath: <its path>, assetType: 'Decal', displayName}, set ParticleEmitter.Texture to rbxassetid://<imageId from that result>, apply the settings listed, and read FlipbookIncompatible back: it must be empty.",
+        "To use a sheet: fix every problem first, then upload_asset {action: 'upload', filePath: <its path>, assetType: 'Decal', displayName}, set ParticleEmitter.Texture to rbxassetid://<imageId from that result>, and apply the settings listed. Confirm it plays by holding one particle at a few ages (TimeScale 0) and taking screenshots: each should show one frame, not the whole grid. Do not go by FlipbookIncompatible: Studio shows its size message even for a sheet that plays.",
       );
     }
     if (animations.length > 0) {

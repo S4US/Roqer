@@ -136,10 +136,13 @@ sheet to these rules, and Roqer checks it from its pixels. Load the
 - `FlipbookLayout` is `Grid2x2`, `Grid4x4` or `Grid8x8` (4, 16 or 64 frames).
   `Custom` with `FlipbookSizeX/Y` was in client beta from October 2025; do not
   rely on it until confirmed.
-- Make the sheet exactly 1024×1024: Studio reports "Particle texture must be
-  1024 by 1024 to use flipbooks." for smaller textures. That is 512 px a frame
-  at 2×2, 256 at 4×4 and 128 at 8×8. Read `FlipbookIncompatible` back after
-  setting the texture; it holds the error when the sheet is unusable.
+- Make the sheet 1024×1024, the size uploaded and seen playing frame by
+  frame. That is 512 px a frame at 2×2, 256 at 4×4 and 128 at 8×8.
+- Do not judge a sheet by `FlipbookIncompatible`. Studio shows "Particle
+  texture must be 1024 by 1024 to use flipbooks." there even for a 1024 sheet
+  that plays, and for a texture with no flipbook layout at all.
+- To check a sheet, hold one particle at a few ages (`TimeScale = 0`) and
+  screenshot it. Each capture should show one frame, not the whole grid.
 - Leave a few pixels of empty space inside each cell. A frame that touches its
   cell edge bleeds into its neighbour.
 - `FlipbookMode`:

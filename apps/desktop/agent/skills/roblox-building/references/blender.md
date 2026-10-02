@@ -427,8 +427,8 @@ flipbook sheet, `<name>.flipbook.png` in `OUTPUT_DIR`. Use it for any
 animated particle texture: an explosion, a smoke puff, a fire loop, an
 impact flash or an energy swirl. Never pack frames by hand.
 
-- **Size and grid:** the sheet is always exactly 1024 x 1024, the only size
-  Roblox plays a flipbook from. `grid` is 2, 4 or 8 (4, 16 or 64 frames). The
+- **Size and grid:** the sheet is always 1024 x 1024, the size uploaded and
+  seen playing as a flipbook in Roblox. `grid` is 2, 4 or 8 (4, 16 or 64 frames). The
   frames from `start` to `end` (the scene's range by default) are sampled
   evenly to fill every cell, because Roblox plays every cell. The animation
   needs at least as many frames as cells.
@@ -508,7 +508,10 @@ To use a sheet:
 1. Upload it with `upload_asset {action: 'upload', filePath, assetType: 'Decal', displayName}`.
 2. Set `ParticleEmitter.Texture` to `rbxassetid://<imageId>`.
 3. Apply the settings Roqer listed.
-4. Read `FlipbookIncompatible` back; it must be empty.
+4. Confirm it plays: hold one particle at a few ages (`TimeScale = 0`) and
+   take screenshots. Each should show one frame, not the whole grid. Do not go
+   by `FlipbookIncompatible`: Studio shows its size message even for a sheet
+   that plays.
 
 Every upload is irreversible and moderated, so settle the sheet before
 uploading, and reuse one sheet across emitters by changing `Color` and `Size`.

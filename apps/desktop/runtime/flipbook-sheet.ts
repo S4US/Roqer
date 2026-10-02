@@ -1,9 +1,11 @@
 // Checks a particle flipbook sheet from its pixels. Roblox plays every cell of
-// the grid in order, refuses a texture that is not exactly 1024 x 1024
-// ("Particle texture must be 1024 by 1024 to use flipbooks."), and a frame
-// that runs into its neighbour's cell shows as a sliver of the next frame. The
-// file a Blender script writes beside the sheet says what it meant to make;
-// this reads what it made, so the two can be compared.
+// the grid in order, and a frame that runs into its neighbour's cell shows as a
+// sliver of the next frame. Sheets are 1024 x 1024: that size was uploaded and
+// seen playing frame by frame in Studio. (Studio's FlipbookIncompatible says
+// "Particle texture must be 1024 by 1024 to use flipbooks." even for that
+// sheet, so it is no check.) The file a Blender script writes beside the sheet
+// says what it meant to make; this reads what it made, so the two can be
+// compared.
 import { inflateSync } from "node:zlib";
 
 export const FLIPBOOK_SIDE = 1024;
@@ -161,7 +163,7 @@ export function analyzeFlipbook(png: Buffer, claim: FlipbookClaim = {}): Flipboo
   const { mask, background } = contentMask(image);
   const base = { width: image.width, height: image.height, background, coverage: [], emptyCells: [], edgeCells: [], repeatedCells: [] };
   if (image.width !== FLIPBOOK_SIDE || image.height !== FLIPBOOK_SIDE) {
-    return { ...base, ok: false, problems: [`The sheet is ${image.width} x ${image.height}; Roblox plays a flipbook only from a texture exactly 1024 x 1024.`] };
+    return { ...base, ok: false, problems: [`The sheet is ${image.width} x ${image.height}; make it 1024 x 1024, the size seen playing as a flipbook in Roblox.`] };
   }
   const side = FLIPBOOK_SIDE;
   const detectedGrid = [...FLIPBOOK_GRIDS].reverse().find((grid) => gutterClear(mask, side, grid));

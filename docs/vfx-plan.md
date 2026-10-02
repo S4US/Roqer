@@ -425,9 +425,18 @@ started.** The flipbook slice as built:
   - Packing order, padding and alpha were checked by eye.
   - An oversized subject was caught as cut off in 7 cells.
   - The reference's example runs as written.
-- **Not done:**
-  - the in-Studio check, which needs an upload;
-  - an animated strip in the result card.
+- **In Studio, 2026-10-02:** one sheet was uploaded with the user's approval:
+  the GlowBurst 8x8 additive sheet, decal 106191190033458, image
+  131517682949853, approved by moderation at once.
+  - On a `ParticleEmitter` with Roqer's reported settings, one particle held
+    at six ages showed one frame each, growing then fading. It played as a
+    flipbook, not the whole grid.
+  - `FlipbookIncompatible` read "Particle texture must be 1024 by 1024 to use
+    flipbooks." throughout. It did so for that working sheet, for a 128 px
+    built-in and with no layout set, and it never cleared over 6 s. The
+    guidance now says not to go by it and to screenshot held particles
+    instead.
+- **Not done:** an animated strip in the result card.
 
 ### 3. Seeing motion: an effect contact sheet
 
@@ -516,10 +525,11 @@ tested.
 4. Have Custom flipbook layouts left Client Beta, and what is
    `FlipbookBlendFrames`' current default? (The `@rbxts/types` 1.0.906 typings
    do not list `FlipbookBlendFrames`.)
-   - Related, observed 2026-10-02: Studio sets `FlipbookIncompatible` to
-     "Particle texture must be 1024 by 1024 to use flipbooks." for 128-256 px
-     textures, even with no layout set.
-   - Step 2's flipbook helper should therefore produce 1024² sheets, not
-     merely square, power-of-two ones.
+   - Related, observed 2026-10-02: Studio's `FlipbookIncompatible` reads
+     "Particle texture must be 1024 by 1024 to use flipbooks." for every
+     texture tried, including an uploaded 1024² sheet that plays (see step
+     2). It says nothing about a sheet.
+   - 1024² is verified to play. Whether smaller square power-of-two sheets
+     still play, as the 2022 release allowed, is untested.
 5. Does vertex alpha from an FBX import reach the renderer on a MeshPart? The
    staff post covers only RGB. If it does, mesh fades need no texture.
