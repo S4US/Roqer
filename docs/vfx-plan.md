@@ -670,6 +670,40 @@ They are not in this repository.
   one-frame star flash, a hot core with a dark rim and streaks, then a ground
   ring and smoke.
 
+### After a second run
+
+The same brief, re-run on the new guidance, produced a different effect. It
+had drawn textures, cel smoke, glowing branching cracks, ground slabs, a
+wind-up and a flash, and the user called it a better direction. Four faults
+remained:
+- **A white blob at the core.** The data shows pure-white layers are thin
+  shapes at Brightness 1-2, about as big as the coloured layers; the hot centre
+  is a coloured layer at high Brightness.
+- **A large half-transparent dome.**
+- **Smoke in one flat tone.**
+- **A light that tinted the whole floor.**
+
+The guidance now covers each one, and they are added to its checking
+questions.
+
+The run also used 10 uploads, one wasted on a texture it then redrew. So
+previewing a texture in Studio without uploading was tested (2026-10-02, edit
+mode):
+- An `EditableImage` made by `AssetService:CreateEditableImage` and filled with
+  `WritePixelsBuffer` shows on a `Decal` and an `ImageLabel` through
+  `TextureContent` and `ImageContent`.
+- `ParticleEmitter.TextureContent` and `Beam.TextureContent` accept it. The
+  particle draws nothing, even after re-emitting, and the beam draws a plain
+  white strip.
+
+So a true particle preview cannot come from memory today. Two ways remain:
+- **A stand-in card:** a billboard `ImageLabel` stepping through the sheet's
+  cells. It shows shape and timing, but not particle blending, Brightness or
+  bloom.
+- **Studio's content folder:** files there load as `rbxasset://` and render as
+  real particles. Writing there changes the user's Roblox install, so it needs
+  their consent, and a Studio update removes the files.
+
 ### Next
 
 - **Camera, screen and debris effects:** the studied scripts add camera shake

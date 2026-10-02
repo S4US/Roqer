@@ -70,6 +70,14 @@ studied effects differ on every one of these points.
   up instead of muting it. *(measured)*
 - **Three-value stack on impacts:** the coloured shape at `ZOffset` z, a black
   copy at z + 0.25 and a white copy at z + 1, all short-lived. *(measured)*
+- **White is a thin shape, not a fill.** The short-lived pure-white layers in
+  the studied effects are wind rings, rings of radial streaks, crescents and
+  spiky impact stars, at Brightness 1-2, and about as big as the coloured
+  layers. *(measured: 67 layers)*
+  - The hot centre comes from a coloured layer at high Brightness.
+  - A filled white disc, or several bright layers stacked over the core, reads
+    as a white blob that hides the shapes. Additive layers add up, so three
+    overlapping glows go white.
 - **How black renders** *(verified)*:
 
   | Setting | Result |
@@ -101,7 +109,9 @@ What this means in practice:
   to keep saturated colour on bright backgrounds. *(measured)*
 - **Glows, flares and soft halos:** `LightEmission` 1 at Brightness 0.05-1.
   Keep them faint; their job is the bloom around a shape.
-- **The white-hot core:** one or two front layers at Brightness 50-150.
+- **The white-hot core:** one or two front layers at Brightness 50-150, with a
+  shape: spikes, a star or a ring, lasting 0.03-0.1 s. Keep everything else
+  behind them saturated.
 
 A Decal's `Color3` above 1 is overbright and blooms the same way
 *(verified)*. Artists use 2-20 on shockwave decals *(measured)*.
@@ -172,6 +182,14 @@ Typical lifetimes in the studied effects *(measured)*:
   violet for the first 10-25% of life. *(measured)*
 - **White is kept** for rings, flares, winds and the hottest core.
 - **Smoke:** warm and grey pairs, lit by the scene (`LightInfluence` 0.35-2).
+- **Fire inside smoke.** The Megumin explosion's mushroom cap is coloured
+  grey, then #ff5500, then grey over its life. Fire gradients end in black.
+  Smoke next to fire should carry the fire's colour where the fire lights it.
+  Two ways to do it:
+  - a `Color` sequence that passes through the fire's orange;
+  - a puff drawn with its colours baked in (`draw_flipbook` returning RGBA),
+    with a dark body and an orange underside.
+  One flat dark tone reads as a cut-out.
 
 ### Sustained forms
 
@@ -200,7 +218,9 @@ them; write them alongside it when the effect needs them:
 - **Impact frame:** a `ColorCorrectionEffect` at Saturation -1 and Contrast
   -100 for 0.02 s, then Contrast +100 for 0.04 s, then restore.
 - **Lights only flash and fade:** peak Brightness 7-16 at Range 7-15, faded to
-  0 over 0.5-1 s.
+  0 over 0.5-1 s. Keep the Range short: the light marks the spot of impact.
+  A light that reaches the whole floor tints it, and the effect reads as a
+  colour filter.
 - **Crater ring:**
   - 9-36 rocks in a circle, tilted 12-55°, with the ground's material and
     colour from a raycast;
@@ -453,9 +473,14 @@ then `preview_asset`) is worth a look when a texture there matches the style.
     effects". Each has UVs laid out along its sweep.
   - Upload all of an effect's shapes as one model. Without Blender, a flat
     Neon cylinder part works as a ground wave.
-- **Light columns:** a Neon cylinder at `Transparency` below about 0.75 looks
-  like solid plastic against a bright sky. Keep it at 0.8 or above and let a
-  flash and particles carry the brightness.
+- **Shells, domes and columns:** a large mesh that is half transparent across
+  its whole surface reads as tinted plastic and covers the screen. That holds
+  for a blast dome, a shockwave sphere or a light column; below a
+  `Transparency` of about 0.75 it looks solid against a bright sky.
+  - Keep a big shell faint (0.85-0.96, as the studied wind swirls start).
+  - Or give it a texture (a Decal on a FileMesh) that puts shape on its
+    surface: streaks, a broken edge.
+  - Let particles and a flash carry the brightness.
 
 ## 6. Layer skeletons
 
@@ -475,9 +500,9 @@ look made for its game. R is the effect's radius in studs.
 | +0.03 s | Black backing | A soft black blob behind, 2-4R |
 | +0.05 s | Streaks | `VelocityParallel` with `Squash`, Speed 60-200, Drag 8-12, with a few black twins |
 | +0.05 s | Ring | A flat `VelocityPerpendicular` ring (Speed 0.001) growing to 2-3R over 0.2-0.4 s |
-| +0.05 s | Smoke | Constant-size cel puffs (4 x 4 OneShot), Speed 50-120, Drag 8, Lifetime 1-1.5, Transparency to above 1, `TimeScale` 0.7, a warm and a grey layer |
+| +0.05 s | Smoke | Constant-size cel puffs (4 x 4 OneShot), Speed 50-120, Drag 8, Lifetime 1-1.5, Transparency to above 1, `TimeScale` 0.7, a warm and a grey layer; beside fire, carrying the fire's colour where it is lit |
 | +0.05 s | Embers | Dots at `LightEmission` 1, Speed 10-120, Drag 10, Lifetime 0.75-2 |
-| 0 | Light | A PointLight at Brightness 7-16 fading over 0.5 s |
+| 0 | Light | A PointLight at Brightness 7-16, Range 7-15, fading over 0.5 s |
 
 **Orb** (a sustained form: every layer at Speed 0.001, `LockedToPart`, `Rate`
 2-4, Lifetime 0.5-1, Transparency `0:1, 0.5:0, 1:1`, random `Rotation`; front to
@@ -758,6 +783,11 @@ effect still for each capture instead of trying to catch it.
    - Does the flash frame read as one sharp, overexposed shape?
    - Is there something dark, so the bright parts read?
    - Do the shapes have hard silhouettes, or do they look like soft smudges?
+   - Is the centre a white blob? Bring the stacked bright layers down until
+     the coloured shapes show through.
+   - Is a large half-transparent shell covering the view?
+   - Does a light tint the whole floor?
+   - Does the smoke beside the fire take its colour, or is it one flat tone?
    - Does every layer show? Thin sparks and faint smoke vanish at a normal
      camera distance.
    - Does one layer bury another?
