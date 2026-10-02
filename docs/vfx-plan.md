@@ -438,6 +438,28 @@ started.** The flipbook slice as built:
     instead.
 - **Not done:** an animated strip in the result card.
 
+**Mesh primitives done 2026-10-02; texture helpers not started.**
+
+- **The helpers:** `roqer.vfx_arc` (crescent), `vfx_ring` (flat band, or a
+  wall with a flared top), `vfx_cone`, `vfx_swirl` (helical ribbon) and
+  `vfx_shell` (sphere or dome).
+  - Each is one open sheet built by a shared strip builder, with UV U along
+    the sweep and V across it, facing Blender -Y (Roblox forward).
+  - Arguments are checked and refused with their valid ranges.
+- **Inspection:** the re-import inspection now reports UVs: meshes with and
+  without them, and the range they span, noting when it falls outside 0 to 1.
+- **Live, Blender 5.2:** all five shapes built in one job.
+  - The preview showed each as intended.
+  - UVs spanned 0 to 1 on every mesh, and the six shapes came to 1,760
+    triangles.
+  - The reference's example ran as written.
+- **Not verified:**
+  - The shapes have not been uploaded or seen in Studio.
+  - Whether a MeshPart texture's transparent pixels show through, or show
+    the part's `Color`, is not known. That decides whether fading textures
+    work on these shapes, and checking it needs a mesh and a texture upload.
+    The texture helpers wait on that answer.
+
 ### 3. Seeing motion: an effect contact sheet
 
 Goal: a grid of frames of the effect as it runs in Studio, taken at fixed

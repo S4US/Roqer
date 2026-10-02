@@ -83,10 +83,44 @@ test("a job exports a model, and Roqer's own pass measures it and returns its pr
   });
 });
 
+test("the inspection reports where UVs are, their range, and meshes a texture cannot map onto", async () => {
+  await withJobs(async (jobsRoot) => {
+    const reports: Record<string, unknown> = {
+      "slash.glb": { meshes: 2, without: [], withoutCount: 0, low: [0, 0], high: [1, 1] },
+      "sword.glb": { meshes: 1, without: ["Handle"], withoutCount: 1, low: [-0.5, 0], high: [2, 1] },
+      "crate.glb": { meshes: 0, without: ["Crate"], withoutCount: 1 },
+    };
+    const blender = fakeBlender(async (args) => {
+      if (args.some((arg) => arg.endsWith("roqer_runner.py"))) {
+        for (const name of Object.keys(reports)) await fs.writeFile(path.join(argAfterDashes(args), "output", name), Buffer.alloc(64));
+        return { output: "ROQER_SCRIPT_DONE\n" };
+      }
+      const uv = reports[path.basename(argAfterDashes(args))];
+      return { output: `ROQER_INSPECT ${JSON.stringify({ meshes: 2, triangles: 64, materials: [], size: [1, 1, 1], uv })}\n` };
+    });
+    const worker = new BlenderWorker({ executable: EXECUTABLE, jobsRoot, spawn: blender.spawn, killTree: blender.killTree, env: {} });
+
+    const outcome = await worker.run({ script: "import bpy" });
+
+    assert.equal(outcome.ok, true, outcome.text);
+    // Each file's entry runs from its "- <path>" line to the next.
+    const entry = (name: string) => {
+      const lines = outcome.text.split("\n");
+      const start = lines.findIndex((line) => line.startsWith("- ") && line.includes(name));
+      const end = lines.findIndex((line, index) => index > start && !line.startsWith("  "));
+      return lines.slice(start, end).join("\n");
+    };
+    assert.match(entry("slash.glb"), /UVs on 2 meshes, spanning U 0\.00 to 1\.00 and V 0\.00 to 1\.00\./);
+    assert.match(entry("sword.glb"), /UVs on 1 mesh, spanning U -0\.50 to 2\.00 and V 0\.00 to 1\.00; outside 0 to 1 a texture repeats; no UVs on Handle, where a texture shows as one flat colour\./);
+    assert.doesNotMatch(entry("crate.glb"), /UVs/, "a model with no UVs anywhere says nothing about textures");
+  });
+});
+
 test("the runner gives the script Roqer's placement helpers, and only those", () => {
   assert.match(RUNNER_SCRIPT, /roqer_helpers\.py/);
   assert.match(RUNNER_SCRIPT, /"roqer": roqer/);
-  for (const helper of ["box", "box_between", "cylinder_between", "cone_between", "join", "paint", "vertex_color_material", "flipbook"]) {
+  for (const helper of ["box", "box_between", "cylinder_between", "cone_between", "join", "paint", "vertex_color_material", "flipbook",
+    "vfx_arc", "vfx_ring", "vfx_cone", "vfx_swirl", "vfx_shell"]) {
     assert.match(HELPERS_SCRIPT, new RegExp(`^def ${helper}\\(`, "m"), helper);
   }
   // A helper places a part by its ends; it never asks the model for a rotation angle.

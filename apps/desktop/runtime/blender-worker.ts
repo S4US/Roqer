@@ -554,6 +554,139 @@ def flipbook(name, grid=8, mode="alpha", start=None, end=None, loop=False, paddi
     return path
 
 
+# VFX shapes. Each is one open sheet of quads with a UV map laid out the same
+# way: U runs along the sweep (0 at the start, 1 at the end), V runs across it
+# (0 inside or at the bottom, 1 outside or at the top). A texture whose alpha
+# fades along U then fades a slash toward its tail, and one that fades across V
+# softens a ring's edges. Shapes face Roblox's forward: Blender -Y.
+_MAX_VFX_SEGMENTS = 256
+
+
+def _segments(value, name, low):
+    if not isinstance(value, int) or value < low or value > _MAX_VFX_SEGMENTS:
+        raise ValueError(f"{name} must be a whole number from {low} to {_MAX_VFX_SEGMENTS}, got {value!r}")
+    return value
+
+
+def _strip(name, columns, rows, point, rgba):
+    """A grid of columns x rows quads at point(u, v), with UVs (u, v); u and v run 0 to 1."""
+    bm = bmesh.new()
+    uv = bm.loops.layers.uv.new("UVMap")
+    grid = [[bm.verts.new(point(c / columns, r / rows)) for r in range(rows + 1)] for c in range(columns + 1)]
+    for c in range(columns):
+        for r in range(rows):
+            corners = [(c, r), (c + 1, r), (c + 1, r + 1), (c, r + 1)]
+            face = bm.faces.new([grid[i][j] for i, j in corners])
+            for loop, (i, j) in zip(face.loops, corners):
+                loop[uv].uv = (i / columns, j / rows)
+    bmesh.ops.remove_doubles(bm, verts=bm.verts, dist=1e-6)
+    obj = _object(name, bm, rgba)
+    return obj
+
+
+def _around(angle):
+    """Unit direction at angle radians from Blender -Y (Roblox's forward), turning toward +X."""
+    import math
+    return Vector((math.sin(angle), -math.cos(angle), 0.0))
+
+
+def vfx_arc(name, radius, width, sweep=160, segments=32, taper=True, rgba=None):
+    """A flat crescent card for a slash, lying in the horizontal plane around the origin.
+
+    It sweeps sweep degrees centred on forward (Blender -Y), from radius - width to radius.
+    With taper the band is widest in the middle and comes to a point at both ends: a crescent.
+    U runs along the sweep from its start (+X side) to its end (-X side), V from the inner edge
+    to the outer. Roll or tilt the MeshPart in Studio for a diagonal swing, and set DoubleSided.
+    """
+    import math
+    radius, width = _positive(radius, "radius"), _positive(width, "width")
+    if width >= radius:
+        raise ValueError(f"width ({width}) must be less than radius ({radius}): the band runs from radius - width to radius")
+    if not isinstance(sweep, (int, float)) or not 10 <= sweep <= 350:
+        raise ValueError(f"sweep must be 10 to 350 degrees, got {sweep!r}")
+    segments = _segments(segments, "segments", 4)
+    half = math.radians(sweep) / 2
+
+    def point(u, v):
+        across = math.sin(math.pi * u) if taper else 1.0
+        inner = radius - width * max(across, 0.02)
+        return _around(half - 2 * half * u) * (inner + (radius - inner) * v)
+
+    return _strip(name, segments, 1 if not taper else 2, point, rgba)
+
+
+def vfx_ring(name, radius, width=0.5, height=0.0, top_radius=None, segments=48, rgba=None):
+    """A shockwave ring around the vertical axis.
+
+    With height 0 it is a flat band on the ground from radius - width to radius. With a height
+    it is a wall from radius at the bottom to top_radius (radius by default) at the top: flare
+    the top outward for a blast wave. U runs once around, V across the band or up the wall.
+    """
+    import math
+    radius = _positive(radius, "radius")
+    segments = _segments(segments, "segments", 8)
+    if not isinstance(height, (int, float)) or height < 0:
+        raise ValueError(f"height must be 0 (a flat band) or a positive number of studs, got {height!r}")
+    if height == 0:
+        width = _positive(width, "width")
+        if width >= radius:
+            raise ValueError(f"width ({width}) must be less than radius ({radius})")
+        return _strip(name, segments, 1, lambda u, v: _around(2 * math.pi * u) * (radius - width + width * v), rgba)
+    top = radius if top_radius is None else _positive(top_radius, "top_radius")
+    return _strip(name, segments, 1, lambda u, v: _around(2 * math.pi * u) * (radius + (top - radius) * v) + Vector((0, 0, height * v)), rgba)
+
+
+def vfx_cone(name, radius, height, tip_radius=0.0, segments=32, rgba=None):
+    """An open cone shell from a base of radius at the origin up to tip_radius at height.
+
+    Point it with the MeshPart's orientation in Studio: up the axis for a burst, along the
+    LookVector for a muzzle blast. U runs around, V from the base to the tip.
+    """
+    import math
+    radius, height = _positive(radius, "radius"), _positive(height, "height")
+    if not isinstance(tip_radius, (int, float)) or tip_radius < 0:
+        raise ValueError(f"tip_radius must be 0 (a point) or a positive number of studs, got {tip_radius!r}")
+    segments = _segments(segments, "segments", 8)
+    return _strip(name, segments, 4,
+                  lambda u, v: _around(2 * math.pi * u) * (radius + (max(tip_radius, 0.001) - radius) * v) + Vector((0, 0, height * v)), rgba)
+
+
+def vfx_swirl(name, radius, height, width, turns=1.5, top_radius=None, segments=96, rgba=None):
+    """A ribbon spiralling up around the vertical axis: a tornado, an aura, a charge-up.
+
+    It turns the given number of times while rising from 0 to height, its radius going from radius to
+    top_radius (radius by default), and the ribbon is width tall. U runs along the ribbon from
+    the bottom end, V across it from its lower edge.
+    """
+    import math
+    radius, height, width = _positive(radius, "radius"), _positive(height, "height"), _positive(width, "width")
+    if not isinstance(turns, (int, float)) or not 0.1 <= turns <= 8:
+        raise ValueError(f"turns must be 0.1 to 8, got {turns!r}")
+    top = radius if top_radius is None else _positive(top_radius, "top_radius")
+    segments = _segments(segments, "segments", 8)
+
+    def point(u, v):
+        return _around(2 * math.pi * turns * u) * (radius + (top - radius) * u) + Vector((0, 0, height * u + width * (v - 0.5)))
+
+    return _strip(name, segments, 1, point, rgba)
+
+
+def vfx_shell(name, radius, segments=32, rings=16, dome=False, rgba=None):
+    """A sphere, or with dome a half sphere standing on the ground, as one shell: a barrier,
+    a blast bubble, a shield. U runs around, V from the bottom (the equator for a dome) to the top.
+    """
+    import math
+    radius = _positive(radius, "radius")
+    segments = _segments(segments, "segments", 8)
+    rings = _segments(rings, "rings", 2)
+
+    def point(u, v):
+        polar = (math.pi / 2) * (1 - v) if dome else math.pi * (1 - v)
+        return _around(2 * math.pi * u) * (radius * math.sin(polar)) + Vector((0, 0, radius * math.cos(polar)))
+
+    return _strip(name, segments, rings, point, rgba)
+
+
 _MAX_INFLUENCES = 4
 # The share of a chain's first bone, either side of its head, over which a part's weight passes to the bone above.
 _ROOT_BLEND = 0.25
@@ -978,6 +1111,26 @@ for item in meshes:
         smooth.append({"object": item.name, "share": round(share, 2)})
 stats["smoothShaded"] = smooth[:8]
 
+# UVs, as they arrived: a texture (TextureID) needs them, and a VFX texture that
+# fades along a sweep needs them laid out along it.
+import numpy
+uv_low, uv_high, without_uv, with_uv = [1e9, 1e9], [-1e9, -1e9], [], 0
+for item in meshes:
+    layer = item.data.uv_layers.active
+    if layer is None or len(layer.data) == 0:
+        without_uv.append(item.name)
+        continue
+    with_uv += 1
+    coords = numpy.empty(len(layer.data) * 2, dtype=numpy.float32)
+    layer.data.foreach_get("uv", coords)
+    coords = coords.reshape(-1, 2)
+    uv_low = [min(uv_low[i], float(coords[:, i].min())) for i in range(2)]
+    uv_high = [max(uv_high[i], float(coords[:, i].max())) for i in range(2)]
+stats["uv"] = {"meshes": with_uv, "without": without_uv[:8], "withoutCount": len(without_uv)}
+if with_uv:
+    stats["uv"]["low"] = [round(value, 3) for value in uv_low]
+    stats["uv"]["high"] = [round(value, 3) for value in uv_high]
+
 # Layout: how the model's pieces sit against each other, in the script's own
 # Blender coordinates. A script usually joins many primitives into one object,
 # so each object is split back into its loose pieces (after welding the
@@ -1369,8 +1522,12 @@ export type InspectedFile = Readonly<{
   layout?: LayoutFacts;
   /** Objects shaded smooth across hard edges, with the share of their corners bent that way. */
   smoothShaded?: ReadonlyArray<Readonly<{ object: string; share: number }>>;
+  uv?: InspectedUv;
   inspectionError?: string;
 }>;
+
+/** Which meshes arrived with UVs, and the range they span. */
+export type InspectedUv = Readonly<{ meshes: number; without: readonly string[]; withoutCount: number; low?: readonly number[]; high?: readonly number[] }>;
 
 /** A piece or group of pieces, by its size and centre in Blender coordinates (X, Y, Z up). */
 export type PieceBox = Readonly<{ size: readonly number[]; center: readonly number[] }>;
@@ -1734,6 +1891,7 @@ export class BlenderWorker {
             ? [{ object: entry.object, share: entry.share }]
             : [])
           : undefined,
+        uv: parseUv(stats.uv),
       });
       if (stats.preview === true) {
         const png = await fs.readFile(preview).catch(() => undefined);
@@ -1983,6 +2141,34 @@ const COLOR_SOURCE_NOTES: Readonly<Record<NonNullable<InspectedFile["colorSource
   material: "coloured by flat material colours only, which arrive white: set Color and Material on each MeshPart after insert",
 };
 
+function parseUv(value: unknown): InspectedUv | undefined {
+  if (!isRecord(value) || !isNumber(value.meshes) || !isNumber(value.withoutCount)) return undefined;
+  const pair = (entry: unknown) => Array.isArray(entry) && entry.length === 2 && entry.every(isNumber) ? entry as number[] : undefined;
+  const low = pair(value.low);
+  const high = pair(value.high);
+  return {
+    meshes: count(value.meshes, 0),
+    without: Array.isArray(value.without) ? value.without.filter((name): name is string => typeof name === "string").slice(0, 8) : [],
+    withoutCount: count(value.withoutCount, 0),
+    ...(low !== undefined && high !== undefined ? { low, high } : {}),
+  };
+}
+
+/** The UV line: only worth saying when some mesh has UVs, so a texture can be meant. */
+function describeUv(uv: InspectedUv | undefined): string {
+  if (uv === undefined || uv.meshes === 0) return "";
+  const span = uv.low !== undefined && uv.high !== undefined
+    ? `, spanning U ${uv.low[0].toFixed(2)} to ${uv.high[0].toFixed(2)} and V ${uv.low[1].toFixed(2)} to ${uv.high[1].toFixed(2)}`
+    : "";
+  const outside = uv.low !== undefined && uv.high !== undefined && (Math.min(...uv.low) < -0.001 || Math.max(...uv.high) > 1.001)
+    ? "; outside 0 to 1 a texture repeats"
+    : "";
+  const missing = uv.withoutCount > 0
+    ? `; no UVs on ${uv.without.join(", ")}${more(uv.without.length, uv.withoutCount)}, where a texture shows as one flat colour`
+    : "";
+  return `\n  UVs on ${uv.meshes} mesh${uv.meshes === 1 ? "" : "es"}${span}${outside}${missing}.`;
+}
+
 function describeFile(file: InspectedFile): string {
   const size = file.size !== undefined && file.size.length === 3 ? `, ${file.size.map((value) => value.toFixed(2)).join(" × ")} Blender units` : "";
   const facts = file.inspectionError !== undefined
@@ -1997,7 +2183,8 @@ function describeFile(file: InspectedFile): string {
   const shading = file.smoothShaded !== undefined && file.smoothShaded.length > 0
     ? `\n  shading: smooth across hard edges on ${file.smoothShaded.map((entry) => `${entry.object} (${Math.round(entry.share * 100)}% of corners)`).join(", ")}, which makes boxes and panels look puffy in Roblox. Unless the object is meant to look rounded, remove shade_smooth; roqer.join keeps what it joins flat.`
     : "";
-  return `- ${file.path} (${Math.max(1, Math.round(file.bytes / 1024))} KB): ${facts}${file.colorSource === undefined ? "" : `; ${COLOR_SOURCE_NOTES[file.colorSource]}`}${pieces}${layout}${shading}${articulated}`;
+  const uv = file.inspectionError === undefined ? describeUv(file.uv) : "";
+  return `- ${file.path} (${Math.max(1, Math.round(file.bytes / 1024))} KB): ${facts}${file.colorSource === undefined ? "" : `; ${COLOR_SOURCE_NOTES[file.colorSource]}`}${pieces}${layout}${shading}${uv}${articulated}`;
 }
 
 const MAX_LAYOUT_ENTRIES = 8;

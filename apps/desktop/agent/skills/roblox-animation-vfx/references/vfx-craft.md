@@ -233,9 +233,13 @@ sheet to these rules, and Roqer checks it from its pixels. Load the
   - A MeshPart's texture cannot scroll: `TextureID` has no offset. Animate the
     mesh's size, rotation and transparency instead, or put a scrolling Beam
     alongside.
-  - Custom shapes (crescents, rings, swirls) are modelled in Blender: an open
-    arc of faces, UVs running along the sweep, and an alpha fade toward the
-    tail. Until a shape exists, a flat cylinder part works as a ground wave.
+  - Make the shapes in a Blender job with `roqer.vfx_arc` (crescent),
+    `vfx_ring` (shockwave or blast wall), `vfx_cone`, `vfx_swirl` (tornado,
+    aura) and `vfx_shell` (barrier, dome). See the `roblox-building` skill's
+    Blender reference, "Shapes for mesh effects". Each has UVs laid out along
+    its sweep.
+  - Upload all of an effect's shapes as one model. Without Blender, a flat
+    Neon cylinder part works as a ground wave.
 - **Impact frames:** for the frame or two of a big hit, add a
   `ColorCorrectionEffect` and a white `Highlight` on the target. Parent the
   correction to `workspace.CurrentCamera` so it affects only the local player.

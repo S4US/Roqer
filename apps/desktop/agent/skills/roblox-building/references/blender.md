@@ -96,6 +96,10 @@ get the direction of wrong, and they paint it when given a colour:
 - `roqer.flipbook(name, grid=8, mode="alpha", start=None, end=None, loop=False, padding=4)`:
   renders the scene's animation into a 1024 x 1024 particle flipbook sheet
   (see "Flipbook sheets for particles").
+- `roqer.vfx_arc`, `vfx_ring`, `vfx_cone`, `vfx_swirl` and `vfx_shell`: shapes
+  for mesh effects (a crescent slash, a shockwave, a burst, a tornado, a
+  barrier), each with UVs laid out along its sweep (see "Shapes for mesh
+  effects").
 
 Prefer them for any part that is not upright. Raw `bpy` is still available for
 shapes they do not cover; there, keep the model flat-shaded (no
@@ -517,6 +521,66 @@ Every upload is irreversible and moderated, so settle the sheet before
 uploading, and reuse one sheet across emitters by changing `Color` and `Size`.
 For layering, timing and the rest of the effect, see the `roblox-animation-vfx`
 skill's VFX craft reference.
+
+## Shapes for mesh effects
+
+Mesh effects are shapes that grow, spin and fade in Studio: a crescent slash,
+a shockwave ring, a twisting tornado, a barrier dome. Make them with these
+helpers rather than by hand.
+
+**What every shape has in common:**
+- It is one open sheet, so set `DoubleSided` on the MeshPart in Studio.
+- Its UVs run the same way: U along the sweep (0 at the start, 1 at the end),
+  V across it (0 inside or at the bottom, 1 outside or at the top). A texture
+  whose alpha fades along U fades a slash toward its tail; one that fades
+  across V softens a ring's edges.
+- It is built around the origin, horizontal or upright, facing Roblox's
+  forward (Blender -Y).
+- Sizes are in studs.
+
+**The shapes:**
+- **`roqer.vfx_arc(name, radius, width, sweep=160, segments=32, taper=True)`**: a
+  flat crescent for a slash. It sweeps `sweep` degrees centred on forward,
+  from radius - width out to radius. With `taper`, it is widest in the middle
+  and pointed at both ends; U runs from the +X end to the -X end. Roll the
+  MeshPart for a diagonal swing.
+- **`roqer.vfx_ring(name, radius, width=0.5, height=0, top_radius=None, segments=48)`**:
+  - with `height` 0, a flat band on the ground: a shockwave;
+  - with a height, a wall from `radius` at the bottom to `top_radius` at the
+    top. A flared top makes a blast wave.
+- **`roqer.vfx_cone(name, radius, height, tip_radius=0, segments=32)`**: an
+  open cone from its base at the origin up to its tip. Point it with the
+  MeshPart's orientation, for example along the LookVector for a muzzle
+  blast.
+- **`roqer.vfx_swirl(name, radius, height, width, turns=1.5, top_radius=None, segments=96)`**:
+  a ribbon `width` tall, spiralling up `turns` times to `height`, widening
+  to `top_radius`. Use it for a tornado, an aura or a charge-up.
+- **`roqer.vfx_shell(name, radius, segments=32, rings=16, dome=False)`**: a
+  sphere, or a dome standing on the ground. Use it for a barrier or a blast
+  bubble.
+
+Put several shapes in one job and export one GLB. Each arrives as its own
+MeshPart named after it. Roqer reports their UVs and triangles.
+
+In Studio:
+1. Set `Material` (`Neon` to glow, `ForceField` to shimmer), `Color`,
+   `DoubleSided` and `Anchored`.
+2. Turn off `CanCollide`, `CanQuery`, `CanTouch` and `CastShadow`.
+3. Animate the parts with the emit module's `Start`/`End` parts (see the
+   `roblox-animation-vfx` skill's VFX craft reference).
+
+Whether a texture's transparent pixels show through a MeshPart, or show its
+`Color`, is not verified yet. Check it in Studio before relying on a fading
+texture.
+
+```python
+import bpy, os
+
+slash = roqer.vfx_arc("Slash", radius=6, width=1.5, sweep=150)
+wave = roqer.vfx_ring("Shockwave", radius=5, width=0.8)
+wave.location = (0, 0, -3)
+bpy.ops.export_scene.gltf(filepath=os.path.join(OUTPUT_DIR, "slash-effect.glb"), export_format="GLB", export_apply=True, use_visible=True)
+```
 
 ## Rendering an image for UI
 
