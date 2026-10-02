@@ -14,21 +14,27 @@ skill's VFX craft reference.
 A particle texture decides most of how an effect looks. Most textures by
 experienced Roblox VFX artists are 2D drawings, not renders: a white,
 hard-edged silhouette on transparency, cel-shaded in two or three flat tones,
-that the particle's `Color` tints. In 3,950 emitters studied across 22
-published effects (see the `roblox-animation-vfx` skill's VFX craft
-reference):
+that the particle's `Color` tints. This comes from studies of published
+effects and a 49-sheet hand-drawn texture set (see the `roblox-animation-vfx`
+skill's `references/vfx-design.md`):
 
-- the shapes were flame tongues, spiky impact stars, crisp smoke puffs with a
-  lit and a shadow side, crescent arcs, rings with radial streaks, shaded
-  rocks, four-point flares and dots;
-- 4 x 4 sheets of 16 frames were the most common flipbook, and the subject
-  filled most of its cell at its largest frame;
-- frames changed by breaking apart: the shape is eaten into pieces and
-  shrinks, rather than a soft blob fading;
-- soft round glows were one layer among many, not the effect.
+- **Shapes:** flame tongues, spiky impact stars, crisp smoke puffs with a lit
+  and a shadow side, crescents and claws, wobbly rings, wisps, zig-zags,
+  splinters, shaded rocks, four-point flares and dots.
+- **Edges:** hard. Alpha is binary with a 1-2 px anti-aliased rim, or
+  posterised to about 16 steps. Only an accent texture or two is soft.
+- **Detail:** from negative space (holes, notches, overhangs, scribbled
+  interior strokes) and tapering stroke widths, not from shading. Silhouettes
+  are asymmetric.
+- **Frames:** 4 x 4 sheets are the most common. The shape grows to a peak
+  around frame 4-6, then breaks into 2-6 pieces; the last cells may be blank.
+- **Size in the cell varies.** Many sheets fill most of the cell. The
+  hand-drawn set keeps shapes small (half span less than 27% of the cell) and
+  lets the particle's `Size` scale them.
+- **Glows:** soft round glows are one layer among many, not the effect.
 
-A soft, grey, rendered smoke ball, small in its cell, is the look to avoid.
-It reads as a smudge at game distance.
+A soft, grey, rendered smoke ball with no silhouette, whose frames barely
+change, is the look to avoid. It reads as a smudge at game distance.
 
 There are two ways to make one. Both write a sheet that Roqer checks the same
 way.
@@ -127,7 +133,7 @@ roqer.draw_texture("LavaCracks", roqer.tex_edge(0.06 - edge, soft=0.02) * roqer.
 It runs in seconds: the job above, two sheets and a texture, took about 5 s. Draw at the
 final size, since a sheet is 1024 x 1024: 256 px a frame at 4 x 4. Look at the
 attached sheet, then change what reads weakly: a shape too thin to survive at
-game distance, a burst that never fills its cell, or a fade where it should
+game distance, a soft edge where it should be crisp, or a fade where it should
 break apart.
 
 ### Rendering the scene
@@ -146,8 +152,8 @@ renders whatever the scene shows.
   reports the repeats.
 - **Mode:** `"alpha"` renders on a transparent film. `"additive"` renders on
   black for `LightEmission = 1`.
-- **Framing:** frame the camera tightly. The subject should fill most of the
-  cell at its largest without leaving the view. An orthographic camera looking
+- **Framing:** frame the camera so the subject stays inside the view on every
+  frame, at the size you want in the cell. An orthographic camera looking
   at the effect is simplest.
 - **Speed:** colour uses the Standard view transform, so glows stay bright.
   - Use Eevee for emission and Workbench for flat shapes; Eevee measured
@@ -204,7 +210,7 @@ What Roqer reports for each sheet is read from its pixels:
 - the coverage of every cell in play order, which should grow and shrink as
   the effect does;
 - **problems:** empty cells and drawing cut off at a cell's edge;
-- **notes:** frames that hold, and a drawing that fills little of its cells;
+- **notes:** frames that hold;
 - the `FlipbookLayout`, `FlipbookMode` and `LightEmission` to use, with the
   `Lifetime` for a one-shot sheet or the `FlipbookFramerate` for a loop.
 

@@ -15,8 +15,6 @@ export type FlipbookGrid = (typeof FLIPBOOK_GRIDS)[number];
 const MAX_FLIPBOOK_FRAMERATE = 30;
 /** A pixel counts as drawn above this: alpha on a transparent sheet, brightness on a black one. */
 const CONTENT_THRESHOLD = 8;
-/** Below this share of a cell, at its widest frame, a drawing is noted as small. */
-const SMALL_SPAN = 0.4;
 /** The most pixels a sheet may decode to; a little over 1024 x 1024 leaves room for a wrong size to be reported. */
 const MAX_PIXELS = 2048 * 2048;
 const MAX_INPUT_BYTES = 24 * 1024 * 1024;
@@ -191,15 +189,12 @@ export function analyzeFlipbook(png: Buffer, claim: FlipbookClaim = {}): Flipboo
   const emptyCells: number[] = [];
   const edgeCells: number[] = [];
   const repeatedCells: number[] = [];
-  // The widest span of drawing in any one cell, as a share of the cell.
-  let largestSpan = 0;
   let previous: Buffer | undefined;
   for (let row = 0; row < grid; row++) {
     for (let column = 0; column < grid; column++) {
       const index = row * grid + column;
       let drawn = 0;
       let touches = false;
-      let left = cell, right = -1, top = cell, bottom = -1;
       const bytes = Buffer.alloc(cell * cell * 4);
       for (let y = 0; y < cell; y++) {
         const sheetRow = row * cell + y;
@@ -207,14 +202,9 @@ export function analyzeFlipbook(png: Buffer, claim: FlipbookClaim = {}): Flipboo
         for (let x = 0; x < cell; x++) {
           if (!mask[sheetRow * side + column * cell + x]) continue;
           drawn++;
-          if (x < left) left = x;
-          if (x > right) right = x;
-          if (y < top) top = y;
-          if (y > bottom) bottom = y;
           if (x < band || y < band || x >= cell - band || y >= cell - band) touches = true;
         }
       }
-      if (drawn > 0) largestSpan = Math.max(largestSpan, (right - left + 1) / cell, (bottom - top + 1) / cell);
       coverage.push(Math.round((drawn / (cell * cell)) * 1000) / 10);
       if (drawn === 0) emptyCells.push(index);
       if (touches) edgeCells.push(index);
@@ -236,11 +226,6 @@ export function analyzeFlipbook(png: Buffer, claim: FlipbookClaim = {}): Flipboo
   if (edgeCells.length > 0) problems.push(`Drawing reaches the edge of ${edgeCells.length} cell${edgeCells.length === 1 ? "" : "s"} (${listCells(edgeCells)}): it is cut off there. Draw it smaller, or frame it smaller with the camera further back.`);
   // Held frames can be deliberate (a short animation, a pause), so they are a note, not a problem.
   const notes: string[] = [];
-  // A particle shows its whole cell at its Size, so a small drawing wastes the
-  // particle and its pixels. The studied artists' sheets fill most of the cell.
-  if (largestSpan > 0 && largestSpan < SMALL_SPAN) {
-    notes.push(`At its largest the drawing spans ${Math.round(largestSpan * 100)}% of a cell. A particle shows the whole cell at its Size, so most of each particle is empty and the drawing gets few pixels; sheets by experienced Roblox VFX artists fill most of the cell at their largest frame. Frame it closer or draw it bigger, unless the small frame is deliberate.`);
-  }
   if (repeatedCells.length > 0) notes.push(`${repeatedCells.length} cell${repeatedCells.length === 1 ? " repeats" : "s repeat"} the one before (${listCells(repeatedCells)}): the animation holds there. Fine for a pause; otherwise animate more frames or use a smaller grid.`);
   const fps = claim.fps !== undefined && claim.fps > 0 ? claim.fps : undefined;
   const lifetime = claim.loop === false && fps !== undefined ? Math.round((cells / fps) * 100) / 100 : undefined;

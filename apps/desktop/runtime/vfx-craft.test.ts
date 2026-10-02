@@ -142,6 +142,8 @@ test("the VFX skill links its reference and emit module, and both load", async (
   const entrypoint = await loadSkill();
   assert.ok(entrypoint.includes(`(${REFERENCE})`));
   assert.ok(entrypoint.includes(`(${MODULE})`));
+  assert.ok(entrypoint.includes("(references/vfx-design.md)"));
+  assert.match(await loadSkill("references/vfx-design.md"), /^# VFX design/);
   const reference = await loadSkill(REFERENCE);
   assert.match(reference, /# VFX craft/);
   const source = await loadSkill(MODULE);

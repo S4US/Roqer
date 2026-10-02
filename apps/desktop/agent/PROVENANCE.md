@@ -52,6 +52,14 @@ build textures come from a study of published effects the user supplied
 (recorded in `docs/vfx-plan.md`); no third-party text or asset is included. It
 is distributed under the repository's licence.
 
+The repository-authored `skills/roblox-animation-vfx/references/vfx-design.md`
+summarises how experienced Roblox VFX artists design effects: palette, value,
+brightness, textures, layering, timing and the camera and world around an
+effect. It is drawn from studies of published effects the user supplied and
+from a captioned tutorial by the artist snaliel. It paraphrases their
+observations with measured numbers; no third-party text or asset is included.
+It is distributed under the repository's licence.
+
 The repository-authored `skills/roblox-building/references/paths.md` covers
 building along a line or curve: placing a part by its two ends, deriving every
 strip from one centre line, meeting straights tangentially, sizing curve

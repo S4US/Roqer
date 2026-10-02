@@ -2,229 +2,38 @@
 
 Load this before building any visual effect: a hit, a slash, an explosion, a
 spell, an aura or a pickup. It covers:
-- what experienced Roblox VFX artists do, measured from their published work;
 - the engine properties that matter;
-- textures, layer skeletons and how to play effects.
+- textures, layer skeletons and how to play effects;
+- how to check an effect.
 
 It does not replace looking: screenshot every effect you build.
 
 This reference is a toolbox and a list of traps, not a style. The design is
 yours: depart from any of it when the effect calls for it.
 
-How far to trust a number:
-- *(measured)*: from a study of 22 published Roblox effects by experienced
-  artists: 3,950 particle emitters, their scripts, and videos of them playing.
-  The effects range from anime slashes and explosions to orbs, magic circles,
-  wind and smoke.
-- *(verified)*: checked in Studio.
-- *(starting point)*: common practice; tune it by looking.
+**Load `references/vfx-design.md` with it.** That reference covers what
+experienced Roblox VFX artists do and why, measured from their published
+effects:
+- what the effect is for;
+- palette, value and brightness;
+- textures, layers and the intensity curve of timing;
+- projectiles, slashes, beams and sustained forms;
+- camera, screen and world reactions.
+
+Numbers here carry the same marks: *(measured)* from those studies,
+*(verified)* checked in Studio, *(starting point)* common practice to tune by
+looking.
 
 ## 1. What experienced artists do
 
-Generic effects come from generic parts: a soft glow, a built-in spark and a
-grey smoke puff, each emitting many particles that drift and fade. The
-studied effects differ on every one of these points.
-
-### Textures carry the look
-
-- **They are custom.** The 3,950 emitters used 915 distinct textures. Only 8
-  used a Roblox built-in texture. *(measured)*
-- **They are white, hard-edged drawings on transparency.** Each is
-  cel-shaded in two or three flat tones and tinted by the particle's `Color`.
-  Common shapes:
-  - flame tongues;
-  - spiky impact stars;
-  - crisp smoke puffs with a lit and a shadow side;
-  - crescent arcs and rings with radial streaks;
-  - shaded rocks, four-point flares and dots.
-  Soft round glows appear, but as one layer among many. *(measured)*
-- **Flipbooks do the motion.** 46% of emitters play a flipbook, mostly 4 x 4.
-  At its largest frame the subject fills most of the cell. Frames change by
-  breaking apart: the shape is eaten into pieces and shrinks, rather than a
-  blob fading. A flipbook layer often keeps a constant `Size` and
-  `Transparency` 0, and lets the sheet do the dissolving. *(measured)*
-- **Make them in Blender by drawing,** with `roqer.draw_flipbook` and
-  `roqer.draw_texture` (section 3). That is the single biggest step from
-  generic to made.
-
-### Many layers, each usually one sprite
-
-- **Layer count:** one hit in the studied slashes has 40-60 distinct layers.
-  Even a small orb is 17 layers on one attachment. *(measured)*
-- **EmitCount:** the median is 1 and the 90th percentile 7. Each layer is
-  usually one deliberate sprite, not a spray. Sparks, debris and dots are the
-  exception, at 10-150. *(measured)*
-- **Speed:** 37% of emitters have Speed near 0. They are sprites stacked and
-  timed in place, not moving particles. *(measured)*
-
-### Value: dark layers make bright ones read
-
-- **Share:** 7% of all emitters are pure black, and 10-35% in the
-  value-focused pieces. Black is used in two ways *(measured)*:
-  - **backing:** behind the colour (`ZOffset` -1 to -3), 1.1-4.5 times its
-    size, so a glow reads against any background;
-  - **accents:** in front, smaller: ink lines, a dark pupil, black cuts
-    through a crescent.
-- **Twins:** a bright layer often has a black twin that moves differently
-  (other `Acceleration`, size or `Squash`), so the dark breaks the bright shape
-  up instead of muting it. *(measured)*
-- **Three-value stack on impacts:** the coloured shape at `ZOffset` z, a black
-  copy at z + 0.25 and a white copy at z + 1, all short-lived. *(measured)*
-- **White is a thin shape, not a fill.** The short-lived pure-white layers in
-  the studied effects are wind rings, rings of radial streaks, crescents and
-  spiky impact stars, at Brightness 1-2, and about as big as the coloured
-  layers. *(measured: 67 layers)*
-  - The hot centre comes from a coloured layer at high Brightness.
-  - A filled white disc, or several bright layers stacked over the core, reads
-    as a white blob that hides the shapes. Additive layers add up, so three
-    overlapping glows go white.
-- **How black renders** *(verified)*:
-
-  | Setting | Result |
-  | --- | --- |
-  | `LightEmission` 0 | Solid ink |
-  | `LightEmission` 0.55 | A faint dark veil |
-  | `LightEmission` 1 | Invisible |
-
-### Brightness and blending
-
-`Brightness` multiplies `Color`. The median emitter's Brightness is 9 and a
-quarter are above 25 *(measured)*. Places start with a `BloomEffect` at
-Threshold 2, the same in every studied place, so a layer above about 2 blooms.
-
-How one orange shape renders under the default lighting *(verified)*:
-
-| Setting | Over a dark background | Over a bright background |
-| --- | --- | --- |
-| `LightEmission` 0, Brightness 1 | Flat orange | Flat orange |
-| `LightEmission` 0, Brightness 5-25 | Hot yellow-orange, blooming | Pale, toward white |
-| `LightEmission` 0, Brightness 150 | White-hot core | White |
-| `LightEmission` 1 (additive), Brightness 1 | Lighter, pale | Washes out, nearly gone |
-| `LightEmission` 1 (additive), Brightness 5 | White glow | White glow |
-| `LightEmission` -1 to -3 | Saturated, solid | Saturated, solid, with a dark rim |
-
-What this means in practice:
-- **Hard cel shapes:** `LightEmission` 0 or negative with Brightness 5-55.
-  These are most emitters. 10% of all emitters use negative `LightEmission`,
-  to keep saturated colour on bright backgrounds. *(measured)*
-- **Glows, flares and soft halos:** `LightEmission` 1 at Brightness 0.05-1.
-  Keep them faint; their job is the bloom around a shape.
-- **The white-hot core:** one or two front layers at Brightness 50-150, with a
-  shape: spikes, a star or a ring, lasting 0.03-0.1 s. Keep everything else
-  behind them saturated.
-
-A Decal's `Color3` above 1 is overbright and blooms the same way
-*(verified)*. Artists use 2-20 on shockwave decals *(measured)*.
-
-### Orientation by role
-
-| Orientation | Used for | Share *(measured)* |
-| --- | --- | --- |
-| `FacingCamera` | Puffs, glows, flares, impact stars | 40% |
-| `VelocityPerpendicular` | Flat rings, crescents in a fixed plane, ground marks | 34% |
-| `VelocityParallel` | Streaks: sparks, flame tongues, speed lines, debris | 23% |
-| `FacingCameraWorldUp` | Rising columns | 3% |
-
-- **A flat sprite needs a direction.** `VelocityPerpendicular` lays a sprite
-  across its direction of travel, so it needs a tiny `Speed` (0.001) along
-  `EmissionDirection`. At Speed 0 it does not show at all *(verified)*. Aim a
-  flat crescent with `Rotation` and sweep it with `RotSpeed` (-280 to -2000).
-- **Streaks:** `VelocityParallel` usually comes with `Squash` (stretch) and
-  `Rotation` -90, so the texture's long axis follows the motion. *(measured)*
-
-### Timing
-
-Typical lifetimes in the studied effects *(measured)*:
-
-| Layer | Lifetime |
-| --- | --- |
-| Flash, impact frames | 0.03-0.15 s |
-| Crescents and slashes | 0.15-0.4 s |
-| Rings and debris | 0.4-1.4 s |
-| Smoke and ground marks | 1-3 s |
-
-- **Anticipation:** 0.1-0.6 s before the hit. Energy gathers in, or a shape
-  shrinks to nothing just before the flash.
-- **The hit:** layers fire in steps 0.025-0.05 s apart:
-  1. anticipation flash;
-  2. flash;
-  3. impact stars;
-  4. sparks and smoke.
-- **The videos agree:**
-  - a one-frame overexposed star, bigger than what follows;
-  - the shape at full size within two frames, with the peak by 0.1 s;
-  - the rest is decay, to 0.6-0.8 s for a hit;
-  - fire turns to dark smoke with glowing cracks inside, and embers linger.
-- **Lingering layers run slower.** Smoke and wind often have `TimeScale`
-  0.6-0.95 while the core stays at 1. *(measured)*
-- **Combos:** duplicate a whole impact, move and rotate each copy, and stagger
-  the copies 0.1-0.15 s apart.
-
-### Motion and curves
-
-- **Burst, then hang.** High `Speed` (50-1300) with `Drag` 2-12, so pieces shoot
-  out and stop. Constant slow drift reads as floaty.
-- **Size pops.** For example `0:0, 0.1:peak, 1:0` for debris. A flash starts
-  big and shrinks. Rings grow with an ease-out curve.
-- **Transparency keys above 1.** A key such as 1.6 makes a particle vanish
-  before its lifetime ends. *(verified: at half life, a 0 to 1.6 curve is more
-  transparent than 0 to 1)*
-- **Negative Transparency.** It does not make a soft texture solid
-  *(verified)*.
-
-### Colour
-
-- **Two or three hue families per effect:**
-  - one dominant hue with a complementary accent: violet with orange, red
-    with a blue start, green with orange;
-  - or a single hue whose value comes from Brightness alone. *(measured)*
-- **Burn out to black.** Fire gradients end in black, and may start blue or
-  violet for the first 10-25% of life. *(measured)*
-- **White is kept** for rings, flares, winds and the hottest core.
-- **Smoke:** warm and grey pairs, lit by the scene (`LightInfluence` 0.35-2).
-- **Fire inside smoke.** The Megumin explosion's mushroom cap is coloured
-  grey, then #ff5500, then grey over its life. Fire gradients end in black.
-  Smoke next to fire should carry the fire's colour where the fire lights it.
-  Two ways to do it:
-  - a `Color` sequence that passes through the fire's orange;
-  - a puff drawn with its colours baked in (`draw_flipbook` returning RGBA),
-    with a dark body and an orange underside.
-  One flat dark tone reads as a cut-out.
-
-### Sustained forms
-
-Orbs, sigils and auras are stacks of stationary billboards on one attachment
-*(measured)*:
-- `Speed` 0.001 and `LockedToPart`;
-- `Rate` x `Lifetime` about 2-4, Transparency `0:1, 0.5:0, 1:1` and a random
-  `Rotation`.
-
-Copies cross-fade, so the form holds steady but shimmers. Size the layers as
-a ladder: core 1, rings about 2, halo about 3.5, black backdrop about 4.5.
-
-### Beyond particles
-
-These come from the studied scripts *(measured)*. The emit module does not do
-them; write them alongside it when the effect needs them:
-
-- **Camera shake** from a shake module, presets:
-
-  | Preset | Magnitude | Roughness | Fade in | Fade out |
-  | --- | --- | --- | --- | --- |
-  | Bump | 2.5 | 4 | 0.1 s | 0.75 s |
-  | Explosion | 2.5-5 | 6-10 | 0 | 0.9-1.5 s |
-
-  Attenuate it with distance.
-- **Impact frame:** a `ColorCorrectionEffect` at Saturation -1 and Contrast
-  -100 for 0.02 s, then Contrast +100 for 0.04 s, then restore.
-- **Lights only flash and fade:** peak Brightness 7-16 at Range 7-15, faded to
-  0 over 0.5-1 s. Keep the Range short: the light marks the spot of impact.
-  A light that reaches the whole floor tints it, and the effect reads as a
-  colour filter.
-- **Crater ring:**
-  - 9-36 rocks in a circle, tilted 12-55°, with the ground's material and
-    colour from a raycast;
-  - hold 1.5-3 s, then sink over 1.8 s.
+See `references/vfx-design.md`. The short version:
+- custom, hard-edged white textures tinted by `Color`;
+- many single-sprite layers;
+- a palette of about five colours that is never broken;
+- dark layers or dim twins so the bright parts read;
+- Brightness and `LightEmission` chosen against the place's bloom;
+- one emit whose layers die in order, getting quieter and never brighter
+  again.
 
 ## 2. Where effects live and how they play
 
@@ -330,7 +139,7 @@ sheet instead, for a lit volume or simulation.
 - **Size:** keep a single texture square, 512 px or less, and 256 px for
   small ones; memory scales with pixels. A flipbook sheet is 1024 x 1024.
 - **White on transparency** suits almost everything: the particle's `Color`
-  tints it, and `LightEmission` picks the blending (section 1). Bake onto black
+  tints it, and `LightEmission` picks the blending (`vfx-design.md`, section 4). Bake onto black
   (`mode="additive"`) only for a layer that will only ever be additive.
 - Roblox has no multiply or premultiplied mode. For darkening, use a black
   layer at `LightEmission` 0, or negative `LightEmission`.

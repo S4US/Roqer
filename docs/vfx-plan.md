@@ -638,8 +638,10 @@ They are not in this repository.
 
 ### Roqer's fire punch, against this
 
-- **Sheets:** Roqer made 8 x 8 sheets of soft, grey, rendered smoke. Each
-  frame filled about 5% of its cell, and the frames barely changed.
+- **Sheets:** Roqer made 8 x 8 sheets of soft, grey, rendered smoke with no
+  silhouette, and the frames barely changed. (This first said each frame
+  filled about 5% of its cell. A later measurement put their widest drawing
+  at 39-62% of a cell. Size was not the fault; see the second study below.)
 - **Meshes:** plain grey.
 - **Result:** a generic glow, orange spikes and a brown cloud:
   - no flash frame;
@@ -660,8 +662,10 @@ They are not in this repository.
   - The worked examples in `blender.md` were run verbatim in Blender 5.2: two
     sheets and a texture in about 5 s.
   - `roqer.flipbook` now defaults to a 4 x 4 grid.
-- **Flipbook check:** Roqer notes a sheet whose drawing spans under 40% of a
-  cell at its largest frame. Roqer's fire-punch sheets would have been noted.
+- **Flipbook check:** Roqer noted a sheet whose drawing spans under 40% of a
+  cell at its largest frame. This was removed after the second study: it
+  would have flagged most of a professional hand-drawn set and missed Roqer's
+  own sheets.
 - **Emit module:** the handle's time scale multiplies each emitter's own
   `TimeScale`, so artists' slowed smoke keeps its pace, and the authored value
   is restored afterwards.
@@ -725,6 +729,124 @@ The two ways considered:
 - **Proof:** re-run the fire-punch brief in Roqer and compare against the
   study. That needs the user's look, and texture uploads only with their
   approval.
+
+## Second reference study: design
+
+Done 2026-10-02, with a second collection from the user:
+- 27 Roblox files: skills, showcases, practice pieces and asset packs;
+- a hand-drawn texture set of 49 sheets, by Qwinkle;
+- a captioned tutorial video by the artist snaliel.
+
+The aim was design: what each effect is for and why it looks as it does.
+
+### Method
+
+- **Files:** dumped as before. Three parallel readings covered the beam and
+  projectile skills, the character skills and showcases, and the practice
+  pieces with the texture set.
+- **Textures:** the 168 most-used were rendered in a Studio gallery.
+- **Effects in Studio:** some practice pieces and Reversal Red were rebuilt in
+  Place1 and captured.
+- **Video:** the captions were read frame by frame.
+
+### What the effects are
+
+| Effect | Kind | What it is |
+| --- | --- | --- |
+| AbyssalRay | Ultimate | A dark summoning-circle beam: 7.5 s root, two implosions, black and white impact frames, then a 0.25 s beam sweep with a crater |
+| beam | Held beam | A Kamehameha-style hand beam |
+| fiya beam | Held beam | An overhead fire cannon |
+| firedragon | Summon | A Katon fire dragon, homing on a Bezier path |
+| Fireball | Ultimate | A meteor ultimate |
+| Flame Beziers | Barrage | Fire missiles |
+| Water Barrage | Volley | A Gate-of-Babylon portal volley |
+| Mildly wet projectiles | Basic skill | Water projectiles on a one-second cooldown |
+| Missile Sequence | Showcase | An arcane star barrage between staged cubes |
+| Ayato | Showcase | A five-hit sword combo and a dash, hand-timed to a 3.2 s animation |
+| Healing | Practice | An A/B of pulsed bursts against a continuous stream |
+| teleport | Kit | A glitch blink |
+| Petal Pathway | Showcase | A traversal path |
+| Reversal Red | Fan move | Gojo's Reversal Red |
+| Colouring Practice | Practice | Colour |
+| Constellations | Practice | An A/B of a halftone overlay |
+| Pink and Blue | Practice | A two-hue aura and hit |
+| Magic Missiles | Practice | One recipe recoloured four ways |
+| orb thingies | Pickups | Three orbs differing only in colour |
+| Jaxelos explosion | Showcase | A staged mega-explosion with colour-correction frames |
+| VFX_MASTERSTUDY | Study | A two-hit study timed with Moon Animator, with camera FOV keys |
+
+The rest are mesh packs and Part_Icles mesh-particle, trail and lightning
+rigs.
+
+### New findings
+
+**Palette and colour:**
+- Many skills are a single hue, with value from Brightness, dim twins and a
+  dark gradient tail.
+- Two-hue effects use analogous hues about 45-50° apart; a complementary
+  accent stays at about 10% of layers.
+- The tutorial says: choose about five colours and never break the palette,
+  and pair saturated energy with desaturated debris and smoke.
+
+**Value without black:**
+- a Brightness 0-0.01 white sprite;
+- same-hue dim twins;
+- a gradient that runs to near-black at `LightEmission` 0;
+- a white base under additive colour;
+- inverted value for dark energy: a black core in front of a white halo.
+
+**Timing:**
+- The tutorial's intensity curve: one emit, with layers dying in order. Key
+  poses only get less intense: the flash with wind, then the scatter, then
+  the residue.
+- Cause and effect are staggered.
+- Shockwave rings are thin Neon discs that grow in 0.2 s while fading.
+- Hit, hold, then a hit 1.6-1.8 times bigger about 1.4 s later.
+- Impacts fire 0.1 s before a projectile arrives.
+
+**Construction:**
+- Projectile anatomy: a head, 2-3 trails, and shed particles.
+- Slashes drawn in time, with points along the arc delayed 0.04-0.05 s apart.
+- Held beams: 2-3 Beams with unsynced scroll, plus Rate-driven streaks.
+
+**Camera, screen and world:**
+- FOV pulls back while charging and snaps at release; blur, tint, and black
+  and white impact frames.
+- Shakes are rotation-only and gated by distance.
+- Lights expand their Range while dying.
+- Craters copy the floor's material and colour.
+
+**Bloom and textures:**
+- Bloom thresholds in these places run 1 to 2. Brightness is relative to the
+  place's bloom.
+- The hand-drawn textures are white with binary or posterised alpha, take
+  their detail from negative space, and grow then fragment.
+  - Their shapes are small in the cell: the widest drawing's median is 27% of
+    the cell, and 40 of 49 are under 40%.
+
+### Corrections
+
+- **The small-drawing note is removed** from Roqer's flipbook check. It would
+  have flagged most of the hand-drawn set, while the sheets it was written for
+  measured 39-62% and would not all have been caught.
+- **The guidance now says size in the cell varies,** and names what made
+  Roqer's first sheets generic: softness, grey, no silhouette, and frames that
+  barely changed.
+- **The study's own attribute decoder** read colour and number sequences in
+  attributes in the wrong field order (the envelope comes first). It is fixed;
+  the first study's conclusions did not rest on those values.
+
+### What changed
+
+- **`references/vfx-design.md` (new):** what the effect is for; palette;
+  value; brightness against the place's bloom; textures; layers; the intensity
+  curve; motion; projectiles, slashes, beams and sustained forms; camera,
+  screen and world.
+  - It combines both studies and the tutorial.
+  - `vfx-craft.md` keeps the engine, tools, skeletons and checking, and points
+    to it.
+- **`references/blender-vfx.md`:** describes hand-drawn texture traits and
+  drops the cell-fill claims.
 
 ## Deferred, and why
 
