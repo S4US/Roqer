@@ -114,7 +114,9 @@ function deferred<T>() {
  * Roqer would have waited 90 s for was abandoned at 60. Approvals and
  * questions wait on the user for as long as the user takes. Roqer bounds every
  * call itself (`timeoutForTool`), and cancelling a run ends the Claude Code
- * process, so this limit only has to stay out of the way.
+ * process, so this limit only has to stay out of the way. Claude Code also
+ * moves an MCP call still running after two minutes to the background when
+ * the user's environment asks for that; `claudeChildEnvironment` turns it off.
  */
 export const CLAUDE_TOOL_CALL_TIMEOUT_MS = 24 * 60 * 60 * 1000;
 
