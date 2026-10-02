@@ -1036,6 +1036,28 @@ with it.
 - The wait now gives up once the effect's clock has stood still for 1.5 s; it
   used to sit out its 20 s cap after the effect ended.
 
+**Magic missile, run 2 (first measured run).** 25% to 34% of a Max 5x
+session, against 13% for run 1; 102 steps against 141; 71 tool calls against
+96, 9 of them `capture_moments`. The usage line: 12.5M tokens read from
+cache, 337k written to it, 153k output, 81 requests, about $8.27 at API
+prices. Run 2 also carried the other guidance changes (two calls a moment,
+Emit's one-line check, not reading other effects' code) and two playtest
+start timeouts, so the saving is not the capture operation's alone.
+
+Weighted the way cache reads, cache writes and output are priced, cache
+reads are about half the cost: 81 requests at about 155k tokens of context
+each. By estimate, the frames were a large share of that context: about 40
+full-size frames at about 1,400 tokens each, kept to the end of the run.
+
+**Contact sheet.** `capture_moments` now returns its frames tiled into one
+image, two to a row, 1568 pixels wide (`composeContactSheet` in
+`electron/image-encoder.ts`, using `nativeImage`). The provider scales any
+image to about that size, so 5 frames cost about 1,500 tokens instead of
+about 7,200. Tested on the live frames as the model would see them: tiles
+about 660-780 pixels wide, with shapes, colours, the sigil's runes and the
+missiles' thin trails all readable. `sheet: false` returns full-size frames.
+The eval harness runs without Electron, so it gets separate frames.
+
 **Follow-up (bridge):** while Studio was not drawing frames,
 `capture_screenshot` first refused ("window appears minimized or not
 rendering"), then returned frames that were 46 minutes old, from an earlier

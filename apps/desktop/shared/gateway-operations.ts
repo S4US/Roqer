@@ -38,6 +38,7 @@ export const GATEWAY_SCHEMAS: Readonly<Record<string, ToolSchema>> = {
       { name: "handle", type: "string", required: false, defaultValue: "\"vfx\"", description: "Name of the global holding the handle." },
       { name: "hold", type: "boolean", required: false, defaultValue: "true", description: "Hold each moment still while capturing. Pass false for trails: a held trail loses its segments, so it keeps playing at slow speed instead." },
       { name: "slow", type: "number", required: false, description: "Playback speed between moments, 0.01-1. Default 0.1, or 0.04 when hold is false." },
+      { name: "sheet", type: "boolean", required: false, defaultValue: "true", description: "Return the frames tiled into one image, which costs about what one frame does. Pass false for each frame at full size, when small detail matters." },
     ],
   },
 };

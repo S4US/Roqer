@@ -36,7 +36,7 @@ test("arguments are checked before anything runs", () => {
   assert.match(String(parseCaptureMoments({ code: "x()", times: [0.1], handle: "_G.vfx" })), /plain global name/);
   assert.match(String(parseCaptureMoments({ code: "x()", times: [0.1], slow: 3 })), /0\.01 to 1/);
   assert.match(String(parseCaptureMoments({ code: "x()", times: Array.from({ length: 9 }, (_, i) => i) })), /1-8/);
-  assert.deepEqual(parseCaptureMoments({ code: "x()", times: [0.1, 0.4] }), { code: "x()", times: [0.1, 0.4], runtime: "edit", handle: "vfx", hold: true, slow: 0.1 });
+  assert.deepEqual(parseCaptureMoments({ code: "x()", times: [0.1, 0.4] }), { code: "x()", times: [0.1, 0.4], runtime: "edit", handle: "vfx", hold: true, slow: 0.1, sheet: true });
   // A trail keeps playing, slowly enough that a capture lands near its time.
   assert.equal((parseCaptureMoments({ code: "x()", times: [0.1], hold: false }) as { slow: number }).slow, 0.04);
   assert.equal((parseCaptureMoments({ code: "x()", times: [0.1], runtime: "client" }) as { target?: string }).target, "client-1");
@@ -103,4 +103,30 @@ test("a cancelled run stops capturing but still ends the effect", async () => {
   assert.match(String(stop?.args.code), /pcall\(h\.stop, h\)/);
   assert.equal(stop?.options?.signal, undefined, "the clean-up call does not carry the cancelled signal");
   assert.equal(calls.filter((call) => call.tool === "capture_screenshot").length, 1);
+});
+
+test("the frames come back tiled into one image when the host can tile them", async () => {
+  const { studio } = fakeStudio();
+  const tiled: Array<{ count: number; columns: number }> = [];
+  const sheet = async (images: readonly { data: string }[], columns: number) => {
+    tiled.push({ count: images.length, columns });
+    return { data: "sheet", mediaType: "image/jpeg" as const };
+  };
+  const outcome = await captureMoments({ code: "_G.vfx = start()", times: [0.1, 0.2, 0.3] }, {}, studio, sheet);
+  assert.deepEqual(tiled, [{ count: 3, columns: 2 }]);
+  assert.deepEqual(outcome.images?.map((picture) => picture.data), ["sheet"]);
+  assert.match(outcome.text, /tiled into one image, 2 to a row, left to right then top to bottom/);
+  assert.match(outcome.text, /- 0\.3 s, at 0\.300 s: frame 3/);
+});
+
+test("frames come back one image each when asked, when there is one, or when tiling fails", async () => {
+  const sheet = async () => ({ data: "sheet", mediaType: "image/jpeg" as const });
+  const separate = await captureMoments({ code: "_G.vfx = start()", times: [0.1, 0.2], sheet: false }, {}, fakeStudio().studio, sheet);
+  assert.deepEqual(separate.images?.map((picture) => picture.data), ["image-1", "image-2"]);
+  assert.match(separate.text, /The images follow in this order/);
+  const single = await captureMoments({ code: "_G.vfx = start()", times: [0.1] }, {}, fakeStudio().studio, sheet);
+  assert.deepEqual(single.images?.map((picture) => picture.data), ["image-1"]);
+  const failing = await captureMoments({ code: "_G.vfx = start()", times: [0.1, 0.2] }, {}, fakeStudio().studio, async () => { throw new Error("no decoder"); });
+  assert.equal(failing.images?.length, 2);
+  assert.match(String(parseCaptureMoments({ code: "x()", times: [0.1], sheet: "yes" })), /sheet must be true or false/);
 });

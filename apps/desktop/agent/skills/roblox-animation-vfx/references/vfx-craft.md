@@ -609,7 +609,10 @@ effect is held still for each capture instead of caught in passing.
      "times": [0.03, 0.1, 0.25, 0.45, 0.9] } }
    ```
    Roqer plays it slowly, holds it at each time, captures the viewport, and
-   returns every frame in one result, in order, then stops the effect. Pick
+   returns the frames tiled into one image, two to a row, then stops the
+   effect. A sheet costs about what one frame does. When small detail
+   matters, such as a texture's edges or a thin trail, capture just that
+   moment with `"sheet": false` for the full-size frame. Pick
    the 4-6 moments that matter: anticipation, the flash, the peak, the body
    at about 0.3 s, the smoke, and a time just past the effect's end, to see
    that nothing is left behind. Every call re-reads the whole

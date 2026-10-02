@@ -119,6 +119,47 @@ export const encodeAttachmentImage: ImageEncoder = async ({ bytes, mediaType, na
 };
 
 /**
+ * The width a contact sheet is drawn at: the long edge a model provider scales
+ * an image to anyway, so tiling costs no detail the model would have seen.
+ */
+const CONTACT_SHEET_WIDTH = 1568;
+const CONTACT_SHEET_QUALITY = 85;
+
+/**
+ * Several frames as one image, `columns` to a row, left to right and top to
+ * bottom, each scaled to its tile. A model reads an image at a cost set by its
+ * pixels, and the provider scales every image down to about the same size, so
+ * five full-size frames cost about five times one sheet of them while showing
+ * little more. Undefined when a frame does not decode here; the caller then
+ * sends the frames as they are.
+ */
+export async function composeContactSheet(images: readonly McpToolImage[], columns: number): Promise<McpToolImage | undefined> {
+  const frames = images.map((image) => nativeImage.createFromBuffer(Buffer.from(image.data, "base64")));
+  if (frames.length === 0 || frames.some((frame) => frame.isEmpty())) return undefined;
+  const tileWidth = Math.floor(CONTACT_SHEET_WIDTH / columns);
+  const tiles = frames.map((frame) => frame.resize({ width: tileWidth, quality: "good" }));
+  const tileHeight = Math.max(...tiles.map((tile) => tile.getSize().height));
+  const rows = Math.ceil(tiles.length / columns);
+  const width = tileWidth * columns;
+  const height = tileHeight * rows;
+  // BGRA, as nativeImage's bitmaps are; untouched tiles stay opaque black.
+  const sheet = Buffer.alloc(width * height * 4);
+  for (let i = 3; i < sheet.length; i += 4) sheet[i] = 255;
+  tiles.forEach((tile, index) => {
+    const { width: w, height: h } = tile.getSize();
+    const bitmap = tile.toBitmap();
+    const left = (index % columns) * tileWidth;
+    const top = Math.floor(index / columns) * tileHeight;
+    for (let y = 0; y < h; y++) {
+      bitmap.copy(sheet, ((top + y) * width + left) * 4, y * w * 4, (y + 1) * w * 4);
+    }
+  });
+  const jpeg = nativeImage.createFromBitmap(sheet, { width, height }).toJPEG(CONTACT_SHEET_QUALITY);
+  if (jpeg.byteLength === 0 || !fits(jpeg)) return undefined;
+  return { data: jpeg.toString("base64"), mediaType: "image/jpeg" };
+}
+
+/**
  * The preview kept with image evidence: a screenshot or a Blender preview,
  * scaled down and re-encoded as JPEG so it fits the saved-record bound.
  *

@@ -67,7 +67,7 @@ import { adoptPreviousUserData, PREVIOUS_USER_DATA_SEGMENTS } from "../runtime/u
 import { RunJournal } from "../runtime/run-journal";
 import { BridgeLog } from "../runtime/bridge-log";
 import { AttachmentRegistry, MAX_IMAGE_SOURCE_BYTES } from "../runtime/attachment-context";
-import { encodeAttachmentImage, previewToolImage } from "./image-encoder";
+import { composeContactSheet, encodeAttachmentImage, previewToolImage } from "./image-encoder";
 import { DiscordPresence } from "./discord-presence";
 import { McpServerProcess } from "../runtime/mcp-server-process";
 import { mcpServerMessage, type McpServerState } from "../shared/mcp-server";
@@ -1486,7 +1486,7 @@ async function startRun(event: IpcMainInvokeEvent, payload: unknown): Promise<Ru
     const heldPictures = new Set<string>();
     const session = new RunSession({
       caller: withLocalOperations(client, new Map<string, LocalOperation>([
-        [CAPTURE_MOMENTS_OPERATION, captureMoments],
+        [CAPTURE_MOMENTS_OPERATION, (args, options, studio) => captureMoments(args, options, studio, composeContactSheet)],
         ...(blender ? [[BLENDER_OPERATION, (args, options) => runBlenderJob(args, options, request.chatId)] as [string, LocalOperation]] : []),
       ])),
       bridge: bridgeRecoveryFor(client.endpoint),
