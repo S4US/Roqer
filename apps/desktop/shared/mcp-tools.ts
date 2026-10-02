@@ -192,8 +192,9 @@ const TOOL_TIMEOUT_MS: Readonly<Record<string, number>> = {
   // The script's own limit (at most 200s) plus Roqer's inspection of up to
   // three exported models (30s each); the worker enforces both itself.
   run_blender_script: 300_000,
-  // Starts an effect, then up to eight waits of at most 20s at slow speed,
-  // each followed by a capture; the operation bounds every step itself.
+  // Starts an effect, then for each of up to eight moments one or more waits
+  // of at most 20 s and a capture. The operation reads this budget and starts
+  // no wait it could not finish within it, keeping room to stop the effect.
   capture_moments: 300_000,
 };
 

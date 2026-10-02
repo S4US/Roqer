@@ -49,13 +49,18 @@ test("a moment travels at normal speed, slows for the last stretch, holds when a
   // 1.5 s of real time at 0.1x is the last 0.15 s of effect time.
   assert.match(held, /if clock\(\) < target - 0\.15 then playTo\(target - 0\.15, 1\) end/);
   assert.match(held, /playTo\(target, 0\.1\)/);
-  assert.match(held, /os\.clock\(\) - started < 20 and os\.clock\(\) - moved < 1\.5 do/, "an ended effect's stopped clock ends the wait");
-  assert.match(held, /h:setTimeScale\(0\)/);
-  assert.match(held, /"done" or \(os\.clock\(\) - moved >= 1\.5 and "stalled" or "capped"\)/);
+  assert.match(held, /h\.finished ~= true and os\.clock\(\) - started < 20 and os\.clock\(\) - moved < 1\.5 do/, "an ended effect's stopped clock ends the wait");
+  assert.match(held, /scale\(0\)/);
+  assert.match(held, /"done" or \(\(h\.finished == true or os\.clock\(\) - moved >= 1\.5\) and "stalled" or "capped"\)/);
+  // A finished handle has restored what it changed; it is never scaled again.
+  assert.match(held, /local function scale\(speed\) if h\.finished ~= true then h:setTimeScale\(speed\) end end/);
+  assert.doesNotMatch(held.replace(/local function scale[^\n]*\n/, ""), /h:setTimeScale/);
   const trail = momentLuau("vfx", 1.2, 0.04, false);
-  // A trail is drawn slowly for longer than it lives, so the whole of it is in the frame.
-  assert.match(trail, /playTo\(target - 0\.9, 1\)/);
-  assert.doesNotMatch(trail, /setTimeScale\(0\)/);
+  // A trail is drawn slowly for as much of its life as one wait covers: 20 s at 0.04x is 0.8 s.
+  assert.match(trail, /playTo\(target - 0\.8, 1\)/);
+  assert.doesNotMatch(trail, /scale\(0\)/);
+  // At the slowest speed the slow stretch still fits one wait.
+  assert.match(momentLuau("vfx", 2, 0.01, false), /playTo\(target - 0\.2, 1\)/);
   assert.match(stopLuau("vfx"), /pcall\(h\.stop, h\)/);
 });
 
@@ -85,6 +90,16 @@ test("a clock that stops short is captured anyway, and said so", async () => {
   assert.match(outcome.text, /at 1\.200 s \(the clock stopped short of 3 s: the effect had ended\)/);
 });
 
+test("a call that runs short of time captures no further moments, and says which", async () => {
+  const { studio, calls } = fakeStudio();
+  // 30 s leaves no room for a 20 s wait after the reserve for stopping the effect.
+  const outcome = await captureMoments({ code: "_G.vfx = start()", times: [0.1, 0.2] }, { timeoutMs: 30_000 }, studio);
+  assert.equal(outcome.ok, false);
+  assert.match(outcome.text, /Not captured, because this call's time ran out first: 0\.1 s, 0\.2 s\. Capture them in another call\./);
+  assert.equal(calls.filter((call) => call.tool === "capture_screenshot").length, 0);
+  assert.match(String(calls.at(-1)?.args.code), /pcall\(h\.stop, h\)/, "the effect is still stopped");
+});
+
 test("a wait that runs out of its call's budget carries on in another call, up to a limit", async () => {
   let waits = 0;
   const { studio } = fakeStudio({ reached: () => (++waits < 3 ? `${waits * 0.5}|capped` : "1.500|done") });
@@ -94,7 +109,7 @@ test("a wait that runs out of its call's budget carries on in another call, up t
   let endless = 0;
   const capped = await captureMoments({ code: "_G.vfx = start()", times: [50] }, {}, fakeStudio({ reached: () => `${++endless}|capped` }).studio);
   assert.equal(endless, 4);
-  assert.match(capped.text, /at 4\.000 s \(still short of 50 s after 80 s of waiting\)/);
+  assert.match(capped.text, /at 4\.000 s \(still short of 50 s when the waiting ran out\)/);
 });
 
 test("code that fails to start captures nothing and still ends the effect", async () => {

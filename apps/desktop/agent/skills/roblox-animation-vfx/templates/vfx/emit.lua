@@ -1,4 +1,4 @@
--- ROQER_VFX_EMIT 2026-10-02
+-- ROQER_VFX_EMIT 2026-10-03
 -- Plays effects authored as instances with attributes, the convention the
 -- popular VFX editors share, so an artist can open and tune what the agent
 -- builds. Require it from client code; effects are presentation.
@@ -255,6 +255,10 @@ function Handle:_collect(root)
 end
 
 function Handle:setTimeScale(scale)
+	-- A finished effect has put back what it changed; scaling it again would undo that.
+	if self.finished then
+		return
+	end
 	self._scale = math.clamp(scale, 0, 1)
 	for _, emitter in self._emitters do
 		emitter.TimeScale = self._timeScales[emitter] * self._scale
