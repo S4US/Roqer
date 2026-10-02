@@ -22,8 +22,11 @@
 --   The effect root  EffectDuration overrides when the effect ends, for an
 --                    effect whose emitters run on their own without attributes.
 --
--- One clock drives everything, scaled by the handle's time scale, which is also
--- written to every emitter's TimeScale and stretches every trail's Lifetime:
+-- EmitDelay is absolute, counted from the effect's start; editors that set a
+-- delay on a group write it onto every descendant, so delays are not summed.
+--
+-- One clock drives everything, scaled by the handle's time scale, which also
+-- multiplies every emitter's own TimeScale and stretches every trail's Lifetime:
 -- setTimeScale(0.1) is slow motion and freeze(seconds) is hitstop for
 -- particles, trails and meshes alike.
 
@@ -89,9 +92,13 @@ function Handle:_emitter(emitter)
 		return
 	end
 	table.insert(self._emitters, emitter)
-	self._restore[emitter] = { Enabled = emitter.Enabled }
+	-- An emitter's own TimeScale (lingering smoke at 0.7, say) is part of the
+	-- design; the handle's time scale multiplies it rather than replacing it.
+	local authored = emitter.TimeScale
+	self._timeScales[emitter] = authored
+	self._restore[emitter] = { Enabled = emitter.Enabled, TimeScale = authored }
 	emitter.Enabled = false
-	local lifetime = emitter.Lifetime.Max
+	local lifetime = emitter.Lifetime.Max / math.max(authored, 0.05)
 	if count ~= nil then
 		local bounded = math.clamp(math.floor(count), 0, MAX_EMIT_COUNT)
 		if bounded ~= count then
@@ -250,7 +257,7 @@ end
 function Handle:setTimeScale(scale)
 	self._scale = math.clamp(scale, 0, 1)
 	for _, emitter in self._emitters do
-		emitter.TimeScale = self._scale
+		emitter.TimeScale = self._timeScales[emitter] * self._scale
 	end
 	for _, entry in self._trails do
 		-- Trail.Lifetime stops at 20 s, which is as near to frozen as a trail gets.
@@ -318,9 +325,6 @@ function Handle:stop()
 				target[name] = value
 			end
 		end
-		for _, emitter in self._emitters do
-			emitter.TimeScale = 1
-		end
 	end
 	if self._onDone then
 		task.spawn(self._onDone)
@@ -338,6 +342,7 @@ local function start(root, owned, options)
 		_events = {},
 		_tracks = {},
 		_emitters = {},
+		_timeScales = {},
 		_trails = {},
 		_restore = {},
 		_ending = 0,

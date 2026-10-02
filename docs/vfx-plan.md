@@ -1,11 +1,12 @@
 # VFX study
 
-Status as of 2026-10-02: step 1 (guidance) is implemented, unit tested and
-checked live in Studio; open questions 1 and 2 are answered. The rest is
-research only. It
-records how strong Roblox VFX are built today, what the agent can and cannot
-do toward that, and a proposed order of work. Facts were gathered from the web
-on that date and carry their sources. Items tagged **[unverified]** are common
+Status as of 2026-10-02: steps 1 and 2 are implemented, unit tested and
+checked live in Studio and Blender; open questions 1 and 2 are answered. A
+study of experienced artists' published effects ("Reference study" below)
+reshaped the guidance and added texture drawing. The document also records
+how strong Roblox VFX are built today, what the agent can and cannot do toward
+that, and a proposed order of work. Web facts were gathered on that date and
+carry their sources. Items tagged **[unverified]** are common
 practice or inference with no primary source found; do not turn them into
 defaults without testing them.
 
@@ -532,6 +533,152 @@ impact, a ground slam with a shockwave and cracks, and a heal aura. Score:
 
 Record the user's visual verdict beside the score. Quality cannot be unit
 tested.
+
+## Reference study of experienced artists' effects
+
+Done 2026-10-02, after Roqer built a fire punch from the guidance above that the
+user called generic and cheap. The user supplied a local collection of
+effects by experienced Roblox VFX artists:
+- 11 `.rbxm` and 10 `.rbxl` files, including Marcid's open-source slashes,
+  Jaxelos's stars and cosmic impact, a Megumin explosion, orbs, magic circles,
+  wind and smoke, water, and shape-and-value practice pieces;
+- 9 showcase videos;
+- an artist's source textures, with stylised wind meshes and their 30-frame
+  texture sequences.
+
+They are not in this repository.
+
+### Method
+
+- **Files:** the binary files were parsed offline and every property,
+  attribute and script dumped.
+  - Distributions were computed over all 3,950 particle emitters.
+  - The script-driven, slash, orb and practice effects were each read in
+    depth.
+- **Textures:** the 144 most-used were rendered in a Studio gallery and looked
+  at.
+- **Effects:** several were rebuilt in Studio and captured frame by frame.
+- **Videos:** each was cut into contact sheets, and its impacts stepped at
+  30 fps.
+- **Engine probes:** the behaviours the data only implied were probed in
+  Studio with one test texture over a dark and a bright background.
+
+### Findings
+
+**Textures**
+- 915 distinct textures; only 3 emitters use a Roblox built-in.
+- Almost all are white, hard-edged, cel-shaded drawings on transparency.
+- 46% of emitters play a flipbook, mostly 4 x 4, whose frames break apart
+  rather than fade.
+
+**Layers**
+- 40-60 distinct layers make one hit in the slashes.
+- The median `EmitCount` is 1, and 37% of emitters have Speed near 0: stacked,
+  timed sprites.
+
+**Value**
+- 7% of emitters are pure black, and 10-35% in the value-focused pieces.
+- Black is used as backing behind colour, as accents in front, and as twins
+  that move differently.
+- Impacts stack a colour copy, a black copy at `ZOffset` +0.25 and a white copy
+  at +1.
+
+**Brightness and blending**
+- The median Brightness is 9.
+- 39% of emitters use `LightEmission` 0, 35% use 1, and 10% are negative.
+- Every studied place has Bloom at Threshold 2, the same as a new place.
+
+**Orientation**
+- 34% `VelocityPerpendicular`: flat rings and crescents in a fixed plane.
+- 23% `VelocityParallel` with `Squash`: streaks.
+
+**Timing**
+- Flash and impact frames: 0.03-0.15 s.
+- Crescents: 0.15-0.4 s.
+- Rings and debris: 0.4-1.4 s.
+- Smoke: 1-3 s.
+- The median lifetime is 0.45 s.
+
+**Videos**
+- A one-frame overexposed star flash.
+- Full size within two frames.
+- About 0.6-0.8 s in total for a hit.
+- Fire turns into dark smoke with glowing cracks.
+- Anticipation before big hits.
+- Scorch marks that linger.
+
+**Conventions**
+- `EmitDelay` is absolute. VFX Forge writes a group's delay onto every
+  descendant; summing ancestors would double it.
+- `EmitDuration` means "re-burst every 0.1 s" in some scripts and "Enabled at
+  `Rate`" in others.
+- `TimeScale_*`, `Size_*` and `Part_*` attributes are VFX Forge editor inputs.
+- The Keyframe data in the slash places animates only the character rig. The
+  effects are fired from Moon Animator markers.
+
+### Verified in Studio
+
+**Blending**
+- At `LightEmission` 0, Brightness 5-150 renders a solid shape pushed toward
+  white, which blooms.
+- `LightEmission` 1 washes out over a bright background.
+- Negative `LightEmission` (-1, -3) keeps the colour saturated and opaque over
+  a bright background, with a dark rim.
+- A black layer renders as:
+  - solid ink at `LightEmission` 0;
+  - a faint veil at 0.55;
+  - nothing at 1.
+
+**Other behaviour**
+- `VelocityPerpendicular` at Speed 0 does not show; at 0.001 it lies flat.
+- Transparency keys above 1 make a particle vanish early. Negative
+  Transparency does not harden a soft texture.
+- A Decal's `Color3` above 1 renders overbright and blooms.
+- `Emit(0)` emits nothing.
+
+### Roqer's fire punch, against this
+
+- **Sheets:** Roqer made 8 x 8 sheets of soft, grey, rendered smoke. Each
+  frame filled about 5% of its cell, and the frames barely changed.
+- **Meshes:** plain grey.
+- **Result:** a generic glow, orange spikes and a brown cloud:
+  - no flash frame;
+  - no dark layers;
+  - no hard silhouettes.
+
+### What changed
+
+- **Guidance:** `vfx-craft.md` is rewritten around the measured and verified
+  findings, with the source of every number marked.
+  - Layer skeletons replace the built-in-texture recipes.
+  - Two earlier claims are corrected: that additive textures need a black
+    background, and that soft shapes read as magical.
+- **Drawing helpers:** the Blender worker gains `roqer.draw_flipbook`,
+  `draw_texture` and 2D primitives (`tex_coords`, `tex_polar`, `tex_noise`,
+  `tex_cells`, `tex_sample`, `tex_edge`, `tex_ease`) for drawing stylised
+  textures with numpy.
+  - The worked examples in `blender.md` were run verbatim in Blender 5.2: two
+    sheets and a texture in about 5 s.
+  - `roqer.flipbook` now defaults to a 4 x 4 grid.
+- **Flipbook check:** Roqer notes a sheet whose drawing spans under 40% of a
+  cell at its largest frame. Roqer's fire-punch sheets would have been noted.
+- **Emit module:** the handle's time scale multiplies each emitter's own
+  `TimeScale`, so artists' slowed smoke keeps its pace, and the authored value
+  is restored afterwards.
+- **Checked live:** the reference's JSON examples, built verbatim as one
+  effect, play in Place1 as designed. The sequence is an anticipation point, a
+  one-frame star flash, a hot core with a dark rim and streaks, then a ground
+  ring and smoke.
+
+### Next
+
+- **Camera, screen and debris effects:** the studied scripts add camera shake
+  presets, impact frames (ColorCorrection), light flashes and ground-sampled
+  crater rings. The guidance documents them with numbers; the emit module does
+  not do them yet.
+- **Proof:** re-run the fire-punch brief in Roqer and compare against the
+  study. That needs the user's look, and texture uploads only with their
+  approval.
 
 ## Deferred, and why
 

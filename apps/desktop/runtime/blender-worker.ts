@@ -427,7 +427,7 @@ def _write_png(path, rgba):
         handle.write(chunk(b"IEND", b""))
 
 
-def flipbook(name, grid=8, mode="alpha", start=None, end=None, loop=False, padding=4):
+def flipbook(name, grid=4, mode="alpha", start=None, end=None, loop=False, padding=4):
     """Render the scene's animation through its camera into one particle flipbook sheet.
 
     The sheet is 1024 x 1024, the size seen playing as a flipbook in Roblox. grid is 2, 4 or
@@ -543,18 +543,212 @@ def flipbook(name, grid=8, mode="alpha", start=None, end=None, loop=False, paddi
             bpy.data.worlds.remove(black)
         scene.frame_set(saved["frame"])
 
+    fps = render.fps / render.fps_base
+    return _write_flipbook(name, sheet, {"name": name, "grid": grid, "mode": mode, "padding": padding, "loop": bool(loop),
+                                         "fps": round(cells / ((frames[-1] - frames[0] + (frames[1] - frames[0] if loop else 0)) / fps), 3) if frames[-1] > frames[0] else None,
+                                         "frames": frames, "engine": render.engine, "renderSeconds": seconds})
+
+
+def _check_name(name):
+    if not isinstance(name, str) or not name or any(c in name for c in '/\\:*?"<>|.'):
+        raise ValueError(f"name must be usable as a file name without dots, got {name!r}")
+
+
+def _write_flipbook(name, sheet, note):
+    """Write a packed sheet and the note Roqer checks it against, plus a half-size copy when the sheet is too big to attach."""
+    import json, os, numpy
     path = os.path.join(_OUTPUT_DIR, name + ".flipbook.png")
     _write_png(path, sheet)
-    preview = None
     if os.path.getsize(path) > _FLIPBOOK_PREVIEW_BYTES:
         half = sheet.reshape(_FLIPBOOK_SIDE // 2, 2, _FLIPBOOK_SIDE // 2, 2, 4).mean(axis=(1, 3))
-        preview = os.path.join(_OUTPUT_DIR, name + ".flipbook-preview.png")
-        _write_png(preview, (half + 0.5).astype(numpy.uint8))
-    fps = render.fps / render.fps_base
+        _write_png(os.path.join(_OUTPUT_DIR, name + ".flipbook-preview.png"), (half + 0.5).astype(numpy.uint8))
     with open(os.path.join(_OUTPUT_DIR, name + ".flipbook.json"), "w", encoding="utf-8") as handle:
-        json.dump({"name": name, "grid": grid, "mode": mode, "padding": padding, "loop": bool(loop),
-                   "fps": round(cells / ((frames[-1] - frames[0] + (frames[1] - frames[0] if loop else 0)) / fps), 3) if frames[-1] > frames[0] else None,
-                   "frames": frames, "engine": render.engine, "renderSeconds": seconds}, handle)
+        json.dump(note, handle)
+    return path
+
+
+# 2D texture drawing with numpy, for the hard-edged, stylised shapes most Roblox
+# VFX textures are: a shape built from coordinates, broken up by noise, cut
+# with a hard edge, and eaten away over the frames. Images are float arrays,
+# row 0 at the top. tex_coords runs -1..1 with x to the right and y up.
+
+def tex_coords(size=256):
+    """Return (x, y): two size x size float arrays running -1..1 across the image, x to the right and y up."""
+    import numpy
+    size = _texture_size(size)
+    steps = (numpy.arange(size, dtype=numpy.float32) + 0.5) / size * 2.0 - 1.0
+    return numpy.tile(steps, (size, 1)), numpy.tile(-steps[:, None], (1, size))
+
+
+def tex_polar(x, y):
+    """Return (r, angle) for coordinates x, y: distance from the centre, and the angle in radians from +x, counterclockwise, -pi..pi."""
+    import numpy
+    return numpy.hypot(x, y), numpy.arctan2(y, x)
+
+
+def _texture_size(size):
+    if not isinstance(size, int) or size < 8 or size > 2048:
+        raise ValueError(f"size must be a whole number of pixels from 8 to 2048, got {size!r}")
+    return size
+
+
+def tex_noise(size=256, scale=4, octaves=4, seed=0):
+    """Smooth fractal noise in 0..1 that tiles. scale is how many blobs fit across the image at the coarsest octave; each further octave adds detail at twice the frequency and half the strength."""
+    import numpy
+    size = _texture_size(size)
+    if not isinstance(octaves, int) or octaves < 1 or octaves > 8:
+        raise ValueError(f"octaves must be a whole number from 1 to 8, got {octaves!r}")
+    rng = numpy.random.default_rng(seed)
+    total = numpy.zeros((size, size), dtype=numpy.float32)
+    weight = 0.0
+    for octave in range(octaves):
+        frequency = max(1, int(round(scale))) * 2 ** octave
+        lattice = rng.random((frequency, frequency), dtype=numpy.float32)
+        at = numpy.arange(size, dtype=numpy.float32) * frequency / size
+        low = numpy.floor(at).astype(int)
+        f = at - low
+        f = f * f * (3.0 - 2.0 * f)
+        low %= frequency
+        high = (low + 1) % frequency
+        top = lattice[numpy.ix_(low, low)] * (1 - f)[None, :] + lattice[numpy.ix_(low, high)] * f[None, :]
+        bottom = lattice[numpy.ix_(high, low)] * (1 - f)[None, :] + lattice[numpy.ix_(high, high)] * f[None, :]
+        amplitude = 0.5 ** octave
+        total += (top * (1 - f)[:, None] + bottom * f[:, None]) * amplitude
+        weight += amplitude
+    return total / weight
+
+
+def tex_cells(size=256, cells=8, seed=0):
+    """Cellular (Voronoi) noise that tiles: cells x cells jittered points. Returns (near, edge): the distance to the nearest point and the gap between the nearest and second-nearest, both in cell widths. edge is 0 on the borders between cells, so tex_edge(edge, 0.05) draws the cracks, and near < radius draws round blobs."""
+    import numpy
+    size = _texture_size(size)
+    if not isinstance(cells, int) or cells < 1 or cells > 64:
+        raise ValueError(f"cells must be a whole number from 1 to 64, got {cells!r}")
+    rng = numpy.random.default_rng(seed)
+    jitter = rng.random((cells, cells, 2), dtype=numpy.float32)
+    at = (numpy.arange(size, dtype=numpy.float32) + 0.5) * cells / size
+    px, py = numpy.meshgrid(at, at)
+    cx, cy = numpy.floor(px).astype(int), numpy.floor(py).astype(int)
+    first = numpy.full((size, size), 9.0, dtype=numpy.float32)
+    second = numpy.full((size, size), 9.0, dtype=numpy.float32)
+    for dy in (-1, 0, 1):
+        for dx in (-1, 0, 1):
+            nx, ny = cx + dx, cy + dy
+            point = jitter[ny % cells, nx % cells]
+            d = numpy.hypot(px - (nx + point[..., 0]), py - (ny + point[..., 1]))
+            second = numpy.where(d < first, first, numpy.minimum(second, d))
+            first = numpy.minimum(first, d)
+    return first, second - first
+
+
+def tex_sample(image, u, v):
+    """Look a 2D image up at u, v (0..1 across and down the image), wrapping and blending between pixels. Scroll, stretch or warp noise per frame with it, as in tex_sample(noise, x * 0.5 + t, y * 0.5)."""
+    import numpy
+    image = numpy.asarray(image, dtype=numpy.float32)
+    height, width = image.shape[:2]
+    x = (numpy.asarray(u, dtype=numpy.float32) % 1.0) * width - 0.5
+    y = (numpy.asarray(v, dtype=numpy.float32) % 1.0) * height - 0.5
+    x0, y0 = numpy.floor(x).astype(int), numpy.floor(y).astype(int)
+    fx, fy = x - x0, y - y0
+    x0, y0 = x0 % width, y0 % height
+    x1, y1 = (x0 + 1) % width, (y0 + 1) % height
+    return (image[y0, x0] * (1 - fx) * (1 - fy) + image[y0, x1] * fx * (1 - fy)
+            + image[y1, x0] * (1 - fx) * fy + image[y1, x1] * fx * fy)
+
+
+def tex_edge(value, at=0.0, soft=0.01):
+    """0 below at and 1 above it, blended over soft: the hard, cel-shaded edge. Keep soft near 0.01 for a crisp silhouette; raise it for a glow."""
+    import numpy
+    soft = max(float(soft), 1e-5)
+    t = numpy.clip((numpy.asarray(value, dtype=numpy.float32) - (at - soft)) / (2 * soft), 0.0, 1.0)
+    return t * t * (3.0 - 2.0 * t)
+
+
+def tex_ease(t, power=3.0):
+    """Ease out: fast at first, then slow, as a burst grows. t is clamped to 0..1."""
+    import numpy
+    return 1.0 - (1.0 - numpy.clip(t, 0.0, 1.0)) ** power
+
+
+def _drawn_rgba(result, size, mode, where):
+    """A drawing function's result as size x size x 4 floats: alpha alone, (alpha, value), or RGB / RGBA."""
+    import numpy
+    if isinstance(result, tuple):
+        if len(result) != 2:
+            raise ValueError(f"{where} returned a tuple of {len(result)}; return alpha, (alpha, value) or an RGBA array")
+        alpha = numpy.asarray(result[0], dtype=numpy.float32)
+        value = numpy.broadcast_to(numpy.asarray(result[1], dtype=numpy.float32), (size, size))
+        if alpha.shape != (size, size):
+            raise ValueError(f"{where} returned alpha shaped {alpha.shape}; it must be {size} x {size}")
+        rgba = numpy.stack([value, value, value, alpha], axis=-1)
+    else:
+        array = numpy.asarray(result, dtype=numpy.float32)
+        if array.shape == (size, size):
+            rgba = numpy.stack([numpy.ones_like(array)] * 3 + [array], axis=-1)
+        elif array.shape == (size, size, 4):
+            rgba = array
+        elif array.shape == (size, size, 3):
+            rgba = numpy.concatenate([array, numpy.ones((size, size, 1), dtype=numpy.float32)], axis=-1)
+        else:
+            raise ValueError(f"{where} returned an array shaped {array.shape}; it must be {size} x {size} (alpha), or {size} x {size} x 3 or 4")
+    rgba = numpy.clip(numpy.nan_to_num(rgba), 0.0, 1.0)
+    if mode == "additive":
+        rgba = numpy.concatenate([rgba[..., :3] * rgba[..., 3:4], numpy.ones((size, size, 1), dtype=numpy.float32)], axis=-1)
+    return (rgba * 255.0 + 0.5).astype(numpy.uint8)
+
+
+def draw_flipbook(name, frame, grid=4, loop=False, fps=None, mode="alpha", padding=4):
+    """Draw a particle flipbook frame by frame with numpy and pack it into a 1024 x 1024 sheet Roqer checks.
+
+    frame(t, size) draws one frame size pixels square. t runs from 0 at the first frame to 1 at
+    the last (to just under 1 for a loop, whose last frame leads back to the first). It returns
+    alpha (a size x size array, 0..1) for a white shape, or (alpha, value) where value is the grey
+    level (a number or an array), or an RGB or RGBA array. White shapes are usual: the particle's
+    Color tints them, and value lets two tones in one shape take one colour. grid is 2, 4 or 8
+    (4, 16 or 64 frames); 4 is what most studied artists' sheets use. fps is the speed the frames
+    are meant to play at, used to suggest the Lifetime or framerate. mode "alpha" keeps a
+    transparent background (LightEmission 0 or below); "additive" bakes alpha onto black for
+    LightEmission 1. padding pixels around each frame stay empty. Writes <name>.flipbook.png.
+    """
+    import numpy
+    _check_name(name)
+    if not callable(frame):
+        raise ValueError("frame must be a function frame(t, size) that returns the frame's alpha, (alpha, value) or an RGBA array")
+    if grid not in _FLIPBOOK_GRIDS:
+        raise ValueError(f"grid must be 2, 4 or 8 (Roblox's Grid2x2, Grid4x4 and Grid8x8), got {grid!r}")
+    if mode not in ("alpha", "additive"):
+        raise ValueError(f'mode must be "alpha" or "additive", got {mode!r}')
+    cell = _FLIPBOOK_SIDE // grid
+    if not isinstance(padding, int) or padding < 0 or padding > cell // 8:
+        raise ValueError(f"padding must be a whole number of pixels from 0 to {cell // 8} for a {grid} x {grid} grid, got {padding!r}")
+    if fps is not None and (not isinstance(fps, (int, float)) or fps <= 0):
+        raise ValueError(f"fps must be a positive number or None, got {fps!r}")
+    cells = grid * grid
+    inner = cell - 2 * padding
+    sheet = numpy.zeros((_FLIPBOOK_SIDE, _FLIPBOOK_SIDE, 4), dtype=numpy.uint8)
+    if mode == "additive":
+        sheet[:, :, 3] = 255
+    for index in range(cells):
+        t = index / cells if loop else index / (cells - 1)
+        where = f"frame(t={t:.3f}, size={inner})"
+        drawn = _drawn_rgba(frame(t, inner), inner, mode, where)
+        row, column = divmod(index, grid)
+        top, left = row * cell + padding, column * cell + padding
+        sheet[top:top + inner, left:left + inner] = drawn
+    return _write_flipbook(name, sheet, {"name": name, "grid": grid, "mode": mode, "padding": padding, "loop": bool(loop),
+                                         "fps": float(fps) if fps is not None else None, "drawn": True})
+
+
+def draw_texture(name, image, size=512, mode="alpha"):
+    """Draw one texture with numpy and write it as <name>.png. image is an array, or a function image(size) returning one: alpha, (alpha, value) or RGB / RGBA, as for draw_flipbook. mode "alpha" keeps transparency; "additive" bakes it onto black."""
+    import os
+    _check_name(name)
+    size = _texture_size(size)
+    if mode not in ("alpha", "additive"):
+        raise ValueError(f'mode must be "alpha" or "additive", got {mode!r}')
+    drawn = _drawn_rgba(image(size) if callable(image) else image, size, mode, "image")
+    path = os.path.join(_OUTPUT_DIR, name + ".png")
+    _write_png(path, drawn)
     return path
 
 

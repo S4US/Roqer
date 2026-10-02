@@ -108,6 +108,16 @@ test("empty cells are problems; held frames are only noted", () => {
   assert.ok(describeFlipbook("held.flipbook.png", held).some((line) => /^ {2}Note: 8 cells repeat/.test(line)));
 });
 
+test("a drawing that fills little of its cells is noted, not refused", () => {
+  // Radius 20 in a 256-pixel cell spans about 16% of it.
+  const small = analyzeFlipbook(sheet(4, () => 20), { grid: 4 });
+  assert.equal(small.ok, true, small.problems.join("\n"));
+  assert.ok(small.notes?.some((note) => /spans 16% of a cell/.test(note)), (small.notes ?? []).join("\n"));
+  // Only the largest frame counts: a burst that starts small and grows to fill its cell is fine.
+  const grows = analyzeFlipbook(sheet(4, (i) => 20 + i * 6), { grid: 4 });
+  assert.ok(!(grows.notes ?? []).some((note) => /spans/.test(note)));
+});
+
 test("a wrong claim is checked against the gutters in the pixels", () => {
   // A real 2 x 2 sheet whose discs cross the 4 x 4 boundaries, claimed as 4 x 4.
   const report = analyzeFlipbook(sheet(2, () => 200), { grid: 4 });
