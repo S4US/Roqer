@@ -52,6 +52,14 @@ See `references/vfx-design.md`. The short version:
   3. Read it for its revision, then write the template's body into it with
      `set_script_source`.
 
+  If `ReplicatedStorage.VFX.Emit` already exists, read only its first line
+  (`line_range` `"1"`). If it matches the template's first line exactly,
+  version included, it is this module: use it without reading the rest.
+  Otherwise it is an older or changed copy, so read it before deciding
+  whether to replace it. Don't read other effects' modules for ideas
+  either; this skill's references are the better source. Everything read
+  stays in the conversation and is re-read on every later call.
+
   It is a starting point, not a cage. Extend it, or write your own player,
   when an effect needs something it does not do: camera shake, Bezier paths,
   colour over time, chained effects. If you change it, keep the attribute
@@ -597,18 +605,24 @@ effect still for each capture instead of trying to catch it.
    `_G.vfx = require(game.ReplicatedStorage.VFX.Emit).play(template, cframe, { timeScale = 0.1 })`.
 4. For each moment to see (anticipation, the flash, the impact stars, the
    peak of the ring, the smoke, the end):
-   - one `execute_luau` waits until `_G.vfx.time` reaches it, then calls
-     `_G.vfx:setTimeScale(0)`;
-   - `capture_screenshot`;
-   - another `execute_luau` resumes it with `setTimeScale(0.1)`.
+   - one `execute_luau` resumes the effect if it is held
+     (`setTimeScale(0.1)`), waits until `_G.vfx.time` reaches the moment,
+     then calls `_G.vfx:setTimeScale(0)`;
+   - `capture_screenshot`.
 
-   The frame is held where you asked, to within a few milliseconds of effect
-   time.
+   Two calls a moment: resuming belongs in the next moment's call, not a
+   call of its own. Every call re-reads the whole conversation, so pick the
+   4-6 moments that matter rather than many. The frame is held where you
+   asked, to within a few milliseconds of effect time.
 
    **Trails are the exception.** A trail ages in real time while the frame is
    held, so its older segments vanish when the effect resumes. For an effect
-   built on trails, play at `timeScale = 0.04` and capture back to back
-   without pausing; the module stretches trail lifetimes to match.
+   built on trails, play at `timeScale = 0.04` and capture without pausing.
+   Real time runs 25 times effect time, so wait accordingly: to see 0.3 s of
+   flight, wait 7.5 s after launch before capturing. The emit module stretches
+   trail lifetimes to match the slow speed; a module of your own that moves a
+   projectile must do the same (`trail.Lifetime = authored / scale`), or its
+   trails come out 25 times too short.
 5. Ask of each capture:
    - From the player's view, does the payoff fill its share of the screen
      (vfx-design.md section 1)? Does it grow taller for a moment, or stay a

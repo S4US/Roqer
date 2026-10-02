@@ -967,6 +967,45 @@ decal route.
 **Follow-up:** `draw_texture` images are not checked at all. Only flipbook
 sheets are.
 
+## The magic missile run, and what a run costs
+
+The user: "looks actually pretty good", but the missiles' trails are bad, and
+the run used 13% of a Max 5x session.
+
+**Trails.** In the run's screenshots they are thin, uniform-width white
+lines: no taper, no coloured or dark body, nothing shed. Roqer never saw them
+in a capture. Pausing discards a trail's segments, and at 0.04x it captured
+before the missiles had moved. Its own module moved the missiles, and may not
+stretch trail lifetimes when slowed.
+
+**Cost.** Run records keep no token counts. Claude Code runs with
+`--no-session-persistence`, and the planner reads `modelUsage` only for the
+context meter. So the following is an estimate. The run made 96 Studio and
+Roqer tool calls, about 115 model requests, and each request re-reads the
+whole conversation:
+- About 40 of those calls were the pause, capture and resume loop: 16
+  screenshots and 25 runtime evals.
+- 16 screenshots reach the model at full size (2246 x 982, about 1,400 tokens
+  each after the API scales them). Each stays in context for the rest of the
+  run.
+- The first three calls read 820 lines of existing modules, including Emit,
+  which the skill ships.
+- Not a cost: the `get_script_source` rows after each write are Roqer's own
+  read-backs, which never reach the model.
+
+**Changed now:** two calls a moment instead of three; pick 4-6 moments; the
+trail wait (effect seconds ÷ 0.04) and the lifetime stretch in a module of
+the agent's own; Emit's first line carries a version, so an existing copy is
+checked from one line.
+
+**Proposed:**
+1. Record each run's usage (`usage`, `num_turns`, `total_cost_usd` from Claude
+   Code's `result` event) in the run record, with the migration and
+   validation a stored schema needs, so savings can be measured.
+2. A Roqer operation that captures several moments of a playing effect in one
+   call: slowed rather than paused for trails, N images in one result.
+3. Then, once measured: smaller screenshots, and the model and effort dials.
+
 ## Deferred, and why
 
 - **Runtime EditableMesh/EditableImage effects** (UV scrolling on meshes,

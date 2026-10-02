@@ -1,4 +1,4 @@
--- ROQER_VFX_EMIT
+-- ROQER_VFX_EMIT 2026-10-02
 -- Plays effects authored as instances with attributes, the convention the
 -- popular VFX editors share, so an artist can open and tune what the agent
 -- builds. Require it from client code; effects are presentation.
