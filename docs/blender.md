@@ -174,7 +174,8 @@ Both live in Roqer's data folder:
   reads the stored values as sRGB, where glTF and Blender mean them as linear.
   The 3D view shows them as Studio will; the still picture shows them as
   Blender does.
-- A creature is rigged in Studio from rigid pieces modelled in Blender.
-  Skinning (a mesh that bends) and UGC accessories are not supported yet, and
-  Blender does not animate. Animations are made in Studio instead; see
+- A creature is rigged in Studio, from rigid pieces or a skinned mesh
+  modelled in Blender. Blender motion arrives as a baked animation file for
+  Roqer's animation tool, not as an animation Roblox reads from the GLB; see
   [Character animation](animation.md).
+- UGC accessories are not supported yet.

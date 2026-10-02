@@ -360,11 +360,11 @@ between versions ("Version 3 of 6"), and the newest is shown first.
 
 - R15 and R6, with only the standard bodies' joints plus three props: a
   held item in each hand and a sheath at the hip. R6 has no elbows or knees, and the foot-sliding check is
-  not applied to it. Faces, fingers, clothing and skinned-mesh rigs are not
-  animated.
-- A model's own rig has at most 64 joints and 128 parts, and its `Bone`s are
-  not read. Roqer rigs a model of at most 512 parts, made of rigid pieces; it
-  does not skin a mesh. The only body plan with names is `quadruped`. A preview draws at most 256 welded parts and 40,000 triangles of
+  not applied to it. Faces, fingers and clothing are not animated.
+- A model's own rig has at most 64 joints and 128 parts; a skinned mesh's
+  `Bone`s count as joints. Roqer rigs a model of at most 512 parts, made of
+  rigid pieces or a skinned mesh; it does not skin a mesh itself, which is
+  done in Blender. The only body plan with names is `quadruped`. A preview draws at most 256 welded parts and 40,000 triangles of
   meshes, each mesh at most 20,000 (Roblox's own limit for an imported mesh);
   a part past these is drawn as its box, and the preview in Roqer says which
   parts and why.
@@ -377,5 +377,6 @@ between versions ("Version 3 of 6"), and the newest is shown first.
   scripts changed instead.
 - NPCs are Roblox's stock R15 and R6 bodies. The loader paces a gait only when
   it was wired with its ground speed, which R6 animations do not report.
-- An animation is made in Studio from its pose description. Animating in
-  Blender is not supported yet.
+- An animation is made in Studio from its pose description, written by the
+  agent or baked from a Blender scene
+  ([Animations made in Blender](#animations-made-in-blender)).
