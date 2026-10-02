@@ -105,6 +105,20 @@ function deferred<T>() {
 }
 
 /**
+ * How long Claude Code waits on one call to Roqer's tools before giving up on
+ * it, in milliseconds.
+ *
+ * Claude Code's default for an HTTP server is 60 s, a hard wall-clock limit.
+ * Past it the model is told the call timed out while Roqer carries on, so a
+ * capture that finished at 65 s never reached the model, and a playtest start
+ * Roqer would have waited 90 s for was abandoned at 60. Approvals and
+ * questions wait on the user for as long as the user takes. Roqer bounds every
+ * call itself (`timeoutForTool`), and cancelling a run ends the Claude Code
+ * process, so this limit only has to stay out of the way.
+ */
+export const CLAUDE_TOOL_CALL_TIMEOUT_MS = 24 * 60 * 60 * 1000;
+
+/**
  * Write the MCP endpoint and its bearer token to a private file.
  *
  * `--mcp-config` also takes the JSON inline, but a command line is readable by
@@ -117,6 +131,7 @@ async function writeMcpConfig(directory: string, server: WorkbenchMcpServerHandl
         type: "http",
         url: server.url,
         headers: { Authorization: `Bearer ${server.token}` },
+        timeout: CLAUDE_TOOL_CALL_TIMEOUT_MS,
       },
     },
   };

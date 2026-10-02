@@ -5,8 +5,9 @@ import path from "node:path";
 import test from "node:test";
 
 import {
-  claudeContextUsage, claudeContextWindow, claudeResultUsage, ClaudeRunUsage, createClaudePlanner, streamedOutput, type ClaudeSession,
+  CLAUDE_TOOL_CALL_TIMEOUT_MS, claudeContextUsage, claudeContextWindow, claudeResultUsage, ClaudeRunUsage, createClaudePlanner, streamedOutput, type ClaudeSession,
 } from "./claude-planner";
+import { timeoutForTool } from "../shared/mcp-tools";
 import type { RunUsage } from "../shared/run-events";
 import type { AgentDefinition } from "./agent-definition";
 import type { McpToolOutcome } from "./mcp-types";
@@ -137,6 +138,7 @@ test("Claude planner routes an MCP tool call through PlannerContext and streams 
   };
   let launchArgs: string[] = [];
   let systemPrompt = "";
+  let mcpTimeout: unknown;
   let toolResult = "";
   let skillResult = "";
   const inputMessages: Record<string, unknown>[] = [];
@@ -147,6 +149,7 @@ test("Claude planner routes an MCP tool call through PlannerContext and streams 
       launch: async (args) => {
         launchArgs = args;
         systemPrompt = await fs.readFile(args[args.indexOf("--system-prompt-file") + 1], "utf8");
+        mcpTimeout = JSON.parse(await fs.readFile(args[args.indexOf("--mcp-config") + 1], "utf8")).mcpServers.workbench.timeout;
         const child = new FakeChildProcess();
         child.stdin.setEncoding("utf8");
         child.stdin.on("data", (chunk: string) => {
@@ -186,6 +189,8 @@ test("Claude planner routes an MCP tool call through PlannerContext and streams 
   const summary = await planner.run(contextWithImage);
 
   assert.equal(summary, "Main prints hi.");
+  // Claude Code's own 60 s default would cut off calls Roqer is still running.
+  assert.ok(typeof mcpTimeout === "number" && mcpTimeout >= timeoutForTool("capture_moments") && mcpTimeout === CLAUDE_TOOL_CALL_TIMEOUT_MS);
   assert.deepEqual(recorded.said, ["Main prints hi."]);
   assert.deepEqual(recorded.calls, ["get_script_source"]);
   assert.match(skillResult, /# Test skill/);
