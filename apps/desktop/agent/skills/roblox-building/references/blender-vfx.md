@@ -60,7 +60,7 @@ The building blocks:
 | `tex_coords(size)` | `x, y` arrays from -1 to 1, x right and y up |
 | `tex_polar(x, y)` | `r, angle`: distance from the centre and the angle |
 | `tex_noise(size, scale, octaves, seed)` | Smooth noise in 0..1 that tiles |
-| `tex_cells(size, cells, seed)` | Voronoi `near, edge`: blobs, and cracks along `edge` near 0 |
+| `tex_cells(size, cells, seed)` | Voronoi `near, edge`: detail inside a shape. Even cells drawn as the whole shape read as floor tiles or a turtle shell |
 | `tex_sample(image, u, v)` | `image` looked up at 0..1 with wrapping, to scroll or warp noise per frame |
 | `tex_curve(points, samples, closed)` | A smooth path through control points |
 | `tex_stroke(x, y, path, width, start, end)` | A brush stroke along a path, with width tapering from head to tail, drawn on or erased by `start` and `end` |
@@ -182,6 +182,9 @@ Look at the attached sheet and ask whether it looks drawn:
 - **Change:** does the shape change across the frames (grow, then break into
   pieces), or does it only scale or fade?
 - **Distance:** would it survive at game distance, or is it too thin?
+- **Ground marks:** does it spread from the point of impact (cracks forking
+  out, frost creeping from the centre), or is it an even pattern of cells
+  that reads as tiles?
 
 ### Rendering the scene
 

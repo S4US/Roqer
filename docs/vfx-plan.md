@@ -886,6 +886,50 @@ The user called it a lot of progress, but not yet top notch.
 - **New checks in `vfx-craft.md`:** clip-art textures, floating projectiles,
   and a pale effect needing its darks on a light floor.
 
+## After the second ice spear run
+
+The same ice spear brief, run after the stroke helpers. The user: the charge
+on the hand was the best part; the impact and explosion "look bad", nowhere
+near the dump.
+
+**What was measured.** The shatter was rendered on the study stage with the
+same camera and timings as the dump's explosions, then from the caster's
+camera 50 studs away. Its numbers were compared with 26 impact groups from
+both dumps (deduplicated):
+- **Size class:** the shatter's largest layer was 13 studs (30 for a ground
+  ring). By screen area over time it sat with the dump's single arrow and
+  barrage hits (peak 400-1,000 size² units), not with its explosions
+  (4,000-25,000 for practice pieces, 480,000 for a meteor slam).
+- **Distance:** from the caster's camera the shatter was a speck. Roqer's
+  own checks framed it from 8-10 studs, where it filled the view. The
+  craft guidance told it to "frame close".
+- **Brightness:** Place1's bloom threshold is 2. Every impact layer but a
+  0.08 s flash sat at Brightness 1-3, so the shatter read as flat paint. The
+  dump's impacts peak at Brightness 15 (median) and 50 or more in a third.
+  The guidance's "most layers sat at 3-10" was read as applying to the hit.
+- **Growth:** the shatter's mass peaked at +0.1 s and only shrank. Seven of
+  nine dump explosions and slams kept growing 0.25-1.35 s after the hit. The
+  guidance's "nothing gets bigger" rule said the opposite.
+- **Flat:** apart from a 6-stud spike mesh, it spread on the floor. The frost
+  patch was even Voronoi cells, which read as tiles.
+
+**Experiment.** The same shatter with sizes and speeds ×2.5 and its hot
+layers at Brightness 12-60 read as a burst from the caster's camera, and was
+overblown close up. Size and brightness are most of the gap. It still read as
+a splash rather than an eruption, so the rest is design: something must rise.
+
+**What changed:**
+- `vfx-design.md` section 1: size the payoff for where it is seen, with the
+  measured size classes; a flat impact shrinks to a smear at range.
+- Section 4: the hit's hottest layer runs Brightness 15-50+, apart from the
+  3-10 of trails and smoke.
+- Section 7: brightness falls, but an explosion's mass grows for 0.25-1.35 s;
+  the flash is the biggest thing in its frames.
+- `vfx-craft.md` section 8: capture from the player's camera as well as
+  close, and check size share, bloom and rise.
+- `blender-vfx.md`: even cells as a whole shape read as tiles; ground marks
+  spread from the point of impact.
+
 ## Deferred, and why
 
 - **Runtime EditableMesh/EditableImage effects** (UV scrolling on meshes,

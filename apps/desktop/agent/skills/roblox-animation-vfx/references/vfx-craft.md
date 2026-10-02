@@ -576,11 +576,20 @@ effect still for each capture instead of trying to catch it.
    uses, remove that ModuleScript and create it again before checking.
    Otherwise the old code runs, and a fix looks as if it did nothing. A new
    playtest always loads fresh code.
-2. Frame the spot: `build_instances` a transparent, anchored marker part
-   about the effect's size where it will play, then `selection` with
-   `action: "view"` on it, from a side and a little above. Effects read
-   smaller than expected, so frame close. A new texture can take a moment to
-   load the first time, so a first capture may miss layers; take it again.
+2. Frame the spot two ways, and capture each moment from both:
+   - **Close**, to judge shapes: `build_instances` a transparent, anchored
+     marker part about the effect's size where it will play, then
+     `selection` with `action: "view"` on it, from a side and a little above.
+   - **From where the player sees it.** This view decides whether the
+     effect works. Put a marker where the player's camera will be (about 10
+     studs behind and 5 above the caster) and point the camera from it at
+     the effect with `execute_luau`:
+     `workspace.CurrentCamera.CFrame = CFrame.lookAt(eye, target)`.
+     A projectile's impact is seen from its whole range away. The close view
+     hides an impact that is a speck at range; the far view shows it.
+
+   A new texture can take a moment to load the first time, so a first capture
+   may miss layers; take it again.
 3. Play it slowed, with `execute_luau`:
    `_G.vfx = require(game.ReplicatedStorage.VFX.Emit).play(template, cframe, { timeScale = 0.1 })`.
 4. For each moment to see (anticipation, the flash, the impact stars, the
@@ -598,7 +607,13 @@ effect still for each capture instead of trying to catch it.
    built on trails, play at `timeScale = 0.04` and capture back to back
    without pausing; the module stretches trail lifetimes to match.
 5. Ask of each capture:
-   - Does the flash frame read as one sharp, overexposed shape?
+   - From the player's view, does the payoff fill its share of the screen
+     (vfx-design.md section 1)? Does it grow taller for a moment, or stay a
+     flat splash on the floor?
+   - Is every layer meant to glow above the place's bloom threshold? A
+     Brightness of 1-3 reads as flat paint at Threshold 2.
+   - Does the flash frame read as one sharp, overexposed shape, bigger than
+     what follows it?
    - Is there something dark, so the bright parts read?
    - Do the shapes have hard silhouettes, or do they look like soft smudges?
    - Is the centre a white blob? Bring the stacked bright layers down until

@@ -30,6 +30,27 @@ How far to trust a number:
     one hue and short. Its hits last about 1 s and are cleaned up by 3 s.
   - **An ultimate** is staged. It roots the caster for seconds, charges, uses
     camera and screen work, and leaves craters and scorch marks.
+- **Size the payoff for where the player sees it.** A projectile's impact
+  lands at the end of its range, so a 40-stud throw is watched from about 50
+  studs. At 50 studs a 16:9 screen at the default field of view is about 125
+  studs wide. In 26 studied impacts, the largest layer *(measured)*:
+  - **One hit of many** (a barrage, an arrow rain, a missile salvo) is 10-13
+    studs across. It peaks at once and halves within 0.1-0.25 s.
+  - **One projectile that is the whole skill** (a fireball, a star, a
+    Zoltraak beam's end) is 70-360 studs across. A meteor slam is 316.
+  - **A skill's finishing explosion** is 40-275 studs across. Seven of nine
+    explosions and slams kept growing for 0.25-1.35 s after the hit
+    (section 7).
+
+  A charge reads easily: it is near the camera, against the caster's dark
+  body, and moving inward. An impact has the opposite problem: it is far
+  away, on a bright floor, and spreading flat. Give it the size, brightness
+  and height to make up for that.
+
+  In a test, an ice spear's 13-stud shatter was a speck from the caster's
+  camera. The same shatter at 2.5 times the size, with its hot layers at
+  Brightness 12-60, read as a burst *(verified)*. It still read as a splash
+  rather than an eruption: size and brightness are not the whole fix.
 - **Borrow the rhythm and silhouette of a reference, not its colour.** The
   studied fan pieces read clearly as Gojo's Reversal Red, a Kamehameha, a
   Katon fire dragon, a Gate of Babylon volley and Ayato's sword kit:
@@ -38,7 +59,10 @@ How far to trust a number:
 - **Decide the dominant shape.** In the tutorial's example the defining
   choice is flat: a wide spiral on the ground, which reads instantly as an
   area attack. A vertical column reads as a pillar; a forward cone reads as a
-  directed blast.
+  directed blast. An impact that stays flat (a ring, a patch, a low splash)
+  shrinks to a smear on the floor from the caster's camera. The studied
+  explosions throw something up as well: flame tongues, crystal spires, a
+  smoke column or rising debris.
 - **Ask for the game's style** when it is not clear. An effect that fits the
   game beats a busy one.
 
@@ -155,7 +179,9 @@ How black renders *(verified)*:
 
 `Brightness` multiplies `Color`. In the first study the median Brightness was
 9 and a quarter were above 25. In the second, most layers sat at 3-10
-*(measured)*.
+*(measured)*. Those medians include trails, auras and smoke. In the hit
+itself the hottest layer runs higher: Brightness 15 at the median of 26
+impacts, and 50 or more in a third of them *(measured)*.
 
 The difference is the place's bloom:
 - The first study's places had Bloom Threshold 2, as a new place does.
@@ -270,7 +296,14 @@ From the tutorial *(measured)*, in four rules:
      flash gone;
   3. the residue: dust settling, a faint glow, the last smoke.
 
-  Nothing in the middle or at the end gets bigger or brighter again.
+  Nothing in the middle or at the end gets brighter again.
+
+  **Brightness falls, but an explosion's mass can still grow.** Measured as
+  the screen area of every live particle, seven of nine explosions and slams
+  kept growing for 0.25-1.35 s after the hit: the flash dies while flames,
+  spires, smoke and debris swell, rise and spread. Only the small hits peak
+  at once *(measured)*. A finisher that is biggest at its flash and then only
+  shrinks reads as a pop, not an explosion.
 - **Stagger cause and effect.** Nothing fires at the same time. In the
   tutorial's example the wall launches, then the dragon appears 0.4 s later,
   then the hit, then the cracks, then the debris. Simultaneous layers read as
@@ -305,7 +338,9 @@ Typical lifetimes *(measured)*:
 - **Layer order:** the flash fires at 0, everything else at +0.03 s or later,
   in steps 0.025-0.05 s apart.
 - **The flash itself** is a growing sprite, a shrinking one (7 to 0 in 0.1
-  s), and a thin squashed flare line (`Squash` -2 to -5, 0.04-0.12 s).
+  s), and a thin squashed flare line (`Squash` -2 to -5, 0.04-0.12 s). In
+  its frames it is the biggest thing on screen, larger than the burst that
+  follows.
 - **A held contact point** (a beam hitting a wall) strobes its flash:
   Lifetime 0.1 at `Rate` 50.
 
