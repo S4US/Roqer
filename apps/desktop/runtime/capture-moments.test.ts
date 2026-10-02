@@ -22,8 +22,8 @@ function fakeStudio(overrides: { start?: McpToolOutcome; reached?: (time: number
     }
     const code = String(args.code);
     if (code.includes("pcall(h.stop")) return ok({ returnValue: "stopped" });
-    const wanted = /< ([\d.]+) and os\.clock/.exec(code);
-    if (wanted) return ok({ returnValue: overrides.reached?.(Number(wanted[1])) ?? Number(wanted[1]).toFixed(3) });
+    const wanted = /local target = ([\d.]+)/.exec(code);
+    if (wanted) return ok({ returnValue: overrides.reached?.(Number(wanted[1])) ?? `${Number(wanted[1]).toFixed(3)}|done` });
     return overrides.start ?? ok({ returnValue: "" });
   };
   return { studio, calls };
@@ -42,13 +42,20 @@ test("arguments are checked before anything runs", () => {
   assert.equal((parseCaptureMoments({ code: "x()", times: [0.1], runtime: "client" }) as { target?: string }).target, "client-1");
 });
 
-test("a moment plays on to its time, holds when asked, and the end stops the effect", () => {
+test("a moment travels at normal speed, slows for the last stretch, holds when asked, and the end stops the effect", () => {
   const held = momentLuau("vfx", 0.25, 0.1, true);
   assert.match(held, /_G\["vfx"\]/);
-  assert.match(held, /h:setTimeScale\(0\.1\)/);
-  assert.match(held, /< 0\.25 and os\.clock\(\) - started < 20 and os\.clock\(\) - moved < 1\.5 do/, "an ended effect's stopped clock ends the wait");
+  assert.match(held, /local target = 0\.25/);
+  // 1.5 s of real time at 0.1x is the last 0.15 s of effect time.
+  assert.match(held, /if clock\(\) < target - 0\.15 then playTo\(target - 0\.15, 1\) end/);
+  assert.match(held, /playTo\(target, 0\.1\)/);
+  assert.match(held, /os\.clock\(\) - started < 20 and os\.clock\(\) - moved < 1\.5 do/, "an ended effect's stopped clock ends the wait");
   assert.match(held, /h:setTimeScale\(0\)/);
-  assert.doesNotMatch(momentLuau("vfx", 0.25, 0.04, false), /setTimeScale\(0\)/);
+  assert.match(held, /"done" or \(os\.clock\(\) - moved >= 1\.5 and "stalled" or "capped"\)/);
+  const trail = momentLuau("vfx", 1.2, 0.04, false);
+  // A trail is drawn slowly for longer than it lives, so the whole of it is in the frame.
+  assert.match(trail, /playTo\(target - 0\.9, 1\)/);
+  assert.doesNotMatch(trail, /setTimeScale\(0\)/);
   assert.match(stopLuau("vfx"), /pcall\(h\.stop, h\)/);
 });
 
@@ -72,10 +79,22 @@ test("in a playtest the code runs on the client peer", async () => {
 });
 
 test("a clock that stops short is captured anyway, and said so", async () => {
-  const { studio } = fakeStudio({ reached: () => "1.200" });
+  const { studio } = fakeStudio({ reached: () => "1.200|stalled" });
   const outcome = await captureMoments({ code: "_G.vfx = start()", times: [3] }, {}, studio);
   assert.equal(outcome.images?.length, 1);
-  assert.match(outcome.text, /at 1\.200 s \(the clock stopped short of 3 s/);
+  assert.match(outcome.text, /at 1\.200 s \(the clock stopped short of 3 s: the effect had ended\)/);
+});
+
+test("a wait that runs out of its call's budget carries on in another call, up to a limit", async () => {
+  let waits = 0;
+  const { studio } = fakeStudio({ reached: () => (++waits < 3 ? `${waits * 0.5}|capped` : "1.500|done") });
+  const outcome = await captureMoments({ code: "_G.vfx = start()", times: [1.5] }, {}, studio);
+  assert.equal(waits, 3);
+  assert.match(outcome.text, /- 1\.5 s, at 1\.500 s: image 1/);
+  let endless = 0;
+  const capped = await captureMoments({ code: "_G.vfx = start()", times: [50] }, {}, fakeStudio({ reached: () => `${++endless}|capped` }).studio);
+  assert.equal(endless, 4);
+  assert.match(capped.text, /at 4\.000 s \(still short of 50 s after 80 s of waiting\)/);
 });
 
 test("code that fails to start captures nothing and still ends the effect", async () => {

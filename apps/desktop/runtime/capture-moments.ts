@@ -18,15 +18,35 @@ import type { McpCallOptions, McpToolImage, McpToolOutcome } from "./mcp-types";
  * playing slowly through each capture instead.
  */
 
-/** Real seconds one moment may wait at slow speed: under the bridge's 30s budget for the call that waits. */
+/** Real seconds one wait may take: under the bridge's 30 s budget for the call that waits. */
 const MAX_WAIT_SECONDS = 20;
+/** Waits one moment may take before it is captured wherever the clock got to. */
+const MAX_WAITS_PER_MOMENT = 4;
 /** Real seconds with the clock standing still before a wait gives up: the effect has ended. */
 const STALLED_SECONDS = 1.5;
+/**
+ * Real seconds of the approach to each moment that are played at slow speed.
+ * The rest of the way is played at normal speed, so a late moment costs its
+ * own length in real time rather than that length divided by the slow speed:
+ * at 0.04x, 1.2 s of effect is 30 s of waiting, past the bridge's budget.
+ * Slowing down only for the last stretch keeps the stop precise and lets a
+ * trail be drawn at the speed it is captured at.
+ */
+const SLOW_APPROACH_SECONDS = 1.5;
+/**
+ * Effect seconds before a moment that a trail capture (`hold: false`) plays
+ * at slow speed. A trail segment keeps the lifetime it was drawn with, so the
+ * segments drawn at normal speed are gone within half a second of real time,
+ * and only what was drawn slowly survives into the frame. The approach covers
+ * the longest trail lifetime seen in the studied effects (0.85 s), so the
+ * whole visible trail is drawn at the speed it is captured at.
+ */
+const TRAIL_APPROACH_SECONDS = 0.9;
 const MAX_CODE_CHARS = 20_000;
 const MAX_TIME_SECONDS = 60;
 const HANDLE_NAME = /^[A-Za-z_][A-Za-z0-9_]{0,40}$/;
 
-type Moment = { requested: number; reached?: number; short?: boolean; image?: number; note?: string };
+type Moment = { requested: number; reached?: number; short?: "ended" | "waited"; image?: number; note?: string };
 
 export type CaptureMomentsArgs = Readonly<{
   code: string;
@@ -46,7 +66,7 @@ export type CaptureMomentsArgs = Readonly<{
  */
 export type ContactSheet = (images: readonly McpToolImage[], columns: number) => Promise<McpToolImage | undefined>;
 
-/** Frames to a row on a contact sheet: two keep each frame about 780 pixels wide as the model sees it. */
+/** Frames to a row on a contact sheet: two keep each frame about 1000 pixels wide, half what a frame sent alone shows. */
 const SHEET_COLUMNS = 2;
 
 /** The call's arguments, checked, or why they cannot run. */
@@ -80,21 +100,34 @@ export function parseCaptureMoments(args: Record<string, unknown>): CaptureMomen
   };
 }
 
-/** Luau that plays the effect on to `time` at `slow`, holds it there when asked, and says where it got to. */
+/**
+ * Luau that plays the effect on to `time`, at normal speed until the last
+ * stretch and at `slow` for it, holds it there when asked, and says where it
+ * got to and why it stopped: "done", "stalled" (the clock stood still, so the
+ * effect has ended) or "capped" (this call's wait ran out first).
+ */
 export function momentLuau(handle: string, time: number, slow: number, hold: boolean): string {
+  const approach = Math.round(Math.max(slow * SLOW_APPROACH_SECONDS, hold ? 0 : TRAIL_APPROACH_SECONDS) * 1000) / 1000;
   return [
     `local h = _G[${JSON.stringify(handle)}]`,
     `if type(h) ~= "table" or type(h.setTimeScale) ~= "function" then return "no-handle" end`,
-    `h:setTimeScale(${slow})`,
+    `local target = ${time}`,
+    "local function clock() return tonumber(h.time) or 0 end",
     // An effect that has ended stops its clock; waiting on for the full cap would only cost time.
-    "local started, last, moved = os.clock(), tonumber(h.time) or 0, os.clock()",
-    `while (tonumber(h.time) or 0) < ${time} and os.clock() - started < ${MAX_WAIT_SECONDS} and os.clock() - moved < ${STALLED_SECONDS} do`,
-    "\ttask.wait()",
-    "\tlocal now = tonumber(h.time) or 0",
-    "\tif now ~= last then last, moved = now, os.clock() end",
+    "local started, last, moved = os.clock(), clock(), os.clock()",
+    "local function playTo(stop, speed)",
+    "\th:setTimeScale(speed)",
+    `\twhile clock() < stop and os.clock() - started < ${MAX_WAIT_SECONDS} and os.clock() - moved < ${STALLED_SECONDS} do`,
+    "\t\ttask.wait()",
+    "\t\tlocal now = clock()",
+    "\t\tif now ~= last then last, moved = now, os.clock() end",
+    "\tend",
     "end",
+    `if clock() < target - ${approach} then playTo(target - ${approach}, 1) end`,
+    `playTo(target, ${slow})`,
     ...(hold ? ["h:setTimeScale(0)"] : []),
-    `return string.format("%.3f", tonumber(h.time) or -1)`,
+    `local status = clock() >= target and "done" or (os.clock() - moved >= ${STALLED_SECONDS} and "stalled" or "capped")`,
+    `return string.format("%.3f|%s", clock(), status)`,
   ].join("\n");
 }
 
@@ -154,19 +187,26 @@ export async function captureMoments(
       if (options.signal?.aborted) throw new Error("Run was cancelled.");
       const moment: Moment = { requested: time };
       moments.push(moment);
-      const step = await run(momentLuau(parsed.handle, time, parsed.slow, parsed.hold));
-      const reached = returned(step).trim();
-      if (!step.ok || reached === "no-handle") {
-        stopped = !step.ok
-          ? `Moving to ${time} s failed: ${step.message ?? step.text}`
+      // A wait that ran out of its call's budget carries on in another call, up to a limit.
+      let reply = "";
+      let failed: McpToolOutcome | undefined;
+      for (let attempt = 0; attempt < MAX_WAITS_PER_MOMENT; attempt++) {
+        const step = await run(momentLuau(parsed.handle, time, parsed.slow, parsed.hold));
+        reply = returned(step).trim();
+        if (!step.ok) failed = step;
+        if (!step.ok || !reply.endsWith("|capped")) break;
+      }
+      if (failed !== undefined || reply === "no-handle") {
+        stopped = failed !== undefined
+          ? `Moving to ${time} s failed: ${failed.message ?? failed.text}`
           : `_G.${parsed.handle} is not a handle with setTimeScale after the code ran; store the effect's handle there.`;
         break;
       }
-      const value = Number(reached);
+      const value = Number(reply.split("|")[0]);
       if (Number.isFinite(value) && value >= 0) {
         moment.reached = value;
-        // A handle whose clock stopped, or that the wait outran, is captured anyway, and said so.
-        if (value + 0.005 < time) moment.short = true;
+        // A handle whose clock stopped, or that the waits outran, is captured anyway, and said so.
+        if (value + 0.005 < time) moment.short = reply.endsWith("|capped") ? "waited" : "ended";
       }
       const shot = await studio("capture_screenshot", {}, { signal: options.signal, timeoutMs: timeoutForTool("capture_screenshot") });
       const image = shot.ok ? shot.images?.[0] : undefined;
@@ -182,7 +222,7 @@ export async function captureMoments(
     await run(stopLuau(parsed.handle), true).catch(() => undefined);
   }
 
-  // One tiled image costs the model about what one frame does, so the frames go as a sheet unless asked otherwise.
+  // A sheet of up to eight frames costs the model about what two frames do, so the frames go as one unless asked otherwise.
   let delivered = images;
   let tiled = false;
   if (parsed.sheet && contactSheet !== undefined && images.length > 1) {
@@ -194,7 +234,11 @@ export async function captureMoments(
   }
   const lines = moments.map((moment) => {
     const at = moment.reached === undefined ? "" : `, at ${moment.reached.toFixed(3)} s`;
-    const short = moment.short ? ` (the clock stopped short of ${moment.requested} s: the effect ended, or it needed more than ${MAX_WAIT_SECONDS} s at ${parsed.slow}x)` : "";
+    const short = moment.short === "ended"
+      ? ` (the clock stopped short of ${moment.requested} s: the effect had ended)`
+      : moment.short === "waited"
+        ? ` (still short of ${moment.requested} s after ${MAX_WAITS_PER_MOMENT * MAX_WAIT_SECONDS} s of waiting)`
+        : "";
     const picture = moment.image === undefined ? moment.note ?? "not captured" : `${tiled ? "frame" : "image"} ${moment.image}`;
     return `- ${moment.requested} s${at}${short}: ${picture}`;
   });

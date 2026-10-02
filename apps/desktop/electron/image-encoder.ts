@@ -119,27 +119,40 @@ export const encodeAttachmentImage: ImageEncoder = async ({ bytes, mediaType, na
 };
 
 /**
- * The width a contact sheet is drawn at: the long edge a model provider scales
- * an image to anyway, so tiling costs no detail the model would have seen.
+ * The width a contact sheet is drawn at: the largest image Claude Code passes
+ * a model (2000 x 2000 for Opus 5.5, read from its model table). A full
+ * 2246-pixel frame reaches the model at 2000 pixels, so two frames to a row
+ * keep each at 1000, half the detail of a frame sent alone, at about a quarter
+ * of the cost for eight frames.
  */
-const CONTACT_SHEET_WIDTH = 1568;
-const CONTACT_SHEET_QUALITY = 85;
+const CONTACT_SHEET_WIDTH = 2000;
+const CONTACT_SHEET_MAX_HEIGHT = 2000;
+/**
+ * Qualities tried, best first. Claude Code re-encodes an image over 512,000
+ * bytes at a quality of its own choosing, so a sheet is kept under that.
+ */
+const CONTACT_SHEET_QUALITIES = [85, 78, 70, 62];
+const CONTACT_SHEET_MAX_BYTES = 500_000;
 
 /**
  * Several frames as one image, `columns` to a row, left to right and top to
  * bottom, each scaled to its tile. A model reads an image at a cost set by its
- * pixels, and the provider scales every image down to about the same size, so
- * five full-size frames cost about five times one sheet of them while showing
- * little more. Undefined when a frame does not decode here; the caller then
- * sends the frames as they are.
+ * pixels, and every image stays in the conversation for the rest of the run,
+ * so eight full-size frames cost about four times one sheet of them. Each
+ * frame shows at half the width it would have alone; the caller offers full
+ * frames for when that detail matters. Undefined when a frame does not decode
+ * here, or the sheet cannot be kept small enough; the caller then sends the
+ * frames as they are.
  */
 export async function composeContactSheet(images: readonly McpToolImage[], columns: number): Promise<McpToolImage | undefined> {
   const frames = images.map((image) => nativeImage.createFromBuffer(Buffer.from(image.data, "base64")));
   if (frames.length === 0 || frames.some((frame) => frame.isEmpty())) return undefined;
-  const tileWidth = Math.floor(CONTACT_SHEET_WIDTH / columns);
+  const rows = Math.ceil(frames.length / columns);
+  // As wide as allowed, unless the rows would then be taller than allowed.
+  const aspect = Math.max(...frames.map((frame) => frame.getSize().height / Math.max(1, frame.getSize().width)));
+  const tileWidth = Math.floor(Math.min(CONTACT_SHEET_WIDTH / columns, CONTACT_SHEET_MAX_HEIGHT / rows / aspect));
   const tiles = frames.map((frame) => frame.resize({ width: tileWidth, quality: "good" }));
   const tileHeight = Math.max(...tiles.map((tile) => tile.getSize().height));
-  const rows = Math.ceil(tiles.length / columns);
   const width = tileWidth * columns;
   const height = tileHeight * rows;
   // BGRA, as nativeImage's bitmaps are; untouched tiles stay opaque black.
@@ -154,9 +167,14 @@ export async function composeContactSheet(images: readonly McpToolImage[], colum
       bitmap.copy(sheet, ((top + y) * width + left) * 4, y * w * 4, (y + 1) * w * 4);
     }
   });
-  const jpeg = nativeImage.createFromBitmap(sheet, { width, height }).toJPEG(CONTACT_SHEET_QUALITY);
-  if (jpeg.byteLength === 0 || !fits(jpeg)) return undefined;
-  return { data: jpeg.toString("base64"), mediaType: "image/jpeg" };
+  const composed = nativeImage.createFromBitmap(sheet, { width, height });
+  for (const quality of CONTACT_SHEET_QUALITIES) {
+    const jpeg = composed.toJPEG(quality);
+    if (jpeg.byteLength > 0 && jpeg.byteLength <= CONTACT_SHEET_MAX_BYTES && fits(jpeg)) {
+      return { data: jpeg.toString("base64"), mediaType: "image/jpeg" };
+    }
+  }
+  return undefined;
 }
 
 /**
