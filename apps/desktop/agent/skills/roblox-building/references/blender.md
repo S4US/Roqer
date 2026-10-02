@@ -93,6 +93,9 @@ get the direction of wrong, and they paint it when given a colour:
 - `roqer.export_animation(name, source, rig, start=None, end=None, loop=True)`:
   bakes what a creature does in the scene into an animation for Studio (see
   "Animating a creature in Blender").
+- `roqer.flipbook(name, grid=8, mode="alpha", start=None, end=None, loop=False, padding=4)`:
+  renders the scene's animation into a 1024 x 1024 particle flipbook sheet
+  (see "Flipbook sheets for particles").
 
 Prefer them for any part that is not upright. Raw `bpy` is still available for
 shapes they do not cover; there, keep the model flat-shaded (no
@@ -415,6 +418,102 @@ For one model on its own; a map's set follows the section above.
    Model.
 5. If it must be held, driven, opened or picked up, assemble it next: load
    [Gameplay assembly](gameplay-assembly.md).
+
+## Flipbook sheets for particles
+
+`roqer.flipbook(name, grid=8, mode="alpha", start=None, end=None, loop=False, padding=4)`
+renders the scene's animation through `scene.camera` into one particle
+flipbook sheet, `<name>.flipbook.png` in `OUTPUT_DIR`. Use it for any
+animated particle texture: an explosion, a smoke puff, a fire loop, an
+impact flash or an energy swirl. Never pack frames by hand.
+
+- **Size and grid:** the sheet is always exactly 1024 x 1024, the only size
+  Roblox plays a flipbook from. `grid` is 2, 4 or 8 (4, 16 or 64 frames). The
+  frames from `start` to `end` (the scene's range by default) are sampled
+  evenly to fill every cell, because Roblox plays every cell. The animation
+  needs at least as many frames as cells.
+- **Mode:** `"additive"` renders on black, for fire, energy, sparks and
+  glows; it is used with `LightEmission = 1`. `"alpha"` renders on a
+  transparent film, for smoke, dust and anything that darkens; it is used
+  with `LightEmission = 0`.
+- **Padding:** each frame is rendered `padding` pixels inside its cell, so
+  frames cannot run into each other.
+- **Loop:** `loop=True` means the last frame leads back into the first, as for
+  a burning fire. Leave it `False` for a burst that plays once and may end
+  fully faded.
+- **Colour and speed:** colour uses the Standard view transform, so glows
+  stay bright. Use Eevee for emission and Workbench for flat shapes.
+  - Eevee measured 0.06 s a frame for the example below: 64 frames in about
+    4 s.
+  - Cycles measured 0.28 s a frame at 32 samples for the same simple sphere,
+    and volumes or smoke take far longer.
+  - Note the per-frame time Roqer reports. Split a long Cycles sheet across
+    jobs with `continue_from` only if a job would pass its time limit.
+- **Framing:** frame the camera so the effect stays inside the view on every
+  frame. An orthographic camera looking at the effect is simplest.
+- **Animating it:** animate scale, emission strength, colour and position
+  with keyframes over the frame range.
+
+What Roqer reports for each sheet is read from its pixels:
+- the grid the gutters between frames agree with;
+- the coverage of every cell in play order, which should grow and fade as
+  the effect does;
+- empty cells, cells the subject runs off the edge of, and frames that do
+  not move;
+- the `FlipbookLayout`, `FlipbookMode` and `LightEmission` to use, with the
+  `Lifetime` for a one-shot sheet or the `FlipbookFramerate` for a loop.
+
+Fix every problem it lists before uploading. The sheet is attached; look at
+it.
+
+```python
+import bpy, math
+
+scene = bpy.context.scene
+scene.render.engine = "BLENDER_EEVEE"
+scene.frame_start, scene.frame_end = 1, 64
+
+camera = bpy.data.objects.new("Camera", bpy.data.cameras.new("Camera"))
+scene.collection.objects.link(camera)
+camera.data.type = "ORTHO"
+camera.data.ortho_scale = 4.0
+camera.location = (0, -10, 0)
+camera.rotation_euler = (math.radians(90), 0, 0)
+scene.camera = camera
+
+bpy.ops.mesh.primitive_uv_sphere_add(radius=0.5, segments=24, ring_count=12)
+ball = bpy.context.active_object
+material = bpy.data.materials.new("Glow")
+material.use_nodes = True
+nodes = material.node_tree.nodes
+nodes.clear()
+emission = nodes.new("ShaderNodeEmission")
+output = nodes.new("ShaderNodeOutputMaterial")
+material.node_tree.links.new(emission.outputs[0], output.inputs[0])
+emission.inputs["Color"].default_value = (1.0, 0.55, 0.15, 1.0)
+ball.data.materials.append(material)
+
+# A burst: grows fast, then fades out while it keeps spreading.
+for frame, scale, strength in ((1, 0.2, 6.0), (20, 2.6, 4.0), (64, 3.6, 0.0)):
+    ball.scale = (scale, scale, scale)
+    ball.keyframe_insert("scale", frame=frame)
+    emission.inputs["Strength"].default_value = strength
+    emission.inputs["Strength"].keyframe_insert("default_value", frame=frame)
+
+roqer.flipbook("GlowBurst", grid=8, mode="additive")
+```
+
+To use a sheet:
+
+1. Upload it with `upload_asset {action: 'upload', filePath, assetType: 'Decal', displayName}`.
+2. Set `ParticleEmitter.Texture` to `rbxassetid://<imageId>`.
+3. Apply the settings Roqer listed.
+4. Read `FlipbookIncompatible` back; it must be empty.
+
+Every upload is irreversible and moderated, so settle the sheet before
+uploading, and reuse one sheet across emitters by changing `Color` and `Size`.
+For layering, timing and the rest of the effect, see the `roblox-animation-vfx`
+skill's VFX craft reference.
 
 ## Rendering an image for UI
 

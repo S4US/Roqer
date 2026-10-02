@@ -129,6 +129,9 @@ Store first (`search_assets` with `assetType: "VFX"` or `"Particle"`, then
   - Roblox has no multiply or premultiplied mode.
 
 **Flipbooks.** A flipbook is a sheet of frames that a particle plays through.
+Make one with `roqer.flipbook` in a Blender job: it renders and packs the
+sheet to these rules, and Roqer checks it from its pixels. Load the
+`roblox-building` skill's Blender reference ("Flipbook sheets for particles").
 
 - `FlipbookLayout` is `Grid2x2`, `Grid4x4` or `Grid8x8` (4, 16 or 64 frames).
   `Custom` with `FlipbookSizeX/Y` was in client beta from October 2025; do not

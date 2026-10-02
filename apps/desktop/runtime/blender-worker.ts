@@ -12,6 +12,7 @@ import {
 import { articulationOf, describeArticulation, MAX_LISTED_OBJECTS, parseObjects, type Articulation, type InspectedObject } from "./blender-articulation";
 import { ANIMATION_SUFFIX, BAKE_SUFFIX, describeBake, describeBakedFile, parseBake } from "./blender-animation";
 import { describeSkins, parseSkins, type InspectedSkin } from "./blender-skin";
+import { analyzeFlipbook, describeFlipbook, type FlipbookClaim, type FlipbookReport } from "./flipbook-sheet";
 import type { McpCallOptions, McpToolImage, McpToolOutcome } from "./mcp-types";
 import { isViewableGlb, JOB_RETENTION_MS, MAX_KEPT_JOBS, modelPreviewFileName, pruneJobFolders } from "./model-preview";
 import { modelPreviewId } from "../shared/model-preview";
@@ -399,6 +400,157 @@ def export_animation(name, source, rig, start=None, end=None, loop=True, rest_fr
     with open(path, "w", encoding="utf-8") as handle:
         json.dump({"name": name, "rig": rig, "loop": bool(loop), "rootJoint": root_joint, "joints": joints, "frames": baked,
                    "ignoredTravel": sorted(ignored)[:16]}, handle)
+    return path
+
+
+_FLIPBOOK_SIDE = 1024
+_FLIPBOOK_GRIDS = (2, 4, 8)
+# A sheet larger than this is not attached to the result, so a half-size copy is written to look at.
+_FLIPBOOK_PREVIEW_BYTES = 1800 * 1024
+
+
+def _write_png(path, rgba):
+    """Write rows of 8-bit RGBA, top row first, as a PNG."""
+    import struct, zlib
+    height, width = rgba.shape[0], rgba.shape[1]
+
+    def chunk(kind, data):
+        return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data) & 0xFFFFFFFF)
+
+    import numpy
+    rows = numpy.zeros((height, width * 4 + 1), dtype=numpy.uint8)
+    rows[:, 1:] = rgba.reshape(height, width * 4)
+    with open(path, "wb") as handle:
+        handle.write(b"\x89PNG\r\n\x1a\n")
+        handle.write(chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 6, 0, 0, 0)))
+        handle.write(chunk(b"IDAT", zlib.compress(rows.tobytes(), 9)))
+        handle.write(chunk(b"IEND", b""))
+
+
+def flipbook(name, grid=8, mode="alpha", start=None, end=None, loop=False, padding=4):
+    """Render the scene's animation through its camera into one particle flipbook sheet.
+
+    The sheet is exactly 1024 x 1024, the only size Roblox plays a flipbook from. grid is 2, 4 or
+    8: 4, 16 or 64 frames. Frames from start to end (the scene's own by default) are sampled
+    evenly to fill every cell, because Roblox plays every cell. mode "alpha" renders on a
+    transparent film, for smoke, dust and anything that darkens (LightEmission 0); "additive"
+    renders on black, for fire, energy and glows (LightEmission 1). Each frame is rendered
+    padding pixels inside its cell, so frames cannot run into each other. loop says the last
+    frame leads back into the first, as for a burning fire; leave it False for a burst that plays
+    once. The scene's render engine is used: Eevee or Workbench render a 64-frame sheet in
+    seconds, Cycles can take minutes. Colour is rendered with the Standard view transform, so
+    glows stay bright. Writes <name>.flipbook.png to OUTPUT_DIR, which Roqer checks.
+    """
+    import json, os, time, numpy
+    if not isinstance(name, str) or not name or any(c in name for c in '/\\:*?"<>|.'):
+        raise ValueError(f"name must be the sheet's name, usable as a file name without dots, got {name!r}")
+    if grid not in _FLIPBOOK_GRIDS:
+        raise ValueError(f"grid must be 2, 4 or 8 (Roblox's Grid2x2, Grid4x4 and Grid8x8), got {grid!r}")
+    if mode not in ("alpha", "additive"):
+        raise ValueError(f'mode must be "alpha" (transparent film, LightEmission 0) or "additive" (black background, LightEmission 1), got {mode!r}')
+    cell = _FLIPBOOK_SIDE // grid
+    if not isinstance(padding, int) or padding < 0 or padding > cell // 8:
+        raise ValueError(f"padding must be a whole number of pixels from 0 to {cell // 8} for a {grid} x {grid} grid, got {padding!r}")
+    scene = bpy.context.scene
+    if scene.camera is None:
+        raise ValueError("the scene has no camera; add one and set scene.camera, framed so the whole effect stays in view")
+    start = scene.frame_start if start is None else int(start)
+    end = scene.frame_end if end is None else int(end)
+    cells = grid * grid
+    span = end - start + (0 if loop else 1)
+    if span < cells:
+        raise ValueError(f"frames {start} to {end} give {span} distinct frames, fewer than the {cells} cells of a {grid} x {grid} grid; "
+                         "make the animation longer or use a smaller grid")
+    if loop:
+        frames = [start + round((end - start) * i / cells) for i in range(cells)]
+    else:
+        frames = [start + round((end - start) * i / (cells - 1)) for i in range(cells)]
+
+    render = scene.render
+    view = scene.view_settings
+    saved = {
+        "resolution_x": render.resolution_x, "resolution_y": render.resolution_y,
+        "resolution_percentage": render.resolution_percentage, "film_transparent": render.film_transparent,
+        "filepath": render.filepath, "file_format": render.image_settings.file_format,
+        "color_mode": render.image_settings.color_mode, "view_transform": view.view_transform,
+        "look": view.look, "world": scene.world, "frame": scene.frame_current,
+    }
+    inner = cell - 2 * padding
+    frames_dir = os.path.join(os.path.dirname(_OUTPUT_DIR), "flipbook-frames", name)
+    os.makedirs(frames_dir, exist_ok=True)
+    seconds = []
+    sheet = numpy.zeros((_FLIPBOOK_SIDE, _FLIPBOOK_SIDE, 4), dtype=numpy.uint8)
+    if mode == "additive":
+        sheet[:, :, 3] = 255
+    black = None
+    try:
+        render.resolution_x = render.resolution_y = inner
+        render.resolution_percentage = 100
+        render.image_settings.file_format = "PNG"
+        view.view_transform = "Standard"
+        view.look = "None"
+        if mode == "alpha":
+            render.film_transparent = True
+            render.image_settings.color_mode = "RGBA"
+        else:
+            render.film_transparent = False
+            render.image_settings.color_mode = "RGB"
+            black = bpy.data.worlds.new("RoqerFlipbookBlack")
+            black.color = (0.0, 0.0, 0.0)
+            if black.node_tree is not None:
+                for node in black.node_tree.nodes:
+                    if node.type == "BACKGROUND":
+                        node.inputs["Color"].default_value = (0.0, 0.0, 0.0, 1.0)
+                        node.inputs["Strength"].default_value = 0.0
+            scene.world = black
+        for index, frame in enumerate(frames):
+            scene.frame_set(frame)
+            path = os.path.join(frames_dir, f"{index:02d}.png")
+            render.filepath = path
+            began = time.perf_counter()
+            bpy.ops.render.render(write_still=True)
+            seconds.append(round(time.perf_counter() - began, 3))
+            image = bpy.data.images.load(path, check_existing=False)
+            try:
+                width, height = image.size
+                if (width, height) != (inner, inner):
+                    raise RuntimeError(f"frame {frame} rendered at {width} x {height}, not {inner} x {inner}")
+                pixels = numpy.empty(width * height * 4, dtype=numpy.float32)
+                image.pixels.foreach_get(pixels)
+            finally:
+                bpy.data.images.remove(image)
+            # Blender keeps rows bottom first; the sheet is written top first.
+            frame_rgba = numpy.flipud((numpy.clip(pixels, 0.0, 1.0) * 255.0 + 0.5).astype(numpy.uint8).reshape(height, width, 4))
+            if mode == "additive":
+                frame_rgba[:, :, 3] = 255
+            row, column = divmod(index, grid)
+            top, left = row * cell + padding, column * cell + padding
+            sheet[top:top + inner, left:left + inner] = frame_rgba
+    finally:
+        render.resolution_x, render.resolution_y = saved["resolution_x"], saved["resolution_y"]
+        render.resolution_percentage = saved["resolution_percentage"]
+        render.film_transparent = saved["film_transparent"]
+        render.filepath = saved["filepath"]
+        render.image_settings.file_format = saved["file_format"]
+        render.image_settings.color_mode = saved["color_mode"]
+        view.view_transform, view.look = saved["view_transform"], saved["look"]
+        scene.world = saved["world"]
+        if black is not None:
+            bpy.data.worlds.remove(black)
+        scene.frame_set(saved["frame"])
+
+    path = os.path.join(_OUTPUT_DIR, name + ".flipbook.png")
+    _write_png(path, sheet)
+    preview = None
+    if os.path.getsize(path) > _FLIPBOOK_PREVIEW_BYTES:
+        half = sheet.reshape(_FLIPBOOK_SIDE // 2, 2, _FLIPBOOK_SIDE // 2, 2, 4).mean(axis=(1, 3))
+        preview = os.path.join(_OUTPUT_DIR, name + ".flipbook-preview.png")
+        _write_png(preview, (half + 0.5).astype(numpy.uint8))
+    fps = render.fps / render.fps_base
+    with open(os.path.join(_OUTPUT_DIR, name + ".flipbook.json"), "w", encoding="utf-8") as handle:
+        json.dump({"name": name, "grid": grid, "mode": mode, "padding": padding, "loop": bool(loop),
+                   "fps": round(cells / ((frames[-1] - frames[0] + (frames[1] - frames[0] if loop else 0)) / fps), 3) if frames[-1] > frames[0] else None,
+                   "frames": frames, "engine": render.engine, "renderSeconds": seconds}, handle)
     return path
 
 
@@ -1483,14 +1635,16 @@ export class BlenderWorker {
       entries = [];
     }
     const models = entries.filter((name) => MODEL_EXTENSIONS.has(path.extname(name).toLowerCase()));
-    const renders = entries.filter((name) => path.extname(name).toLowerCase() === ".png");
+    const flipbookFiles = entries.filter((name) => isFlipbookFile(name));
+    const sheets = flipbookFiles.filter((name) => name.toLowerCase().endsWith(FLIPBOOK_SUFFIX));
+    const renders = entries.filter((name) => path.extname(name).toLowerCase() === ".png" && !flipbookFiles.includes(name));
     // Animations roqer.export_animation baked: each becomes a pose description beside it.
     const animations: BakedAnimation[] = [];
     for (const name of entries.filter((entry) => entry.toLowerCase().endsWith(BAKE_SUFFIX)).slice(0, MAX_BAKED_ANIMATIONS)) {
       animations.push(await convertBake(outputDirectory, name));
     }
-    const others = entries.filter((name) => !models.includes(name) && !renders.includes(name) && !name.toLowerCase().endsWith(BAKE_SUFFIX));
-    if (models.length === 0 && renders.length === 0 && !sceneSaved) {
+    const others = entries.filter((name) => !models.includes(name) && !renders.includes(name) && !flipbookFiles.includes(name) && !name.toLowerCase().endsWith(BAKE_SUFFIX));
+    if (models.length === 0 && renders.length === 0 && sheets.length === 0 && !sceneSaved) {
       return failure(
         `${beforeFailure}The script finished but left no model (.glb, .gltf, .fbx or .obj) or PNG image in OUTPUT_DIR. Export the model there, for example bpy.ops.export_scene.gltf(filepath=os.path.join(OUTPUT_DIR, "model.glb"), export_format="GLB", export_apply=True, use_visible=True), or render the image there.${others.length > 0 ? ` It left: ${others.join(", ")}.` : ""}`,
         "no_model_exported",
@@ -1519,9 +1673,18 @@ export class BlenderWorker {
       rendered.push({ name, path: filePath, bytes: bytes.length, width: header.width, height: header.height });
       if (bytes.length <= MAX_PREVIEW_BYTES) renderImages.push({ data: bytes.toString("base64"), mediaType: "image/png" });
     }
+    // A flipbook sheet is checked from its own pixels; the note the script
+    // wrote beside it is only what it claims to have made.
+    const flipbooks: CheckedFlipbook[] = [];
+    const flipbookImages: McpToolImage[] = [];
+    for (const name of sheets.slice(0, MAX_FLIPBOOKS)) {
+      const checked = await checkFlipbook(outputDirectory, name);
+      flipbooks.push(checked);
+      if (checked.image !== undefined) flipbookImages.push(checked.image);
+    }
     // Nothing exported, so the scene itself is what the model is to look at:
     // it is inspected the same way, measured as it would export.
-    const inspectScene = models.length === 0 && renders.length === 0 && sceneSaved;
+    const inspectScene = models.length === 0 && renders.length === 0 && sheets.length === 0 && sceneSaved;
     const inspected = inspectScene
       ? [{ name: "scene.blend", filePath: sceneFile }]
       : models.slice(0, MAX_INSPECTED_MODELS).map((name) => ({ name, filePath: path.join(outputDirectory, name) }));
@@ -1588,7 +1751,7 @@ export class BlenderWorker {
     }
 
     const previews = images.length;
-    images.push(...renderImages);
+    images.push(...renderImages, ...flipbookImages);
     const durationMs = this.now() - started;
     const lines = [`Blender job ${jobId} finished in ${(durationMs / 1000).toFixed(1)} s.`, ...(notContinued === undefined ? [] : [notContinued])];
     if (inspectScene) {
@@ -1620,6 +1783,14 @@ export class BlenderWorker {
         "To use an image in UI: upload_asset {action: 'upload', filePath: <its path>, assetType: 'Decal', displayName}, then set ImageLabel.Image to rbxassetid://<imageId from that result>. The decalId does not display in an ImageLabel; if imageId is null, check the upload again with action 'status'.",
       );
     }
+    if (flipbooks.length > 0) {
+      lines.push(
+        "Flipbook sheets it made, checked by Roqer from their pixels (attached after any renders, in this order):",
+        ...flipbooks.flatMap((flipbook) => flipbook.lines),
+        ...(sheets.length > MAX_FLIPBOOKS ? [`${sheets.length - MAX_FLIPBOOKS} more flipbook sheets were not checked.`] : []),
+        "To use a sheet: fix every problem first, then upload_asset {action: 'upload', filePath: <its path>, assetType: 'Decal', displayName}, set ParticleEmitter.Texture to rbxassetid://<imageId from that result>, apply the settings listed, and read FlipbookIncompatible back: it must be empty.",
+      );
+    }
     if (animations.length > 0) {
       lines.push(
         "Animations it baked, each sampled frame by frame and kept as the keys its joints need:",
@@ -1636,6 +1807,7 @@ export class BlenderWorker {
         jobId,
         ...(continueFrom === undefined ? {} : { continuedFrom: continueFrom }),
         jobDirectory, outputDirectory, files, images: rendered, otherFiles: others, log,
+        ...(flipbooks.length > 0 ? { flipbooks: flipbooks.map(({ name, path: sheetPath, report }) => ({ name, path: sheetPath, ...(report === undefined ? {} : { report }) })) } : {}),
         ...(animations.length > 0 ? { animations: animations.flatMap((animation) => animation.path === undefined ? [] : [{ name: animation.name, path: animation.path }]) } : {}),
         scene: sceneSaved ? { path: sceneFile, ...(contents === undefined ? {} : { contents }) } : null,
       },
@@ -1698,6 +1870,78 @@ export class BlenderWorker {
   private async prune(keep?: string): Promise<void> {
     await pruneJobFolders(this.options.jobsRoot, this.now(), keep);
   }
+}
+
+const MAX_FLIPBOOKS = 4;
+const FLIPBOOK_SUFFIX = ".flipbook.png";
+const FLIPBOOK_NOTE_SUFFIX = ".flipbook.json";
+const FLIPBOOK_PREVIEW_SUFFIX = ".flipbook-preview.png";
+const MAX_FLIPBOOK_NOTE_BYTES = 64 * 1024;
+
+/** A sheet roqer.flipbook writes, its note, or the half-size copy it writes to look at. */
+function isFlipbookFile(name: string): boolean {
+  const lower = name.toLowerCase();
+  return lower.endsWith(FLIPBOOK_SUFFIX) || lower.endsWith(FLIPBOOK_NOTE_SUFFIX) || lower.endsWith(FLIPBOOK_PREVIEW_SUFFIX);
+}
+
+type CheckedFlipbook = Readonly<{ name: string; path: string; report?: FlipbookReport; image?: McpToolImage; lines: readonly string[] }>;
+
+/** The note beside a sheet, kept only where each value has the expected type: it is the script's claim. */
+async function readFlipbookNote(file: string): Promise<{ claim: FlipbookClaim; renderSeconds?: number[]; engine?: string }> {
+  const stat = await fs.stat(file).catch(() => undefined);
+  if (stat === undefined || stat.size > MAX_FLIPBOOK_NOTE_BYTES) return { claim: {} };
+  let note: unknown;
+  try {
+    note = JSON.parse(await fs.readFile(file, "utf8"));
+  } catch {
+    return { claim: {} };
+  }
+  if (!isRecord(note)) return { claim: {} };
+  const seconds = Array.isArray(note.renderSeconds) ? note.renderSeconds.filter(isNumber).slice(0, 64) : undefined;
+  return {
+    claim: {
+      ...(isNumber(note.grid) ? { grid: note.grid } : {}),
+      ...(typeof note.mode === "string" ? { mode: note.mode } : {}),
+      ...(isNumber(note.padding) ? { padding: note.padding } : {}),
+      ...(typeof note.loop === "boolean" ? { loop: note.loop } : {}),
+      ...(isNumber(note.fps) && note.fps > 0 ? { fps: note.fps } : {}),
+    },
+    ...(seconds === undefined || seconds.length === 0 ? {} : { renderSeconds: seconds }),
+    ...(typeof note.engine === "string" && note.engine.length <= 40 ? { engine: note.engine } : {}),
+  };
+}
+
+async function checkFlipbook(directory: string, name: string): Promise<CheckedFlipbook> {
+  const sheetPath = path.join(directory, name);
+  const stem = name.slice(0, -FLIPBOOK_SUFFIX.length);
+  const { claim, renderSeconds, engine } = await readFlipbookNote(path.join(directory, stem + FLIPBOOK_NOTE_SUFFIX));
+  const bytes = await fs.readFile(sheetPath).catch(() => undefined);
+  if (bytes === undefined) return { name, path: sheetPath, lines: [`- ${name}: Roqer could not read it.`] };
+  let report: FlipbookReport;
+  try {
+    report = analyzeFlipbook(bytes, claim);
+  } catch (error) {
+    return { name, path: sheetPath, lines: [`- ${name}: not a sheet Roqer can read: ${error instanceof Error ? error.message : String(error)}`] };
+  }
+  const lines = describeFlipbook(name, report);
+  if (renderSeconds !== undefined) {
+    const total = renderSeconds.reduce((sum, value) => sum + value, 0);
+    lines.push(`  The script's note says ${renderSeconds.length} frames rendered in ${total.toFixed(1)} s${engine === undefined ? "" : ` with ${engine}`} (${(total / renderSeconds.length).toFixed(2)} s a frame).`);
+  }
+  // The sheet itself when it fits in the result, otherwise the half-size copy written beside it.
+  let image: McpToolImage | undefined;
+  if (bytes.length <= MAX_PREVIEW_BYTES) {
+    image = { data: bytes.toString("base64"), mediaType: "image/png" };
+  } else {
+    const preview = await fs.readFile(path.join(directory, stem + FLIPBOOK_PREVIEW_SUFFIX)).catch(() => undefined);
+    if (preview !== undefined && preview.length <= MAX_PREVIEW_BYTES && readPngSize(preview) !== undefined) {
+      image = { data: preview.toString("base64"), mediaType: "image/png" };
+      lines.push("  The sheet is too large to attach, so a half-size copy of it is attached instead; the checks above read the full sheet.");
+    } else {
+      lines.push("  The sheet is too large to attach; judge it by the numbers above.");
+    }
+  }
+  return { name, path: sheetPath, report, ...(image === undefined ? {} : { image }), lines };
 }
 
 const MAX_BAKED_ANIMATIONS = 8;

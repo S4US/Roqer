@@ -383,11 +383,51 @@ Add worker helpers, on the same pattern as `export_animation`:
 
 Acceptance:
 
-- the same script renders the same sheet byte for byte;
+- the same script renders the same sheet: same frame numbers, same layout,
+  and coverage within tolerance. Eevee is not bit-stable across GPUs, so not
+  byte for byte;
 - a malformed layout is refused, naming the valid range;
 - the checks come from Roqer's own read of the PNG, never from the agent;
 - a live check: one uploaded sheet plays in a `ParticleEmitter` with no
   `FlipbookIncompatible` message and no visible bleed.
+
+**Flipbooks done 2026-10-02; mesh primitives and texture helpers not
+started.** The flipbook slice as built:
+
+- **`roqer.flipbook(name, grid, mode, start, end, loop, padding)`**
+  - Grids are 2, 4 or 8 only, and the sheet is always 1024² (Custom layouts
+    were left out).
+  - Frames are sampled evenly to fill every cell, and the animation must have
+    at least as many frames as cells.
+  - Frames render into the job folder, `padding` pixels inside their cells.
+  - The view transform is set to Standard while rendering, and the scene's
+    settings are restored afterwards.
+  - The sheet is packed with numpy and written by a small PNG writer, not
+    Blender's image saver.
+  - A note beside the sheet records the grid, mode, loop flag, frames and
+    per-frame render time.
+- **`runtime/flipbook-sheet.ts`** decodes the sheet itself, treats the note
+  as a claim, and reports:
+  - the grid its gutters agree with;
+  - coverage per cell;
+  - empty cells (a faded tail is fine for a one-shot sheet);
+  - cells the subject runs off the edge of;
+  - frozen frames;
+  - the settings to use.
+
+  It refuses any size but 1024², and a palette or interlaced PNG.
+- **The result:** sheets get their own section in the Blender result, apart
+  from renders. A sheet too large to attach is replaced by a half-size copy
+  the helper writes.
+- **Live, Blender 5.2:**
+  - Eevee rendered 64 frames in 4.1 s; Cycles took 0.28 s a frame for a
+    simple 4x4 sheet.
+  - Packing order, padding and alpha were checked by eye.
+  - An oversized subject was caught as cut off in 7 cells.
+  - The reference's example runs as written.
+- **Not done:**
+  - the in-Studio check, which needs an upload;
+  - an animated strip in the result card.
 
 ### 3. Seeing motion: an effect contact sheet
 

@@ -11,6 +11,7 @@ import {
   BlenderWorker, HELPERS_SCRIPT, otherSideName, readSceneContents, RUNNER_SCRIPT, scriptEnvironment, type SpawnProcess,
 } from "./blender-worker";
 import { glbBytes } from "./test-glb";
+import { png, sheet } from "./test-png";
 
 /** What one fake Blender process does: optional work, printed output, and how it ends. */
 type Behaviour = (args: readonly string[]) => Promise<{ output?: string; exitCode?: number; hang?: boolean }>;
@@ -85,7 +86,7 @@ test("a job exports a model, and Roqer's own pass measures it and returns its pr
 test("the runner gives the script Roqer's placement helpers, and only those", () => {
   assert.match(RUNNER_SCRIPT, /roqer_helpers\.py/);
   assert.match(RUNNER_SCRIPT, /"roqer": roqer/);
-  for (const helper of ["box", "box_between", "cylinder_between", "cone_between", "join", "paint", "vertex_color_material"]) {
+  for (const helper of ["box", "box_between", "cylinder_between", "cone_between", "join", "paint", "vertex_color_material", "flipbook"]) {
     assert.match(HELPERS_SCRIPT, new RegExp(`^def ${helper}\\(`, "m"), helper);
   }
   // A helper places a part by its ends; it never asks the model for a rotation angle.
@@ -152,6 +153,57 @@ test("a job that renders an image for UI returns it, measured from the file and 
     assert.match(outcome.text, /assetType: 'Decal'/);
     assert.match(outcome.text, /imageId/);
     assert.doesNotMatch(outcome.text, /assetType: 'Model'/, "no model upload advice without a model");
+  });
+});
+
+test("a flipbook sheet is checked from its pixels, apart from ordinary renders, with its note read only as a claim", async () => {
+  await withJobs(async (jobsRoot) => {
+    const burst = sheet(8, (i) => (i >= 62 ? 0 : 6 + Math.min(i, 61 - i)));
+    // Noise does not compress: this sheet is over the attachment limit, so its half-size copy is shown instead.
+    let seed = 7;
+    const noisy = png(1024, 1024, (x, y) => {
+      seed = (seed * 1103515245 + 12345) & 0x7fffffff;
+      const inCell = x % 256 > 8 && x % 256 < 248 && y % 256 > 8 && y % 256 < 248;
+      return inCell ? [seed & 255, (seed >> 8) & 255, (seed >> 16) & 255, 255] : [0, 0, 0, 0];
+    });
+    const halfSize = png(512, 512, () => [128, 128, 128, 255]);
+    const blender = fakeBlender(async (args) => {
+      const output = path.join(argAfterDashes(args), "output");
+      await fs.writeFile(path.join(output, "Burst.flipbook.png"), burst);
+      await fs.writeFile(path.join(output, "Burst.flipbook.json"), JSON.stringify({
+        name: "Burst", grid: 8, mode: "alpha", padding: 4, loop: false, fps: 32, engine: "BLENDER_EEVEE",
+        renderSeconds: Array.from({ length: 64 }, () => 0.05),
+      }));
+      await fs.writeFile(path.join(output, "Noise.flipbook.png"), noisy);
+      await fs.writeFile(path.join(output, "Noise.flipbook.json"), "{ not json");
+      await fs.writeFile(path.join(output, "Noise.flipbook-preview.png"), halfSize);
+      await fs.writeFile(path.join(output, "icon.png"), pngHeader(256, 256));
+      return { output: "ROQER_SCRIPT_DONE\n" };
+    });
+    const worker = new BlenderWorker({ executable: EXECUTABLE, jobsRoot, spawn: blender.spawn, killTree: blender.killTree, env: {} });
+
+    const outcome = await worker.run({ script: "import bpy\nroqer.flipbook('Burst')" });
+
+    assert.equal(outcome.ok, true, outcome.text);
+    const data = outcome.data as {
+      images: Array<{ name: string }>;
+      otherFiles: string[];
+      flipbooks: Array<{ name: string; report?: { ok: boolean; grid?: number; settings?: { FlipbookMode: string } } }>;
+    };
+    assert.deepEqual(data.images.map((image) => image.name), ["icon.png"], "sheets, notes and copies are not ordinary renders");
+    assert.deepEqual(data.otherFiles, []);
+    assert.deepEqual(data.flipbooks.map((flipbook) => flipbook.name), ["Burst.flipbook.png", "Noise.flipbook.png"]);
+    const [checked, noise] = data.flipbooks;
+    assert.equal(checked.report?.ok, true);
+    assert.equal(checked.report?.settings?.FlipbookMode, "OneShot", "a burst played once, as its note says, may end faded out");
+    assert.match(outcome.text, /Burst\.flipbook\.png: 1024 x 1024, transparent background, 8 x 8 grid \(its gutters agree\)/);
+    assert.match(outcome.text, /FlipbookLayout = Grid8x8, FlipbookMode = OneShot, LightEmission = 0, Lifetime = 2/);
+    assert.match(outcome.text, /64 frames rendered in 3\.2 s with BLENDER_EEVEE/);
+    // An unreadable note claims nothing; the sheet is still checked from its pixels.
+    assert.equal(noise.report?.grid, 4);
+    assert.match(outcome.text, /half-size copy of it is attached instead/);
+    assert.deepEqual(outcome.images?.map((image) => image.data), [pngHeader(256, 256), burst, halfSize].map((bytes) => bytes.toString("base64")));
+    assert.match(outcome.text, /read FlipbookIncompatible back: it must be empty/);
   });
 });
 
