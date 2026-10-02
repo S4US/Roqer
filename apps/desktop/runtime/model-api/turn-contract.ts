@@ -114,9 +114,10 @@ export type TurnImageMediaType = typeof TURN_IMAGE_MEDIA_TYPES[number];
  *
  * Four pictures at this bound come to under 6 MB, well within what every
  * provider takes in one request beside the conversation, the instructions, and
- * the tool schemas. A caller that wants to send more should downscale first: past
- * roughly 1568 pixels on the long edge no provider gains detail, it only pays
- * for it.
+ * the tool schemas. A caller that wants to send more should downscale first.
+ * Larger images do carry more detail for newer models (Opus 4.7 and later
+ * resolve up to 2576 pixels on the long edge, and Claude Code passes up to
+ * 2000 x 2000), but each one costs more to send and to keep in context.
  */
 export const MAX_TURN_IMAGES = 4;
 export const MAX_TURN_IMAGE_BASE64 = 1_400_000;

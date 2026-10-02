@@ -985,8 +985,9 @@ Roqer tool calls, about 115 model requests, and each request re-reads the
 whole conversation:
 - About 40 of those calls were the pause, capture and resume loop: 16
   screenshots and 25 runtime evals.
-- 16 screenshots reach the model at full size (2246 x 982, about 1,400 tokens
-  each after the API scales them). Each stays in context for the rest of the
+- 16 screenshots reach the model at full size (2246 x 982, which Claude Code
+  passes to Opus 5.5 at 2000 x 874, about 2,300 tokens each; first estimated
+  here at 1,400 on a 1568-pixel premise, corrected after run 3). Each stays in context for the rest of the
   run.
 - The first three calls read 820 lines of existing modules, including Emit,
   which the skill ships.
@@ -1044,7 +1045,9 @@ prices. Run 2 also carried the other guidance changes (two calls a moment,
 Emit's one-line check, not reading other effects' code) and two playtest
 start timeouts, so the saving is not the capture operation's alone.
 
-*Corrected after run 3:* the cost split above was wrong. Claude Code's model
+*Corrected after run 3:* an earlier version of this note put cache reads at
+about half of run 2's cost, and its frames at about 1,400 tokens each. Both
+were wrong. Claude Code's model
 table prices Opus 5.5 at $4 per million input tokens, $20 output and $0.20
 cache reads, and run 2's $8.265385 reproduces exactly with cache writes at
 $8, the one-hour rate. So run 2 was 30% cache reads ($2.51), 33% cache writes
@@ -1134,13 +1137,22 @@ same frames sent alone).
 **Changed:**
 - Claude Code gets a 24-hour tool-call timeout for Roqer's server (the
   per-server `timeout` key), so Roqer's own budgets, approvals and cancellation
-  decide.
-- `capture_moments` plays at normal speed and slows down only for the last
-  stretch before each moment (0.9 s of effect time for trails, longer than
-  any studied trail lives), and continues a capped wait in another call.
-  Checked live: a 3-moment trail capture reached every moment in 34 s with
-  full trails, and an 8-moment held capture took 23 s instead of 35 s.
-- The contact sheet is 2000 pixels wide (8 frames: 2000 x 1744, 327 KB).
+  decide. Its automatic backgrounding of MCP calls running past two minutes
+  (on when a user sets `CLAUDE_AUTO_BACKGROUND_TASKS`) is turned off with
+  `CLAUDE_CODE_MCP_AUTO_BACKGROUND_MS=0`.
+- `capture_moments`:
+  - It plays at normal speed and slows down only for the last stretch before
+    each moment. For trails that stretch is 0.9 s of effect time, longer than
+    any studied trail lives, but never more than one wait covers.
+  - A capped wait continues in another call.
+  - It keeps within its call budget and names the moments it had no time for.
+  - It no longer rescales an effect that has finished. Emit's
+    `setTimeScale` now refuses too, so its version line is 2026-10-03.
+  - Checked live: a 3-moment trail capture reached every moment in 34 s with
+    full trails, and an 8-moment held capture took 23 s instead of 35 s.
+- The contact sheet is as wide as a frame sent alone would reach the model, at
+  most 2000 pixels, so each tile is half that width and a frame is never
+  enlarged. Eight 2246-pixel frames make 2000 x 1744 at 327 KB.
 - Guidance:
   - tune in the edit viewport;
   - take the final look as full-size frames from the player's camera;

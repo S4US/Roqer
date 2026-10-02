@@ -119,11 +119,11 @@ export const encodeAttachmentImage: ImageEncoder = async ({ bytes, mediaType, na
 };
 
 /**
- * The width a contact sheet is drawn at: the largest image Claude Code passes
- * a model (2000 x 2000 for Opus 5.5, read from its model table). A full
- * 2246-pixel frame reaches the model at 2000 pixels, so two frames to a row
- * keep each at 1000, half the detail of a frame sent alone, at about a quarter
- * of the cost for eight frames.
+ * The largest image Claude Code passes a model unchanged: 2000 x 2000 for
+ * Opus 5.5, read from its model table. A sheet is drawn as wide as a frame
+ * sent alone would reach the model (a 2246-pixel frame arrives at 2000), so
+ * with two frames to a row each shows at half that width, and a sheet of up to
+ * eight frames costs about what two frames sent alone do.
  */
 const CONTACT_SHEET_WIDTH = 2000;
 const CONTACT_SHEET_MAX_HEIGHT = 2000;
@@ -148,9 +148,13 @@ export async function composeContactSheet(images: readonly McpToolImage[], colum
   const frames = images.map((image) => nativeImage.createFromBuffer(Buffer.from(image.data, "base64")));
   if (frames.length === 0 || frames.some((frame) => frame.isEmpty())) return undefined;
   const rows = Math.ceil(frames.length / columns);
-  // As wide as allowed, unless the rows would then be taller than allowed.
+  // As wide as a frame sent alone would reach the model, so a frame is never
+  // enlarged, unless the rows would then be taller than allowed. Each row gets
+  // a whole number of pixels: the resize rounds a tile's height, and three
+  // rows of 666.67 would otherwise round to 2001.
   const aspect = Math.max(...frames.map((frame) => frame.getSize().height / Math.max(1, frame.getSize().width)));
-  const tileWidth = Math.floor(Math.min(CONTACT_SHEET_WIDTH / columns, CONTACT_SHEET_MAX_HEIGHT / rows / aspect));
+  const seenWidth = Math.min(CONTACT_SHEET_WIDTH, Math.max(...frames.map((frame) => frame.getSize().width)));
+  const tileWidth = Math.floor(Math.min(seenWidth / columns, Math.floor(CONTACT_SHEET_MAX_HEIGHT / rows) / aspect));
   const tiles = frames.map((frame) => frame.resize({ width: tileWidth, quality: "good" }));
   const tileHeight = Math.max(...tiles.map((tile) => tile.getSize().height));
   const width = tileWidth * columns;
