@@ -453,12 +453,32 @@ started.** The flipbook slice as built:
   - UVs spanned 0 to 1 on every mesh, and the six shapes came to 1,760
     triangles.
   - The reference's example ran as written.
-- **Not verified:**
-  - The shapes have not been uploaded or seen in Studio.
-  - Whether a MeshPart texture's transparent pixels show through, or show
-    the part's `Color`, is not known. That decides whether fading textures
-    work on these shapes, and checking it needs a mesh and a texture upload.
-    The texture helpers wait on that answer.
+- **In Studio, 2026-10-02**, with the user's approval for two uploads: a
+  `vfx_arc` crescent (model 93242260704793) and a fade texture (decal
+  84595241411908, image 86775129723972). Both were approved at once.
+  - The crescent arrived as a MeshPart, 0.001 studs thick, in a Model under
+    `Crescent_Node`.
+  - The texture was tried on crescents in front of a green wall:
+    - `TextureID` on red SmoothPlastic, also at `Transparency` 0.01, and on
+      white Neon: white everywhere, so alpha is ignored. Nothing showed
+      through and no red appeared.
+    - `SurfaceAppearance`, `AlphaMode = Transparency`: it fades, but
+      dithered.
+    - A `Decal` on the card's face, on an invisible part: a clean fade that
+      takes `Color3` and `Transparency`. It is projected across the box
+      face, ignoring UVs, so this UV-laid texture lost the crescent's middle
+      in a test slash.
+  - The rebuilt slash uses two Neon crescents fading by part `Transparency`
+    (core and glow) plus sparks.
+  - With `RenderFidelity` Automatic the crescents drew as straight-sided
+    wedges. `Precise` kept them smooth.
+  - Side by side with the swept-trail slash, the mesh slash reads as a real
+    sword slash.
+  - The emit module now fades Decals on `Start` toward the same-named Decals
+    on `End`.
+- **Texture helpers:** reconsidered. Since `TextureID` ignores alpha, the
+  useful texture for a mesh effect is a Decal drawn for flat projection, and
+  that is a different helper from the UV gradient first planned.
 
 ### 3. Seeing motion: an effect contact sheet
 

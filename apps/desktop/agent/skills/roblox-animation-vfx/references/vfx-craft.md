@@ -230,9 +230,22 @@ sheet to these rules, and Roqer checks it from its pixels. Load the
     behind.
   - Under vertex colours, keep the part's `Color` white, because `Color`
     multiplies them.
-  - A MeshPart's texture cannot scroll: `TextureID` has no offset. Animate the
-    mesh's size, rotation and transparency instead, or put a scrolling Beam
+  - A MeshPart's texture cannot scroll (`TextureID` has no offset) and
+    ignores alpha (checked in Studio: nothing shows through). Animate the
+    mesh's size, rotation and `Transparency` instead, or put a scrolling Beam
     alongside.
+  - Set `RenderFidelity = Precise` on thin curved shapes. Automatic level of
+    detail turns a crescent into a straight-sided wedge at distance.
+  - For a texture that fades, put a `Decal` on the card's face and set the
+    part's `Transparency` to 1. The emit module fades each Decal on `Start`
+    toward the same-named Decal on `End`. A Decal is projected across the
+    part's box face and ignores UVs, so draw its texture for that projection.
+  - **Verified crescent slash:** two crescents from `roqer.vfx_arc`.
+    - A white `Neon` core goes from `Transparency` 0.05 to 1 over 0.2 s.
+    - A larger blue `Neon` glow goes from 0.55 to 1 over 0.32 s.
+    - Each grows from about 0.8 to 1.2 times its size with `Spin` 50 and
+      `Quart` `Out`, and sparks come off the edge.
+    - It reads far better than the swept-trail slash.
   - Make the shapes in a Blender job with `roqer.vfx_arc` (crescent),
     `vfx_ring` (shockwave or blast wall), `vfx_cone`, `vfx_swirl` (tornado,
     aura) and `vfx_shell` (barrier, dome). See the `roblox-building` skill's

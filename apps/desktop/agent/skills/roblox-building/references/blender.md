@@ -531,9 +531,10 @@ helpers rather than by hand.
 **What every shape has in common:**
 - It is one open sheet, so set `DoubleSided` on the MeshPart in Studio.
 - Its UVs run the same way: U along the sweep (0 at the start, 1 at the end),
-  V across it (0 inside or at the bottom, 1 outside or at the top). A texture
-  whose alpha fades along U fades a slash toward its tail; one that fades
-  across V softens a ring's edges.
+  V across it (0 inside or at the bottom, 1 outside or at the top). They are
+  for maps that follow the surface. In Roblox, `TextureID` ignores alpha (see
+  below), so the shape itself, the part's `Transparency` and a Neon colour do
+  most of the work.
 - It is built around the origin, horizontal or upright, facing Roblox's
   forward (Blender -Y).
 - Sizes are in studs.
@@ -564,14 +565,32 @@ MeshPart named after it. Roqer reports their UVs and triangles.
 
 In Studio:
 1. Set `Material` (`Neon` to glow, `ForceField` to shimmer), `Color`,
-   `DoubleSided` and `Anchored`.
+   `DoubleSided`, `RenderFidelity = Precise` and `Anchored`.
 2. Turn off `CanCollide`, `CanQuery`, `CanTouch` and `CastShadow`.
 3. Animate the parts with the emit module's `Start`/`End` parts (see the
    `roblox-animation-vfx` skill's VFX craft reference).
 
-Whether a texture's transparent pixels show through a MeshPart, or show its
-`Color`, is not verified yet. Check it in Studio before relying on a fading
-texture.
+What arrives, and what works on it, was checked in Studio:
+- A shape arrives as a MeshPart inside a Model, under a child named after the
+  node (`Crescent_Node`). A flat shape is 0.001 studs thick. Its pivot is the
+  centre of its box, not the origin it was built around, so a crescent spins
+  about its middle.
+- Set `RenderFidelity = Precise`. With Automatic, Roblox simplifies a thin
+  curved card at distance until a crescent reads as a straight-sided wedge.
+- `TextureID` ignores alpha on a MeshPart: the texture's colour covers the
+  whole surface, and nothing shows through. Do not put a fading texture
+  there.
+- What does fade:
+  - **The part's own `Transparency`.** A `Neon` card fading from about 0 to 1
+    is the reliable mesh effect.
+  - **A `Decal` on the card's face** (`Top`, plus `Bottom` to show from
+    below), on a part with `Transparency = 1`. It fades cleanly and takes
+    `Color3` and `Transparency`, but it is projected across the part's box
+    face and ignores the UVs. Its texture must be drawn for that flat
+    projection, not along the sweep.
+  - A `SurfaceAppearance` with `AlphaMode = Transparency` follows the UVs,
+    but rendered dithered in Studio, and scripts cannot change its maps at
+    runtime.
 
 ```python
 import bpy, os

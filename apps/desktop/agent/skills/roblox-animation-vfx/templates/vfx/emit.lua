@@ -15,7 +15,8 @@
 --                    EmitDelay, EmitDuration (on, then Brightness fades to 0 over it)
 --   Mesh motion      a Model or Folder holding BaseParts named Start and End.
 --                    Start is shown and moves to End's CFrame, Size, Transparency
---                    and Color (and a SpecialMesh's Scale) over Duration seconds.
+--                    and Color (and a SpecialMesh's Scale) over Duration seconds;
+--                    Decals on Start fade to the Transparency of End's same-named Decal.
 --                    Container attributes: EmitDelay, Duration (0.4), Easing ("Quad"),
 --                    EasingDirection ("Out"), Spin (degrees about Start's up axis).
 --   The effect root  EffectDuration overrides when the effect ends, for an
@@ -170,6 +171,18 @@ function Handle:_mesh(container, start, finish)
 	local to = { CFrame = finish.CFrame, Size = finish.Size, Transparency = finish.Transparency, Color = finish.Color }
 	local startMesh, startScale = meshScale(start)
 	local _, finishScale = meshScale(finish)
+	-- Decals on Start fade to the Transparency of End's decal of the same name.
+	-- A Decal is how a mesh shows a texture that fades: TextureID ignores alpha.
+	local decals = {}
+	for _, child in start:GetChildren() do
+		if child:IsA("Decal") then
+			local target = finish:FindFirstChild(child.Name)
+			local to = target and target:IsA("Decal") and target.Transparency or child.Transparency
+			table.insert(decals, { decal = child, from = child.Transparency, to = to })
+			self._restore[child] = { Transparency = child.Transparency }
+			child.Transparency = 1
+		end
+	end
 	-- End only carries the target values; it is never shown.
 	if self._owned then
 		finish:Destroy()
@@ -189,9 +202,15 @@ function Handle:_mesh(container, start, finish)
 		if startMesh and startScale and finishScale then
 			startMesh.Scale = startScale:Lerp(finishScale, eased)
 		end
+		for _, entry in decals do
+			entry.decal.Transparency = entry.from + (entry.to - entry.from) * eased
+		end
 	end)
 	self:_at(delay + duration, function()
 		start.Transparency = 1
+		for _, entry in decals do
+			entry.decal.Transparency = 1
+		end
 	end)
 end
 
