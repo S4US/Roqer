@@ -98,8 +98,8 @@ get the direction of wrong, and they paint it when given a colour:
   (see "Flipbook sheets for particles").
 - `roqer.vfx_arc`, `vfx_ring`, `vfx_cone`, `vfx_swirl` and `vfx_shell`: shapes
   for mesh effects (a crescent slash, a shockwave, a burst, a tornado, a
-  barrier), each with UVs laid out along its sweep (see "Shapes for mesh
-  effects").
+  barrier), each with UVs laid out along its sweep. `roqer.vfx_surface`
+  builds any other shape from a function (see "Shapes for mesh effects").
 
 Prefer them for any part that is not upright. Raw `bpy` is still available for
 shapes they do not cover; there, keep the model flat-shaded (no
@@ -429,13 +429,23 @@ For one model on its own; a map's set follows the section above.
 renders the scene's animation through `scene.camera` into one particle
 flipbook sheet, `<name>.flipbook.png` in `OUTPUT_DIR`. Use it for any
 animated particle texture: an explosion, a smoke puff, a fire loop, an
-impact flash or an energy swirl. Never pack frames by hand.
+impact flash or an energy swirl.
+
+The helper handles the parts that are easy to get wrong: the size, the grid,
+padding, frame sampling, colour management and packing. The look is
+yours to make. Use any materials, geometry nodes, simulations, compositor
+passes or lighting, and the helper renders whatever the scene shows. If you
+need a sheet it cannot make (frames from several renders, a hand-ordered
+sequence), pack it yourself as a 1024 x 1024 PNG named `<name>.flipbook.png`.
+Roqer checks it the same way, and a `<name>.flipbook.json` beside it with
+`grid`, `loop` and `fps` lets it report the settings.
 
 - **Size and grid:** the sheet is always 1024 x 1024, the size uploaded and
   seen playing as a flipbook in Roblox. `grid` is 2, 4 or 8 (4, 16 or 64 frames). The
   frames from `start` to `end` (the scene's range by default) are sampled
-  evenly to fill every cell, because Roblox plays every cell. The animation
-  needs at least as many frames as cells.
+  evenly to fill every cell, because Roblox plays every cell. With fewer
+  frames than cells, some frames are held for two cells, and Roqer reports
+  the repeats.
 - **Mode:** `"additive"` renders on black, for fire, energy, sparks and
   glows; it is used with `LightEmission = 1`. `"alpha"` renders on a
   transparent film, for smoke, dust and anything that darkens; it is used
@@ -525,8 +535,13 @@ skill's VFX craft reference.
 ## Shapes for mesh effects
 
 Mesh effects are shapes that grow, spin and fade in Studio: a crescent slash,
-a shockwave ring, a twisting tornado, a barrier dome. Make them with these
-helpers rather than by hand.
+a shockwave ring, a twisting tornado, a barrier dome.
+- **The named helpers** cover the common shapes.
+- **`roqer.vfx_surface`** builds any other shape you can describe as a
+  function: a jagged shockwave, a forked lightning card, petals, a spiked
+  burst, a wobbling wave.
+- **Raw `bpy`** remains available for anything else: modifiers, geometry
+  nodes, sculpted or boolean shapes. Roqer inspects every mesh the same way.
 
 **What every shape has in common:**
 - It is one open sheet, so set `DoubleSided` on the MeshPart in Studio.
@@ -559,6 +574,33 @@ helpers rather than by hand.
 - **`roqer.vfx_shell(name, radius, segments=32, rings=16, dome=False)`**: a
   sphere, or a dome standing on the ground. Use it for a barrier or a blast
   bubble.
+- **`roqer.vfx_surface(name, point, columns=32, rows=1)`**: anything else.
+  - `point(u, v)` returns the position of each grid corner for u and v from
+    0 to 1, and that corner's UV is (u, v).
+  - Corners that meet are merged, so closed loops and poles need no special
+    care.
+  - Vary the radius with `u` for a jagged or wobbling ring. Offset a strip
+    sideways with noise for lightning. Shape a petal by tapering it with
+    `v`.
+
+```python
+import bpy, math, os, random
+from mathutils import Vector
+
+random.seed(4)
+spikes = [1.0 + random.uniform(-0.25, 0.45) for _ in range(24)]
+
+def jagged(u, v):
+    # A shockwave ring whose outer edge is torn into spikes.
+    angle = 2 * math.pi * u
+    i = u * len(spikes)
+    spike = spikes[int(i) % len(spikes)] * (1 - (i % 1)) + spikes[int(i + 1) % len(spikes)] * (i % 1)
+    radius = 4.0 + v * 1.5 * spike
+    return Vector((math.sin(angle) * radius, -math.cos(angle) * radius, 0.0))
+
+roqer.vfx_surface("TornWave", jagged, columns=96, rows=2)
+bpy.ops.export_scene.gltf(filepath=os.path.join(OUTPUT_DIR, "torn-wave.glb"), export_format="GLB", export_apply=True, use_visible=True)
+```
 
 Put several shapes in one job and export one GLB. Each arrives as its own
 MeshPart named after it. Roqer reports their UVs and triangles.

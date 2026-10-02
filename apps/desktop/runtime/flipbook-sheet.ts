@@ -124,6 +124,8 @@ export type FlipbookReport = Readonly<{
   /** Cells identical to the one before: frames that do not move. */
   repeatedCells: readonly number[];
   problems: readonly string[];
+  /** Worth knowing, but not wrong: a sheet with notes and no problems is fine to use. */
+  notes?: readonly string[];
   settings?: Readonly<{ FlipbookLayout: string; FlipbookMode: string; LightEmission: number; lifetime?: number; framerate?: number }>;
 }>;
 
@@ -222,7 +224,9 @@ export function analyzeFlipbook(png: Buffer, claim: FlipbookClaim = {}): Flipboo
     problems.push(`${blinking.length} of ${cells} cells are empty (${listCells(blinking)}); Roblox plays every cell, so a particle blinks out on each.`);
   }
   if (edgeCells.length > 0) problems.push(`Drawing reaches the edge of ${edgeCells.length} cell${edgeCells.length === 1 ? "" : "s"} (${listCells(edgeCells)}): the subject leaves the camera's view there and is cut off. Frame it smaller or move the camera back.`);
-  if (repeatedCells.length >= cells / 4) problems.push(`${repeatedCells.length} cells repeat the one before (${listCells(repeatedCells)}): the animation does not move there.`);
+  // Held frames can be deliberate (a short animation, a pause), so they are a note, not a problem.
+  const notes: string[] = [];
+  if (repeatedCells.length > 0) notes.push(`${repeatedCells.length} cell${repeatedCells.length === 1 ? " repeats" : "s repeat"} the one before (${listCells(repeatedCells)}): the animation holds there. Fine for a pause; otherwise animate more frames or use a smaller grid.`);
   const fps = claim.fps !== undefined && claim.fps > 0 ? claim.fps : undefined;
   const lifetime = claim.loop === false && fps !== undefined ? Math.round((cells / fps) * 100) / 100 : undefined;
   // A loop plays at FlipbookFramerate, which Roblox caps at 30 frames a second.
@@ -234,7 +238,7 @@ export function analyzeFlipbook(png: Buffer, claim: FlipbookClaim = {}): Flipboo
     ...(lifetime === undefined ? {} : { lifetime }),
     ...(framerate === undefined ? {} : { framerate }),
   };
-  return { ...base, ok: problems.length === 0, detectedGrid, grid, coverage, emptyCells, edgeCells, repeatedCells, problems, settings };
+  return { ...base, ok: problems.length === 0, detectedGrid, grid, coverage, emptyCells, edgeCells, repeatedCells, problems, notes, settings };
 }
 
 function listCells(cells: readonly number[]): string {
@@ -249,6 +253,7 @@ export function describeFlipbook(name: string, report: FlipbookReport): string[]
     lines.push(`  Coverage per cell, in play order (% drawn): ${report.coverage.map((value) => value.toFixed(0)).join(" ")}`);
   }
   for (const problem of report.problems) lines.push(`  Problem: ${problem}`);
+  for (const note of report.notes ?? []) lines.push(`  Note: ${note}`);
   if (report.settings !== undefined) {
     const { FlipbookLayout, FlipbookMode, LightEmission, lifetime, framerate } = report.settings;
     lines.push(`  On a ParticleEmitter: FlipbookLayout = ${FlipbookLayout}, FlipbookMode = ${FlipbookMode}, LightEmission = ${LightEmission}${lifetime === undefined ? "" : `, Lifetime = ${lifetime} (OneShot plays the sheet once per lifetime)`}${framerate === undefined ? "" : `, FlipbookFramerate = ${framerate} (the speed it was animated at${framerate === MAX_FLIPBOOK_FRAMERATE ? ", or Roblox's limit of 30" : ""})`}.`);

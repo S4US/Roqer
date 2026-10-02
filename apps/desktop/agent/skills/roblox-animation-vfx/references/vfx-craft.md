@@ -8,6 +8,38 @@ does not replace looking: screenshot every effect you build.
 Numbers marked *(starting point)* are common practice with no primary source.
 Tune them by looking, not by trusting them.
 
+This reference is a toolbox and a list of traps, not a style. The recipes,
+helpers and module exist so the plumbing is quick and correct. The design is
+yours: depart from any of it when the effect calls for it.
+
+## What separates great effects
+
+The starter recipes make readable effects, not memorable ones. Top Roblox
+VFX get there through:
+
+- **One strong idea.** Decide what the effect is before building layers: a
+  heavy crushing slam, a clean surgical cut, a wild unstable surge. Every
+  layer, colour and curve serves that idea.
+- **Shape language.** Sharp, angular shapes read as fast and violent; round,
+  soft ones as magical or gentle. Custom meshes and textures carry this far
+  better than default particles.
+- **Value and colour.** A bright core, saturated mid-tones and dark accents.
+  Two or three colours, not a rainbow. Something dark (smoke, a shadow, a
+  black outline) makes the bright parts read.
+- **Timing with contrast.** Fast against slow, and holds against bursts. An
+  impact that snaps in, holds for a beat, then lingers reads as heavy;
+  everything easing at one speed reads as floaty.
+- **Secondary motion.** Debris that settles, embers that drift, a shockwave
+  that kicks up dust, a lingering glow on the ground.
+- **Custom assets.** Bespoke textures, flipbooks and meshes made in Blender
+  for this effect.
+- **Iteration.** Look at each version frame by frame and at full speed,
+  compare it against the idea, and change what is weakest. Several passes
+  are normal.
+
+Ask the user for the game's style or a reference when it is not clear. An
+effect that fits the game beats a technically busy one.
+
 ## 1. How a strong effect is built
 
 **Layers.** A good effect is several simple emitters that each do one job, not
@@ -49,8 +81,11 @@ against the place's real lighting.
   skill. Load it with `load_skill`. Create a ModuleScript named `Emit` with
   `build_instances` under the build root `ReplicatedStorage.VFX`, so it sits
   at `ReplicatedStorage.VFX.Emit` beside the templates. Read it for its
-  revision, then write the template's body into it with `set_script_source`. Use it unchanged unless the user asks otherwise; it is
-  the contract this reference describes.
+  revision, then write the template's body into it with `set_script_source`.
+  It is a starting point, not a cage. Extend it, or write your own player,
+  when an effect needs something it does not do: Bezier paths, beam texture
+  scrubbing, colour over time, camera work, chained effects. If you change
+  it, keep the attribute names so VFX editors can still read the effect.
 - **Playing an effect:**
   - `VFX.play(template, cframe)` clones the template, places it, plays it and
     removes it once the last particle is gone.
@@ -105,10 +140,18 @@ is one of them.
 | `rbxasset://textures/particles/fire_main.dds` | Wispy flames | Flames |
 | `rbxasset://textures/particles/forcefield_vortex_main.dds` | Thin ring with dots | Magic circles, auras |
 
-These are enough for prototypes and many finished effects. For anything
-specific (a stylised slash, a skull, a custom flipbook), search the Creator
-Store first (`search_assets` with `assetType: "VFX"` or `"Particle"`, then
-`preview_asset`), and make a new texture only when nothing fits.
+These are enough for prototypes, but they are generic, and every Roblox
+player has seen them. Distinctive effects come from textures made for them:
+- shaped glows and streaks;
+- noise-broken smoke;
+- stylised slashes and sharp sparkle stars;
+- hand-timed flipbooks.
+
+Make them in Blender when the effect deserves it: procedural noise,
+compositor passes, painted shapes, rendered simulations. The Creator Store
+(`search_assets` with `assetType: "VFX"` or `"Particle"`, then
+`preview_asset`) is worth a look when it saves an upload or matches the
+style.
 
 **Making a texture.**
 
@@ -164,7 +207,7 @@ sheet to these rules, and Roqer checks it from its pixels. Load the
   with a small upward `Speed` lays the particle flat.
 - **Slowing down:** `Drag` is the half-life of speed in seconds. Fast-then-slow
   motion reads as force; constant speed reads as floaty.
-- **Size and transparency curves:** always give `Size` and `Transparency`
+- **Size and transparency curves:** give `Size` and `Transparency`
   keypoints. A burst grows fast then holds, and fades late. A constant size is
   the clearest sign of a default effect.
 - **Shapes:**
@@ -271,6 +314,11 @@ noted. Fire them with `VFX.play` or `VFX.emit`; on their own they emit nothing.
 They were tuned by contact sheet against the default Baseplate's lighting:
 together (gather, then everything else delayed 0.25 s) they make a readable
 ground slam. A darker or brighter place needs its own pass.
+
+They are a floor, not a target: correct property shapes and sensible values
+to start from. Change textures, colours, curves and counts freely, and add
+layers they do not have. A finished effect should look made for its game,
+not assembled from these.
 
 Flash:
 

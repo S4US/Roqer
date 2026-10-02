@@ -432,7 +432,9 @@ def flipbook(name, grid=8, mode="alpha", start=None, end=None, loop=False, paddi
 
     The sheet is 1024 x 1024, the size seen playing as a flipbook in Roblox. grid is 2, 4 or
     8: 4, 16 or 64 frames. Frames from start to end (the scene's own by default) are sampled
-    evenly to fill every cell, because Roblox plays every cell. mode "alpha" renders on a
+    evenly to fill every cell, because Roblox plays every cell; a shorter animation holds some
+    frames for two cells. The scene is rendered as it is, so any material, simulation or
+    compositor setup shows in the sheet. mode "alpha" renders on a
     transparent film, for smoke, dust and anything that darkens (LightEmission 0); "additive"
     renders on black, for fire, energy and glows (LightEmission 1). Each frame is rendered
     padding pixels inside its cell, so frames cannot run into each other. loop says the last
@@ -458,9 +460,11 @@ def flipbook(name, grid=8, mode="alpha", start=None, end=None, loop=False, paddi
     end = scene.frame_end if end is None else int(end)
     cells = grid * grid
     span = end - start + (0 if loop else 1)
+    if end <= start:
+        raise ValueError(f"end ({end}) must be after start ({start})")
     if span < cells:
-        raise ValueError(f"frames {start} to {end} give {span} distinct frames, fewer than the {cells} cells of a {grid} x {grid} grid; "
-                         "make the animation longer or use a smaller grid")
+        print(f"roqer.flipbook: frames {start} to {end} give {span} distinct frames for {cells} cells, so some frames are held "
+              f"for two cells; a longer animation or a smaller grid avoids the holds", flush=True)
     if loop:
         frames = [start + round((end - start) * i / cells) for i in range(cells)]
     else:
@@ -566,6 +570,21 @@ def _segments(value, name, low):
     if not isinstance(value, int) or value < low or value > _MAX_VFX_SEGMENTS:
         raise ValueError(f"{name} must be a whole number from {low} to {_MAX_VFX_SEGMENTS}, got {value!r}")
     return value
+
+
+def vfx_surface(name, point, columns=32, rows=1, rgba=None):
+    """Any shape you can describe as a function: a sheet of columns x rows quads, where point(u, v)
+    gives the position (three numbers, in studs) of each grid corner for u and v from 0 to 1, and
+    the corner's UV is (u, v). Corners that land on the same spot are merged, so closed loops and
+    poles need no special care. The named vfx_ shapes are built with it; use it for anything they
+    do not cover: a jagged shockwave (vary the radius with u), a forked lightning card, petals, a
+    wobbling wave, a spiked burst.
+    """
+    if not callable(point):
+        raise ValueError("point must be a function point(u, v) returning (x, y, z) in studs")
+    columns = _segments(columns, "columns", 1)
+    rows = _segments(rows, "rows", 1)
+    return _strip(name, columns, rows, lambda u, v: _vector(point(u, v), "point(u, v)"), rgba)
 
 
 def _strip(name, columns, rows, point, rgba):

@@ -96,11 +96,16 @@ test("a burst played once may end on empty cells; a loop may not", () => {
   assert.ok(gap.problems.some((problem) => /1 of 16 cells are empty \(#6\)/.test(problem)));
 });
 
-test("empty cells and frozen frames are reported", () => {
+test("empty cells are problems; held frames are only noted", () => {
   const report = analyzeFlipbook(sheet(4, (i) => (i === 3 || i === 7 ? 0 : 20)), { grid: 4 });
   assert.deepEqual(report.emptyCells, [3, 7]);
   assert.ok(report.problems.some((problem) => /2 of 16 cells are empty \(#4, #8\)/.test(problem)));
-  assert.ok(report.problems.some((problem) => /repeat the one before/.test(problem)));
+  assert.ok(!report.problems.some((problem) => /repeat/.test(problem)));
+  assert.ok(report.notes?.some((note) => /cells repeat the one before .*the animation holds there/.test(note)));
+  // A sheet whose only remark is a hold is fine to use.
+  const held = analyzeFlipbook(sheet(4, (i) => 10 + Math.floor(i / 2) * 4), { grid: 4 });
+  assert.equal(held.ok, true, held.problems.join("\n"));
+  assert.ok(describeFlipbook("held.flipbook.png", held).some((line) => /^ {2}Note: 8 cells repeat/.test(line)));
 });
 
 test("a wrong claim is checked against the gutters in the pixels", () => {
