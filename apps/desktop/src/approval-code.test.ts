@@ -50,3 +50,11 @@ test("approval-code - every MCP tool that takes Luau code shows it when asking",
     assert.ok(approvalCode(tool, { code: "print(1)" }), `${tool} takes code but its approval would not show it`);
   }
 });
+
+test("approval-code - capturing moments shows the Luau that starts the effect, and where it runs", () => {
+  const shown = approvalCode("capture_moments", { code: "_G.vfx = Emit.play(t, cf)", times: [0.1] });
+  assert.ok(shown);
+  assert.equal(text(shown.lines), "_G.vfx = Emit.play(t, cf)");
+  assert.match(shown.subtitle, /^Runs this Luau in Studio to start an effect, then screenshots it/);
+  assert.match(approvalCode("capture_moments", { code: "x()", runtime: "client" })!.subtitle, /in a running game client/);
+});

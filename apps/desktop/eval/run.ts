@@ -36,7 +36,9 @@ import { createClaudePlanner } from "../runtime/claude-planner";
 import { createCustomTransport } from "../runtime/custom-provider";
 import { loadAgentRuntime } from "../runtime/agent-definition";
 import { createAgentLoopPlanner } from "../runtime/agent-loop";
-import { withLocalOperations } from "../runtime/local-operations";
+import { captureMoments } from "../runtime/capture-moments";
+import { withLocalOperations, type LocalOperation } from "../runtime/local-operations";
+import { CAPTURE_MOMENTS_OPERATION } from "../shared/gateway-operations";
 import { McpClient } from "../runtime/mcp-client";
 import { BLENDER_OPERATION } from "../shared/blender";
 import { CUSTOM_API_FORMATS, DEFAULT_CUSTOM_REASONING_EFFORTS, type CustomApiFormat, type CustomConnection } from "../shared/custom-providers";
@@ -157,9 +159,10 @@ async function main(): Promise<void> {
   const worker = options.blender === undefined
     ? undefined
     : new BlenderWorker({ executable: await resolveBlender(options.blender), jobsRoot: path.join(os.tmpdir(), "roqer-eval-blender-jobs") });
-  const caller = worker === undefined
-    ? client
-    : withLocalOperations(client, new Map([[BLENDER_OPERATION, (args, call) => worker.run(args, call)]]));
+  const caller = withLocalOperations(client, new Map<string, LocalOperation>([
+    [CAPTURE_MOMENTS_OPERATION, captureMoments],
+    ...(worker === undefined ? [] : [[BLENDER_OPERATION, (args, call) => worker.run(args, call)] as [string, LocalOperation]]),
+  ]));
   const blender = worker !== undefined;
   if (needsUploadKey(options.tasks, blender)) {
     await requireUploads(client, instanceId, options.endpoint);

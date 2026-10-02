@@ -127,8 +127,10 @@ async function loadSkill(resource?: string): Promise<string> {
 function recipes(reference: string): Step[] {
   const steps: Step[] = [];
   for (const match of reference.matchAll(/```json\r?\n([\s\S]*?)```/g)) {
-    const parsed = JSON.parse(match[1]) as Step | Step[];
-    steps.push(...(Array.isArray(parsed) ? parsed : [parsed]));
+    const parsed = JSON.parse(match[1]) as Step | Step[] | { operation: string };
+    // A whole tool call, such as capture_moments, is an example of a call, not a build step.
+    if (!Array.isArray(parsed) && "operation" in parsed) continue;
+    steps.push(...(Array.isArray(parsed) ? parsed : [parsed as Step]));
   }
   return steps;
 }

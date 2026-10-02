@@ -50,6 +50,14 @@ const CODE_TOOLS: Readonly<Record<string, CodeTool>> = {
     label: "Luau code",
     subtitle: () => "Runs this Luau in a running game client",
   },
+  capture_moments: {
+    argument: "code",
+    language: "luau",
+    label: "Luau code",
+    subtitle: (args) => args.runtime === "client"
+      ? "Runs this Luau in a running game client to start an effect, then screenshots it at several moments and stops it"
+      : "Runs this Luau in Studio to start an effect, then screenshots it at several moments and stops it. It cannot be undone from Studio",
+  },
 };
 
 export function approvalCode(tool: string, args: Record<string, unknown>): ApprovalCode | undefined {

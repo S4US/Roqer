@@ -1577,6 +1577,31 @@ test("the same refusal covers Luau run inside a live playtest", async () => {
   assert.equal(calls.length, 0);
 });
 
+test("the refusal covers the code that starts an effect for capturing, too", async () => {
+  const { context, calls } = contextWith([ok({})]);
+  const result = await createStudioToolRunner(context)("capture_moments", { code: 'script.Parent.Main.Source = "x"', times: [0.1] });
+  assert.equal(result.ok, false);
+  assert.equal(calls.length, 0);
+});
+
+test("moments captured in one call are visual evidence, and the model receives every frame", async () => {
+  const captured = {
+    ...ok({ moments: [] }),
+    text: "Captured 2 of 2 moments, held still for each capture.",
+    images: [{ data: "Rmlyc3Q=", mediaType: "image/jpeg" as const }, { data: "U2Vjb25k", mediaType: "image/jpeg" as const }],
+  };
+  const { context, evidence } = contextWith([captured]);
+  context.previewImage = async () => PREVIEW;
+  const result = await createStudioToolRunner(context)("capture_moments", { code: "_G.vfx = start()", times: [0.1, 0.3] });
+
+  assert.equal(result.images?.length, 2);
+  assert.equal(evidence[0].kind, "screenshot");
+  assert.equal(evidence[0].requirement, "visual");
+  assert.equal(evidence[0].imageDataUrl, PREVIEW);
+  assert.deepEqual(evidence[0].metadata?.map((entry) => entry.label), ["Images returned", "Moments"]);
+  assert.equal(evidence[0].metadata?.[1]?.value, "0.1 s, 0.3 s");
+});
+
 test("arbitrary Luau that only creates instances is left alone", async () => {
   const { context } = contextWith([ok({ success: true, output: [] })]);
   const run = createStudioToolRunner(context);

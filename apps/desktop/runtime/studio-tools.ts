@@ -1,5 +1,6 @@
 import { BLENDER_OPERATION } from "../shared/blender";
 import { AUDITED_AFTER_LABEL, UI_AUDIT_TITLE } from "../shared/completion";
+import { CAPTURE_MOMENTS_OPERATION, GATEWAY_TOOL_RISK, isGatewayOperation } from "../shared/gateway-operations";
 import { isKnownTool, TOOL_RISK } from "../shared/mcp-tools";
 import {
   argumentTypeProblems,
@@ -74,7 +75,7 @@ function pluginRefused(outcome: McpToolOutcome): boolean {
 }
 
 /** Operations that hand Studio a block of Luau to run, whatever it does. */
-const LUAU_EXECUTION = new Set(["execute_luau", "eval_server_runtime", "eval_client_runtime"]);
+const LUAU_EXECUTION = new Set(["execute_luau", "eval_server_runtime", "eval_client_runtime", CAPTURE_MOMENTS_OPERATION]);
 
 /**
  * Luau that writes a script body.
@@ -151,6 +152,7 @@ const DOCUMENTED_OPERATIONS = [
   "get_runtime_logs",
   "selection",
   "capture_screenshot",
+  CAPTURE_MOMENTS_OPERATION,
   "inspect_ui",
   "interact_ui",
   "execute_luau",
@@ -212,7 +214,7 @@ export function studioToolInputSchema(): JsonRecord {
   return {
     type: "object",
     properties: {
-      operation: { type: "string", enum: Object.keys(TOOL_RISK) },
+      operation: { type: "string", enum: [...Object.keys(TOOL_RISK), ...Object.keys(GATEWAY_TOOL_RISK)] },
       arguments: { type: "object", additionalProperties: true },
     },
     required: ["operation", "arguments"],
@@ -322,7 +324,7 @@ export function parseStudioToolInput(value: unknown): { operation: string; args:
   if (!isRecord(value) || typeof value.operation !== "string" || value.operation === "" || !isRecord(reading?.value)) {
     throw new MalformedToolCallError(`${ENVELOPE_RULE} ${envelopeProblem(value, reading)} ${ENVELOPE_SHAPE}`);
   }
-  if (!isKnownTool(value.operation)) {
+  if (!isKnownTool(value.operation) && !isGatewayOperation(value.operation)) {
     throw new MalformedToolCallError(`Unknown Roblox Studio operation: ${truncateText(value.operation, 120)}`);
   }
   return { operation: value.operation, args: restoreArgumentTypes(value.operation, reading.value) };
@@ -702,6 +704,23 @@ function observationEvidence(
         passed: true,
         detail,
         metadata: metadata.length > 0 ? metadata : undefined,
+      };
+    }
+    case CAPTURE_MOMENTS_OPERATION: {
+      // The first moment is the picture the card shows; the model sees them all.
+      const times = Array.isArray(args.times) ? args.times.filter((time): time is number => typeof time === "number") : [];
+      const metadata = [
+        { label: "Images returned", value: String(outcome.images?.length ?? 0) },
+        ...(times.length > 0 ? [{ label: "Moments", value: times.map((time) => `${time} s`).join(", ") }] : []),
+        ...(playtestRunning ? [{ label: SCREENSHOT_VIEW_LABEL, value: SCREENSHOT_VIEW_PLAYTEST }] : []),
+      ];
+      return {
+        kind: "screenshot",
+        requirement: "visual",
+        title: "Effect captured at several moments",
+        passed: true,
+        detail: truncateText(outcome.text, MAX_OBSERVATION_DETAIL_CHARS),
+        metadata,
       };
     }
     case "inspect_ui": {

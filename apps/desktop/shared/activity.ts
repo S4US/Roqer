@@ -92,8 +92,9 @@ const KIND_BY_TOOL: Readonly<Record<string, ToolActivityKind>> = {
   interact_ui: "run",
   simulate_mouse_input: "run",
   simulate_keyboard_input: "run",
-  // Roqer's own local operation, not a Studio tool.
+  // Roqer's own operations, not Studio tools.
   run_blender_script: "run",
+  capture_moments: "run",
 };
 
 /**
@@ -126,6 +127,7 @@ const PHASE_BY_TOOL: Readonly<Record<string, ActivityPhase>> = {
   grep_scripts: "scripts",
   get_runtime_logs: "verify",
   capture_screenshot: "verify",
+  capture_moments: "verify",
 };
 
 const PHASE_BY_KIND: Readonly<Record<ActivityKind, ActivityPhase>> = {
@@ -287,6 +289,7 @@ export function activityLabel(tool: string, target: string | null, past: boolean
   if (tool === "upload_asset" && target === "status") return `${verb} upload status`;
   if (tool === "upload_asset" && target === "upload") return past ? "Uploaded an asset" : "Uploading an asset";
   if (tool === "run_blender_script") return past ? "Modeled in Blender" : "Modeling in Blender";
+  if (tool === "capture_moments") return past ? "Captured an effect at several moments" : "Capturing an effect at several moments";
   if (tool === "animation") {
     if (target?.startsWith("build ")) return past ? "Built an animation" : "Building an animation";
     if (target?.startsWith("publish ")) return past ? "Published an animation" : "Publishing an animation";

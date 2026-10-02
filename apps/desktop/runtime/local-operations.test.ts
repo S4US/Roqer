@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { BLENDER_OPERATION } from "../shared/blender";
+import { CAPTURE_MOMENTS_OPERATION } from "../shared/gateway-operations";
 import { isClassifiedTool, isKnownTool, riskForTool } from "../shared/mcp-tools";
 import { decideToolPolicy } from "../shared/policy";
 import { blenderToolDefinition, parseBlenderToolInput } from "./blender-tool";
@@ -29,6 +30,34 @@ test("a local operation never reaches the bridge, and the bridge still gets ever
   assert.equal((await caller.callTool("get_place_info", { instance_id: "place:1" })).text, "from Studio");
   assert.deepEqual(bridgeCalls, ["get_place_info"]);
   assert.deepEqual(localArgs, [{ script: "x = 1" }], "the run's Studio id is not handed to the script");
+});
+
+test("an operation composed of Studio calls makes them at the run's Studio without being handed its id", async () => {
+  const bridgeCalls: Array<{ tool: string; args: Record<string, unknown> }> = [];
+  const bridge: McpToolCaller = {
+    async callTool(tool, args) {
+      bridgeCalls.push({ tool, args });
+      return outcome("from Studio");
+    },
+  };
+  let seen: Record<string, unknown> | undefined;
+  const caller = withLocalOperations(bridge, new Map([[CAPTURE_MOMENTS_OPERATION, async (args, _options, studio) => {
+    seen = args;
+    return studio("capture_screenshot", {});
+  }]]));
+  assert.equal((await caller.callTool(CAPTURE_MOMENTS_OPERATION, { code: "x()", times: [0.1], instance_id: "place:1" })).text, "from Studio");
+  assert.deepEqual(seen, { code: "x()", times: [0.1] });
+  assert.deepEqual(bridgeCalls, [{ tool: "capture_screenshot", args: { instance_id: "place:1" } }]);
+});
+
+test("capturing moments runs Luau, so it is classified and confirmed like execute_luau, inside roblox_studio", () => {
+  assert.equal(riskForTool(CAPTURE_MOMENTS_OPERATION), "irreversible");
+  assert.equal(isClassifiedTool(CAPTURE_MOMENTS_OPERATION), true);
+  assert.equal(isKnownTool(CAPTURE_MOMENTS_OPERATION), false, "not part of the MCP surface or its drift tests");
+  const operations = ((studioToolInputSchema().properties as Record<string, { enum: string[] }>).operation).enum;
+  assert.equal(operations.includes(CAPTURE_MOMENTS_OPERATION), true);
+  assert.deepEqual(parseStudioToolInput({ operation: CAPTURE_MOMENTS_OPERATION, arguments: { code: "x()", times: "[0.1, 0.3]" } }),
+    { operation: CAPTURE_MOMENTS_OPERATION, args: { code: "x()", times: [0.1, 0.3] } }, "times written as text are read back as numbers");
 });
 
 test("a Blender job is irreversible: it asks outside Full auto, and Full auto may run it", () => {

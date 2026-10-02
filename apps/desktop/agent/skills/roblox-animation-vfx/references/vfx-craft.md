@@ -576,8 +576,8 @@ both parts with a Blender ring mesh for a real shockwave, which can also take
 ## 8. Checking an effect
 
 Effects play in the edit viewport, so no playtest is needed to look at one.
-A screenshot takes most of a second, longer than a whole burst, so hold the
-effect still for each capture instead of trying to catch it.
+A screenshot takes most of a second, longer than a whole burst, so the
+effect is held still for each capture instead of caught in passing.
 
 1. Build the template and install the module (section 2).
 
@@ -601,28 +601,29 @@ effect still for each capture instead of trying to catch it.
 
    A new texture can take a moment to load the first time, so a first capture
    may miss layers; take it again.
-3. Play it slowed, with `execute_luau`:
-   `_G.vfx = require(game.ReplicatedStorage.VFX.Emit).play(template, cframe, { timeScale = 0.1 })`.
-4. For each moment to see (anticipation, the flash, the impact stars, the
-   peak of the ring, the smoke, the end):
-   - one `execute_luau` resumes the effect if it is held
-     (`setTimeScale(0.1)`), waits until `_G.vfx.time` reaches the moment,
-     then calls `_G.vfx:setTimeScale(0)`;
-   - `capture_screenshot`.
-
-   Two calls a moment: resuming belongs in the next moment's call, not a
-   call of its own. Every call re-reads the whole conversation, so pick the
-   4-6 moments that matter rather than many. The frame is held where you
-   asked, to within a few milliseconds of effect time.
-
-   **Trails are the exception.** A trail ages in real time while the frame is
-   held, so its older segments vanish when the effect resumes. For an effect
-   built on trails, play at `timeScale = 0.04` and capture without pausing.
-   Real time runs 25 times effect time, so wait accordingly: to see 0.3 s of
-   flight, wait 7.5 s after launch before capturing. The emit module stretches
-   trail lifetimes to match the slow speed; a module of your own that moves a
-   projectile must do the same (`trail.Lifetime = authored / scale`), or its
-   trails come out 25 times too short.
+3. See it with one `capture_moments` call. Pass the code that starts the
+   effect and stores its handle in `_G.vfx`, and the effect seconds to see:
+   ```json
+   { "operation": "capture_moments", "arguments": {
+     "code": "_G.vfx = require(game.ReplicatedStorage.VFX.Emit).play(game.ReplicatedStorage.VFX.Slam, CFrame.new(0, 3, 0))",
+     "times": [0.03, 0.1, 0.25, 0.45, 0.9] } }
+   ```
+   Roqer plays it slowly, holds it at each time, captures the viewport, and
+   returns every frame in one result, in order, then stops the effect. Pick
+   the 4-6 moments that matter: anticipation, the flash, the peak, the body
+   at about 0.3 s, the smoke, the end. Every call re-reads the whole
+   conversation, so one call for all the moments is far cheaper than a call
+   for each.
+   - **Trails:** a held trail loses its segments, so pass `"hold": false`. The
+     effect keeps playing at 0.04x through each capture, and the emit module
+     stretches trail lifetimes to match. A module of your own that moves a
+     projectile must do the same (`trail.Lifetime = authored / scale`), or its
+     trails come out 25 times too short.
+   - **On a character in a playtest:** pass `"runtime": "client"`; the code
+     runs in the client, and the frames are the player's view.
+   - **Your own module's handle** works too, if it has a `time` field in effect
+     seconds and `setTimeScale(scale)`.
+4. Capture again from the other view (step 2) with the same times.
 5. Ask of each capture:
    - From the player's view, does the payoff fill its share of the screen
      (vfx-design.md section 1)? Does it grow taller for a moment, or stay a
@@ -649,14 +650,12 @@ effect still for each capture instead of trying to catch it.
    - Does one layer bury another?
    - Does anything stay constant that should change?
    - Does it end cleanly, with nothing left behind?
-6. Stop the effect (`_G.vfx:stop()`), remove the marker, and check
-   `get_runtime_logs` for `VFXEmit` warnings: a bad attribute, an emitter with
-   nothing to play, a bounded count. Before calling the effect done, check
-   that no `rbxasset://textures/roqer-preview/` address is left: players
-   would see nothing there.
-7. To see it on a character or through a player's camera, the same handle
-   works in a `solo_playtest` through `eval_client_runtime`, but the character
-   can hide an effect played in front of it.
+6. Remove the marker, and check `get_runtime_logs` for `VFXEmit` warnings: a
+   bad attribute, an emitter with nothing to play, a bounded count. Before
+   calling the effect done, check that no `rbxasset://textures/roqer-preview/`
+   address is left: players would see nothing there.
+7. On a character, the character can hide an effect played in front of it;
+   frame it from a side as well.
 
 Effects are judged by eye. Tell the user what you checked and ask them to look
 at it at full speed.

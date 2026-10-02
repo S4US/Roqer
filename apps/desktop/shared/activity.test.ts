@@ -6,6 +6,7 @@ import {
   evidenceActivityKind, evidenceDetailLabel, evidenceLabel, evidencePhase, phaseTitle,
   shortTarget, unclassifiedTools, MAX_FINDING_CHARS, type ActivityPhase,
 } from "./activity";
+import { GATEWAY_TOOL_RISK } from "./gateway-operations";
 import { LOCAL_TOOL_RISK, TOOL_RISK, summarizeToolCall } from "./mcp-tools";
 
 test("every tool the risk table knows about is classified", () => {
@@ -13,9 +14,15 @@ test("every tool the risk table knows about is classified", () => {
 });
 
 test("the classification table has no tool the MCP surface dropped", () => {
-  // Roqer's own local operations are classified too, without being MCP tools.
-  const known = new Set([...Object.keys(TOOL_RISK), ...Object.keys(LOCAL_TOOL_RISK)]);
+  // Roqer's own operations are classified too, without being MCP tools.
+  const known = new Set([...Object.keys(TOOL_RISK), ...Object.keys(LOCAL_TOOL_RISK), ...Object.keys(GATEWAY_TOOL_RISK)]);
   assert.deepEqual(classifiedTools().filter((tool) => !known.has(tool)), []);
+});
+
+test("capturing moments reads as checking the result, not as its operation name", () => {
+  assert.equal(activityLabel("capture_moments", null, false), "Capturing an effect at several moments");
+  assert.equal(activityLabel("capture_moments", "client-1", true), "Captured an effect at several moments");
+  assert.equal(activityPhase("capture_moments"), "verify");
 });
 
 test("a Blender job reads as modeling, not as its operation name", () => {
