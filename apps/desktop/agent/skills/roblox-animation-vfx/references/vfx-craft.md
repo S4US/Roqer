@@ -611,7 +611,8 @@ effect is held still for each capture instead of caught in passing.
    Roqer plays it slowly, holds it at each time, captures the viewport, and
    returns every frame in one result, in order, then stops the effect. Pick
    the 4-6 moments that matter: anticipation, the flash, the peak, the body
-   at about 0.3 s, the smoke, the end. Every call re-reads the whole
+   at about 0.3 s, the smoke, and a time just past the effect's end, to see
+   that nothing is left behind. Every call re-reads the whole
    conversation, so one call for all the moments is far cheaper than a call
    for each.
    - **Trails:** a held trail loses its segments, so pass `"hold": false`. The
@@ -623,7 +624,8 @@ effect is held still for each capture instead of caught in passing.
      runs in the client, and the frames are the player's view.
    - **Your own module's handle** works too, if it has a `time` field in effect
      seconds and `setTimeScale(scale)`.
-4. Capture again from the other view (step 2) with the same times.
+4. Aim the other view (step 2) and make a second `capture_moments` call with
+   the same times: two calls for both views, never a call per moment.
 5. Ask of each capture:
    - From the player's view, does the payoff fill its share of the screen
      (vfx-design.md section 1)? Does it grow taller for a moment, or stay a
