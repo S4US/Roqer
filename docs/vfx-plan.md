@@ -566,7 +566,7 @@ They are not in this repository.
 ### Findings
 
 **Textures**
-- 915 distinct textures; only 3 emitters use a Roblox built-in.
+- 915 distinct textures; only 8 emitters use a Roblox built-in.
 - Almost all are white, hard-edged, cel-shaded drawings on transparency.
 - 46% of emitters play a flipbook, mostly 4 x 4, whose frames break apart
   rather than fade.

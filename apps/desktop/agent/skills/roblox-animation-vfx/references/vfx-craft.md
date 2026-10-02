@@ -27,8 +27,8 @@ studied effects differ on every one of these points.
 
 ### Textures carry the look
 
-- **They are custom.** The 3,950 emitters used 915 distinct textures. Only 3
-  emitters used a Roblox built-in texture. *(measured)*
+- **They are custom.** The 3,950 emitters used 915 distinct textures. Only 8
+  used a Roblox built-in texture. *(measured)*
 - **They are white, hard-edged drawings on transparency.** Each is
   cel-shaded in two or three flat tones and tinted by the particle's `Color`.
   Common shapes:
@@ -91,7 +91,8 @@ How one orange shape renders under the default lighting *(verified)*:
 | `LightEmission` 0, Brightness 1 | Flat orange | Flat orange |
 | `LightEmission` 0, Brightness 5-25 | Hot yellow-orange, blooming | Pale, toward white |
 | `LightEmission` 0, Brightness 150 | White-hot core | White |
-| `LightEmission` 1 (additive) | Lighter, glowing | Washes out, nearly gone |
+| `LightEmission` 1 (additive), Brightness 1 | Lighter, pale | Washes out, nearly gone |
+| `LightEmission` 1 (additive), Brightness 5 | White glow | White glow |
 | `LightEmission` -1 to -3 | Saturated, solid | Saturated, solid, with a dark rim |
 
 What this means in practice:
