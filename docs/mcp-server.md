@@ -12,7 +12,9 @@ install, and connect them; this page says what they can do.
 - Inspect place identity, instances, properties, attributes, project structure,
   scripts, and connected Studio instances.
 - Apply atomic property updates and revision-aware script replacements or
-  localized edits.
+  localized edits. Each script write is compiled without being run, and one
+  whose source will not compile still lands but reports `syntaxError` with the
+  line.
 - Run custom Luau in edit mode when a structured operation is not sufficient.
 - Route every call to an explicit `instance_id` when multiple places are
   connected; see [Multiple connected places](configuration.md#multiple-connected-places).

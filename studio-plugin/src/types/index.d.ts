@@ -57,5 +57,5 @@ export interface TransportUpdate {
 }
 
 declare global {
-	function loadstring(code: string): LuaTuple<[(() => unknown) | undefined, string?]>;
+	function loadstring(code: string, chunkname?: string): LuaTuple<[(() => unknown) | undefined, string?]>;
 }

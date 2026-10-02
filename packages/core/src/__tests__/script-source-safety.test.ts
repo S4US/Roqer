@@ -332,4 +332,126 @@ describe('script source update safety', () => {
       expect(applyScriptSource).toHaveBeenLastCalledWith(expect.anything(), 'a\ninserted\nb\nc', readSource);
     });
   });
+
+  describe('a write says whether its source compiles', () => {
+    type SyntaxReport = { syntaxError?: { line?: number; message: string }; syntaxCheck?: string };
+
+    // Enough of Luau's string library for the check: `%d` and `.` in the one
+    // pattern it matches, and plain finds.
+    const luaString = {
+      find: (text: string, needle: string, init = 1, plain = false) => {
+        if (!plain) throw new Error('only plain finds are shimmed');
+        const index = text.indexOf(needle, init - 1);
+        return index < 0 ? [undefined] : [index + 1, index + needle.length];
+      },
+      match: (text: string, pattern: string) => {
+        const source = pattern.replace(/%d|\./g, (token) => (token === '%d' ? '\\d' : '[\\s\\S]'));
+        const found = new RegExp(source).exec(text);
+        return found ? found.slice(1) : [undefined];
+      },
+    };
+    const luauGlobals = (loadstring: unknown) => ({
+      loadstring,
+      string: luaString,
+      tostring: String,
+      tonumber: (text: string) => (/^\d+$/.test(text) ? Number(text) : undefined),
+      pcall: robloxPcall,
+    });
+
+    async function loadCheck(loadstring: unknown) {
+      const loaded = await loadPluginModule<{ checkSyntax: (source: string) => SyntaxReport }>(
+        'studio-plugin/src/modules/ScriptSyntax.ts',
+        luauGlobals(loadstring),
+      );
+      return loaded.checkSyntax;
+    }
+
+    test('source that compiles adds nothing to the result', async () => {
+      const loadstring = jest.fn(() => [() => undefined]);
+      const checkSyntax = await loadCheck(loadstring);
+      expect(checkSyntax('return 1')).toEqual({});
+      // Named, so the error reads `source:N:` whatever the first line holds; a
+      // first line with a quote in it would otherwise garble the default name.
+      expect(loadstring).toHaveBeenCalledWith('return 1', '=source');
+    });
+
+    test('a compile error comes back with its line and message', async () => {
+      const checkSyntax = await loadCheck(() => [undefined, "source:3: Expected 'end' (to close 'function' at line 1), got <eof>"]);
+      expect(checkSyntax('function f()\n\n')).toEqual({
+        syntaxError: { line: 3, message: "Expected 'end' (to close 'function' at line 1), got <eof>" },
+      });
+    });
+
+    test('an error in another shape is passed on whole rather than dropped', async () => {
+      const checkSyntax = await loadCheck(() => [undefined, 'something unexpected']);
+      expect(checkSyntax('x')).toEqual({ syntaxError: { message: 'something unexpected' } });
+    });
+
+    test('a Studio that cannot compile a chunk says the check did not run', async () => {
+      const unavailable = await loadCheck(() => [undefined, 'loadstring() is not available']);
+      expect(unavailable('return 1')).toEqual({ syntaxCheck: 'unavailable' });
+      const throwing = await loadCheck(() => {
+        throw new Error('loadstring() is not available');
+      });
+      expect(throwing('return 1')).toEqual({ syntaxCheck: 'unavailable' });
+    });
+
+    test('a line edit that breaks the script still lands, and its result says where', async () => {
+      const script = { Name: 'Main', ClassName: 'Script', IsA: (className: string) => className === 'LuaSourceContainer' };
+      const applyScriptSource = jest.fn(() => ({ success: true, method: 'UpdateSourceAsync' }));
+      const dependencyPlugin: Plugin = {
+        name: 'syntax-test-dependencies',
+        setup(build) {
+          build.onResolve({ filter: /^\.\.\/(Utils|Recording|SourceRevision)$/ }, (args) => ({
+            path: args.path.slice(3),
+            namespace: 'syntax-test',
+          }));
+          build.onLoad({ filter: /.*/, namespace: 'syntax-test' }, (args) => ({
+            contents: args.path === 'Utils'
+              ? 'export default globalThis.__SYNTAX_TEST_UTILS__;'
+              : args.path === 'Recording'
+                ? 'export default globalThis.__SYNTAX_TEST_RECORDING__;'
+                : 'export const sourceRevision = (text) => `revision:${text}`;',
+            loader: 'js',
+          }));
+        },
+      };
+      type InsertHandler = { insertScriptLines: (request: Record<string, unknown>) => Record<string, unknown> };
+      const loaded = await loadPluginModule<{ default?: InsertHandler } & Partial<InsertHandler>>('studio-plugin/src/modules/handlers/ScriptHandlers.ts', {
+        __SYNTAX_TEST_UTILS__: {
+          getInstancePath: () => 'game.ServerScriptService.Main',
+          resolveInstance: () => script,
+          getInstanceReference: () => 'instance:test:1',
+          readScriptSource: () => 'local a = 1\nreturn a',
+          applyScriptSource,
+          splitLines: (text: string) => [Object.assign(text.split('\n'), {
+            size(this: string[]) { return this.length; },
+          }), false],
+          joinLines: (lines: string[]) => lines.join('\n'),
+        },
+        __SYNTAX_TEST_RECORDING__: { beginRecording: () => 'recording-id', finishRecording: jest.fn() },
+        // Compiles anything but the inserted line, which it rejects as Luau would.
+        ...luauGlobals((source: string) => (source.includes('= =')
+          ? [undefined, "source:2: Expected identifier when parsing expression, got '='"]
+          : [() => undefined])),
+        typeIs: (value: unknown, expectedType: string) => typeof value === expectedType,
+        error: (message: unknown) => {
+          throw new Error(String(message));
+        },
+      }, [dependencyPlugin]);
+      const { insertScriptLines } = (loaded.default ?? loaded) as InsertHandler;
+
+      const broken = insertScriptLines({ instancePath: 'game.ServerScriptService.Main', afterLine: 1, newContent: 'local b = = 2' });
+      expect(broken).toMatchObject({
+        success: true,
+        syntaxError: { line: 2, message: "Expected identifier when parsing expression, got '='" },
+      });
+      expect(applyScriptSource).toHaveBeenCalledWith(script, 'local a = 1\nlocal b = = 2\nreturn a', 'local a = 1\nreturn a');
+
+      const clean = insertScriptLines({ instancePath: 'game.ServerScriptService.Main', afterLine: 1, newContent: 'local b = 2' });
+      expect(clean.success).toBe(true);
+      expect(clean).not.toHaveProperty('syntaxError');
+      expect(clean).not.toHaveProperty('syntaxCheck');
+    });
+  });
 });

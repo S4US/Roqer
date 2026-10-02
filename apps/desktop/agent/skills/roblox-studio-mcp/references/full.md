@@ -45,6 +45,10 @@ Reject a stale revision instead of overwriting newer Studio state.
 - Pass the `revision` from the `get_script_source` read the line numbers came from as `expectedRevision` on both. If the script changed since, the edit is refused with `source_revision_conflict` instead of landing on the wrong lines; read it again and recompute the lines.
 - `find_and_replace_in_scripts`: preview a broad replacement with `dryRun: true` before applying it.
 
+### Compile errors
+
+Every script write, and each script a `find_and_replace_in_scripts` changes or would change on a dry run, is compiled without being run. When the new source does not compile, the write still lands and its result carries `syntaxError: {line, message}`; fix that line before playtesting or moving on. A clean compile adds nothing. `syntaxCheck: "unavailable"` means this Studio could not compile the source for the plugin, so nothing was checked. Only syntax is judged: a type error or a misspelled member compiles and shows up at runtime.
+
 Read back after every mutation. A tool-level success without the expected source is a failed verification.
 
 Use `set_properties` for an atomic property group. Use `build_instances` to create, clone, update, tag, or remove many instances under one build root: every step is checked before Studio changes, the batch applies whole or not at all, and it is one undo step. Parents and targets must be the root or inside it; a clone source may be anywhere. Use `execute_luau` only when traversal or mutation cannot be expressed safely by a structured operation. Re-acquire references inside every `execute_luau` call; calls do not share local variables.

@@ -1109,6 +1109,45 @@ return string.format("%.1f|%.1f|%.1f|%.4f|%.4f|%.4f",
     });
     assertContains(source.source, 'return value + 1', 'get_script_source returns edited source');
 
+    // A write says when its source will not compile, with the line, and says
+    // nothing when it does; the write lands either way.
+    assert(setSource.syntaxError === undefined && setSource.syntaxCheck === undefined,
+      `a write that compiles reports no syntax problem (${JSON.stringify(setSource)})`);
+    const brokenEdit = await client.callTool('edit_script_lines', {
+      instancePath: scriptPath,
+      old_string: 'local value = 41',
+      new_string: 'local value = = 41',
+      instance_id: instanceId,
+    });
+    assert(brokenEdit.success === true && brokenEdit.syntaxError?.line === 1
+      && typeof brokenEdit.syntaxError.message === 'string' && brokenEdit.syntaxError.message.length > 0,
+      `a write that does not compile lands and reports its line (${JSON.stringify(brokenEdit)})`);
+    const repaired = await client.callTool('find_and_replace_in_scripts', {
+      pattern: 'local value = = 41',
+      replacement: 'local value = 41',
+      caseSensitive: true,
+      path: scriptPath,
+      classFilter: 'Script',
+      instance_id: instanceId,
+    });
+    assert(repaired.success === true && repaired.scriptsModified === 1
+      && repaired.changes[0].syntaxError === undefined && repaired.syntaxCheck === undefined,
+      `a find-and-replace that leaves the script compiling reports no syntax problem (${JSON.stringify(repaired)})`);
+    const breakingDryRun = await client.callTool('find_and_replace_in_scripts', {
+      pattern: 'return value + 1',
+      replacement: 'return value +)',
+      caseSensitive: true,
+      path: scriptPath,
+      classFilter: 'Script',
+      dryRun: true,
+      instance_id: instanceId,
+    });
+    assert(breakingDryRun.success === true && breakingDryRun.changes?.length === 1
+      && breakingDryRun.changes[0].syntaxError?.line === 2,
+      `a find-and-replace dry run reports the syntax error its replace would leave (${JSON.stringify(breakingDryRun)})`);
+    const afterDryRun = await client.callTool('get_script_source', { instancePath: scriptPath, instance_id: instanceId });
+    assertContains(afterDryRun.source, 'return value + 1', 'a find-and-replace dry run leaves the script as it was');
+
     const escapeHeavyLines = [
       String.raw`local newline = "\n"`,
       String.raw`local tab = "\t"`,

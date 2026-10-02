@@ -1,6 +1,7 @@
 import Utils from "../Utils";
 import Recording from "../Recording";
 import { sourceRevision } from "../SourceRevision";
+import { checkSyntax, ScriptSyntaxError } from "../ScriptSyntax";
 
 const { getInstancePath, getInstanceByPath, getInstanceReference, resolveInstance, readScriptSource, applyScriptSource, splitLines, joinLines } = Utils;
 const { beginRecording, finishRecording } = Recording;
@@ -151,6 +152,7 @@ function setScriptSource(requestData: Record<string, unknown>) {
 			revision: sourceRevision(sourceToSet),
 			method: applyResult.method,
 			message: `Script source updated successfully (${applyResult.method === "UpdateSourceAsync" ? "editor-safe" : "direct assignment"})`,
+			...checkSyntax(sourceToSet),
 		};
 	}
 
@@ -263,6 +265,7 @@ function editScriptLines(requestData: Record<string, unknown>) {
 			previousRevision: sourceRevision(source),
 			revision: sourceRevision(newSource),
 			message: "Script edited successfully",
+			...checkSyntax(newSource),
 		};
 	});
 
@@ -383,6 +386,7 @@ function editScriptBatch(requestData: Record<string, unknown>) {
 			previousRevision: observedRevision,
 			revision: sourceRevision(newSource),
 			message: `Applied ${resolved.size()} edits in one transaction`,
+			...checkSyntax(newSource),
 		};
 	});
 
@@ -463,6 +467,7 @@ function insertScriptLines(requestData: Record<string, unknown>) {
 			previousRevision: sourceRevision(source),
 			revision: sourceRevision(newSource),
 			message: "Script lines inserted successfully",
+			...checkSyntax(newSource),
 		};
 	});
 
@@ -519,6 +524,7 @@ function deleteScriptLines(requestData: Record<string, unknown>) {
 			previousRevision: sourceRevision(source),
 			revision: sourceRevision(newSource),
 			message: "Script lines deleted successfully",
+			...checkSyntax(newSource),
 		};
 	});
 
@@ -587,12 +593,14 @@ function findAndReplaceInScripts(requestData: Record<string, unknown>) {
 		className: string;
 		replacements: number;
 		error?: string;
+		syntaxError?: ScriptSyntaxError;
 	}
 
 	const changes: ScriptChange[] = [];
 	let totalReplacements = 0;
 	let scriptsSearched = 0;
 	let hitLimit = false;
+	let syntaxUnchecked = false;
 
 	const recordingId = dryRun ? undefined : beginRecording("Find and replace in scripts");
 
@@ -641,11 +649,16 @@ function findAndReplaceInScripts(requestData: Record<string, unknown>) {
 					});
 				} else {
 					totalReplacements += replCount;
+					// Checked on a dry run too, so a replace that would break a
+					// script says so before it is made.
+					const syntax = checkSyntax(newSource);
+					if (syntax.syntaxCheck !== undefined) syntaxUnchecked = true;
 					changes.push({
 						instancePath: getInstancePath(instance),
 						name: instance.Name,
 						className: instance.ClassName,
 						replacements: replCount,
+						syntaxError: syntax.syntaxError,
 					});
 				}
 			}
@@ -677,6 +690,7 @@ function findAndReplaceInScripts(requestData: Record<string, unknown>) {
 		scriptsFailed: failedScripts,
 		changes,
 		truncated: hitLimit,
+		syntaxCheck: syntaxUnchecked ? "unavailable" : undefined,
 	};
 }
 
