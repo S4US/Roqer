@@ -242,6 +242,43 @@ test("a flipbook sheet is checked from its pixels, apart from ordinary renders, 
   });
 });
 
+test("a job that asks for a Studio preview gets an rbxasset address for each texture", async () => {
+  await withJobs(async (jobsRoot) => {
+    const content = path.join(jobsRoot, "studio", "content");
+    await fs.mkdir(content, { recursive: true });
+    const burst = sheet(4, (i) => 20 + i * 4);
+    const blender = fakeBlender(async (args) => {
+      const output = path.join(argAfterDashes(args), "output");
+      await fs.writeFile(path.join(output, "Burst.flipbook.png"), burst);
+      await fs.writeFile(path.join(output, "Burst.flipbook.json"), JSON.stringify({ grid: 4, loop: false, fps: 24 }));
+      await fs.writeFile(path.join(output, "Cracks.png"), pngHeader(256, 256));
+      return { output: "ROQER_SCRIPT_DONE\n" };
+    });
+    const studioContentDirectories = async () => [content];
+    const worker = new BlenderWorker({ executable: EXECUTABLE, jobsRoot, spawn: blender.spawn, killTree: blender.killTree, env: {}, studioContentDirectories });
+
+    const outcome = await worker.run({ script: "import bpy", preview_in_studio: true });
+
+    assert.equal(outcome.ok, true, outcome.text);
+    const data = outcome.data as { jobId: string; studioPreviews: Array<{ name: string; uri: string }> };
+    assert.deepEqual(data.studioPreviews, [
+      { name: "Burst.flipbook.png", uri: `rbxasset://textures/roqer-preview/${data.jobId}-Burst.png` },
+      { name: "Cracks.png", uri: `rbxasset://textures/roqer-preview/${data.jobId}-Cracks.png` },
+    ]);
+    const staged = path.join(content, "textures", "roqer-preview", `${data.jobId}-Burst.png`);
+    assert.deepEqual(await fs.readFile(staged), burst);
+    assert.match(outcome.text, /Previews in Studio, before any upload/);
+    assert.match(outcome.text, /replace every rbxasset:\/\/textures\/roqer-preview\/ address/);
+
+    // Without the flag nothing leaves the job folder; without an install the job says so.
+    const plain = await worker.run({ script: "import bpy" });
+    assert.equal((plain.data as { studioPreviews?: unknown }).studioPreviews, undefined);
+    assert.doesNotMatch(plain.text, /Previews in Studio/);
+    const none = new BlenderWorker({ executable: EXECUTABLE, jobsRoot, spawn: blender.spawn, killTree: blender.killTree, env: {}, studioContentDirectories: async () => [] });
+    assert.match((await none.run({ script: "import bpy", preview_in_studio: true })).text, /No Roblox Studio install was found/);
+  });
+});
+
 test("model previews come before rendered images in what the model sees", async () => {
   await withJobs(async (jobsRoot) => {
     const preview = pngHeader(512, 384);

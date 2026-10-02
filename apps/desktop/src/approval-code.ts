@@ -26,7 +26,9 @@ const CODE_TOOLS: Readonly<Record<string, CodeTool>> = {
     argument: "script",
     language: "python",
     label: "Blender script",
-    subtitle: () => "Runs this Python in Blender on your computer, with your permissions",
+    subtitle: (args) => args.preview_in_studio === true
+      ? "Runs this Python in Blender on your computer, with your permissions, then copies its textures into your Roblox Studio install to preview them"
+      : "Runs this Python in Blender on your computer, with your permissions",
   },
   execute_luau: {
     argument: "code",

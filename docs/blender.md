@@ -79,6 +79,32 @@ the tool away again.
 A job stops after two minutes by default, and never runs longer than 200
 seconds. Stopping the run stops Blender.
 
+## Previewing textures in Studio
+
+Particle textures and flipbook sheets take several drawn versions to get
+right, and every upload is irreversible and moderated. So the agent can ask
+for a job's PNGs to be previewed in Studio first. The approval then says that
+the job copies its textures into your Roblox Studio install.
+
+- **Where they go:** Roqer copies each PNG into the `content\textures\roqer-preview`
+  folder of every Studio install under `%LOCALAPPDATA%\Roblox\Versions`.
+- **How they load:** Studio loads them as `rbxasset://textures/roqer-preview/...`
+  addresses, and a particle shows them as it would an uploaded texture. No
+  restart is needed.
+- **Naming:** Studio keeps the first image it loaded under a name for the rest
+  of the session, so each job's files get new names.
+- **Who sees them:** the addresses work on your computer only. Before the
+  effect is done, the agent uploads the settled textures and replaces every
+  preview address.
+- **Cleanup:** previews older than seven days, and all but the newest 200, are
+  removed. Roqer removes only files it named. A Studio update installs a fresh
+  version folder without them.
+- **Platforms:** Windows only. On macOS, Studio's content folder is inside the
+  signed app, which Roqer does not change.
+
+Studio cannot show an in-memory image (an `EditableImage`) on a particle or a
+beam, only on a Decal or UI, which is why the files are copied.
+
 ## Creatures that move
 
 A creature that will be animated, for "Model a low-poly wolf, rig it and make
@@ -148,7 +174,9 @@ each job asks first outside Full auto, and why the approval shows the whole
 script: read it as you would any script you were about to run.
 
 The agent is told to write only into the job's own folder and not to use the
-network, but nothing enforces that; your approval is the safeguard. Roqer does
+network, but nothing enforces that; your approval is the safeguard. Roqer
+itself writes outside the job's folder in one place: the Studio preview
+folder, for a job you approved with that preview. Roqer does
 keep secrets out of Blender's reach: it starts Blender without any environment
 variable named like a credential (a key, token, secret, password or cookie) and
 without Roqer's own settings.

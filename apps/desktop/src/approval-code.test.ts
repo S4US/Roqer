@@ -29,6 +29,9 @@ test("approval-code - a Blender script is shown as plain Python", () => {
   assert.equal(shown.label, "Blender script");
   assert.match(shown.subtitle, /Python in Blender/);
   assert.ok(shown.lines.flat().every((token) => token.kind === "plain"));
+  assert.doesNotMatch(shown.subtitle, /Studio install/);
+  // A job that copies textures into Studio says so before the user approves it.
+  assert.match(approvalCode("run_blender_script", { script: "import bpy", preview_in_studio: true })!.subtitle, /copies its textures into your Roblox Studio install/);
 });
 
 test("approval-code - other tools and malformed code fall back to the summary", () => {

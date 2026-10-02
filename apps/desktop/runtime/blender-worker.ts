@@ -14,6 +14,7 @@ import { ANIMATION_SUFFIX, BAKE_SUFFIX, describeBake, describeBakedFile, parseBa
 import { describeSkins, parseSkins, type InspectedSkin } from "./blender-skin";
 import { analyzeFlipbook, describeFlipbook, type FlipbookClaim, type FlipbookReport } from "./flipbook-sheet";
 import type { McpCallOptions, McpToolImage, McpToolOutcome } from "./mcp-types";
+import { findStudioContentDirectories, stageStudioPreviews, type StudioPreview } from "./studio-preview";
 import { isViewableGlb, JOB_RETENTION_MS, MAX_KEPT_JOBS, modelPreviewFileName, pruneJobFolders } from "./model-preview";
 import { modelPreviewId } from "../shared/model-preview";
 
@@ -1699,6 +1700,8 @@ export type BlenderWorkerOptions = Readonly<{
   killTree?: (child: ChildProcess) => void;
   env?: NodeJS.ProcessEnv;
   now?: () => number;
+  /** The Studio installs a job's textures are previewed in when it asks; found on this computer by default. */
+  studioContentDirectories?: () => Promise<string[]>;
 }>;
 
 type ProcessResult = Readonly<{
@@ -2162,6 +2165,31 @@ export class BlenderWorker {
         "To use a sheet: fix every problem first, then upload_asset {action: 'upload', filePath: <its path>, assetType: 'Decal', displayName}, set ParticleEmitter.Texture to rbxassetid://<imageId from that result>, and apply the settings listed. Confirm it plays by holding one particle at a few ages (TimeScale 0) and taking screenshots: each should show one frame, not the whole grid. Do not go by FlipbookIncompatible: Studio shows its size message even for a sheet that plays.",
       );
     }
+    // Textures shown in Studio before any upload, when the job asked for it.
+    let studioPreviews: StudioPreview[] = [];
+    if (args.preview_in_studio === true) {
+      const textures = [
+        ...flipbooks.map((flipbook) => ({ name: flipbook.name, path: flipbook.path })),
+        ...rendered.filter((image) => image.error === undefined).map((image) => ({ name: image.name, path: image.path })),
+      ].slice(0, MAX_STUDIO_PREVIEWS);
+      try {
+        const installs = await (this.options.studioContentDirectories ?? (() => findStudioContentDirectories(this.options.env ?? process.env)))();
+        studioPreviews = await stageStudioPreviews(textures, jobId, installs, this.now());
+        if (textures.length === 0) {
+          lines.push("Nothing to preview in Studio: the job made no PNG or flipbook sheet.");
+        } else if (installs.length === 0) {
+          lines.push("No Roblox Studio install was found to preview in (previews work with Studio on Windows). Upload the textures to see them in Studio.");
+        } else {
+          lines.push(
+            "Previews in Studio, before any upload. Each address works on this computer only:",
+            ...studioPreviews.map((preview) => `- ${preview.name}: ${preview.uri}`),
+            "Set ParticleEmitter.Texture (or a Beam's or Decal's Texture) to an address to see the texture in Studio as players would. Studio keeps a file's first image for the session, so a redrawn texture comes from a new job with new addresses. Players and other computers see nothing at these addresses: once the textures are settled, upload them (upload_asset as Decal) and replace every rbxasset://textures/roqer-preview/ address with rbxassetid://<imageId>.",
+          );
+        }
+      } catch (error) {
+        lines.push(`The textures could not be copied into Studio for a preview: ${error instanceof Error ? error.message : String(error)}. Upload them to see them in Studio.`);
+      }
+    }
     if (animations.length > 0) {
       lines.push(
         "Animations it baked, each sampled frame by frame and kept as the keys its joints need:",
@@ -2180,6 +2208,7 @@ export class BlenderWorker {
         jobDirectory, outputDirectory, files, images: rendered, otherFiles: others, log,
         ...(flipbooks.length > 0 ? { flipbooks: flipbooks.map(({ name, path: sheetPath, report }) => ({ name, path: sheetPath, ...(report === undefined ? {} : { report }) })) } : {}),
         ...(animations.length > 0 ? { animations: animations.flatMap((animation) => animation.path === undefined ? [] : [{ name: animation.name, path: animation.path }]) } : {}),
+        ...(studioPreviews.length > 0 ? { studioPreviews } : {}),
         scene: sceneSaved ? { path: sceneFile, ...(contents === undefined ? {} : { contents }) } : null,
       },
       text: lines.join("\n"),
@@ -2244,6 +2273,8 @@ export class BlenderWorker {
 }
 
 const MAX_FLIPBOOKS = 4;
+/** The most textures one job previews in Studio: its checked sheets and rendered images. */
+const MAX_STUDIO_PREVIEWS = 8;
 const FLIPBOOK_SUFFIX = ".flipbook.png";
 const FLIPBOOK_NOTE_SUFFIX = ".flipbook.json";
 const FLIPBOOK_PREVIEW_SUFFIX = ".flipbook-preview.png";

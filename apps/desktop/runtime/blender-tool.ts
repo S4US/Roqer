@@ -50,6 +50,10 @@ export function blenderToolDefinition(): Readonly<{ name: typeof BLENDER_TOOL_NA
           maximum: MAX_BLENDER_JOB_SECONDS,
           description: `How long the script may run before Blender is stopped; default ${DEFAULT_BLENDER_JOB_SECONDS}.`,
         },
+        preview_in_studio: {
+          type: "boolean",
+          description: "Copy the job's PNGs and flipbook sheets into the user's Roblox Studio install and return an rbxasset:// address for each, so a texture can be seen on a ParticleEmitter, Beam or Decal in Studio before it is uploaded. Use it while a texture is still changing: iterate on previews, and upload only the settled set. The addresses work on this computer only, so replace each with its uploaded id before the work is done.",
+        },
       },
       required: ["script"],
       additionalProperties: false,
@@ -68,6 +72,12 @@ export function parseBlenderToolInput(value: unknown): { operation: string; args
   }
   const args: JsonRecord = { script: record.script };
   if (typeof record.timeout_seconds === "number") args.timeout_seconds = record.timeout_seconds;
+  if (record.preview_in_studio !== undefined && record.preview_in_studio !== null) {
+    if (typeof record.preview_in_studio !== "boolean") {
+      throw new MalformedToolCallError("blender preview_in_studio must be true or false.");
+    }
+    if (record.preview_in_studio) args.preview_in_studio = true;
+  }
   if (record.continue_from !== undefined && record.continue_from !== null) {
     if (!isBlenderJobId(record.continue_from)) {
       throw new MalformedToolCallError("blender continue_from must be the id of an earlier job, exactly as that job's result gave it (8 hexadecimal characters).");

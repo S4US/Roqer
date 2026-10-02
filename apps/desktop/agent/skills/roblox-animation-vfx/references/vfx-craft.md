@@ -300,8 +300,8 @@ effect.
 
 ## 3. Textures
 
-**Draw your own.** In a Blender job (load `roblox-building` and its Blender
-reference, "Particle textures and flipbooks"), `roqer.draw_flipbook` and
+**Draw your own.** In a Blender job (load the `roblox-building` skill's
+`references/blender-vfx.md`, with its `references/blender.md`), `roqer.draw_flipbook` and
 `roqer.draw_texture` draw textures with numpy:
 - describe a shape from coordinates;
 - break it up with noise;
@@ -312,10 +312,19 @@ Roqer checks each sheet from its pixels and attaches it. One job can make
 every texture an effect needs. `roqer.flipbook` renders a 3D scene into a
 sheet instead, for a lit volume or simulation.
 
+- **Preview first.** A Blender job run with `preview_in_studio: true`
+  returns an `rbxasset://textures/roqer-preview/...` address for each
+  texture. That address plays on a particle in Studio as an upload would
+  (checked in Studio on Windows), so iterate on textures inside the effect
+  for free.
+  - A redraw comes from a new job, with new addresses.
+  - The addresses work on this computer only; players see nothing there.
 - **Upload:** use `upload_asset` as a `Decal`, and use the result's `imageId`
   as `rbxassetid://<imageId>`.
-  - Every upload is irreversible and moderated, so settle the textures first,
-    and say how many uploads a request will use before uploading.
+  - Every upload is irreversible and moderated, so upload only the settled
+    set, and say how many uploads a request will use before uploading.
+  - Then replace every preview address left in the place (see the
+    `roblox-building` skill's `references/blender-vfx.md`).
   - Reuse one texture across layers by changing `Color`, `Size`, `Rotation`
     and `Squash`.
 - **Size:** keep a single texture square, 512 px or less, and 256 px for
@@ -469,8 +478,8 @@ then `preview_asset`) is worth a look when a texture there matches the style.
   - Make the shapes in a Blender job with `roqer.vfx_arc` (crescent),
     `vfx_ring` (shockwave or blast wall), `vfx_cone`, `vfx_swirl` (tornado,
     aura), `vfx_shell` (barrier, dome) or `vfx_surface` (anything else). See
-    the `roblox-building` skill's Blender reference, "Shapes for mesh
-    effects". Each has UVs laid out along its sweep.
+    the `roblox-building` skill's `references/blender-vfx.md`, "Shapes for
+    mesh effects". Each has UVs laid out along its sweep.
   - Upload all of an effect's shapes as one model. Without Blender, a flat
     Neon cylinder part works as a ground wave.
 - **Shells, domes and columns:** a large mesh that is half transparent across
@@ -795,7 +804,9 @@ effect still for each capture instead of trying to catch it.
    - Does it end cleanly, with nothing left behind?
 6. Stop the effect (`_G.vfx:stop()`), remove the marker, and check
    `get_runtime_logs` for `VFXEmit` warnings: a bad attribute, an emitter with
-   nothing to play, a bounded count.
+   nothing to play, a bounded count. Before calling the effect done, check
+   that no `rbxasset://textures/roqer-preview/` address is left: players
+   would see nothing there.
 7. To see it on a character or through a player's camera, the same handle
    works in a `solo_playtest` through `eval_client_runtime`, but the character
    can hide an effect played in front of it.

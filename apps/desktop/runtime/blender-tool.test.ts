@@ -14,6 +14,15 @@ test("a blender call may name the earlier job whose scene it continues, and only
   }
 });
 
+test("a blender call may ask to preview its textures in Studio, only with a boolean", () => {
+  assert.deepEqual(parseBlenderToolInput({ script: "import bpy", preview_in_studio: true }).args, { script: "import bpy", preview_in_studio: true });
+  assert.deepEqual(parseBlenderToolInput({ script: "import bpy", preview_in_studio: false }).args, { script: "import bpy" });
+  assert.throws(() => parseBlenderToolInput({ script: "import bpy", preview_in_studio: "yes" }), /preview_in_studio must be true or false/);
+  const properties = blenderToolDefinition().inputSchema.properties as Record<string, Record<string, unknown>>;
+  assert.equal(properties.preview_in_studio.type, "boolean");
+  assert.match(String(properties.preview_in_studio.description), /before it is uploaded/);
+});
+
 test("the blender tool says how to build in stages and what a script may be", () => {
   const tool = blenderToolDefinition();
   assert.match(tool.description, /one job per stage, each continuing from the last \(see continue_from\)/);

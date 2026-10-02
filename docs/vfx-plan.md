@@ -696,7 +696,19 @@ mode):
   particle draws nothing, even after re-emitting, and the beam draws a plain
   white strip.
 
-So a true particle preview cannot come from memory today. Two ways remain:
+So a true particle preview cannot come from memory today.
+
+The content folder was then tried, with the user's consent, and adopted:
+- A PNG copied into `content/textures/roqer-preview` loads as an
+  `rbxasset://` address with no restart, and plays as a flipbook.
+- An overwritten file keeps showing its first image, so each job's files get
+  new names.
+- The Blender tool's `preview_in_studio` flag does this
+  (`runtime/studio-preview.ts`, documented in `docs/blender.md`). It was
+  checked end to end: a real job's sheets were staged into the real install
+  and played on a particle in Place1.
+
+The two ways considered:
 - **A stand-in card:** a billboard `ImageLabel` stepping through the sheet's
   cells. It shows shape and timing, but not particle blending, Brightness or
   bloom.
