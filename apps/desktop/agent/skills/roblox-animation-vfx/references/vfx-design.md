@@ -496,7 +496,13 @@ module does not; write them alongside it when the effect needs them.
 A tinted full-screen flash fading over 0.4 s is a lighter alternative.
 
 **Camera shake:** rotation only, gated by distance (150-350 studs). Stop
-every sustained shake.
+every sustained shake. Take each frame's offset back off: the player's
+camera works out its next frame from where it is now, so a shake written as
+`camera.CFrame *= offset` every frame builds up and tips the view toward the
+floor or the sky. Undo last frame's offset in a `BindToRenderStep` step just
+before the camera scripts (`Enum.RenderPriority.Camera.Value - 1`) and apply
+the new one just after them (`+ 1`). Two missile runs drifted the camera this
+way and fixed it like this.
 
 | Use | Magnitude | Roughness | Fade out |
 | --- | --- | --- | --- |

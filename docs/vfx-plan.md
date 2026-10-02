@@ -1044,24 +1044,129 @@ prices. Run 2 also carried the other guidance changes (two calls a moment,
 Emit's one-line check, not reading other effects' code) and two playtest
 start timeouts, so the saving is not the capture operation's alone.
 
-Weighted the way cache reads, cache writes and output are priced, cache
-reads are about half the cost: 81 requests at about 155k tokens of context
-each. By estimate, the frames were a large share of that context: about 40
-full-size frames at about 1,400 tokens each, kept to the end of the run.
+*Corrected after run 3:* the cost split above was wrong. Claude Code's model
+table prices Opus 5.5 at $4 per million input tokens, $20 output and $0.20
+cache reads, and run 2's $8.265385 reproduces exactly with cache writes at
+$8, the one-hour rate. So run 2 was 30% cache reads ($2.51), 33% cache writes
+($2.70) and 37% output ($3.06), not "about half" cache reads. Its frames were
+estimated at about 14% of its cost.
 
 **Contact sheet.** `capture_moments` now returns its frames tiled into one
-image, two to a row, 1568 pixels wide (`composeContactSheet` in
-`electron/image-encoder.ts`, using `nativeImage`). The provider scales any
-image to about that size, so 5 frames cost about 1,500 tokens instead of
-about 7,200. Tested on the live frames as the model would see them: tiles
-about 660-780 pixels wide, with shapes, colours, the sigil's runes and the
-missiles' thin trails all readable. `sheet: false` returns full-size frames.
-The eval harness runs without Electron, so it gets separate frames.
+image, two to a row (`composeContactSheet` in `electron/image-encoder.ts`,
+using `nativeImage`). `sheet: false` returns full-size frames. The eval
+harness runs without Electron, so it gets separate frames. *Corrected after
+run 3:* the first version was 1568 pixels wide, on the premise that the
+provider scales any image to about that size. For Opus 5.5 that was wrong:
+Claude Code passes images up to 2000 x 2000, so run 2's frames reached the
+model at 2000 pixels and the 784-pixel tiles had 6.5 times fewer pixels. The
+sheet is now 2000 pixels wide (1000-pixel tiles).
 
 **Follow-up (bridge):** while Studio was not drawing frames,
 `capture_screenshot` first refused ("window appears minimized or not
 rendering"), then returned frames that were 46 minutes old, from an earlier
 playtest, without an error. A stale frame should be refused too.
+
+## Magic missile run 3: why it looked worse
+
+The same prompt a third time. The user: "way worse". It also cost more: 16.7M
+cache reads, 299k cache writes, 175k output, 102 requests, about $9.23
+against run 2's $8.27, and it ended unverified.
+
+**What was compared.** Run 2's and run 3's `VFX` folders were exported from
+the user's saved places and played side by side in Place1, on one stand-in
+R15 caster, from the same cameras, at each version's own beats. Five
+independent analyses covered the evidence images, the textures, the process,
+the contact sheet and the playtest failures. Their load-bearing claims were
+checked against Claude Code's logs and binary, Studio's logs and the code.
+
+**How run 3 looks worse** (live, same conditions):
+- **Sigil:** a 9-stud root with rune rings growing to 15 studs, thin line art
+  around the whole caster; run 2's is about 5-6 studs, compact and saturated.
+- **Missiles:** small white sparks with soft ribbons; run 2's are bright
+  shards with white cores and magenta ribbons.
+- **Finisher:** run 2 has a 30-40-stud light lance, crystal spires, crescents,
+  dark violet dust smoke for 1.2-1.7 s and a ground sigil. Run 3 has a small
+  flash, a camera-facing ring growing to 42 studs (a pale shell), a swirl of
+  claw strokes up to 46 studs and no smoke.
+- By the screen-mass metric, run 3's finisher is as large and lasts as long
+  (peak about 8,500 against 9,100). The metric counts each particle's quad;
+  thin claws and translucent rings fill little of theirs.
+
+**Why** (most to least weight; one sample of each run):
+1. **Design choices made before any capture.** Run 3 drew 8 textures to run
+   2's 11, as geometric polar and segment shapes. Its scripts call `tex_warp`,
+   `tex_blob` and `tex_curve` 0 times, against 4, 3 and 3 in run 2. It dropped
+   run 2's cel smoke puff (its only matter layer) and loose rune glyphs, used a
+   static 1.4%-wide ring on 10 emitters, and arranged its claws evenly around
+   the centre. The guidance was identical, so this is model variance. Commit
+   f2c9b03 cannot have caused it: every texture was drawn before the first
+   capture.
+2. **Its checks were weaker.**
+   - **Playtests wedged.** The agent sent `stop` and `start` in one batch.
+     Studio refused the start while still stopping ("already in transition
+     StoppingPlayTest") and then refused every later start ("a previous one is
+     still in progress"). The plugin returned `success` before Studio started
+     (`TestHandlers.startPlaytest`) and only `warn()`ed the error, so each
+     retry waited out a timeout. Several open Studio windows were not the
+     cause. Run 3 then tuned on a stand-in in the edit viewport and never saw
+     its final version on the character.
+   - **Claude Code cut every call at 60 s** (`timeoutMs: 60000` for HTTP
+     servers). Captures over 60 s and long playtest waits never reached the
+     model, though Roqer recorded them as successful. A trail capture
+     (`hold: false`) played the whole effect at 0.04x and always ran past 60 s,
+     so neither run's model saw its trails in flight.
+   - **The Blender result attaches at most 4 plain PNGs, by sorted name.** Run
+     3's spark had no preview until a third job, and its own review sheets
+     (`zz_review_*`) were never shown to it.
+   - **The contact sheet** showed every run 3 frame at 784 pixels against run
+     2's 2000. Plausible, not shown: the agent still caught the obvious
+     problems.
+3. **Process variance.** Run 3 tuned in a playtest first. Its accumulating
+   camera shake moved the playtest camera. Its first arm fix (turning the
+   `AnimationConstraint`'s attachment) did nothing. And it edited the module
+   after uploading, so the completion gate asked for a fresh look.
+
+**Cost:** +21 requests at peak context (the playtest wedge, arm and camera
+debugging, the gate's re-capture) explain the extra cache reads. The contact
+sheet lowered image cost (estimated about $0.30 against about $1.93 for the
+same frames sent alone).
+
+**Changed:**
+- Claude Code gets a 24-hour tool-call timeout for Roqer's server (the
+  per-server `timeout` key), so Roqer's own budgets, approvals and cancellation
+  decide.
+- `capture_moments` plays at normal speed and slows down only for the last
+  stretch before each moment (0.9 s of effect time for trails, longer than
+  any studied trail lives), and continues a capped wait in another call.
+  Checked live: a 3-moment trail capture reached every moment in 34 s with
+  full trails, and an 8-moment held capture took 23 s instead of 35 s.
+- The contact sheet is 2000 pixels wide (8 frames: 2000 x 1744, 327 KB).
+- Guidance:
+  - tune in the edit viewport;
+  - take the final look as full-size frames from the player's camera;
+  - camera shake takes its offset back off;
+  - pose an `AnimationConstraint` joint by writing `Transform` in
+    `PreSimulation`;
+  - never batch a playtest stop with a start, and stop retrying after one
+    failure.
+
+**Follow-ups, not done:**
+- **Plugin and bridge:**
+  - `stop` should wait out Studio's stop transition before returning;
+  - `start` should fail with Studio's own error instead of reporting
+    success;
+  - readiness should be tied to the start that asked for it (run 2's call 50
+    reported a session the bridge had not started).
+  These need the live suites.
+- **Blender worker:** stage previews for every texture, attach the agent's own
+  review sheets, and name the PNGs not attached.
+- **Texture checks:** report thin line art that will not survive distance
+  (survival under a 1% erosion: run 3's rune ring 0.00, run 2's smoke 0.88)
+  and radial arrangement, so the agent sees them as numbers.
+- **The camera skill's shake recipe** pins the camera to where the shake
+  began, which fights a following camera.
+- **Per-request usage** is not kept, so where context grows can only be
+  estimated.
 
 ## Deferred, and why
 

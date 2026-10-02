@@ -576,8 +576,12 @@ both parts with a Blender ring mesh for a real shockwave, which can also take
 ## 8. Checking an effect
 
 Effects play in the edit viewport, so no playtest is needed to look at one.
-A screenshot takes most of a second, longer than a whole burst, so the
-effect is held still for each capture instead of caught in passing.
+Tune there, on a stand-in character if the effect needs one: every edit to a
+module needs a playtest restarted to show, and restarts are slow and can
+fail. Use a playtest at the end, once the look is settled, to see it on the
+real character from the player's camera. A screenshot takes most of a
+second, longer than a whole burst, so the effect is held still for each
+capture instead of caught in passing.
 
 1. Build the template and install the module (section 2).
 
@@ -608,16 +612,20 @@ effect is held still for each capture instead of caught in passing.
      "code": "_G.vfx = require(game.ReplicatedStorage.VFX.Emit).play(game.ReplicatedStorage.VFX.Slam, CFrame.new(0, 3, 0))",
      "times": [0.03, 0.1, 0.25, 0.45, 0.9] } }
    ```
-   Roqer plays it slowly, holds it at each time, captures the viewport, and
-   returns the frames tiled into one image, two to a row, then stops the
-   effect. A sheet costs about what one frame does. When small detail
-   matters, such as a texture's edges or a thin trail, capture just that
-   moment with `"sheet": false` for the full-size frame. Pick
+   Roqer plays it at normal speed, slows down for the last stretch before
+   each time, holds it there, captures the viewport, and returns the frames
+   tiled into one image, two to a row at half width, then stops the effect.
+   A sheet of up to eight frames costs about what two full frames do. Pick
    the 4-6 moments that matter: anticipation, the flash, the peak, the body
    at about 0.3 s, the smoke, and a time just past the effect's end, to see
    that nothing is left behind. Every call re-reads the whole
    conversation, so one call for all the moments is far cheaper than a call
    for each.
+   - **Detail and the final look:** a frame on a sheet is half as wide as a
+     full frame. When small detail matters (a texture's edges, a thin trail,
+     the missiles in flight), and for the final look from the player's camera
+     before calling the effect done, pass `"sheet": false` for full-size
+     frames.
    - **Trails:** a held trail loses its segments, so pass `"hold": false`. The
      effect keeps playing at 0.04x through each capture, and the emit module
      stretches trail lifetimes to match. A module of your own that moves a
