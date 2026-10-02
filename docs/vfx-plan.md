@@ -1006,6 +1006,25 @@ checked from one line.
    call: slowed rather than paused for trails, N images in one result.
 3. Then, once measured: smaller screenshots, and the model and effort dials.
 
+**Trails, read from the saved place.** The missiles play through the emit
+module, so their trails were stretched when slowed; that was not the fault.
+`TrailCore` is 0.32 studs wide and lives 0.22 s; `TrailBody` is 1.7 studs,
+mostly transparent. What the missile sheds is 0.25-0.28 studs. The studied
+missiles run 2-3 trails across about 5 studs, a dark or wide body under a hot
+core, and shed particles at around 100 a second. The guidance says so; Roqer
+never saw its own trails to compare.
+
+**Built: `capture_moments`** (`runtime/capture-moments.ts`), offered inside
+`roblox_studio` as a gateway operation (`shared/gateway-operations.ts`):
+Roqer composes it from `execute_luau` or `eval_client_runtime` and
+`capture_screenshot`. One call runs the code that starts an effect, plays it
+slowly to each requested time (at most 20 s of real time per moment), holds it
+or, with `hold: false`, keeps it playing for trails, captures, and returns up
+to 8 frames in one result. It stops the effect afterwards, after a failure or
+cancel too. It is classified irreversible like the calls it is made of, and
+the approval card shows its code. `vfx-craft.md` section 8 now checks effects
+with it.
+
 ## Deferred, and why
 
 - **Runtime EditableMesh/EditableImage effects** (UV scrolling on meshes,
