@@ -20,6 +20,8 @@ import type { McpCallOptions, McpToolImage, McpToolOutcome } from "./mcp-types";
 
 /** Real seconds one moment may wait at slow speed: under the bridge's 30s budget for the call that waits. */
 const MAX_WAIT_SECONDS = 20;
+/** Real seconds with the clock standing still before a wait gives up: the effect has ended. */
+const STALLED_SECONDS = 1.5;
 const MAX_CODE_CHARS = 20_000;
 const MAX_TIME_SECONDS = 60;
 const HANDLE_NAME = /^[A-Za-z_][A-Za-z0-9_]{0,40}$/;
@@ -71,8 +73,13 @@ export function momentLuau(handle: string, time: number, slow: number, hold: boo
     `local h = _G[${JSON.stringify(handle)}]`,
     `if type(h) ~= "table" or type(h.setTimeScale) ~= "function" then return "no-handle" end`,
     `h:setTimeScale(${slow})`,
-    "local started = os.clock()",
-    `while (tonumber(h.time) or 0) < ${time} and os.clock() - started < ${MAX_WAIT_SECONDS} do task.wait() end`,
+    // An effect that has ended stops its clock; waiting on for the full cap would only cost time.
+    "local started, last, moved = os.clock(), tonumber(h.time) or 0, os.clock()",
+    `while (tonumber(h.time) or 0) < ${time} and os.clock() - started < ${MAX_WAIT_SECONDS} and os.clock() - moved < ${STALLED_SECONDS} do`,
+    "\ttask.wait()",
+    "\tlocal now = tonumber(h.time) or 0",
+    "\tif now ~= last then last, moved = now, os.clock() end",
+    "end",
     ...(hold ? ["h:setTimeScale(0)"] : []),
     `return string.format("%.3f", tonumber(h.time) or -1)`,
   ].join("\n");

@@ -46,7 +46,7 @@ test("a moment plays on to its time, holds when asked, and the end stops the eff
   const held = momentLuau("vfx", 0.25, 0.1, true);
   assert.match(held, /_G\["vfx"\]/);
   assert.match(held, /h:setTimeScale\(0\.1\)/);
-  assert.match(held, /< 0\.25 and os\.clock\(\) - started < 20/);
+  assert.match(held, /< 0\.25 and os\.clock\(\) - started < 20 and os\.clock\(\) - moved < 1\.5 do/, "an ended effect's stopped clock ends the wait");
   assert.match(held, /h:setTimeScale\(0\)/);
   assert.doesNotMatch(momentLuau("vfx", 0.25, 0.04, false), /setTimeScale\(0\)/);
   assert.match(stopLuau("vfx"), /pcall\(h\.stop, h\)/);

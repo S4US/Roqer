@@ -1025,6 +1025,22 @@ cancel too. It is classified irreversible like the calls it is made of, and
 the approval card shows its code. `vfx-craft.md` section 8 now checks effects
 with it.
 
+**Checked live** in the user's saved missile place (2026-10-02):
+- Held: the final blast at 0.05, 0.15, 0.35, 0.6 and 4 s. Five frames came
+  back in one call, the last one empty after the effect ended.
+- Not held: a full cast at 0.04x. The missiles' trails show, as they never
+  did in the run's own captures.
+- A caster-to-target marker viewed from the caster's side puts the camera
+  about where the player's is.
+- Workspace was left as it was.
+- The wait now gives up once the effect's clock has stood still for 1.5 s; it
+  used to sit out its 20 s cap after the effect ended.
+
+**Follow-up (bridge):** while Studio was not drawing frames,
+`capture_screenshot` first refused ("window appears minimized or not
+rendering"), then returned frames that were 46 minutes old, from an earlier
+playtest, without an error. A stale frame should be refused too.
+
 ## Deferred, and why
 
 - **Runtime EditableMesh/EditableImage effects** (UV scrolling on meshes,
