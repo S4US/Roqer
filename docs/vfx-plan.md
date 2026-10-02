@@ -934,6 +934,39 @@ a splash rather than an eruption, so the rest is design: something must rise.
 - `blender-vfx.md`: even cells as a whole shape read as tiles; ground marks
   spread from the point of impact.
 
+## After the third ice spear run
+
+The user: "looking better once again". Roqer checked the impact from the
+caster's camera this time, sized it up (a 30-stud flash at Brightness 25, a
+22-26-stud star, a 40-stud ground ring, upward spires) and it reads from
+range.
+
+**What still separates it from the dump:**
+- **A pop, not a swell.** Its screen area peaks at about 2,600 (size² units)
+  by +0.1 s, three times the previous run, but falls to a third by +0.25 s.
+  Its star body lives 0.16-0.2 s; the dump's explosion bodies live 0.35-1.2
+  s. What remains is 40 shards of about 2 studs, which reads as a sparkler
+  from the caster's camera.
+- **The flash** is a thin four-ray flare at 30 studs. Rotated, it shows as
+  two white beams in a V.
+- **Overbright decal colour** was refused by `build_instances`, whose
+  `color3From` (`studio-plugin/src/modules/Utils.ts`) takes components from
+  0 to 1 only, on purpose, to catch 0-255 values. The guidance asked for
+  `Color3` 2-20 on decals without saying how. It now says to set it with
+  `execute_luau` after the build.
+
+Considered and dropped: reporting each flipbook cell's drawing span. The
+star's spikes span 70% of its cell, so the span was not what made it read
+small.
+
+**What changed:** section 7 of `vfx-design.md` names the body layers and their
+measured lifetimes, adds a lifetime row, and says a flash's body is a filled
+shape. `vfx-craft.md` adds a check for the body at 0.3 s, and the overbright
+decal route.
+
+**Follow-up:** `draw_texture` images are not checked at all. Only flipbook
+sheets are.
+
 ## Deferred, and why
 
 - **Runtime EditableMesh/EditableImage effects** (UV scrolling on meshes,

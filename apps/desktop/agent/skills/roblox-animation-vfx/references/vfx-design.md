@@ -309,6 +309,17 @@ From the tutorial *(measured)*, in four rules:
   spires, smoke and debris swell, rise and spread. Only the small hits peak
   at once *(measured)*. A finisher that is biggest at its flash and then only
   shrinks reads as a pop, not an explosion.
+
+  **The mass comes from body layers that outlive the flash.** In the studied
+  explosions, crescents, flame tongues and puffs carry the effect from 0.1 to
+  0.6 s *(measured)*:
+  - a practice explosion's crescents grow from 2 to 19 studs over 0.36-0.55
+    s, and its smoke holds 20 studs for 0.6-1.2 s;
+  - a fireball skill's crescents grow to 125 studs over 0.35-0.55 s.
+
+  Shards, sparks and glints are accents, not mass. In a test, an ice
+  shatter whose body layers died by 0.2 s became 40 shards of 2 studs by
+  0.25 s, and read as a sparkler from the caster's camera *(verified)*.
 - **Stagger cause and effect.** Nothing fires at the same time. In the
   tutorial's example the wall launches, then the dragon appears 0.4 s later,
   then the hit, then the cracks, then the debris. Simultaneous layers read as
@@ -323,6 +334,7 @@ Typical lifetimes *(measured)*:
 | --- | --- |
 | Flash, impact frames | 0.03-0.15 s |
 | Crescents and slashes | 0.15-0.4 s |
+| An explosion's body (crescents, tongues, puffs) | 0.35-1.2 s |
 | Rings and debris | 0.4-1.4 s |
 | Smoke and ground marks | 1-3 s, scorch up to 6 s |
 
@@ -345,7 +357,9 @@ Typical lifetimes *(measured)*:
 - **The flash itself** is a growing sprite, a shrinking one (7 to 0 in 0.1
   s), and a thin squashed flare line (`Squash` -2 to -5, 0.04-0.12 s). In
   its frames it is the biggest thing on screen, larger than the burst that
-  follows.
+  follows. Its body is a filled spiky shape covering most of its cell; the
+  thin flare is an addition. A thin four-ray flare used as the whole flash
+  shows as two white beams in a V once it is rotated *(verified)*.
 - **A held contact point** (a beam hitting a wall) strobes its flash:
   Lifetime 0.1 at `Rate` 50.
 

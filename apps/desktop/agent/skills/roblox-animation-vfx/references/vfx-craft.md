@@ -258,7 +258,9 @@ then `preview_asset`) is worth a look when a texture there matches the style.
       wind swirls, or 0 for a coloured one.
     - Black `Neon` swirls as dark accents.
     - A `SpecialMesh` (FileMesh) on an invisible part, with a Decal whose
-      `Color3` is above 1 so it blooms, fading the Decal.
+      `Color3` is above 1 so it blooms, fading the Decal. `build_instances`
+      takes colour components from 0 to 1 only, so build the Decal there and
+      set `Color3.new(4, 6, 8)` and the like with `execute_luau` afterwards.
   - Use `Material = "Neon"` for a glowing shape, or `"ForceField"` with a
     texture for a shimmering, edge-lit shell. ForceField's animation speed
     cannot be controlled, so it suits a shield or aura, not a timed wipe.
@@ -609,7 +611,8 @@ effect still for each capture instead of trying to catch it.
 5. Ask of each capture:
    - From the player's view, does the payoff fill its share of the screen
      (vfx-design.md section 1)? Does it grow taller for a moment, or stay a
-     flat splash on the floor?
+     flat splash on the floor? At 0.3 s, is a body (crescents, tongues,
+     puffs) still carrying the mass, or only shards and sparks?
    - Is every layer meant to glow above the place's bloom threshold? A
      Brightness of 1-3 reads as flat paint at Threshold 2.
    - Does the flash frame read as one sharp, overexposed shape, bigger than
