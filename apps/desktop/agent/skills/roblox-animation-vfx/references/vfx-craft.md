@@ -583,8 +583,8 @@ effect still for each capture instead of trying to catch it.
    - **From where the player sees it.** This view decides whether the
      effect works. Put a marker where the player's camera will be (about 10
      studs behind and 5 above the caster) and point the camera from it at
-     the effect with `execute_luau`:
-     `workspace.CurrentCamera.CFrame = CFrame.lookAt(eye, target)`.
+     the effect with `execute_luau`: set `CameraType` to `Scriptable`, then
+     `CFrame = CFrame.lookAt(eye, target)`.
      A projectile's impact is seen from its whole range away. The close view
      hides an impact that is a speck at range; the far view shows it.
 
@@ -631,7 +631,8 @@ effect still for each capture instead of trying to catch it.
    - Does one layer bury another?
    - Does anything stay constant that should change?
    - Does it end cleanly, with nothing left behind?
-6. Stop the effect (`_G.vfx:stop()`), remove the marker, and check
+6. Stop the effect (`_G.vfx:stop()`), remove the marker, set the camera's
+   `CameraType` back to `Custom` so the user's viewport is free, and check
    `get_runtime_logs` for `VFXEmit` warnings: a bad attribute, an emitter with
    nothing to play, a bounded count. Before calling the effect done, check
    that no `rbxasset://textures/roqer-preview/` address is left: players

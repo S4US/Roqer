@@ -33,14 +33,19 @@ How far to trust a number:
 - **Size the payoff for where the player sees it.** A projectile's impact
   lands at the end of its range, so a 40-stud throw is watched from about 50
   studs. At 50 studs a 16:9 screen at the default field of view is about 125
-  studs wide. In 26 studied impacts, the largest layer *(measured)*:
-  - **One hit of many** (a barrage, an arrow rain, a missile salvo) is 10-13
-    studs across. It peaks at once and halves within 0.1-0.25 s.
+  studs wide. In 26 studied impacts, the largest layer is usually a flash, a
+  flare or a shockwave that reaches its size for a fraction of a second
+  while it fades *(measured)*:
+  - **One hit of many** (a barrage, an arrow rain, a missile salvo): 10-13
+    studs. Most peak at once and halve within 0.1-0.25 s.
   - **One projectile that is the whole skill** (a fireball, a star, a
-    Zoltraak beam's end) is 70-360 studs across. A meteor slam is 316.
-  - **A skill's finishing explosion** is 40-275 studs across. Seven of nine
+    Zoltraak beam's end): 70-360 studs. A meteor slam's smoke grows to 237.
+  - **A skill's finishing explosion:** 40-275 studs. Seven of nine
     explosions and slams kept growing for 0.25-1.35 s after the hit
     (section 7).
+
+  The solid bodies are smaller: a practice explosion's crescents grow to 19
+  studs, and a fireball skill's crescents and lightning to 125.
 
   A charge reads easily: it is near the camera, against the caster's dark
   body, and moving inward. An impact has the opposite problem: it is far

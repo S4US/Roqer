@@ -901,8 +901,12 @@ both dumps (deduplicated):
   barrage hits (peak 400-1,000 size² units), not with its explosions
   (4,000-25,000 for practice pieces, 480,000 for a meteor slam).
 - **Distance:** from the caster's camera the shatter was a speck. Roqer's
-  own checks framed it from 8-10 studs, where it filled the view. The
-  craft guidance told it to "frame close".
+  own checks framed it close, where it filled the view. The craft guidance
+  told it to "frame close".
+- **Size numbers:** the dump's largest layers (10-13 studs for one hit of
+  many, 70-360 for a whole-skill projectile) are mostly flashes, flares and
+  shockwaves at full size for a fraction of a second. Solid bodies are
+  smaller (crescents 19-125 studs).
 - **Brightness:** Place1's bloom threshold is 2. Every impact layer but a
   0.08 s flash sat at Brightness 1-3, so the shatter read as flat paint. The
   dump's impacts peak at Brightness 15 (median) and 50 or more in a third.
