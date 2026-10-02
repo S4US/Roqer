@@ -204,8 +204,9 @@ export function codexUsageTotals(notification: AppServerNotification): CodexUsag
 /**
  * One run's usage: what the thread's totals grew by since `baseline`, the
  * totals the run started from. Null when any figure went down, which no
- * report from the same thread should do. Codex says neither what was written
- * to the cache nor how many requests it made, and puts no price on the run.
+ * report from the same thread should do. Only input, cache reads and output
+ * are counted: a cache-write figure, where Codex gives one, is not counted
+ * apart, and Codex counts no requests and puts no price on the run.
  */
 export function codexRunUsage(baseline: CodexUsageTotals, totals: CodexUsageTotals): RunUsage | null {
   const input = totals.inputTokens - baseline.inputTokens;
