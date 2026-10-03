@@ -646,8 +646,9 @@ capture instead of caught in passing.
 2. Frame the spot two ways, and capture each moment from both:
    - **Close**, to judge shapes: `build_instances` a transparent, anchored
      marker part about the effect's size where it will play, under its own
-     root (`path` `game.Workspace.SlamPreview`), then `selection` with
-     `action: "view"` on it, from a side and a little above.
+     root (`path` `game.Workspace.SlamPreview`, and no `parent` on the step:
+     it goes in the root), then `selection` with `action: "view"` on it, from
+     a side and a little above.
    - **From where the player sees it.** This view decides whether the
      effect works. In a playtest, the client's own camera behind the
      character is that view: capture it as it is. In edit mode, build a
