@@ -226,6 +226,35 @@ export type RunUsage = {
    * yardstick for comparing runs.
    */
   costUsd?: number;
+  /**
+   * The same run request by request, in the order they were made, so the cost
+   * of what each one added can be measured: the request after a result is the
+   * one that pays to write it into the cache, and every later one pays to read
+   * it again. Absent when the provider did not report each request.
+   */
+  perRequest?: RunRequestUsage[];
+};
+
+/** The most requests one run records apart; the run's totals still cover the rest. */
+export const MAX_RECORDED_REQUESTS = 400;
+/** The most tool names one request lists, and the longest name kept. */
+export const MAX_REQUEST_TOOLS = 16;
+export const MAX_REQUEST_TOOL_CHARS = 64;
+
+/**
+ * One model request's usage, split as `RunUsage` splits a run's. Carries names
+ * and counts only, never what the model or a tool said.
+ */
+export type RunRequestUsage = {
+  inputTokens: number;
+  cacheReadTokens?: number;
+  cacheWriteTokens?: number;
+  outputTokens: number;
+  /**
+   * The tools whose results this request was the first to send, by operation
+   * name: what its cache write was paying for.
+   */
+  after?: string[];
 };
 
 type RunEventBase = {
@@ -642,7 +671,22 @@ export function isRunUsage(value: unknown): value is RunUsage {
     isOptionalTokenCount(value.cacheWriteTokens) &&
     isOptionalTokenCount(value.requests) &&
     (value.costUsd === undefined ||
-      (typeof value.costUsd === "number" && Number.isFinite(value.costUsd) && value.costUsd >= 0));
+      (typeof value.costUsd === "number" && Number.isFinite(value.costUsd) && value.costUsd >= 0)) &&
+    (value.perRequest === undefined ||
+      (Array.isArray(value.perRequest) && value.perRequest.length <= MAX_RECORDED_REQUESTS &&
+        value.perRequest.every(isRunRequestUsage)));
+}
+
+/** One request's usage as `RunRequestUsage` describes it. */
+export function isRunRequestUsage(value: unknown): value is RunRequestUsage {
+  return isRecord(value) &&
+    isTokenCount(value.inputTokens) &&
+    isTokenCount(value.outputTokens) &&
+    isOptionalTokenCount(value.cacheReadTokens) &&
+    isOptionalTokenCount(value.cacheWriteTokens) &&
+    (value.after === undefined ||
+      (Array.isArray(value.after) && value.after.length <= MAX_REQUEST_TOOLS &&
+        value.after.every((name) => isString(name) && name.length > 0 && name.length <= MAX_REQUEST_TOOL_CHARS)));
 }
 
 /**

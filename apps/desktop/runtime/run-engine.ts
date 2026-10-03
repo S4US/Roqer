@@ -461,7 +461,7 @@ export class RunSession {
       runUsage: (usage) => {
         if (this.completed || !isRunUsage(usage)) return;
         // Copied field by field, so nothing but the figures reaches the record.
-        const { inputTokens, cacheReadTokens, cacheWriteTokens, outputTokens, requests, costUsd } = usage;
+        const { inputTokens, cacheReadTokens, cacheWriteTokens, outputTokens, requests, costUsd, perRequest } = usage;
         this.usage = {
           inputTokens,
           ...(cacheReadTokens === undefined ? {} : { cacheReadTokens }),
@@ -469,6 +469,15 @@ export class RunSession {
           outputTokens,
           ...(requests === undefined ? {} : { requests }),
           ...(costUsd === undefined ? {} : { costUsd }),
+          ...(perRequest === undefined ? {} : {
+            perRequest: perRequest.map((request) => ({
+              inputTokens: request.inputTokens,
+              ...(request.cacheReadTokens === undefined ? {} : { cacheReadTokens: request.cacheReadTokens }),
+              ...(request.cacheWriteTokens === undefined ? {} : { cacheWriteTokens: request.cacheWriteTokens }),
+              outputTokens: request.outputTokens,
+              ...(request.after === undefined ? {} : { after: [...request.after] }),
+            })),
+          }),
         };
       },
       recordChange: (change) => {

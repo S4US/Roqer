@@ -569,7 +569,7 @@ export function createAgentLoopPlanner(options: AgentLoopPlannerOptions): Planne
     id: options.plannerId ?? "agent-loop",
     async run(context: PlannerContext): Promise<string> {
       const prose = createProseStream((text) => context.say(text));
-      const runStudioTool = createStudioToolRunner(context);
+      const runStudioTool = createStudioToolRunner(context, { templates: options.skillLibrary });
       const images = (acceptsImages ? context.images : []).flatMap((image): TurnContent[] => isTurnImageMediaType(image.mediaType)
         ? [{ kind: "image", mediaType: image.mediaType, data: image.data }]
         : []);

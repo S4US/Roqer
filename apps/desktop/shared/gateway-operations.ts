@@ -1,5 +1,5 @@
 import type { ToolRisk } from "./policy";
-import type { ToolSchema } from "./mcp-tool-schemas";
+import type { ToolParameterSchema, ToolSchema } from "./mcp-tool-schemas";
 
 /**
  * Operations Roqer composes out of Studio tools and offers inside the
@@ -41,6 +41,26 @@ export const GATEWAY_SCHEMAS: Readonly<Record<string, ToolSchema>> = {
       { name: "sheet", type: "boolean", required: false, defaultValue: "true", description: "Return the frames tiled into one image, two to a row at half width, which costs about what two frames do. Pass false for each frame at full size, when small detail matters or for the final look from the player's camera." },
     ],
   },
+};
+
+/**
+ * Arguments Roqer accepts on a Studio operation and resolves itself, so the
+ * server never sees them: each entry replaces the generated parameter of the
+ * same name, or adds one.
+ *
+ * `set_script_source` takes a skill template in place of `source`, which
+ * Roqer reads from its own skill pack: a template the model is not changing
+ * cost it the whole file twice, once to load and once to retype, plus the
+ * read-back it then made of its own copy. And a script that is still empty
+ * needs no `expectedRevision`: Roqer reads it, and writes against the revision
+ * it read only when there is nothing in it to lose.
+ */
+export const GATEWAY_ARGUMENTS: Readonly<Record<string, readonly ToolParameterSchema[]>> = {
+  set_script_source: [
+    { name: "source", type: "string", required: false, description: "Replacement source; or pass template." },
+    { name: "template", type: "string", required: false, description: "Skill template Roqer writes as the source, e.g. roblox-animation-vfx/templates/vfx/emit.lua." },
+    { name: "expectedRevision", type: "string", required: false, description: "Read revision; omit when the script is empty." },
+  ],
 };
 
 export function isGatewayOperation(operation: string): boolean {

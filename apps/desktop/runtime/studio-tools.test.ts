@@ -1867,3 +1867,156 @@ test("arguments written as JSON text with raw line breaks in a string are read a
 
   assert.equal(parsed.args.code, code);
 });
+
+const EMPTY_REVISION = "sr1:0:0000150500000000";
+const EMIT = "roblox-animation-vfx/templates/vfx/emit.lua";
+
+/** A skill pack holding one template, written with CRLF as a Windows checkout has it. */
+function templateLibrary(content = "-- ROQER_VFX_EMIT test\r\nlocal VFX = {}\r\nreturn VFX\r\n") {
+  const loads: Array<{ name: string; resource?: string }> = [];
+  return {
+    loads,
+    templates: {
+      load: async (name: string, resource?: string) => {
+        loads.push({ name, resource });
+        if (name !== "roblox-animation-vfx" || resource !== "templates/vfx/emit.lua") throw new Error(`Skill resource not found: ${name}/${resource}`);
+        return { name, resource, content };
+      },
+    },
+  };
+}
+
+test("a template is written into a new script without the model reading, sending or retyping it", async () => {
+  const target = "game.ReplicatedStorage.VFX.Emit";
+  const written = "-- ROQER_VFX_EMIT test\nlocal VFX = {}\nreturn VFX\n";
+  const { context, calls, changes } = contextWith([
+    ok({ source: "1: ", revision: EMPTY_REVISION, lineCount: 1 }),
+    ok({ success: true, revision: "sr1:44:after", previousRevision: EMPTY_REVISION }),
+    ok({ source: "1: -- ROQER_VFX_EMIT test\n2: local VFX = {}\n3: return VFX\n4: ", revision: "sr1:44:after" }),
+  ]);
+  const { templates, loads } = templateLibrary();
+  const run = createStudioToolRunner(context, { templates });
+
+  const result = await run("set_script_source", { instancePath: target, template: EMIT });
+
+  assert.equal(result.ok, true, result.text);
+  assert.deepEqual(loads, [{ name: "roblox-animation-vfx", resource: "templates/vfx/emit.lua" }]);
+  assert.deepEqual(calls, [
+    { tool: "get_script_source", args: { instancePath: target, line_range: "1-" } },
+    // The template's own text, in one newline convention, against the revision Roqer read.
+    { tool: "set_script_source", args: { instancePath: target, source: written, expectedRevision: EMPTY_REVISION } },
+    { tool: "get_script_source", args: { instancePath: target, line_range: "1-" } },
+  ]);
+  assert.equal(changes.length, 1);
+  assert.match(String(changes[0].diff), /\+local VFX = \{\}/);
+  assert.match(result.text, /verified revision sr1:44:after/);
+  assert.match(result.text, /Roqer wrote roblox-animation-vfx\/templates\/vfx\/emit\.lua \(4 lines\)/);
+  assert.doesNotMatch(result.text, /local VFX = \{\}/, "the template's text is not handed back to the model");
+});
+
+test("a script that already holds the template is left alone", async () => {
+  const target = "game.ReplicatedStorage.VFX.Emit";
+  const { context, calls, changes } = contextWith([
+    ok({ source: "1: -- ROQER_VFX_EMIT test\n2: local VFX = {}\n3: return VFX\n4: ", revision: "sr1:44:same" }),
+  ]);
+  const run = createStudioToolRunner(context, { templates: templateLibrary().templates });
+
+  const result = await run("set_script_source", { instancePath: target, template: EMIT });
+
+  assert.equal(result.ok, true);
+  assert.match(result.text, /already holds .* exactly, so nothing was written/);
+  assert.deepEqual(calls.map((call) => call.tool), ["get_script_source"]);
+  assert.deepEqual(changes, []);
+});
+
+test("an empty script is written without the model reading it for its revision", async () => {
+  const target = "game.ServerScriptService.Main";
+  const { context, calls } = contextWith([
+    ok({ source: "1: ", revision: EMPTY_REVISION }),
+    ok({ success: true, revision: "sr1:5:r2" }),
+    ok({ source: "1: print()", revision: "sr1:5:r2" }),
+  ]);
+  const run = createStudioToolRunner(context);
+
+  const result = await run("set_script_source", { instancePath: target, source: "print()" });
+
+  assert.equal(result.ok, true, result.text);
+  assert.deepEqual(calls[1], { tool: "set_script_source", args: { instancePath: target, source: "print()", expectedRevision: EMPTY_REVISION } });
+});
+
+test("a script with anything in it still needs the revision the model read", async () => {
+  const target = "game.ServerScriptService.Main";
+  const { context, calls } = contextWith([ok({ source: "1: print(\"mine\")", revision: "sr1:13:theirs" })]);
+  const run = createStudioToolRunner(context, { templates: templateLibrary().templates });
+
+  const plain = await run("set_script_source", { instancePath: target, source: "print()" });
+  const template = await run("set_script_source", { instancePath: target, template: EMIT, expectedRevision: "" });
+
+  assert.equal(plain.ok, false);
+  assert.match(plain.text, /is not empty, so expectedRevision is required: read it with get_script_source and pass that revision/);
+  assert.equal(template.ok, false);
+  assert.match(template.text, /line_range "1" is enough/);
+  assert.deepEqual(calls.map((call) => call.tool), ["get_script_source", "get_script_source"], "nothing was written");
+});
+
+test("a script Roqer cannot read is not written on a revision it never saw", async () => {
+  const { context, calls } = contextWith([unavailable()]);
+  const run = createStudioToolRunner(context);
+
+  const result = await run("set_script_source", { instancePath: "game.ServerScriptService.Main", source: "print()" });
+
+  assert.equal(result.ok, false);
+  assert.match(result.text, /could not read game\.ServerScriptService\.Main to check that it is empty/);
+  assert.deepEqual(calls.map((call) => call.tool), ["get_script_source"]);
+});
+
+test("a template write that cannot be resolved is refused before anything reaches Studio", async () => {
+  const target = "game.ReplicatedStorage.VFX.Emit";
+  const { context, calls } = contextWith([]);
+  const withTemplates = createStudioToolRunner(context, { templates: templateLibrary().templates });
+  const without = createStudioToolRunner(context);
+
+  const refusals = [
+    await withTemplates("set_script_source", { instancePath: target, template: EMIT, source: "print()" }),
+    await withTemplates("set_script_source", { instancePath: target, template: "roblox-animation-vfx/references/vfx-craft.md" }),
+    await withTemplates("set_script_source", { instancePath: target, template: "roblox-animation-vfx/templates/missing.lua" }),
+    await withTemplates("set_script_source", { instancePath: target, template: 7 }),
+    await withTemplates("set_script_source", { instancePath: target }),
+    await without("set_script_source", { instancePath: target, template: EMIT }),
+  ];
+
+  assert.deepEqual(refusals.map((result) => result.ok), [false, false, false, false, false, false]);
+  assert.match(refusals[0].text, /pass source or template, not both/);
+  assert.match(refusals[1].text, /must name a Lua file in a skill's templates folder/);
+  assert.match(refusals[2].text, /could not be read: Skill resource not found/);
+  assert.match(refusals[3].text, /template must be a skill template path/);
+  assert.match(refusals[4].text, /source is required/);
+  assert.match(refusals[5].text, /templates are not available in this run/);
+  assert.deepEqual(calls, []);
+});
+
+test("the guide and the schema both offer the template and the empty-script write", () => {
+  assert.match(studioToolGuide(), /set_script_source \{instancePath: string, instanceRef\?: string, source\?: string, template\?: string, expectedRevision\?: string\}/);
+  assert.match(studioToolGuide(), /pass template \(its skill path/);
+});
+
+test("the shipped emit template can be written by the path the VFX reference gives", async () => {
+  const library = await openSkillLibrary(fileURLToPath(new URL("../agent/skills", import.meta.url)));
+  const reference = (await library.load("roblox-animation-vfx", "references/vfx-craft.md")).content;
+  const named = reference.match(/template: "([^"]+)"/)?.[1];
+  assert.equal(named, EMIT);
+  const { context, calls } = contextWith([
+    ok({ source: "1: ", revision: EMPTY_REVISION }),
+    ok({ success: true, revision: "sr1:1:after" }),
+    ok({ source: "1: x", revision: "sr1:1:after" }),
+  ]);
+  const run = createStudioToolRunner(context, { templates: library });
+
+  const result = await run("set_script_source", { instancePath: "game.ReplicatedStorage.VFX.Emit", template: named });
+
+  assert.equal(result.ok, true, result.text);
+  const source = String(calls[1].args.source);
+  assert.match(source, /^-- ROQER_VFX_EMIT/);
+  assert.match(source, /\nreturn VFX\n?$/);
+  assert.doesNotMatch(source, /\r/);
+});

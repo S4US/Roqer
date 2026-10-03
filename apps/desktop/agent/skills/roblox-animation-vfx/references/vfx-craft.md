@@ -44,28 +44,31 @@ See `references/vfx-design.md`. The short version:
     after its layer. The studied artists split a long effect into one Model or
     Folder per beat (`Dash`, `Up`, `Down`).
 - **The player module** is the template `templates/vfx/emit.lua` in this
-  skill.
-  1. Load it with `load_skill`.
-  2. Create a ModuleScript named `Emit` with `build_instances` under the build
-     root `ReplicatedStorage.VFX`, so it sits at `ReplicatedStorage.VFX.Emit`
-     beside the templates. Pass `path` `game.ReplicatedStorage.VFX`: a missing
-     root is created for you (as a Model), and a service itself cannot be a
-     build root.
-  3. Read it for its revision, then write the template's body into it with
-     `set_script_source`.
+  skill. Roqer writes it into the place for you, so don't load it or type it
+  out.
+  1. Create a ModuleScript named `Emit` with `build_instances` under the build
+     root `ReplicatedStorage.VFX` (in the same build as the effect, when you
+     are building one), so it sits at `ReplicatedStorage.VFX.Emit` beside the
+     templates. Pass `path` `game.ReplicatedStorage.VFX`: a missing root is
+     created for you (as a Model), and a service itself cannot be a build
+     root.
+  2. Call `set_script_source {instancePath: "game.ReplicatedStorage.VFX.Emit",
+     template: "roblox-animation-vfx/templates/vfx/emit.lua"}`. The new script
+     is empty, so it needs no read and no `expectedRevision`, and Roqer's
+     read-back verifies the write: don't read it afterwards.
 
-  If `ReplicatedStorage.VFX.Emit` already exists, read only its first line
-  (`line_range` `"1"`). If it matches the template's first line exactly,
-  version included, it is this module: use it without reading the rest.
-  Otherwise it is an older or changed copy, so read it before deciding
-  whether to replace it. Don't read other effects' modules for ideas
+  If `ReplicatedStorage.VFX.Emit` already exists, send the same call: a
+  script that already holds this template exactly is left as it is. If the
+  call is refused, the script is an older or changed copy, so read it before
+  deciding whether to replace it. Don't read other effects' modules for ideas
   either; this skill's references are the better source. Everything read
   stays in the conversation and is re-read on every later call.
 
   It is a starting point, not a cage. Extend it, or write your own player,
   when an effect needs something it does not do: camera shake, Bezier paths,
-  colour over time, chained effects. If you change it, keep the attribute
-  names so VFX editors can still read the effect.
+  colour over time, chained effects. Only then load the template, since
+  changing it means writing its source yourself, and keep the attribute names
+  so VFX editors can still read the effect.
 - **Playing an effect:**
   - `VFX.play(template, cframe)` clones the template, places it, plays it and
     removes it once the last particle is gone.
@@ -76,6 +79,10 @@ See `references/vfx-design.md`. The short version:
     lights and trail lifetimes, so they stay in step. The handle's scale
     multiplies each emitter's own `TimeScale`, so a slowed smoke layer stays
     slower than the core.
+  - The handle also has `time` (effect seconds so far), `finished` (true once
+    it has ended), `root` (what is being played) and `stop()` (end it now).
+    Both functions end with an optional `options` table: `timeScale` and
+    `onDone` for either, and `parent` (default `workspace`) for `play`.
 - **The attributes it reads**, the convention VFX Editor, VFX Forge and other
   editors share:
 

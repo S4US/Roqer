@@ -25,6 +25,7 @@ import {
 } from "../shared/model-preview";
 import type { McpToolImage, McpToolOutcome } from "./mcp-types";
 import type { PlannerContext } from "./run-engine";
+import type { SkillLibrary } from "./skill-library";
 import { compactValue, truncateText } from "./result-summary";
 
 /**
@@ -193,7 +194,8 @@ export function studioToolGuide(): string {
     "Important operations and arguments:",
     ...signatures,
     "Other operations in the enum are called the same way. To read one's schema first, call it with {help: true} as its only argument: that is answered locally, never reaches Studio, and is not a failed call. Calling with arguments that do not fit also returns the schema.",
-    "Always read a script and its sourceRevision before changing it. Roqer automatically reads back every successful script mutation and tells you whether its reported revision was verified.",
+    "Always read a script and its sourceRevision before changing it, except one that is still empty, such as a script build_instances just created: omit expectedRevision and Roqer checks it is empty and supplies the revision. Roqer automatically reads back every successful script mutation and tells you whether its reported revision was verified; that is the check, so do not read a script again only to confirm a write.",
+    `To write a skill's Lua template unchanged, pass template (its skill path, e.g. ${TEMPLATE_EXAMPLE}) instead of source: Roqer writes the file itself, so do not load a template you are not changing, and never retype one. A script that already holds it exactly is left alone.`,
     "A script write whose source will not compile still lands, and its result carries syntaxError {line, message}: fix that line before playtesting. syntaxCheck: 'unavailable' means the source was not checked. Only syntax is judged, not types or member names.",
     "When one script needs several exact edits, send them as one edit_script_batch rather than several edit_script_lines calls: each separate write costs its own approval, revision, and read-back, and every write after the first is resolved against source you can no longer describe.",
     "Never write a script's source inside execute_luau; that call is refused before it runs. Create the instance there when nothing structured can, then write its body with set_script_source: only the structured script operations produce the diff the user reviews and the read-back that verifies the write.",
@@ -1644,6 +1646,30 @@ export type StudioToolResult = {
 
 export type StudioToolRunner = (operation: string, args: JsonRecord) => Promise<StudioToolResult>;
 
+/** Where `set_script_source {template}` is read from: Roqer's own skill pack. */
+export type TemplateLibrary = Pick<SkillLibrary, "load">;
+
+export type StudioToolRunnerOptions = Readonly<{
+  /** Without it, a template write is refused and the model sends source instead. */
+  templates?: TemplateLibrary;
+}>;
+
+const TEMPLATE_EXAMPLE = "roblox-animation-vfx/templates/vfx/emit.lua";
+
+/** `<skill>/templates/<path>.lua`, split into the skill and its resource. */
+function templatePath(value: string): { name: string; resource: string } | undefined {
+  const [name, ...rest] = value.split("/");
+  const resource = rest.join("/");
+  if (!name || rest[0] !== "templates" || !resource.toLowerCase().endsWith(".lua")) return undefined;
+  return { name, resource };
+}
+
+/** An optional argument the model filled with nothing, which some models send rather than leaving it out. */
+const omitted = (value: unknown): boolean => value === undefined || value === null || value === "";
+
+/** A write made ready to send, with what to tell the model about it; or the answer that ends it here. */
+type PreparedWrite = { args: JsonRecord; note?: string } | { result: StudioToolResult };
+
 /**
  * Run one Studio operation through the engine and record what it proves.
  *
@@ -1652,7 +1678,7 @@ export type StudioToolRunner = (operation: string, args: JsonRecord) => Promise<
  * follow-up read returns, so the reads and writes of a single run have to be
  * remembered together.
  */
-export function createStudioToolRunner(context: PlannerContext): StudioToolRunner {
+export function createStudioToolRunner(context: PlannerContext, options: StudioToolRunnerOptions = {}): StudioToolRunner {
   const scriptReads = new Map<string, ScriptSnapshot>();
   const changedScripts = new Map<string, string | undefined>();
   const recordedAssetIds = new Set<string>();
@@ -1767,7 +1793,61 @@ export function createStudioToolRunner(context: PlannerContext): StudioToolRunne
     }
   };
 
-  return async function runStudioTool(operation, args) {
+  /**
+   * A full-source write made ready to send: a template read into its source,
+   * and an empty script's revision supplied.
+   *
+   * Both are resolved here, before anything else sees the call, so the
+   * approval, the diff card, the run record and Studio all get the source that
+   * is actually written and a revision that was actually read. A script with
+   * anything in it still needs the revision the model read: only a script with
+   * nothing to lose is written against the revision Roqer read itself, and
+   * Studio still refuses the write if it changed in between.
+   */
+  const prepareSourceWrite = async (args: JsonRecord): Promise<PreparedWrite> => {
+    const refuse = (reason: string): PreparedWrite => ({ result: { ok: false, text: `set_script_source was not called: ${reason}` } });
+    let prepared = args;
+    let note: string | undefined;
+    let templateSource: string | undefined;
+    const template = args.template;
+    if (!omitted(template)) {
+      if (typeof template !== "string") return refuse(`template must be a skill template path, such as ${TEMPLATE_EXAMPLE}.`);
+      if (!omitted(args.source)) return refuse("pass source or template, not both.");
+      const path = templatePath(template);
+      if (path === undefined) return refuse(`template must name a Lua file in a skill's templates folder, such as ${TEMPLATE_EXAMPLE}.`);
+      if (options.templates === undefined) return refuse("skill templates are not available in this run; send the source instead.");
+      try {
+        templateSource = normalizeNewlines((await options.templates.load(path.name, path.resource)).content);
+      } catch (error) {
+        return refuse(`${template} could not be read: ${error instanceof Error ? error.message : String(error)}`);
+      }
+      prepared = { ...args, source: templateSource };
+      delete prepared.template;
+      note = `Roqer wrote ${template} (${countLines(templateSource)} lines) as this script's source. It has not changed, so there is no need to read it.`;
+    } else if (typeof args.source !== "string") {
+      return refuse(`source is required: the script's whole new text, or template for a skill template such as ${TEMPLATE_EXAMPLE}.`);
+    }
+
+    const target = typeof prepared.instancePath === "string" ? prepared.instancePath : undefined;
+    if (target === undefined || !omitted(prepared.expectedRevision)) return { args: prepared, ...(note === undefined ? {} : { note }) };
+    const read = await readWholeScript(target);
+    if (!read.ok) {
+      const reason = boundedVerificationReason(read.message || read.text || read.errorCode || "Studio did not return the script");
+      return refuse(`expectedRevision was omitted, and Roqer could not read ${target} to check that it is empty: ${reason}`);
+    }
+    const snapshot = snapshotFromOutcome(read);
+    if (snapshot.source !== undefined) scriptReads.set(target, snapshot);
+    if (templateSource !== undefined && snapshot.complete === true && snapshot.source === templateSource) {
+      return { result: { ok: true, text: `${target} already holds ${String(template)} exactly, so nothing was written.` } };
+    }
+    if (snapshot.complete !== true || snapshot.source?.trim() !== "" || snapshot.revision === undefined) {
+      const how = templateSource === undefined ? "" : " (for a template, line_range \"1\" is enough)";
+      return refuse(`${target} is not empty, so expectedRevision is required: read it with get_script_source${how} and pass that revision.`);
+    }
+    return { args: { ...prepared, expectedRevision: snapshot.revision }, ...(note === undefined ? {} : { note }) };
+  };
+
+  const runOperation = async (operation: string, args: JsonRecord): Promise<StudioToolResult> => {
     // An operation's schema is a local fact. Making the model discover it by
     // sending a call it expects to fail costs a Studio round trip, an approval
     // decision on a write it did not mean yet, and a failed row in the timeline
@@ -1928,5 +2008,15 @@ export function createStudioToolRunner(context: PlannerContext): StudioToolRunne
       text: appendModelNote(studioToolResultText(operation, outcome), modelNote),
       ...(outcome.images && outcome.images.length > 0 ? { images: outcome.images } : {}),
     };
+  };
+
+  return async function runStudioTool(operation, args) {
+    if (operation !== "set_script_source" || args.help === true) return runOperation(operation, args);
+    const prepared = await prepareSourceWrite(args);
+    if ("result" in prepared) return prepared.result;
+    const result = await runOperation(operation, prepared.args);
+    return result.ok && prepared.note !== undefined
+      ? { ...result, text: appendModelNote(result.text, prepared.note) }
+      : result;
   };
 }

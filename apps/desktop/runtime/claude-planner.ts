@@ -5,7 +5,11 @@ import path from "node:path";
 import readline from "node:readline";
 
 import type { Planner, PlannerContext } from "./run-engine";
-import type { RunUsage } from "../shared/run-events";
+import {
+  MAX_RECORDED_REQUESTS, MAX_REQUEST_TOOL_CHARS, MAX_REQUEST_TOOLS, type RunRequestUsage, type RunUsage,
+} from "../shared/run-events";
+import { isGatewayOperation } from "../shared/gateway-operations";
+import { isKnownTool } from "../shared/mcp-tools";
 import type { AgentDefinition } from "./agent-definition";
 import type { ProviderStatus, ReasoningEffort } from "../shared/provider";
 import type { ClaudeLauncher } from "./claude-cli";
@@ -383,6 +387,75 @@ export class ClaudeRunUsage {
   }
 }
 
+/**
+ * The main agent's model requests one by one, from Claude Code's stream.
+ *
+ * A run's totals say what it cost, not what for: whether a run's cache writes
+ * paid for skill documents, screenshots or the model's own scripts can only be
+ * read off the request each one arrived in. Each API request opens with
+ * `message_start`, whose usage splits the input the way the cache bills it,
+ * and closes with `message_delta`, whose `output_tokens` is the response's
+ * final count. A subagent's requests carry a parent tool id and are left out,
+ * as their context is not the conversation's. Tool names are noted as their
+ * calls run and given to the next request, which is the one that sends their
+ * results. Only names and counts are kept.
+ */
+export class ClaudeRequestLog {
+  private readonly requests: RunRequestUsage[] = [];
+  /** The request still streaming, when it is being recorded. */
+  private current: RunRequestUsage | undefined;
+  private pending: string[] = [];
+
+  /** A tool call whose result the next request will carry. */
+  toolCalled(name: string): void {
+    if (name !== "" && this.pending.length < MAX_REQUEST_TOOLS) this.pending.push(name.slice(0, MAX_REQUEST_TOOL_CHARS));
+  }
+
+  /** Fold in one stream message. */
+  observe(message: JsonRecord): void {
+    if (message.type !== "stream_event" || message.parent_tool_use_id != null || !isRecord(message.event)) return;
+    const event = message.event;
+    if (event.type === "message_start") {
+      const usage = isRecord(event.message) && isRecord(event.message.usage) ? event.message.usage : undefined;
+      const input = usage === undefined ? undefined : tokenCount(usage.input_tokens);
+      const after = this.pending;
+      this.pending = [];
+      this.current = undefined;
+      if (usage === undefined || input === undefined || this.requests.length >= MAX_RECORDED_REQUESTS) return;
+      const read = tokenCount(usage.cache_read_input_tokens);
+      const written = tokenCount(usage.cache_creation_input_tokens);
+      this.current = {
+        inputTokens: input,
+        ...(read === undefined ? {} : { cacheReadTokens: read }),
+        ...(written === undefined ? {} : { cacheWriteTokens: written }),
+        outputTokens: tokenCount(usage.output_tokens) ?? 0,
+        ...(after.length === 0 ? {} : { after }),
+      };
+      this.requests.push(this.current);
+      return;
+    }
+    if (event.type === "message_delta" && this.current !== undefined && isRecord(event.usage)) {
+      const output = tokenCount(event.usage.output_tokens);
+      if (output !== undefined) this.current.outputTokens = output;
+    }
+  }
+
+  /** The requests so far, or undefined before the first. */
+  snapshot(): RunRequestUsage[] | undefined {
+    return this.requests.length === 0
+      ? undefined
+      : this.requests.map((request) => ({ ...request, ...(request.after === undefined ? {} : { after: [...request.after] }) }));
+  }
+}
+
+/** What a request log names a tool call by: the Studio operation it asks for, else the tool. */
+function requestToolLabel(name: string, args: JsonRecord): string {
+  const operation = args.operation;
+  return name === STUDIO_TOOL_NAME && typeof operation === "string" && (isKnownTool(operation) || isGatewayOperation(operation))
+    ? operation
+    : name;
+}
+
 function assistantText(message: JsonRecord): string {
   if (message.parent_tool_use_id != null) return "";
   const payload = message.message;
@@ -601,7 +674,7 @@ export function createClaudePlanner(options: ClaudePlannerOptions): Planner {
       if (account.kind !== "signed-in") throw new Error(account.message);
       if (context.signal.aborted) throw new Error("Run was cancelled.");
 
-      const runStudioTool = createStudioToolRunner(context);
+      const runStudioTool = createStudioToolRunner(context, { templates: options.skillLibrary });
       const runIconTool = createIconToolRunner(options.skillLibrary);
       const completion = deferred<string>();
       // Startup can still be awaiting filesystem/process work when cancellation
@@ -619,6 +692,8 @@ export function createClaudePlanner(options: ClaudePlannerOptions): Planner {
       let contextReading: { usedTokens: number; model: string | null } | null = null;
       /** This run's share of the session's usage, from the moment the session is bound. */
       let runUsage: ClaudeRunUsage | undefined;
+      /** The same usage request by request. */
+      const requestLog = new ClaudeRequestLog();
       /** Malformed Studio or Blender calls since the last well-formed one. */
       let malformedCalls = 0;
 
@@ -736,6 +811,7 @@ export function createClaudePlanner(options: ClaudePlannerOptions): Planner {
         }
 
         if (message.type === "stream_event") {
+          requestLog.observe(message);
           const output = streamedOutput(message);
           if (output?.start) responseCharacters = 0;
           if (output?.characters !== undefined) {
@@ -768,7 +844,8 @@ export function createClaudePlanner(options: ClaudePlannerOptions): Planner {
         if (message.type === "result") {
           // Before the error check: a failed turn was still spent.
           const usage = runUsage?.observe(message);
-          if (usage) context.runUsage(usage);
+          const perRequest = requestLog.snapshot();
+          if (usage) context.runUsage(perRequest === undefined ? usage : { ...usage, perRequest });
           if (session !== undefined) {
             session.contextWindow = claudeContextWindow(message, [session.mainModel, contextReading?.model ?? null]) ?? session.contextWindow;
           }
@@ -819,6 +896,7 @@ export function createClaudePlanner(options: ClaudePlannerOptions): Planner {
         runUsage = new ClaudeRunUsage(session.usageTotals);
         session.bind({
           invoke: async (name, args) => {
+            requestLog.toolCalled(requestToolLabel(name, args));
             // A tool call is Roqer's time, not the model's: an approval or a
             // question can wait on the user indefinitely without anything being stuck.
             const release = watchdog.hold();
