@@ -1,5 +1,5 @@
 import {
-  app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme, shell,
+  app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme, protocol, shell,
   type IpcMainEvent, type IpcMainInvokeEvent, type MessageBoxOptions, type WebContents,
 } from "electron";
 import { autoUpdater } from "electron-updater";
@@ -68,7 +68,15 @@ import { adoptPreviousUserData, PREVIOUS_USER_DATA_SEGMENTS } from "../runtime/u
 import { RunJournal } from "../runtime/run-journal";
 import { BridgeLog } from "../runtime/bridge-log";
 import { AttachmentRegistry, MAX_IMAGE_SOURCE_BYTES } from "../runtime/attachment-context";
-import { composeContactSheet, encodeAttachmentImage, previewToolImage } from "./image-encoder";
+import {
+  clipAnalysisFrame, clipThumbnail, composeClipSheet, composeContactSheet, encodeAttachmentImage, previewToolImage,
+} from "./image-encoder";
+import { ClipDecoder } from "./clip-decoder";
+import { clipScope, ClipStore } from "../runtime/clip-store";
+import type { ClipSupport } from "../runtime/clip-source";
+import { readReferenceClip, type ChatClips } from "../runtime/reference-clip";
+import { CLIP_MEDIA_SCHEME, MAX_DROPPED_CLIP_BYTES, REFERENCE_CLIP_OPERATION } from "../shared/reference-clip";
+import { serveClipMedia } from "../runtime/clip-media";
 import { DiscordPresence } from "./discord-presence";
 import { McpServerProcess } from "../runtime/mcp-server-process";
 import { mcpServerMessage, type McpServerState } from "../shared/mcp-server";
@@ -109,7 +117,43 @@ const trustedSenders = new Set<number>();
 const runSessions = new Map<string, RunSession>();
 const runExecutions = new Set<Promise<unknown>>();
 const pendingRuns = new PendingRuns();
-const attachments = new AttachmentRegistry(encodeAttachmentImage);
+
+/** Reads frames from reference clips in a hidden window of its own; opened on first use. */
+const clipDecoder = new ClipDecoder(path.join(__dirname, "clip-decoder.html"));
+let referenceClips: ClipStore | undefined;
+
+/** The frames read from reference clips, kept per chat beside the chats. */
+function clipStore(): ClipStore {
+  referenceClips ??= new ClipStore(app.getPath("userData"));
+  return referenceClips;
+}
+
+/** Where a dropped video is copied for the decoder to read, until it is released. */
+function clipSourcesDirectory(): string {
+  return path.join(app.getPath("userData"), "clip-sources");
+}
+
+const clipSupport: ClipSupport = {
+  info: (source) => clipDecoder.info(source),
+  strip: (source, times, edge) => clipDecoder.strip(source, times, edge),
+  capture: (source, selection, edge) => clipDecoder.capture(source, selection, edge),
+  thumbnail: clipThumbnail,
+  analysisFrame: clipAnalysisFrame,
+  pixelOrder: "bgra",
+  get store() {
+    return clipStore();
+  },
+  compose: composeClipSheet,
+};
+
+const attachments = new AttachmentRegistry(encodeAttachmentImage, clipSupport);
+
+// The chat window plays an attached clip from this scheme while the user
+// chooses the part to send. It must be declared before the app is ready, and
+// as a streaming scheme, or a <video> cannot seek in it.
+protocol.registerSchemesAsPrivileged([
+  { scheme: CLIP_MEDIA_SCHEME, privileges: { standard: true, secure: true, stream: true, supportFetchAPI: true } },
+]);
 const discardedRuns = new Set<string>();
 const journalRuns = new Set<string>();
 const completedRuns = new Set<string>();
@@ -314,7 +358,8 @@ async function pickAsset(event: IpcMainInvokeEvent) {
     title: "Attach an asset pack",
     properties: ["openFile"],
     filters: [
-      { name: "Roblox, text and media assets", extensions: ["rbxm", "rbxmx", "txt", "md", "lua", "luau", "zip", "png", "jpg", "jpeg", "webp", "ogg", "mp3", "wav"] },
+      { name: "Roblox, text and media assets", extensions: ["rbxm", "rbxmx", "txt", "md", "lua", "luau", "zip", "png", "jpg", "jpeg", "webp", "gif", "ogg", "mp3", "wav", "mp4", "m4v", "mov", "webm", "mkv"] },
+      { name: "Reference clips", extensions: ["mp4", "m4v", "mov", "webm", "mkv", "gif", "webp"] },
       { name: "All files", extensions: ["*"] },
     ],
   });
@@ -346,6 +391,84 @@ async function attachImage(event: IpcMainInvokeEvent, payload: unknown) {
     mediaType,
     bytes: Buffer.from(view),
   });
+}
+
+/** A video container by its own bytes: MP4 and QuickTime, or Matroska and WebM. */
+function sniffedVideo(bytes: Uint8Array): { mediaType: string; extension: string } | undefined {
+  const text = (from: number, to: number) => Buffer.from(bytes.subarray(from, to)).toString("latin1");
+  if (bytes.length >= 12 && text(4, 8) === "ftyp") {
+    return text(8, 12) === "qt  " ? { mediaType: "video/quicktime", extension: ".mov" } : { mediaType: "video/mp4", extension: ".mp4" };
+  }
+  // Older QuickTime files open with another atom, not "ftyp".
+  if (bytes.length >= 8 && ["moov", "mdat", "wide", "free", "skip", "pnot"].includes(text(4, 8))) {
+    return { mediaType: "video/quicktime", extension: ".mov" };
+  }
+  if (bytes.length >= 4 && bytes[0] === 0x1a && bytes[1] === 0x45 && bytes[2] === 0xdf && bytes[3] === 0xa3) {
+    return text(0, Math.min(bytes.length, 64)).includes("webm") ? { mediaType: "video/webm", extension: ".webm" } : { mediaType: "video/x-matroska", extension: ".mkv" };
+  }
+  return undefined;
+}
+
+/**
+ * Register a video dropped or pasted onto the composer. Like a pasted
+ * picture, its bytes cross the bridge because the chat window has no path to
+ * give; they are copied to a file named here, for the decoder to read, and
+ * removed when the clip is.
+ */
+async function attachVideo(event: IpcMainInvokeEvent, payload: unknown) {
+  if (!isTrusted(event.sender)) throw new Error("This window may not attach videos.");
+  if (!isRecord(payload)) throw new Error("The attachment request was not valid.");
+  const { name, bytes } = payload;
+  if (typeof name !== "string" || name.length === 0 || name.length > 200) throw new Error("An attached video needs a name.");
+  if (!(bytes instanceof ArrayBuffer) && !ArrayBuffer.isView(bytes)) throw new Error("The attached video was not readable.");
+  const view = bytes instanceof ArrayBuffer ? new Uint8Array(bytes) : new Uint8Array(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  if (view.byteLength > MAX_DROPPED_CLIP_BYTES) {
+    throw new Error(`“${name}” is too large to drop here. Attach it with the paperclip instead.`);
+  }
+  const container = sniffedVideo(view);
+  if (container === undefined) throw new Error("Attach an MP4, MOV, WebM or MKV video.");
+  const directory = clipSourcesDirectory();
+  await fs.promises.mkdir(directory, { recursive: true });
+  const temporary = path.join(directory, `${randomUUID()}${container.extension}`);
+  await fs.promises.writeFile(temporary, view, { mode: 0o600 });
+  return attachments.registerClip({
+    name,
+    size: view.byteLength,
+    mediaType: container.mediaType,
+    source: { kind: "video", path: temporary },
+    temporary,
+  });
+}
+
+/** Thumbnails over a clip, or over part of it, for choosing what to send. */
+function clipStrip(event: IpcMainInvokeEvent, payload: unknown) {
+  if (!isTrusted(event.sender)) throw new Error("This window may not read clips.");
+  if (!isRecord(payload)) throw new Error("The clip request was not valid.");
+  return attachments.clipStrip(payload.id, payload.range, payload.count);
+}
+
+/** One frame of a clip, for an end of the selection. */
+function clipFrame(event: IpcMainInvokeEvent, payload: unknown) {
+  if (!isTrusted(event.sender)) throw new Error("This window may not read clips.");
+  if (!isRecord(payload)) throw new Error("The clip request was not valid.");
+  return attachments.clipFrame(payload.id, payload.time);
+}
+
+/** Read the frames of the part of a clip the user chose. */
+function selectClip(event: IpcMainInvokeEvent, payload: unknown) {
+  if (!isTrusted(event.sender)) throw new Error("This window may not read clips.");
+  if (!isRecord(payload)) throw new Error("The clip request was not valid.");
+  return attachments.selectClip(payload.id, payload.selection);
+}
+
+/** A chat's clips as `reference_clip` reads them. */
+function chatClips(chatId: string): ChatClips {
+  const scope = clipScope(chatId);
+  return {
+    list: () => clipStore().list(scope),
+    read: (id) => clipStore().read(scope, id),
+    frame: (manifest, index) => clipStore().frame(scope, manifest, index),
+  };
 }
 
 /**
@@ -1178,7 +1301,9 @@ async function resolveCustomRun(modelKey: string | null): Promise<CustomRun | { 
 }
 
 /** The agent that drives a run, chosen by the provider the user connected. */
-function plannerFor(request: RunStartRequest, agentRuntime: AgentRuntime, runId: string, modelName: string | undefined, custom?: CustomRun, blender = false): Planner {
+function plannerFor(
+  request: RunStartRequest, agentRuntime: AgentRuntime, runId: string, modelName: string | undefined, custom?: CustomRun, blender = false, referenceClips = false,
+): Planner {
   const cwd = app.getPath("userData");
   // A conversation kept by one provider has not seen what another provider
   // does in the same chat, so a run on any other provider retires it.
@@ -1207,6 +1332,7 @@ function plannerFor(request: RunStartRequest, agentRuntime: AgentRuntime, runId:
         custom.model.maxOutputTokens === undefined ? "" : ` (it is set to ${custom.model.maxOutputTokens.toLocaleString("en-US")})`
       }, then ask it to continue.`,
       blender,
+      referenceClips,
       chatId: request.chatId,
       sessions: customConversations,
       transportKey: customTransportKey(custom),
@@ -1229,6 +1355,7 @@ function plannerFor(request: RunStartRequest, agentRuntime: AgentRuntime, runId:
       chatId: request.chatId,
       sessions: claudeSessions,
       blender,
+      referenceClips,
     });
   }
   return createChatGptPlanner({
@@ -1242,6 +1369,7 @@ function plannerFor(request: RunStartRequest, agentRuntime: AgentRuntime, runId:
     chatId: request.chatId,
     sessions: codexThreads,
     blender,
+    referenceClips,
   });
 }
 
@@ -1403,8 +1531,12 @@ async function startRun(event: IpcMainInvokeEvent, payload: unknown): Promise<Ru
     }
     const attachmentContext = await attachments.context(request.attachmentIds ?? [], {
       images: !smokeTest,
+      scope: clipScope(request.chatId),
     });
     if (cancelled()) return stopped;
+    // Read after the attachments, so a chat's first clip is offered to the
+    // very run that sends it.
+    const clips = !smokeTest && (await clipStore().list(clipScope(request.chatId)).catch(() => [])).length > 0;
     if (journalFailure) return { ok: false, message: journalFailure };
 
     let client: McpClient;
@@ -1475,7 +1607,7 @@ async function startRun(event: IpcMainInvokeEvent, payload: unknown): Promise<Ru
     // the job itself checks again, so switching it off mid-run stops new jobs.
     const blender = !smokeTest && (await blenderSettings().ready().catch(() => undefined)) !== undefined;
     if (cancelled()) return stopped;
-    const planner = smokeTest ? createInspectionPlanner() : plannerFor(resolvedRequest, agentRuntime, runId, modelName, customRun, blender);
+    const planner = smokeTest ? createInspectionPlanner() : plannerFor(resolvedRequest, agentRuntime, runId, modelName, customRun, blender, clips);
     journalId = runId;
     await runJournal().start(runId, request, request.prompt, request.approvalMode);
     if (cancelled()) return stopped;
@@ -1487,9 +1619,14 @@ async function startRun(event: IpcMainInvokeEvent, payload: unknown): Promise<Ru
     const heldPictures = new Set<string>();
     const session = new RunSession({
       caller: withLocalOperations(client, new Map<string, LocalOperation>([
-        [CAPTURE_MOMENTS_OPERATION, (args, options, studio) => captureMoments(args, options, studio, composeContactSheet)],
+        [CAPTURE_MOMENTS_OPERATION, (args, options, studio) => captureMoments(
+          args, options, studio, composeContactSheet, clips ? chatClips(request.chatId) : undefined,
+        )],
         [UPLOAD_ASSETS_OPERATION, uploadAssets],
         ...(blender ? [[BLENDER_OPERATION, (args, options) => runBlenderJob(args, options, request.chatId)] as [string, LocalOperation]] : []),
+        ...(clips
+          ? [[REFERENCE_CLIP_OPERATION, (args, options) => readReferenceClip(args, options, chatClips(request.chatId), composeClipSheet)] as [string, LocalOperation]]
+          : []),
       ])),
       bridge: bridgeRecoveryFor(client.endpoint),
       planner,
@@ -1685,6 +1822,9 @@ function createWindow(): void {
     // started may keep touching Studio.
     cancelAllRuns();
     attachments.clear();
+    // The decoder's hidden window would otherwise keep the app open with no
+    // window left to use it.
+    void clipDecoder.close();
   });
 
   if (smokeTest) {
@@ -1876,6 +2016,12 @@ app.whenReady().then(async () => {
     return store().status();
   });
   ipcMain.handle("assets:attach-image", attachImage);
+  ipcMain.handle("assets:attach-video", attachVideo);
+  ipcMain.handle("assets:clip-strip", clipStrip);
+  ipcMain.handle("assets:clip-frame", clipFrame);
+  ipcMain.handle("assets:clip-select", selectClip);
+  // Only clips the registry issued, by attachment id, and only while attached.
+  protocol.handle(CLIP_MEDIA_SCHEME, (request) => serveClipMedia(request, (id) => attachments.clipMedia(id)));
   ipcMain.handle("update:state", (event) => {
     if (!isTrusted(event.sender)) throw new Error("This window may not read the update state.");
     return updateState;
@@ -1957,6 +2103,11 @@ app.whenReady().then(async () => {
     startUpdates();
   }
 
+  // Clips read for messages never sent, and copies of dropped videos from a
+  // session that ended before they were released, are not needed by anything.
+  void clipStore().prune().catch(() => undefined);
+  await fs.promises.rm(clipSourcesDirectory(), { recursive: true, force: true }).catch(() => undefined);
+
   windowBackground = await resolveWindowBackground();
   createWindow();
 
@@ -1972,6 +2123,8 @@ app.on("before-quit", () => {
   // in Roblox Studio" standing in a profile until Discord notices the socket.
   presence.dispose();
   cancelAllRuns();
+  attachments.clear();
+  void clipDecoder.close(true);
   clientInstalls.stop();
   void claudeSessions.closeAll();
   void codexThreads.closeAll();

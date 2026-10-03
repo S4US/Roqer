@@ -1,9 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { captureMoments, momentLuau, parseCaptureMoments, preloadLuau, stopLuau } from "./capture-moments";
+import { captureMoments, momentLuau, parseCaptureMoments, preloadLuau, stopLuau, type ContactSheet } from "./capture-moments";
+import type { ClipManifest } from "./clip-store";
 import type { StudioCaller } from "./local-operations";
 import type { McpCallOptions, McpToolOutcome } from "./mcp-types";
+import type { ChatClips } from "./reference-clip";
 
 type Call = { tool: string; args: Record<string, unknown>; options?: McpCallOptions };
 
@@ -212,4 +214,84 @@ test("a view is checked with the other arguments", () => {
   assert.match(String(parseCaptureMoments({ code: "x()", times: [0.1], view: { path: "game.Workspace.A", angleY: "20" } })), /view\.angleY must be a number/);
   assert.match(String(parseCaptureMoments({ code: "x()", times: [0.1], runtime: "client", view: { path: "game.Workspace.A" } })), /player's own view, so leave view out/);
   assert.deepEqual((parseCaptureMoments({ code: "x()", times: [0.1], view: { path: "game.Workspace.A", padding: 2 } }) as { view?: unknown }).view, { path: "game.Workspace.A", padding: 2 });
+});
+
+const CLIP = "0123456789ab";
+
+/** A chat's reference clip: frames 1/30 s apart from the start of its selection, cropped to its right half. */
+function chatClips(): ChatClips & { frames: number[] } {
+  const manifest: ClipManifest = {
+    version: 1, id: CLIP, name: "nova.mp4", duration: 3, width: 1280, height: 720,
+    selection: { start: 1, end: 2, slow: 1 },
+    frames: Array.from({ length: 31 }, (_, index) => 1 + index / 30),
+    analysis: { active: true, cameraMoves: false, phases: [], crop: { x: 0.5, y: 0, width: 0.5, height: 1 } },
+    createdAt: "2026-10-03T12:00:00.000Z",
+  };
+  const frames: number[] = [];
+  return {
+    frames,
+    list: async () => [manifest],
+    read: async (id) => (id === CLIP ? manifest : undefined),
+    frame: async (_manifest, index) => {
+      frames.push(index);
+      return Buffer.from([0xff, 0xd8, 0xff, index]);
+    },
+  };
+}
+
+test("a reference is checked with the other arguments", () => {
+  assert.match(String(parseCaptureMoments({ code: "x()", times: [0.1], reference: "nova" })), /reference must be an object/);
+  assert.match(String(parseCaptureMoments({ code: "x()", times: [0.1], reference: { clip: "nova" } })), /reference\.clip must be a clip's id/);
+  assert.match(String(parseCaptureMoments({ code: "x()", times: [0.1, 0.2], reference: { clip: CLIP, times: [0.1] } })), /one effect second of the clip for each of the 2 moments/);
+  assert.deepEqual((parseCaptureMoments({ code: "x()", times: [0.1, 0.2], reference: { clip: CLIP, times: [0.3, 0.5] } }) as { reference?: unknown }).reference, { clip: CLIP, times: [0.3, 0.5] });
+});
+
+test("with a reference, each moment comes back beside the clip's frame at its time, in one image", async () => {
+  const { studio } = fakeStudio();
+  const clips = chatClips();
+  const tiled: Array<{ data: string[]; columns: number; labels?: readonly string[]; crops?: readonly unknown[] }> = [];
+  const sheet: ContactSheet = async (images, columns, options) => {
+    tiled.push({ data: images.map((picture) => picture.data), columns, labels: options?.labels, crops: options?.crops });
+    return { data: "comparison", mediaType: "image/jpeg" };
+  };
+  const outcome = await captureMoments({
+    code: "_G.vfx = start()", times: [0.1, 0.2, 0.3], sheet: false, reference: { clip: CLIP, times: [0.1, 0.2, 0.5] },
+  }, {}, studio, sheet, clips);
+  assert.equal(outcome.ok, true, outcome.text);
+  assert.deepEqual(outcome.images?.map((picture) => picture.data), ["comparison"], "one image whatever sheet says");
+  // The clip's frames at 0.1, 0.2 and 0.5 s are its 4th, 7th and 16th (1/30 s apart).
+  assert.deepEqual(clips.frames, [3, 6, 15]);
+  assert.equal(tiled[0]!.columns, 4);
+  assert.deepEqual(tiled[0]!.data.filter((_, index) => index % 2 === 1), ["image-1", "image-2", "image-3"]);
+  assert.deepEqual(tiled[0]!.labels, ["R1 0.10s", "S1 0.10s", "R2 0.20s", "S2 0.20s", "R3 0.50s", "S3 0.30s"]);
+  assert.deepEqual(tiled[0]!.crops?.[0], { x: 0.5, y: 0, width: 0.5, height: 1 });
+  assert.equal(tiled[0]!.crops?.[1], undefined, "Studio's frames are not cropped");
+  assert.match(outcome.text, /Each moment is paired with reference clip 0123456789ab in one image, two pairs to a row/);
+  assert.match(outcome.text, /- 0\.3 s, at 0\.300 s: pair 3, beside the clip at 0\.50 s\n/);
+  assert.deepEqual((outcome.data as { comparedWith?: string }).comparedWith, CLIP);
+
+  // A time past the clip's end shows its last frame, and says so.
+  const past = await captureMoments({ code: "_G.vfx = start()", times: [0.1], reference: { clip: CLIP, times: [2.5] } }, {}, fakeStudio().studio, sheet, chatClips());
+  assert.match(past.text, /pair 1, beside the clip at 1\.00 s \(the clip ends at 1\.00 s; its last frame is shown\)/);
+});
+
+test("a reference the chat does not hold is refused before anything starts in Studio", async () => {
+  const { studio, calls } = fakeStudio();
+  const missing = await captureMoments({ code: "_G.vfx = start()", times: [0.1], reference: { clip: "aaaaaaaaaaaa" } }, {}, studio, undefined, chatClips());
+  assert.equal(missing.ok, false);
+  assert.match(missing.text, /This chat has no clip aaaaaaaaaaaa\. This chat's clips, most recently used first: 0123456789ab/);
+  const none = await captureMoments({ code: "_G.vfx = start()", times: [0.1], reference: { clip: CLIP } }, {}, studio);
+  assert.match(none.text, /holds no reference clips to compare with/);
+  assert.deepEqual(calls, []);
+});
+
+test("when the pairs cannot be made, the moments come back on their own, and say why", async () => {
+  const { studio } = fakeStudio();
+  const clips = { ...chatClips(), frame: async () => { throw new Error("gone"); } };
+  const sheet: ContactSheet = async () => ({ data: "plain", mediaType: "image/jpeg" });
+  const outcome = await captureMoments({ code: "_G.vfx = start()", times: [0.1, 0.2], reference: { clip: CLIP } }, {}, studio, sheet, clips);
+  assert.equal(outcome.ok, true);
+  assert.deepEqual(outcome.images?.map((picture) => picture.data), ["plain"]);
+  assert.match(outcome.text, /could not pair the frames with the clip's/);
+  assert.equal((outcome.data as { comparedWith?: string }).comparedWith, undefined);
 });

@@ -1,4 +1,4 @@
-import { open, readFile, stat } from "node:fs/promises";
+import { open, readFile, rm, stat } from "node:fs/promises";
 import { basename, extname } from "node:path";
 import { randomUUID } from "node:crypto";
 import {
@@ -8,6 +8,21 @@ import {
   type TurnImageMediaType,
 } from "./model-api/turn-contract";
 import type { AssetAttachment } from "../src/model";
+import {
+  defaultSelection,
+  effectSeconds,
+  MAX_ANIMATED_IMAGE_BYTES,
+  MAX_CLIP_FRAMES,
+  MAX_CLIP_SOURCE_BYTES,
+  selectionProblem,
+  VIDEO_EXTENSIONS,
+  type ClipSelection,
+} from "../shared/reference-clip";
+import { analyseClip } from "./clip-analysis";
+import type { ClipMedia } from "./clip-media";
+import { frameSize, type ClipInfo, type ClipSource, type ClipSupport } from "./clip-source";
+import type { ClipManifest } from "./clip-store";
+import { clipAttachmentText, nearestFrame, planClipSheets, sheetColumns, sheetLabels, type SentSheet } from "./reference-clip";
 
 export const MAX_ATTACHMENTS = 64;
 export const MAX_SELECTED_ATTACHMENTS = 8;
@@ -96,6 +111,18 @@ export type AttachmentContext = Readonly<{
   images: readonly Readonly<{ name: string; mediaType: TurnImageMediaType; data: string }>[];
 }>;
 
+/** A clip's state while it waits to be sent. */
+type RegisteredClip = {
+  source: ClipSource;
+  info: ClipInfo;
+  /** A copy Roqer made of a dropped video, removed when the clip is released. */
+  temporary?: string;
+  /** The frames read for the chosen part, pending in the store until a run adopts them. */
+  manifest?: ClipManifest;
+  /** Set while the frames of a selection are being read. */
+  reading?: boolean;
+};
+
 type RegisteredAttachment = {
   attachment: AssetAttachment;
   mtimeMs: number;
@@ -107,7 +134,25 @@ type RegisteredAttachment = {
    * more predictable rule for the other.
    */
   image?: EncodedImage;
+  /** Present for a video or an animated picture, which reaches the model as frames. */
+  clip?: RegisteredClip;
 };
+
+/** The long side of a stored clip frame: detailed enough to crop to an effect and still read it. */
+export const CLIP_FRAME_EDGE = 1280;
+/** Thumbnails for choosing a selection, and the larger previews at its ends. */
+const CLIP_STRIP_EDGE = 200;
+const CLIP_PREVIEW_EDGE = 480;
+const MAX_STRIP_FRAMES = 24;
+
+/** GIF and WebP by their own bytes: the two picture formats that can move. */
+function animatableType(bytes: Buffer): "image/gif" | "image/webp" | undefined {
+  if (bytes.length >= 6 && /^GIF8[79]a$/.test(bytes.subarray(0, 6).toString("latin1"))) return "image/gif";
+  if (bytes.length >= 12 && bytes.subarray(0, 4).toString("latin1") === "RIFF" && bytes.subarray(8, 12).toString("latin1") === "WEBP") return "image/webp";
+  return undefined;
+}
+
+const roundTime = (value: number) => Math.round(value * 1000) / 1000;
 
 function formatSize(size: number): string {
   return `${size} bytes`;
@@ -178,9 +223,12 @@ const passthroughEncoder: ImageEncoder = async ({ bytes, mediaType, name }) => {
 export class AttachmentRegistry {
   private readonly entries = new Map<string, RegisteredAttachment>();
   private readonly encodeImage: ImageEncoder;
+  private readonly clips: ClipSupport | undefined;
 
-  constructor(encodeImage: ImageEncoder = passthroughEncoder) {
+  /** `clips` reads videos and animated pictures; without it they cannot be attached as clips. */
+  constructor(encodeImage: ImageEncoder = passthroughEncoder, clips?: ClipSupport) {
     this.encodeImage = encodeImage;
+    this.clips = clips;
   }
 
   async register(filePath: string): Promise<AssetAttachment> {
@@ -193,13 +241,21 @@ export class AttachmentRegistry {
     if (!file.isFile()) throw new Error("Selected attachment is not a regular file.");
 
     const name = basename(filePath);
+    const videoType = VIDEO_EXTENSIONS.get(extname(name).toLowerCase());
+    if (videoType !== undefined) {
+      if (file.size > MAX_CLIP_SOURCE_BYTES) throw new Error(`“${name}” is too large to read as a clip.`);
+      return this.registerClip({ name, size: file.size, mediaType: videoType, path: filePath, mtimeMs: file.mtimeMs, source: { kind: "video", path: filePath } });
+    }
     const mediaType = IMAGE_EXTENSIONS.get(extname(name).toLowerCase());
     let image: EncodedImage | undefined;
     if (mediaType !== undefined) {
       if (file.size > MAX_IMAGE_SOURCE_BYTES) {
         throw new Error(`“${name}” is too large to read as an image.`);
       }
-      image = await this.encodeImage({ bytes: await readFile(filePath), mediaType, name });
+      const bytes = await readFile(filePath);
+      const clip = await this.animatedClip(bytes, name, file.size, filePath, file.mtimeMs);
+      if (clip !== undefined) return clip;
+      image = await this.encodeImage({ bytes, mediaType, name });
     }
 
     const attachment: AssetAttachment = {
@@ -235,6 +291,8 @@ export class AttachmentRegistry {
     }
     this.assertRoom();
 
+    const clip = await this.animatedClip(input.bytes, input.name, input.bytes.byteLength);
+    if (clip !== undefined) return clip;
     const image = await this.encodeImage({ bytes: input.bytes, mediaType: input.mediaType, name: input.name });
     const attachment: AssetAttachment = {
       id: randomUUID(),
@@ -249,14 +307,207 @@ export class AttachmentRegistry {
   }
 
   /**
+   * A picture that moves, attached as a clip; undefined for one that does not,
+   * or that cannot be read as one, which is then attached as the still it
+   * always was. The type is read from the bytes, not from the name or the
+   * renderer's word for it.
+   */
+  private async animatedClip(bytes: Buffer, name: string, size: number, path?: string, mtimeMs?: number): Promise<AssetAttachment | undefined> {
+    const mediaType = animatableType(bytes);
+    if (this.clips === undefined || mediaType === undefined || bytes.byteLength > MAX_ANIMATED_IMAGE_BYTES) return undefined;
+    const source: ClipSource = { kind: "image", bytes, mediaType };
+    let info: ClipInfo;
+    try {
+      info = await this.clips.info(source);
+    } catch {
+      return undefined;
+    }
+    return this.registerClip({ name, size, mediaType, source, info, ...(path === undefined ? {} : { path }), ...(mtimeMs === undefined ? {} : { mtimeMs }) });
+  }
+
+  /**
+   * Register a clip: a video on disk, or an animated picture's bytes.
+   *
+   * It starts with all of the clip selected, or its first ten seconds, and its
+   * frames are read once the user settles on a part (`selectClip`). A
+   * `temporary` copy, of a video dropped onto the composer, is the registry's
+   * to remove: on release, or here if the clip cannot be read.
+   */
+  async registerClip(input: Readonly<{
+    name: string;
+    size: number;
+    mediaType: string;
+    source: ClipSource;
+    info?: ClipInfo;
+    path?: string;
+    temporary?: string;
+    mtimeMs?: number;
+  }>): Promise<AssetAttachment> {
+    try {
+      const clips = this.requireClips();
+      this.assertRoom();
+      const info = input.info ?? await clips.info(input.source);
+      const duration = roundTime(info.duration);
+      const selection = defaultSelection(duration);
+      const poster = await clips.strip(input.source, [selection.end / 2], CLIP_PREVIEW_EDGE).catch(() => []);
+      const thumbnail = poster[0] === undefined ? undefined : await clips.thumbnail(poster[0].jpeg).catch(() => undefined);
+      const attachment: AssetAttachment = {
+        id: randomUUID(),
+        name: input.name,
+        ...(input.path === undefined ? {} : { path: input.path }),
+        size: input.size,
+        addedAt: new Date().toISOString(),
+        mediaType: input.mediaType,
+        ...(thumbnail === undefined ? {} : { thumbnailDataUrl: thumbnail }),
+        clip: { duration, ...selection },
+      };
+      this.entries.set(attachment.id, {
+        attachment,
+        mtimeMs: input.mtimeMs ?? 0,
+        clip: { source: input.source, info: { ...info, duration }, ...(input.temporary === undefined ? {} : { temporary: input.temporary }) },
+      });
+      return { ...attachment };
+    } catch (error) {
+      if (input.temporary !== undefined) await rm(input.temporary, { force: true }).catch(() => undefined);
+      throw error;
+    }
+  }
+
+  /**
+   * Thumbnails spread over a clip, or over `range` of it, for choosing the
+   * part to send: data URLs the chat window shows and never sends anywhere.
+   */
+  async clipStrip(id: unknown, range: unknown, count: unknown): Promise<Array<{ time: number; dataUrl: string }>> {
+    const { clip } = this.clipEntry(id);
+    if (!Number.isSafeInteger(count) || (count as number) < 1 || (count as number) > MAX_STRIP_FRAMES) {
+      throw new Error(`Ask for 1 to ${MAX_STRIP_FRAMES} thumbnails.`);
+    }
+    let from = 0;
+    let to = clip.info.duration;
+    if (range !== undefined && range !== null) {
+      const { start, end } = (typeof range === "object" ? range : {}) as Record<string, unknown>;
+      if (typeof start !== "number" || typeof end !== "number" || !Number.isFinite(start) || !Number.isFinite(end) ||
+        start < 0 || end > clip.info.duration + 0.001 || end <= start) {
+        throw new Error("That is not a part of the clip.");
+      }
+      from = start;
+      to = end;
+    }
+    const times = Array.from({ length: count as number }, (_, index) => from + ((index + 0.5) * (to - from)) / (count as number));
+    const frames = await this.requireClips().strip(clip.source, times, CLIP_STRIP_EDGE);
+    return frames.map((frame) => ({ time: roundTime(frame.time), dataUrl: `data:image/jpeg;base64,${frame.jpeg.toString("base64")}` }));
+  }
+
+  /** The frame at one time in a clip, larger, for the ends of a selection. */
+  async clipFrame(id: unknown, time: unknown): Promise<string> {
+    const { clip } = this.clipEntry(id);
+    if (typeof time !== "number" || !Number.isFinite(time) || time < 0 || time > clip.info.duration + 0.001) {
+      throw new Error("That time is not in the clip.");
+    }
+    const [frame] = await this.requireClips().strip(clip.source, [time], CLIP_PREVIEW_EDGE);
+    if (frame === undefined) throw new Error("Roqer could not read that frame.");
+    return `data:image/jpeg;base64,${frame.jpeg.toString("base64")}`;
+  }
+
+  /**
+   * Read the frames of the part of a clip the user chose, measure them, and
+   * keep them pending for the run that sends it. Choosing again replaces
+   * them. Takes about as long as the part lasts: a video is played through.
+   */
+  async selectClip(id: unknown, selection: unknown): Promise<AssetAttachment> {
+    const entry = this.clipEntry(id);
+    const { clip } = entry;
+    const problem = selectionProblem(selection, clip.info.duration);
+    if (problem !== undefined) throw new Error(problem);
+    if (clip.reading) throw new Error("Roqer is still reading this clip.");
+    const clips = this.requireClips();
+    const { start, end, slow } = selection as ClipSelection;
+    const chosen: ClipSelection = { start: roundTime(start), end: roundTime(end), slow };
+    clip.reading = true;
+    try {
+      const { frames } = await clips.capture(clip.source, chosen, CLIP_FRAME_EDGE);
+      const kept = frames.filter((frame) => frame.time >= chosen.start - 0.001 && frame.time <= chosen.end + 0.001).slice(0, MAX_CLIP_FRAMES);
+      if (kept.length === 0) throw new Error("Roqer read no frames from that part of the clip. Choose another part.");
+      const measured = await Promise.all(kept.map((frame) => clips.analysisFrame(frame.jpeg, effectSeconds(frame.time, chosen))));
+      const analysis = analyseClip(measured, clips.pixelOrder);
+      const size = frameSize(clip.info, CLIP_FRAME_EDGE);
+      const manifest = await clips.store.createPending({
+        name: entry.attachment.name,
+        duration: clip.info.duration,
+        width: size.width,
+        height: size.height,
+        selection: chosen,
+        frames: kept.map((frame) => ({ time: frame.time, jpeg: frame.jpeg })),
+        analysis,
+      });
+      if (!this.entries.has(entry.attachment.id)) {
+        // Removed while it was being read: nothing will send it.
+        await clips.store.discardPending(manifest.id);
+        throw new Error("The clip was removed.");
+      }
+      const previous = clip.manifest;
+      clip.manifest = manifest;
+      if (previous !== undefined) await clips.store.discardPending(previous.id);
+      // The chat keeps the moment the clip changes most as its preview.
+      const poster = kept[analysis.peak === undefined ? Math.floor(kept.length / 2) : nearestFrame(manifest, analysis.peak)];
+      const thumbnail = poster === undefined ? undefined : await clips.thumbnail(poster.jpeg).catch(() => undefined);
+      entry.attachment = {
+        ...entry.attachment,
+        ...(thumbnail === undefined ? {} : { thumbnailDataUrl: thumbnail }),
+        clip: { duration: clip.info.duration, ...chosen, id: manifest.id, frames: kept.length },
+      };
+      return { ...entry.attachment };
+    } finally {
+      clip.reading = false;
+    }
+  }
+
+  /**
+   * A clip's own bytes, for the chat window's preview player while the user
+   * chooses the part to send: only a clip this registry issued, found by its
+   * attachment id, and gone once the clip is released.
+   */
+  clipMedia(id: unknown): ClipMedia | undefined {
+    const entry = typeof id === "string" ? this.entries.get(id) : undefined;
+    const clip = entry?.clip;
+    if (entry === undefined || clip === undefined) return undefined;
+    const mediaType = entry.attachment.mediaType ?? "application/octet-stream";
+    return clip.source.kind === "video" ? { path: clip.source.path, mediaType } : { bytes: clip.source.bytes, mediaType };
+  }
+
+  private requireClips(): ClipSupport {
+    if (this.clips === undefined) throw new Error("Video clips cannot be attached here.");
+    return this.clips;
+  }
+
+  /** A clip this registry issued, by its id; anything else is refused. */
+  private clipEntry(id: unknown): RegisteredAttachment & { clip: RegisteredClip } {
+    const entry = typeof id === "string" ? this.entries.get(id) : undefined;
+    if (entry?.clip === undefined) throw new Error("That clip is no longer attached. Attach it again.");
+    return entry as RegisteredAttachment & { clip: RegisteredClip };
+  }
+
+  /** Remove what a clip left behind: its unsent frames and a dropped video's copy. */
+  private discardClip(clip: RegisteredClip | undefined): void {
+    if (clip === undefined) return;
+    if (clip.manifest !== undefined) void this.clips?.store.discardPending(clip.manifest.id);
+    if (clip.temporary !== undefined) void rm(clip.temporary, { force: true }).catch(() => undefined);
+  }
+
+  /**
    * Build what one run receives from the attachments it selected.
    *
    * `images` says whether the run's sign-in can actually look at a picture.
    * When it cannot, the image is still described — the user attached it and the
    * transcript should say so — but the description says plainly that its
    * contents were not sent, rather than claiming an image the model never saw.
+   *
+   * A clip's frames move into the chat's folder, `scope`, before its sheets
+   * are made, so the run that sends it and every later one in the chat can
+   * look at them again. Its sheets take their place among the message's
+   * pictures in attachment order, which is the order the text numbers them in.
    */
-  async context(ids: unknown, options: Readonly<{ images?: boolean }> = {}): Promise<AttachmentContext> {
+  async context(ids: unknown, options: Readonly<{ images?: boolean; scope?: string }> = {}): Promise<AttachmentContext> {
     const includeImages = options.images ?? true;
     if (!Array.isArray(ids)) throw new Error("Attachment IDs must be an array.");
     if (ids.length > MAX_SELECTED_ATTACHMENTS) {
@@ -280,6 +531,38 @@ export class AttachmentRegistry {
     const images: { name: string; mediaType: TurnImageMediaType; data: string }[] = [];
     for (const entry of selected) {
       const { attachment } = entry;
+      if (entry.clip !== undefined) {
+        const clips = this.requireClips();
+        const pending = entry.clip.manifest;
+        if (pending === undefined || entry.clip.reading) {
+          throw new Error(`Choose the part of “${attachment.name}” to send, and wait for Roqer to read it, then send again.`);
+        }
+        if (options.scope === undefined) throw new Error("A clip can only be sent in a chat.");
+        const manifest = await clips.store.adopt(pending.id, options.scope);
+        const plans = includeImages ? planClipSheets(manifest) : [];
+        if (images.length + plans.length > MAX_IMAGE_ATTACHMENTS) {
+          throw new Error(`“${attachment.name}” is sent as ${plans.length} images, and one message carries at most ${MAX_IMAGE_ATTACHMENTS}. Send it with fewer pictures.`);
+        }
+        const sent: SentSheet[] = [];
+        for (const plan of plans) {
+          const frames = await Promise.all(plan.indexes.map((index) => clips.store.frame(options.scope!, manifest, index)));
+          const crop = manifest.analysis.crop;
+          const sheet = await clips.compose(frames, {
+            columns: sheetColumns(plan.indexes.length),
+            labels: sheetLabels(manifest, plan.indexes),
+            ...(crop === undefined ? {} : { crop }),
+          }).catch(() => undefined);
+          if (sheet === undefined) throw new Error(`Roqer could not prepare the frames of “${attachment.name}”. Remove it and attach it again.`);
+          imageBytes += sheet.data.length;
+          if (imageBytes > MAX_TOTAL_IMAGE_BASE64) {
+            throw new Error("The attached images are too large to send together. Remove one and try again.");
+          }
+          images.push({ name: `${attachment.name}, ${plan.title}`, mediaType: sheet.mediaType, data: sheet.data });
+          sent.push({ plan, image: images.length, cropped: crop !== undefined });
+        }
+        sections.push(clipAttachmentText(manifest, attachment.size, sent, includeImages));
+        continue;
+      }
       const extension = extname(attachment.name).toLowerCase();
       const kind = entry.image === undefined ? fileType(extension) : "image";
       if (kind === "unsupported") {
@@ -377,10 +660,14 @@ export class AttachmentRegistry {
   }
 
   release(ids: string[]): void {
-    for (const id of ids) this.entries.delete(id);
+    for (const id of ids) {
+      this.discardClip(this.entries.get(id)?.clip);
+      this.entries.delete(id);
+    }
   }
 
   clear(): void {
+    for (const entry of this.entries.values()) this.discardClip(entry.clip);
     this.entries.clear();
   }
 

@@ -60,6 +60,8 @@ const KIND_BY_TOOL: Readonly<Record<string, ToolActivityKind>> = {
   get_scene_analysis: "read",
   get_roblox_skills: "read",
   get_roblox_docs: "read",
+  // Roqer's own operation: frames of a clip the user attached to the chat.
+  read_reference_clip: "read",
 
   // -- Changing the project ----------------------------------------------
   set_properties: "edit",
@@ -293,6 +295,7 @@ export function activityLabel(tool: string, target: string | null, past: boolean
   if (tool === "upload_assets") return past ? "Uploaded assets" : "Uploading assets";
   if (tool === "run_blender_script") return past ? "Modeled in Blender" : "Modeling in Blender";
   if (tool === "capture_moments") return past ? "Captured an effect at several moments" : "Capturing an effect at several moments";
+  if (tool === "read_reference_clip") return past ? "Looked closer at the reference clip" : "Looking closer at the reference clip";
   if (tool === "animation") {
     if (target?.startsWith("build ")) return past ? "Built an animation" : "Building an animation";
     if (target?.startsWith("publish ")) return past ? "Published an animation" : "Publishing an animation";

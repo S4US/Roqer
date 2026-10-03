@@ -100,6 +100,9 @@ export const TOOL_RISK: Readonly<Record<string, ToolRisk>> = {
 export const LOCAL_TOOL_RISK: Readonly<Record<string, ToolRisk>> = {
   // Model-written Python in the user's own Blender, with their permissions.
   run_blender_script: "irreversible",
+  // Tiles frames Roqer already stored from a clip the user attached to the
+  // chat: it reads nothing else and changes nothing.
+  read_reference_clip: "read",
 };
 
 /**
@@ -199,6 +202,8 @@ const TOOL_TIMEOUT_MS: Readonly<Record<string, number>> = {
   // Uploads one file after another, each within upload_asset's own budget;
   // the operation starts none that would not finish within this one.
   upload_assets: 300_000,
+  // Up to sixteen stored frames read from disk and tiled; nothing waits on Studio.
+  read_reference_clip: 60_000,
 };
 
 /**

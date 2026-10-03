@@ -46,6 +46,7 @@ export const GATEWAY_SCHEMAS: Readonly<Record<string, ToolSchema>> = {
       { name: "slow", type: "number", required: false, description: "Playback speed for the last stretch before each moment, 0.01-1; the rest plays at normal speed. Default 0.1, or 0.04 when hold is false." },
       { name: "sheet", type: "boolean", required: false, defaultValue: "true", description: "Return the frames tiled into one image, two to a row at half width, which costs about what two frames do. Pass false for each frame at full size, when small detail matters or for the final look from the player's camera." },
       { name: "view", type: "object", required: false, description: "Edit runtime only: aim the camera first, as selection view does, with {path, from?, angleY?, padding?}, instead of a separate selection call. Leave it out to keep the current view." },
+      { name: "reference", type: "object", required: false, description: "Compare with a reference clip the user attached: {clip, times?}, clip being its id and times the clip's effect seconds to match, one per moment (default: the same times). Each moment comes back beside the clip's frame at its time, in one image, whatever sheet says." },
     ],
   },
   [UPLOAD_ASSETS_OPERATION]: {

@@ -9,5 +9,7 @@
     "moduleResolution": "bundler",
     "types": ["node"]
   },
-  "include": ["shared", "runtime", "eval", "electron/**/*.ts"]
+  "include": ["shared", "runtime", "eval", "electron/**/*.ts"],
+  "//exclude": "The clip decoder's page runs in a browser window, so tsconfig.json checks it with the DOM.",
+  "exclude": ["electron/clip-decoder-page.ts"]
 }

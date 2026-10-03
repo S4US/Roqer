@@ -63,6 +63,11 @@ user supplied and from a captioned tutorial by the artist snaliel. It
 paraphrases their observations with measured numbers; no third-party text or
 asset is included. It is distributed under the repository's licence.
 
+The repository-authored `skills/roblox-animation-vfx/references/vfx-reference.md`
+covers matching a reference clip the user attaches: reading Roqer's labelled
+frames and measurements, looking closer with `reference_clip`, and comparing
+with `capture_moments`. It is distributed under the repository's licence.
+
 The repository-authored `skills/roblox-building/references/paths.md` covers
 building along a line or curve: placing a part by its two ends, deriving every
 strip from one centre line, meeting straights tangentially, sizing curve

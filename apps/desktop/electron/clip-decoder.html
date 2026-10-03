@@ -1,0 +1,15 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<!--
+  Roqer's hidden clip decoder: never shown, never navigated, and it runs no
+  script but its own. It loads only the media the main process names.
+-->
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; media-src file:; img-src data: blob:">
+<title>Roqer clip decoder</title>
+</head>
+<body>
+<script src="clip-decoder.js"></script>
+</body>
+</html>

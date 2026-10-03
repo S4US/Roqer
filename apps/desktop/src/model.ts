@@ -1,5 +1,6 @@
 import { isRunRecord, withoutMalformedUsage, type RunRecord } from "../shared/run-events";
 import { isPersistedAttachment } from "../shared/workspace-validation";
+import type { AttachmentClip } from "../shared/reference-clip";
 import {
   DEFAULT_PROVIDER_ID,
   enabledProviderOr,
@@ -31,6 +32,12 @@ export type AssetAttachment = {
    * a screenshot still shows the screenshot when the chat is reopened.
    */
   thumbnailDataUrl?: string;
+  /**
+   * Set for a video or an animated picture, which reaches the model as
+   * frames: the part the user chose, and once Roqer has read them, the id
+   * its frames are kept under for the chat.
+   */
+  clip?: AttachmentClip;
 };
 
 export type ChatMessage = {

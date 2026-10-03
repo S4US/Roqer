@@ -41,6 +41,12 @@ test("a Blender job reads as modeling, not as its operation name", () => {
   assert.equal(activityKind("run_blender_script"), "run");
 });
 
+test("a closer look at a reference clip reads as looking, not as its operation name", () => {
+  assert.equal(activityLabel("read_reference_clip", null, false), "Looking closer at the reference clip");
+  assert.equal(activityLabel("read_reference_clip", null, true), "Looked closer at the reference clip");
+  assert.equal(activityKind("read_reference_clip"), "read");
+});
+
 test("a tool nobody has classified is assumed to make something happen", () => {
   // The same conservative direction riskForTool takes: an operation this table
   // has not caught up with must never read as a harmless lookup.

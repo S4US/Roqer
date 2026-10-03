@@ -7,6 +7,8 @@ import type { SkillLibrary } from "./skill-library";
 import { createIconToolRunner, iconToolDefinition, ICON_TOOL_NAME } from "./icon-tool";
 import { blenderToolDefinition, parseBlenderToolInput } from "./blender-tool";
 import { BLENDER_TOOL_NAME } from "../shared/blender";
+import { REFERENCE_CLIP_TOOL_NAME } from "../shared/reference-clip";
+import { parseReferenceClipToolInput, referenceClipToolDefinition } from "./reference-clip";
 import { createSkillToolRunner, skillToolDefinition, SKILL_TOOL_NAME, type SkillToolRunner } from "./skill-tool";
 import {
   createStudioToolRunner, MalformedToolCallError, malformedCallsEndRun, MAX_CONSECUTIVE_MALFORMED_CALLS,
@@ -47,6 +49,8 @@ export type ChatGptPlannerOptions = {
   sessions?: CodexThreadStore;
   /** Offer the `blender` tool: only while the user has turned the local Blender worker on. */
   blender?: boolean;
+  /** Offer `reference_clip`: only in a chat holding a clip the user attached. */
+  referenceClips?: boolean;
 };
 
 export interface ChatGptAppServer {
@@ -248,10 +252,11 @@ export function codexStreamedOutput(notification: AppServerNotification): { char
   }
 }
 
-function parseDynamicCall(request: AppServerRequest, threadId: string, blender: boolean):
+function parseDynamicCall(request: AppServerRequest, threadId: string, blender: boolean, referenceClips = false):
   { operation: string; args: JsonRecord } | null {
   if (request.method !== "item/tool/call" || request.params.threadId !== threadId) return null;
   if (blender && request.params.tool === BLENDER_TOOL_NAME) return parseBlenderToolInput(request.params.arguments);
+  if (referenceClips && request.params.tool === REFERENCE_CLIP_TOOL_NAME) return parseReferenceClipToolInput(request.params.arguments);
   if (request.params.tool !== STUDIO_TOOL_NAME) return null;
   return parseStudioToolInput(request.params.arguments);
 }
@@ -283,7 +288,7 @@ export type CodexThreadStore = ProviderSessionStore<CodexThread>;
  * them into a run against another.
  */
 function threadKey(options: ChatGptPlannerOptions, { autoPlaytest, instanceId }: Pick<PlannerContext, "autoPlaytest" | "instanceId">): string {
-  return JSON.stringify([instanceId, autoPlaytest, options.agent.id, options.agent.version, options.blender === true]);
+  return JSON.stringify([instanceId, autoPlaytest, options.agent.id, options.agent.version, options.blender === true, options.referenceClips === true]);
 }
 
 async function startThread(options: ChatGptPlannerOptions, autoPlaytest: boolean): Promise<string> {
@@ -305,6 +310,7 @@ async function startThread(options: ChatGptPlannerOptions, autoPlaytest: boolean
       { type: "function", ...taskToolDefinition() },
       { type: "function", ...questionToolDefinition() },
       ...(options.blender === true ? [{ type: "function", ...blenderToolDefinition() }] : []),
+      ...(options.referenceClips === true ? [{ type: "function", ...referenceClipToolDefinition() }] : []),
     ],
   });
   const thread = isRecord(started) && isRecord(started.thread) ? started.thread : null;
@@ -527,7 +533,7 @@ export function createChatGptPlanner(options: ChatGptPlannerOptions): Planner {
         }
         let call: ReturnType<typeof parseDynamicCall>;
         try {
-          call = parseDynamicCall(request, threadId, options.blender === true);
+          call = parseDynamicCall(request, threadId, options.blender === true, options.referenceClips === true);
         } catch (error) {
           if (!(error instanceof MalformedToolCallError)) {
             fail(error);

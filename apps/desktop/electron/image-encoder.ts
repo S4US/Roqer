@@ -5,7 +5,10 @@ import {
 } from "../runtime/model-api/turn-contract";
 
 import { imageAsAttached, MAX_ATTACHED_IMAGE_EDGE, type EncodedImage, type ImageEncoder } from "../runtime/attachment-context";
+import type { AnalysisFrame, CropBox } from "../runtime/clip-analysis";
 import type { McpToolImage } from "../runtime/mcp-types";
+import type { ClipSheetComposer } from "../runtime/reference-clip";
+import { drawLabel, labelScale } from "../runtime/sheet-labels";
 import { isEvidenceImage } from "../shared/run-events";
 import { MAX_ATTACHMENT_THUMBNAIL_CHARACTERS } from "../shared/workspace-validation";
 
@@ -135,6 +138,33 @@ const CONTACT_SHEET_QUALITIES = [85, 78, 70, 62];
 const CONTACT_SHEET_MAX_BYTES = 500_000;
 
 /**
+ * What a sheet may add to its frames: a crop for each, a label drawn in each
+ * tile's corner, and `wide`, for tiles as wide as the sheet allows rather than
+ * a sheet as wide as one frame. A cropped frame is narrow, and in a sheet only
+ * as wide as itself its tiles would be too small to read.
+ */
+export type ContactSheetOptions = Readonly<{
+  crops?: readonly (CropBox | undefined)[];
+  labels?: readonly string[];
+  wide?: boolean;
+}>;
+
+/** The part of a frame a crop box names, in whole pixels, or the frame when there is none. */
+function cropped(frame: NativeImage, crop: CropBox | undefined): NativeImage {
+  if (crop === undefined) return frame;
+  const { width, height } = frame.getSize();
+  const x = Math.max(0, Math.min(width - 1, Math.round(crop.x * width)));
+  const y = Math.max(0, Math.min(height - 1, Math.round(crop.y * height)));
+  const rect = {
+    x,
+    y,
+    width: Math.max(1, Math.min(width - x, Math.round(crop.width * width))),
+    height: Math.max(1, Math.min(height - y, Math.round(crop.height * height))),
+  };
+  return frame.crop(rect);
+}
+
+/**
  * Several frames as one image, `columns` to a row, left to right and top to
  * bottom, each scaled to its tile. A model reads an image at a cost set by its
  * pixels, and every image stays in the conversation for the rest of the run,
@@ -143,17 +173,24 @@ const CONTACT_SHEET_MAX_BYTES = 500_000;
  * frames for when that detail matters. Undefined when a frame does not decode
  * here, or the sheet cannot be kept small enough; the caller then sends the
  * frames as they are.
+ *
+ * A frame may be cropped first (a reference clip, to where its effect is), and
+ * a tile may carry a label in its top-left corner: its number and time, so the
+ * model reads which frame it is looking at rather than counting tiles.
  */
-export async function composeContactSheet(images: readonly McpToolImage[], columns: number): Promise<McpToolImage | undefined> {
-  const frames = images.map((image) => nativeImage.createFromBuffer(Buffer.from(image.data, "base64")));
-  if (frames.length === 0 || frames.some((frame) => frame.isEmpty())) return undefined;
+export async function composeContactSheet(images: readonly McpToolImage[], columns: number, options: ContactSheetOptions = {}): Promise<McpToolImage | undefined> {
+  const decoded = images.map((image) => nativeImage.createFromBuffer(Buffer.from(image.data, "base64")));
+  if (decoded.length === 0 || decoded.some((frame) => frame.isEmpty())) return undefined;
+  const frames = decoded.map((frame, index) => cropped(frame, options.crops?.[index]));
   const rows = Math.ceil(frames.length / columns);
   // As wide as a frame sent alone would reach the model, so a frame is never
-  // enlarged, unless the rows would then be taller than allowed. Each row gets
+  // enlarged, unless the rows would then be taller than allowed; a wide sheet
+  // gives each tile up to its widest frame's own width instead. Each row gets
   // a whole number of pixels: the resize rounds a tile's height, and three
   // rows of 666.67 would otherwise round to 2001.
   const aspect = Math.max(...frames.map((frame) => frame.getSize().height / Math.max(1, frame.getSize().width)));
-  const seenWidth = Math.min(CONTACT_SHEET_WIDTH, Math.max(...frames.map((frame) => frame.getSize().width)));
+  const widest = Math.max(...frames.map((frame) => frame.getSize().width));
+  const seenWidth = Math.min(CONTACT_SHEET_WIDTH, options.wide === true ? widest * columns : widest);
   const tileWidth = Math.floor(Math.min(seenWidth / columns, Math.floor(CONTACT_SHEET_MAX_HEIGHT / rows) / aspect));
   const tiles = frames.map((frame) => frame.resize({ width: tileWidth, quality: "good" }));
   const tileHeight = Math.max(...tiles.map((tile) => tile.getSize().height));
@@ -170,6 +207,13 @@ export async function composeContactSheet(images: readonly McpToolImage[], colum
     for (let y = 0; y < h; y++) {
       bitmap.copy(sheet, ((top + y) * width + left) * 4, y * w * 4, (y + 1) * w * 4);
     }
+    const label = options.labels?.[index];
+    if (label !== undefined && label !== "") {
+      const scale = labelScale(tileWidth);
+      const inset = 2 * scale;
+      // Kept inside the tile, so a narrow one clips its label rather than its neighbour's frame.
+      drawLabel(sheet, width, height, left + inset, top + inset, label.slice(0, Math.max(1, Math.floor((tileWidth - inset * 2) / (6 * scale)) - 1)), scale);
+    }
   });
   const composed = nativeImage.createFromBitmap(sheet, { width, height });
   for (const quality of CONTACT_SHEET_QUALITIES) {
@@ -179,6 +223,34 @@ export async function composeContactSheet(images: readonly McpToolImage[], colum
     }
   }
   return undefined;
+}
+
+/**
+ * A reference clip's frames as one sheet, cropped to where the clip changes
+ * and each labelled with its number and time.
+ */
+export const composeClipSheet: ClipSheetComposer = (frames, { columns, labels, crop }) => composeContactSheet(
+  frames.map((jpeg) => ({ data: jpeg.toString("base64"), mediaType: "image/jpeg" })),
+  columns,
+  { labels, crops: frames.map(() => crop), wide: true },
+);
+
+/** The preview an attached clip keeps in the chat, made from one of its frames. */
+export async function clipThumbnail(jpeg: Buffer): Promise<string | undefined> {
+  const source = nativeImage.createFromBuffer(jpeg);
+  return source.isEmpty() ? undefined : thumbnail(source);
+}
+
+/** The long side of a frame measured for a clip's timing and colours. */
+const ANALYSIS_EDGE = 160;
+
+/** A clip frame made small and raw for measuring: BGRA, as Electron's bitmaps are. */
+export async function clipAnalysisFrame(jpeg: Buffer, time: number): Promise<AnalysisFrame> {
+  const source = nativeImage.createFromBuffer(jpeg);
+  if (source.isEmpty()) throw new Error("A frame of the clip could not be read back.");
+  const small = scaled(source, ANALYSIS_EDGE);
+  const { width, height } = small.getSize();
+  return { time, width, height, pixels: new Uint8Array(small.toBitmap()) };
 }
 
 /**

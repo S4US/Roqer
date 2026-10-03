@@ -12,6 +12,7 @@ import type { OpenCloudCheckResult, OpenCloudSave, OpenCloudSettingsResult } fro
 import type { BlenderSettingsResult } from "../shared/blender";
 import type { ModelPreviewResult } from "../shared/model-preview";
 import type { EvidencePictureResult } from "../shared/evidence-picture";
+import { clipMediaUrl, type ClipSelection } from "../shared/reference-clip";
 import { NO_LIMITS, type ProviderLimits } from "../shared/provider-limits";
 import {
   providerLabel,
@@ -355,6 +356,43 @@ export async function attachImage(file: Blob, name: string): Promise<AssetAttach
       return preview === undefined ? {} : { thumbnailDataUrl: preview };
     })(),
   };
+}
+
+/** Video formats the composer takes as a reference clip when one is dropped or pasted. */
+export { ATTACHABLE_VIDEO_TYPES } from "../shared/reference-clip";
+
+function clipBridge() {
+  if (!window.workbenchDesktop) throw new Error("Reference clips need the Roqer desktop app.");
+  return window.workbenchDesktop.assets;
+}
+
+/**
+ * Attach a video the renderer already holds, from a paste or a drop. The
+ * main process copies it for its clip decoder and answers with the clip's
+ * length and a preview; nothing is read from it here.
+ */
+export async function attachVideo(file: Blob, name: string): Promise<AssetAttachment> {
+  return clipBridge().attachVideo(name, await file.arrayBuffer());
+}
+
+/** Thumbnails spread over a clip, or over part of it, for choosing what to send. */
+export function clipStrip(id: string, count: number, range?: { start: number; end: number }): Promise<Array<{ time: number; dataUrl: string }>> {
+  return clipBridge().clipStrip(id, count, range);
+}
+
+/** Where the trim dialog plays an attached clip from; undefined outside the desktop app. */
+export function clipPreviewUrl(id: string): string | undefined {
+  return window.workbenchDesktop ? clipMediaUrl(id) : undefined;
+}
+
+/** The frame at one time in a clip. */
+export function clipFrame(id: string, time: number): Promise<string> {
+  return clipBridge().clipFrame(id, time);
+}
+
+/** Have Roqer read the frames of the part of a clip the user chose. */
+export function selectClip(id: string, selection: ClipSelection): Promise<AssetAttachment> {
+  return clipBridge().selectClip(id, selection);
 }
 
 export async function pickAsset(): Promise<AssetAttachment | null> {

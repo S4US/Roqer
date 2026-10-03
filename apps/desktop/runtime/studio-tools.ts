@@ -712,15 +712,18 @@ function observationEvidence(
     case CAPTURE_MOMENTS_OPERATION: {
       // The first moment is the picture the card shows; the model sees them all.
       const times = Array.isArray(args.times) ? args.times.filter((time): time is number => typeof time === "number") : [];
+      // Paired with a reference clip, half the picture is the clip, labelled R; the card says so.
+      const compared = stringField(outcome.data, "comparedWith");
       const metadata = [
         { label: "Images returned", value: String(outcome.images?.length ?? 0) },
         ...(times.length > 0 ? [{ label: "Moments", value: times.map((time) => `${time} s`).join(", ") }] : []),
+        ...(compared === undefined ? [] : [{ label: "Compared with", value: `reference clip ${compared} (its frames are labelled R)` }]),
         ...(playtestRunning ? [{ label: SCREENSHOT_VIEW_LABEL, value: SCREENSHOT_VIEW_PLAYTEST }] : []),
       ];
       return {
         kind: "screenshot",
         requirement: "visual",
-        title: "Effect captured at several moments",
+        title: compared === undefined ? "Effect captured at several moments" : "Effect captured beside the reference clip",
         passed: true,
         detail: truncateText(outcome.text, MAX_OBSERVATION_DETAIL_CHARS),
         metadata,

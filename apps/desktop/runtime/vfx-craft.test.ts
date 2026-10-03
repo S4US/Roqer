@@ -270,6 +270,8 @@ test("an effect's references arrive in at most two calls, the core pair together
     explosion: [...core, "references/vfx-textures.md"],
     missile: [...core, "references/vfx-textures.md", "references/vfx-motion.md", "references/vfx-camera-world.md"],
     slam: [...core, "references/vfx-textures.md", "references/vfx-mesh-shapes.md", "references/vfx-camera-world.md"],
+    // An effect matched to a clip the user attached.
+    reference: [...core, "references/vfx-reference.md", "references/vfx-textures.md", "references/vfx-camera-world.md"],
   };
   for (const [effect, route] of Object.entries(routes)) {
     const run = createSkillToolRunner(runtime.skillLibrary);
