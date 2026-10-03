@@ -113,6 +113,11 @@ effect.
 - **Timing to an animation.** Put a marker on the keyframe where the hit lands
   (`markers: [{ "name": "Impact" }]` with the `animation` tool). Play the
   effect from `GetMarkerReachedSignal("Impact")`; see `references/full.md` §2.
+- **A cast pose from code** (the caster's arm or hand raised toward a target
+  while the effect plays, with no animation asset) is in
+  `vfx-camera-world.md`. Load it first: newer avatars' shoulders are
+  `AnimationConstraint`s, which code written for `Motor6D` skips without an
+  error.
 
 ## 2. Textures without drawing
 

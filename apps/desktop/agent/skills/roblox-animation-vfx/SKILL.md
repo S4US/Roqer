@@ -31,7 +31,7 @@ Load when implementing character animation, particle or beam effects, tweens, ca
   - `references/vfx-textures.md`: drawing the effect's own hard-edged textures and flipbooks in Blender, previewing them in Studio and uploading them. Most effects should.
   - `references/vfx-motion.md`: anything that travels, sweeps or is held: projectiles, volleys, trails, beams, slashes, dashes, teleports, orbs, sigils and auras.
   - `references/vfx-mesh-shapes.md`: mesh effects (crescent meshes, shockwave rings, swirls, domes, ground waves) and making their shapes in Blender.
-  - `references/vfx-camera-world.md`: camera shake, field of view, blur and impact frames, lights, craters and scorch marks, and a cast pose on the character.
+  - `references/vfx-camera-world.md`: camera shake, field of view, blur and impact frames, lights, craters and scorch marks, and a cast pose: the caster's arm or hand raised toward a target from code, for any skill cast from a character's hand.
   - `references/vfx-rendered-flipbooks.md`: a flipbook rendered from a 3D scene rather than drawn.
 
   Roqer writes the emit module (`templates/vfx/emit.lua`) into the place itself, as `references/vfx-craft.md` explains, so load it only to change it.
