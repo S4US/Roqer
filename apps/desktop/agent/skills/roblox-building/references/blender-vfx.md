@@ -60,8 +60,9 @@ calls `frame(t, size)` once per cell and packs the results into
 
 Roqer shows you the textures a job draws: up to four one by one, five to
 sixteen as one review sheet, and each flipbook sheet on its own, with any
-transparency over a dark ground. Draw only the textures themselves, with no
-review copies.
+transparency over a dark ground. The ground is only for looking: in the game
+a texture is tinted by `Color` and shows over the scene. Draw only the
+textures themselves, with no review copies.
 
 The building blocks:
 
