@@ -29,7 +29,7 @@ export const MAX_CAPTURE_MOMENTS = 8;
 
 export const GATEWAY_SCHEMAS: Readonly<Record<string, ToolSchema>> = {
   [CAPTURE_MOMENTS_OPERATION]: {
-    description: "Use to see a playing effect at several moments in one call: runs code that starts it, then holds it at each time and captures the viewport. Aim the camera with selection first.",
+    description: "Use to see a playing effect at several moments in one call: aims the camera at view, runs code that starts it, waits for its textures, then holds it at each time and captures the viewport.",
     parameters: [
       { name: "code", type: "string", required: true, minLength: 1, description: "Luau that starts the effect and stores its handle in a global, e.g. _G.vfx = require(game.ReplicatedStorage.VFX.Emit).play(template, cframe). The handle needs a time field (effect seconds) and setTimeScale(scale); stop() is called after the last capture when it has one." },
       { name: "times", type: "number[]", required: true, description: `Effect seconds to capture, ascending, 1-${MAX_CAPTURE_MOMENTS} of them.` },
@@ -39,6 +39,7 @@ export const GATEWAY_SCHEMAS: Readonly<Record<string, ToolSchema>> = {
       { name: "hold", type: "boolean", required: false, defaultValue: "true", description: "Hold each moment still while capturing. Pass false for trails: a held trail loses its segments, so it keeps playing at slow speed instead." },
       { name: "slow", type: "number", required: false, description: "Playback speed for the last stretch before each moment, 0.01-1; the rest plays at normal speed. Default 0.1, or 0.04 when hold is false." },
       { name: "sheet", type: "boolean", required: false, defaultValue: "true", description: "Return the frames tiled into one image, two to a row at half width, which costs about what two frames do. Pass false for each frame at full size, when small detail matters or for the final look from the player's camera." },
+      { name: "view", type: "object", required: false, description: "Edit runtime only: aim the camera first, as selection view does, with {path, from?, angleY?, padding?}, instead of a separate selection call. Leave it out to keep the current view." },
     ],
   },
 };

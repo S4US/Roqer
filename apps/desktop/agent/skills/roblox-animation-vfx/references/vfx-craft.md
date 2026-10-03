@@ -654,29 +654,33 @@ capture instead of caught in passing.
    - **Close**, to judge shapes: `build_instances` a transparent, anchored
      marker part about the effect's size where it will play, under its own
      root (`path` `game.Workspace.SlamPreview`, and no `parent` on the step:
-     it goes in the root), then `selection` with `action: "view"` on it, from
-     a side and a little above.
+     it goes in the root), and aim at it from a side and a little above with
+     `capture_moments`' `view` (step 3), which takes what `selection`'s
+     `action: "view"` does: `path`, `from`, `angleY`, `padding`.
    - **From where the player sees it.** This view decides whether the
      effect works. In a playtest, the client's own camera behind the
      character is that view: capture it as it is. In edit mode, build a
-     marker that spans from the caster's spot to the effect, and `selection`
-     view it from the caster's side at `angleY` 5-15; the camera then sits
-     about where the player's would. A projectile's impact is seen from its
-     whole range away. The close view hides an impact that is a speck at
-     range; the far view shows it.
-
-   A new texture can take a moment to load the first time, so a first capture
-   may miss layers; take it again.
-3. See it with one `capture_moments` call. Pass the code that starts the
-   effect and stores its handle in `_G.vfx`, and the effect seconds to see:
+     marker that spans from the caster's spot to the effect, and `view` it
+     from the caster's side at `angleY` 5-15; the camera then sits about
+     where the player's would. A projectile's impact is seen from its whole
+     range away. The close view hides an impact that is a speck at range; the
+     far view shows it.
+3. See it with one `capture_moments` call. Pass the view, the code that
+   starts the effect and stores its handle in `_G.vfx`, and the effect
+   seconds to see:
    ```json
    { "operation": "capture_moments", "arguments": {
+     "view": { "path": "game.Workspace.SlamPreview", "from": 30, "angleY": 20 },
      "code": "_G.vfx = require(game.ReplicatedStorage.VFX.Emit).play(game.ReplicatedStorage.VFX.Slam, CFrame.new(0, 3, 0))",
      "times": [0.03, 0.1, 0.25, 0.45, 0.9] } }
    ```
-   Roqer plays it at normal speed, slows down for the last stretch before
-   each time, holds it there, captures the viewport, and returns the frames
-   tiled into one image, two to a row at half width, then stops the effect.
+   Roqer aims the camera, starts the effect and holds it while its textures
+   load (a texture shown for the first time, such as one just uploaded,
+   takes a moment), then plays it at normal speed, slows down for the last
+   stretch before each time, holds it there, captures the viewport, and
+   returns the frames tiled into one image, two to a row at half width, then
+   stops the effect. The result says when textures were still loading; only
+   then capture again.
    A sheet of up to eight frames costs about what two full frames do. Pick
    the 4-6 moments that matter: anticipation, the flash, the peak, the body
    at about 0.3 s, the smoke, and a time just past the effect's end, to see
@@ -697,8 +701,8 @@ capture instead of caught in passing.
      runs in the client, and the frames are the player's view.
    - **Your own module's handle** works too, if it has a `time` field in effect
      seconds and `setTimeScale(scale)`.
-4. Aim the other view (step 2) and make a second `capture_moments` call with
-   the same times: two calls for both views, never a call per moment.
+4. Make a second `capture_moments` call with the other view (step 2) and the
+   same times: two calls for both views, never a call per moment.
 5. Ask of each capture:
    - From the player's view, does the payoff fill its share of the screen
      (vfx-design.md section 1)? Does it grow taller for a moment, or stay a
