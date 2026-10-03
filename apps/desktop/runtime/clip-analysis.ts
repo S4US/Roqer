@@ -57,6 +57,8 @@ export const CHANGE_THRESHOLD = 32;
 const EDGE_SHARE = 0.15;
 /** The least mean change worth calling activity: below it, compression noise. */
 const MIN_ACTIVITY = 0.002;
+/** The least share of the frame that counts as something showing, at the effect's edges. */
+const MIN_VISIBLE_AREA = 0.001;
 /** A frame where more than this share changed is changing everywhere. */
 const WHOLE_FRAME = 0.6;
 /** The share of frames changing everywhere that means the camera moves. */
@@ -241,10 +243,16 @@ export function analyseClip(frames: readonly AnalysisFrame[], order: PixelOrder)
   if (peakValue < MIN_ACTIVITY) return { ...inactive, ...(brightness === undefined ? {} : { brightness }) };
   if (cameraMoves) return { active: true, cameraMoves, phases: [], ...(brightness === undefined ? {} : { brightness }) };
 
+  // The stretch above a share of the peak is the effect, not small motion
+  // elsewhere in the frame; its edges then walk out along the rise and the
+  // fall for as long as something is still visible. A growing disc's change
+  // grows with its area, so the share alone starts it late and ends it early.
   const threshold = peakValue * EDGE_SHARE;
-  const onsetIndex = curve.findIndex((value) => value >= threshold);
+  let onsetIndex = curve.findIndex((value) => value >= threshold);
   let endIndex = onsetIndex;
   curve.forEach((value, index) => { if (value >= threshold) endIndex = index; });
+  while (onsetIndex > 0 && curve[onsetIndex - 1] < curve[onsetIndex] && areas[onsetIndex - 1] >= MIN_VISIBLE_AREA) onsetIndex--;
+  while (endIndex < frames.length - 1 && curve[endIndex + 1] < curve[endIndex] && areas[endIndex + 1] >= MIN_VISIBLE_AREA) endIndex++;
   let halfIndex = curve.findIndex((value, index) => index > peakIndex && value < peakValue * 0.5);
   if (halfIndex < 0) halfIndex = endIndex;
 
@@ -369,7 +377,8 @@ export function describeClipAnalysis(analysis: ClipAnalysis): string[] {
     lines.push(`- Timing (how much of the frame differs from the background, and by how much): starts at ${seconds(onset)}, peaks at ${seconds(peak)}, falls to half by ${seconds(half)} and is gone by ${seconds(end)}.`);
   }
   if (area !== undefined) {
-    lines.push(`- Size: covers up to ${percent(area.largest)} of the frame, at ${seconds(area.time)} (${percent(area.atOnset)} as it starts).`);
+    const start = area.atOnset < 0.01 ? "growing from almost nothing" : `${percent(area.atOnset)} as it starts`;
+    lines.push(`- Size: covers up to ${percent(area.largest)} of the frame, at ${seconds(area.time)} (${start}).`);
   }
   const colored = analysis.phases.filter((phase) => phase.colors.length > 0);
   if (colored.length > 0) {

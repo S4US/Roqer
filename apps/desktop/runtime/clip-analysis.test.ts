@@ -51,10 +51,12 @@ test("a burst is timed from where it starts to where it is gone, and cropped to 
   const analysis = analyseClip(burst(), "rgba");
   assert.equal(analysis.active, true);
   assert.equal(analysis.cameraMoves, false);
-  assert.ok(analysis.onset! >= 0.19 && analysis.onset! <= 0.27, `onset ${analysis.onset}`);
+  // From the first frame the disc shows, not from when it is large enough to pass a share of the peak.
+  assert.equal(analysis.onset, 0.2);
   assert.ok(analysis.peak! >= 0.43 && analysis.peak! <= 0.6, `peak ${analysis.peak}`);
   assert.ok(analysis.half! > analysis.peak! && analysis.half! <= 0.85, `half ${analysis.half}`);
-  assert.ok(analysis.end! >= 0.8 && analysis.end! < 1.0, `end ${analysis.end}`);
+  // To the last frame it still differs from the background, as it fades into it.
+  assert.ok(analysis.end! >= 0.9 && analysis.end! < 1.0, `end ${analysis.end}`);
   assert.ok(analysis.area!.largest > 0.1 && analysis.area!.largest < 0.25);
   assert.ok(analysis.area!.atOnset < analysis.area!.largest);
   // The disc is right of the middle, so the crop is too, and smaller than the frame.

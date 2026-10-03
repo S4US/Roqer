@@ -571,7 +571,7 @@ button:focus-visible, textarea:focus-visible, select:focus-visible, input:focus-
 .clip-strip img { display: block; width: 100%; aspect-ratio: 16 / 9; object-fit: cover; border-radius: 3px; }
 .clip-strip-loading { grid-column: 1 / -1; display: flex; align-items: center; justify-content: center; gap: 6px; color: var(--muted); font-size: var(--type-label); }
 .clip-strip-loading svg { animation: spin 1s linear infinite; }
-.clip-window { position: absolute; top: 0; bottom: 0; border: 2px solid var(--accent); border-radius: 6px; background: var(--accent-soft); pointer-events: none; }
+.clip-window { position: absolute; top: 0; bottom: 0; border: 2px solid var(--accent); border-radius: 6px; background: color-mix(in srgb, var(--accent) 14%, transparent); pointer-events: none; }
 .clip-range { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-top: 12px; }
 .clip-range label, .clip-speed { display: flex; flex-direction: column; gap: 5px; color: var(--muted); font-size: var(--type-label); font-weight: var(--weight-medium); }
 .clip-range input { width: 100%; accent-color: var(--accent); }
