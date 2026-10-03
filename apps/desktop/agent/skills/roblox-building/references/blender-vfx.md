@@ -58,6 +58,11 @@ calls `frame(t, size)` once per cell and packs the results into
 `roqer.draw_texture(name, image, size=512)` writes one texture as
 `<name>.png`, from an array or a function of `size`.
 
+Roqer shows you the textures a job draws: up to four one by one, five to
+sixteen as one review sheet, and each flipbook sheet on its own, with any
+transparency over a dark ground. Draw only the textures themselves, with no
+review copies.
+
 The building blocks:
 
 | Helper | Gives |

@@ -10,6 +10,8 @@ import test from "node:test";
 import {
   BlenderWorker, HELPERS_SCRIPT, otherSideName, readSceneContents, RUNNER_SCRIPT, scriptEnvironment, type SpawnProcess,
 } from "./blender-worker";
+import { decodePng } from "./flipbook-sheet";
+import { VIEW_GROUND } from "./png-view";
 import { glbBytes } from "./test-glb";
 import { png, sheet } from "./test-png";
 
@@ -261,7 +263,10 @@ test("a flipbook sheet is checked from its pixels, apart from ordinary renders, 
     // Noise does not compress: this sheet is over the attachment limit, so its half-size copy is shown instead.
     let seed = 7;
     const noisy = png(1024, 1024, (x, y) => {
-      seed = (seed * 1103515245 + 12345) & 0x7fffffff;
+      seed ^= seed << 13;
+      seed ^= seed >>> 17;
+      seed ^= seed << 5;
+      seed >>>= 0;
       const inCell = x % 256 > 8 && x % 256 < 248 && y % 256 > 8 && y % 256 < 248;
       return inCell ? [seed & 255, (seed >> 8) & 255, (seed >> 16) & 255, 255] : [0, 0, 0, 0];
     });
@@ -287,7 +292,7 @@ test("a flipbook sheet is checked from its pixels, apart from ordinary renders, 
     const data = outcome.data as {
       images: Array<{ name: string }>;
       otherFiles: string[];
-      flipbooks: Array<{ name: string; report?: { ok: boolean; grid?: number; settings?: { FlipbookMode: string } } }>;
+      flipbooks: Array<{ name: string; path: string; report?: { ok: boolean; grid?: number; settings?: { FlipbookMode: string } } }>;
     };
     assert.deepEqual(data.images.map((image) => image.name), ["icon.png"], "sheets, notes and copies are not ordinary renders");
     assert.deepEqual(data.otherFiles, []);
@@ -301,7 +306,17 @@ test("a flipbook sheet is checked from its pixels, apart from ordinary renders, 
     // An unreadable note claims nothing; the sheet is still checked from its pixels.
     assert.equal(noise.report?.grid, 4);
     assert.match(outcome.text, /half-size copy of it is attached instead/);
-    assert.deepEqual(outcome.images?.map((image) => image.data), [pngHeader(256, 256), burst, halfSize].map((bytes) => bytes.toString("base64")));
+    // A header the decoder cannot read, and an opaque copy, are attached as they are; the
+    // transparent sheet is shown over the dark ground, since a model does not see alpha.
+    const shown = outcome.images?.map((image) => Buffer.from(image.data, "base64")) ?? [];
+    assert.equal(shown.length, 3);
+    assert.deepEqual([shown[0], shown[2]], [pngHeader(256, 256), halfSize]);
+    const grounded = decodePng(shown[1]);
+    assert.equal(grounded.hasAlpha, false);
+    assert.deepEqual([...grounded.rgba.subarray(0, 3)], [...VIEW_GROUND], "a transparent corner shows as the ground");
+    const centre = (64 * 1024 + 64) * 4;
+    assert.deepEqual([...grounded.rgba.subarray(centre, centre + 3)], [255, 255, 255], "the first frame's disc stays white");
+    assert.deepEqual(await fs.readFile(data.flipbooks[0].path), burst, "the file itself is unchanged");
     assert.match(outcome.text, /Do not go by FlipbookIncompatible/);
   });
 });
@@ -340,6 +355,43 @@ test("a job that asks for a Studio preview gets an rbxasset address for each tex
     assert.doesNotMatch(plain.text, /Previews in Studio/);
     const none = new BlenderWorker({ executable: EXECUTABLE, jobsRoot, spawn: blender.spawn, killTree: blender.killTree, env: {}, studioContentDirectories: async () => [] });
     assert.match((await none.run({ script: "import bpy", preview_in_studio: true })).text, /No Roblox Studio install was found/);
+  });
+});
+
+test("a job that draws more textures than fit one by one shows them all as one review sheet, and previews each in Studio", async () => {
+  await withJobs(async (jobsRoot) => {
+    const content = path.join(jobsRoot, "studio", "content");
+    await fs.mkdir(content, { recursive: true });
+    // Six white shapes on transparency, as a missile run drew; it was shown four and previewed four.
+    const names = ["ArcaneSigil", "Glint", "MissileHead", "MissileTrail", "SigilCore", "SoftGlow"];
+    const texture = (size: number) => png(size, size, (x, y) => Math.hypot(x - size / 2, y - size / 2) < size / 3 ? [255, 255, 255, 255] : [255, 255, 255, 0]);
+    let writes: Array<[string, Buffer]> = names.map((name) => [`${name}.png`, texture(256)]);
+    const blender = fakeBlender(async (args) => {
+      const output = path.join(argAfterDashes(args), "output");
+      for (const [name, bytes] of writes) await fs.writeFile(path.join(output, name), bytes);
+      return { output: "ROQER_SCRIPT_DONE\n" };
+    });
+    const worker = new BlenderWorker({ executable: EXECUTABLE, jobsRoot, spawn: blender.spawn, killTree: blender.killTree, env: {}, studioContentDirectories: async () => [content] });
+
+    const outcome = await worker.run({ script: "import bpy", preview_in_studio: true });
+
+    assert.equal(outcome.ok, true, outcome.text);
+    const data = outcome.data as { images: Array<{ name: string }>; studioPreviews: Array<{ name: string }> };
+    assert.deepEqual(data.images.map((image) => image.name), names.map((name) => `${name}.png`), "every texture is read and listed");
+    assert.deepEqual(data.studioPreviews.map((preview) => preview.name), names.map((name) => `${name}.png`), "and previewed, not only the first four");
+    assert.equal(outcome.images?.length, 1, "one review sheet");
+    const reviewed = decodePng(Buffer.from(outcome.images![0].data, "base64"));
+    assert.deepEqual([reviewed.width, reviewed.height], [3 * 512 + 4 * 4, 2 * 512 + 3 * 4]);
+    assert.match(outcome.text, /There are 6 of them, so they are attached as one review sheet after any model previews, 3 to a row, left to right then top to bottom, in the order listed above/);
+    assert.match(outcome.text, /shown over a dark ground/);
+    assert.doesNotMatch(outcome.text, /more PNG files were not read/);
+
+    // One image the sheet cannot decode: the first four go one by one, and the result says the rest did not.
+    writes = [["A.png", texture(64)], ["B.png", pngHeader(64, 64)], ["C.png", texture(64)], ["D.png", texture(64)], ["E.png", texture(64)]];
+    const fallback = await worker.run({ script: "import bpy" });
+    assert.equal(fallback.images?.length, 4);
+    assert.match(fallback.text, /the first 4 only: the rest could not be tiled into a review sheet/);
+    assert.equal(decodePng(Buffer.from(fallback.images![0].data, "base64")).hasAlpha, false, "a transparent one is still shown over the ground");
   });
 });
 

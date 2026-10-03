@@ -16,6 +16,7 @@ import { analyzeFlipbook, describeFlipbook, type FlipbookClaim, type FlipbookRep
 import type { McpCallOptions, McpToolImage, McpToolOutcome } from "./mcp-types";
 import { findStudioContentDirectories, stageStudioPreviews, type StudioPreview } from "./studio-preview";
 import { isViewableGlb, JOB_RETENTION_MS, MAX_KEPT_JOBS, modelPreviewFileName, pruneJobFolders } from "./model-preview";
+import { onDarkGround, reviewSheet } from "./png-view";
 import { modelPreviewId } from "../shared/model-preview";
 
 /**
@@ -37,7 +38,10 @@ import { modelPreviewId } from "../shared/model-preview";
 
 const MODEL_EXTENSIONS = new Set([".glb", ".gltf", ".fbx", ".obj"]);
 const MAX_INSPECTED_MODELS = 3;
+/** Up to this many rendered images are attached one by one; more are tiled into one review sheet. */
 const MAX_RENDERED_IMAGES = 4;
+/** The most rendered images a job's result reads, tiles and previews in Studio. */
+const MAX_SHEETED_IMAGES = 16;
 /** Roblox stores an uploaded image at most this many pixels a side. */
 const MAX_UPLOAD_IMAGE_SIDE = 1024;
 /** The inspection re-imports, measures the layout (itself capped at 12 s) and renders four views. */
@@ -2133,8 +2137,8 @@ export class BlenderWorker {
     // A render is shown as itself: the image is the result, so there is nothing
     // to re-import. Its size is read from the file, not from the script.
     const rendered: RenderedImage[] = [];
-    const renderImages: McpToolImage[] = [];
-    for (const name of renders.slice(0, MAX_RENDERED_IMAGES)) {
+    const readable: Buffer[] = [];
+    for (const name of renders.slice(0, MAX_SHEETED_IMAGES)) {
       const filePath = path.join(outputDirectory, name);
       const bytes = await fs.readFile(filePath).catch(() => undefined);
       const header = bytes === undefined ? undefined : readPngSize(bytes);
@@ -2143,7 +2147,20 @@ export class BlenderWorker {
         continue;
       }
       rendered.push({ name, path: filePath, bytes: bytes.length, width: header.width, height: header.height });
-      if (bytes.length <= MAX_PREVIEW_BYTES) renderImages.push({ data: bytes.toString("base64"), mediaType: "image/png" });
+      readable.push(bytes);
+    }
+    // A few renders are attached one by one; more go as one review sheet, so
+    // the model sees every texture the job drew, not only the first few.
+    const renderImages: McpToolImage[] = [];
+    const sheet = readable.length > MAX_RENDERED_IMAGES ? reviewSheet(readable) : undefined;
+    const sheeted = sheet !== undefined && sheet.png.length <= MAX_PREVIEW_BYTES;
+    if (sheeted) {
+      renderImages.push({ data: sheet.png.toString("base64"), mediaType: "image/png" });
+    } else {
+      for (const bytes of readable.slice(0, MAX_RENDERED_IMAGES)) {
+        const shown = viewable(bytes);
+        if (shown !== undefined) renderImages.push({ data: shown.toString("base64"), mediaType: "image/png" });
+      }
     }
     // A flipbook sheet is checked from its own pixels; the note the script
     // wrote beside it is only what it claims to have made.
@@ -2249,22 +2266,27 @@ export class BlenderWorker {
       );
     }
     if (rendered.length > 0) {
+      const attachedRenders = sheeted
+        ? `There are ${readable.length} of them, so they are attached as one review sheet after any model previews, ${sheet.columns} to a row, left to right then top to bottom, in the order listed above (leaving out any not readable).`
+        : `They are attached after any model previews${readable.length > MAX_RENDERED_IMAGES ? `, the first ${MAX_RENDERED_IMAGES} only: the rest could not be tiled into a review sheet` : ""}.`;
       lines.push(
-        "Images it rendered (attached after any model previews; look at each before using it):",
+        "Images it rendered (look at each before using it):",
         ...rendered.map(describeImage),
-        ...(renders.length > MAX_RENDERED_IMAGES ? [`${renders.length - MAX_RENDERED_IMAGES} more PNG files were not read.`] : []),
+        ...(renders.length > MAX_SHEETED_IMAGES ? [`${renders.length - MAX_SHEETED_IMAGES} more PNG files were not read.`] : []),
+        ...(readable.length === 0 ? [] : [`${attachedRenders} An image with transparency is shown over a dark ground, where a white texture reads as it will glow in the game; the file itself is unchanged.`]),
         "To use an image in UI: upload_asset {action: 'upload', filePath: <its path>, assetType: 'Decal', displayName}, then set ImageLabel.Image to rbxassetid://<imageId from that result>. The decalId does not display in an ImageLabel; if imageId is null, check the upload again with action 'status'.",
       );
     }
     if (flipbooks.length > 0) {
       lines.push(
-        "Flipbook sheets it made, checked by Roqer from their pixels (attached after any renders, in this order):",
+        "Flipbook sheets it made, checked by Roqer from their pixels (attached after any renders, in this order; a transparent sheet is shown over a dark ground, the file itself unchanged):",
         ...flipbooks.flatMap((flipbook) => flipbook.lines),
         ...(sheets.length > MAX_FLIPBOOKS ? [`${sheets.length - MAX_FLIPBOOKS} more flipbook sheets were not checked.`] : []),
         "To use a sheet: fix every problem first, then upload_asset {action: 'upload', filePath: <its path>, assetType: 'Decal', displayName}, set ParticleEmitter.Texture to rbxassetid://<imageId from that result>, and apply the settings listed. Confirm it plays by holding one particle at a few ages (TimeScale 0) and taking screenshots: each should show one frame, not the whole grid. Do not go by FlipbookIncompatible: Studio shows its size message even for a sheet that plays.",
       );
     }
-    // Textures shown in Studio before any upload, when the job asked for it.
+    // Textures shown in Studio before any upload, when the job asked for it:
+    // every sheet and readable render, whether or not it was attached.
     let studioPreviews: StudioPreview[] = [];
     if (args.preview_in_studio === true) {
       const textures = [
@@ -2372,8 +2394,8 @@ export class BlenderWorker {
 }
 
 const MAX_FLIPBOOKS = 4;
-/** The most textures one job previews in Studio: its checked sheets and rendered images. */
-const MAX_STUDIO_PREVIEWS = 8;
+/** The most textures one job previews in Studio: all its checked sheets and rendered images. */
+const MAX_STUDIO_PREVIEWS = MAX_FLIPBOOKS + MAX_SHEETED_IMAGES;
 const FLIPBOOK_SUFFIX = ".flipbook.png";
 const FLIPBOOK_NOTE_SUFFIX = ".flipbook.json";
 const FLIPBOOK_PREVIEW_SUFFIX = ".flipbook-preview.png";
@@ -2431,18 +2453,31 @@ async function checkFlipbook(directory: string, name: string): Promise<CheckedFl
   }
   // The sheet itself when it fits in the result, otherwise the half-size copy written beside it.
   let image: McpToolImage | undefined;
-  if (bytes.length <= MAX_PREVIEW_BYTES) {
-    image = { data: bytes.toString("base64"), mediaType: "image/png" };
+  const shown = viewable(bytes);
+  if (shown !== undefined) {
+    image = { data: shown.toString("base64"), mediaType: "image/png" };
   } else {
     const preview = await fs.readFile(path.join(directory, stem + FLIPBOOK_PREVIEW_SUFFIX)).catch(() => undefined);
-    if (preview !== undefined && preview.length <= MAX_PREVIEW_BYTES && readPngSize(preview) !== undefined) {
-      image = { data: preview.toString("base64"), mediaType: "image/png" };
+    const shownPreview = preview !== undefined && readPngSize(preview) !== undefined ? viewable(preview) : undefined;
+    if (shownPreview !== undefined) {
+      image = { data: shownPreview.toString("base64"), mediaType: "image/png" };
       lines.push("  The sheet is too large to attach, so a half-size copy of it is attached instead; the checks above read the full sheet.");
     } else {
       lines.push("  The sheet is too large to attach; judge it by the numbers above.");
     }
   }
   return { name, path: sheetPath, report, ...(image === undefined ? {} : { image }), lines };
+}
+
+/**
+ * The PNG as the model is shown it: over the dark ground when it has
+ * transparency, which a model does not see, otherwise as it is. Undefined when
+ * neither fits in a result.
+ */
+function viewable(bytes: Buffer): Buffer | undefined {
+  const grounded = onDarkGround(bytes);
+  if (grounded !== undefined && grounded.length <= MAX_PREVIEW_BYTES) return grounded;
+  return bytes.length <= MAX_PREVIEW_BYTES ? bytes : undefined;
 }
 
 const MAX_BAKED_ANIMATIONS = 8;
