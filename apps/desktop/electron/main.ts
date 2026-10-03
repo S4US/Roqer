@@ -74,7 +74,7 @@ import {
 import { ClipDecoder } from "./clip-decoder";
 import { clipScope, ClipStore } from "../runtime/clip-store";
 import type { ClipSupport } from "../runtime/clip-source";
-import { readReferenceClip, type ClipSource as ReferenceClipSource } from "../runtime/reference-clip";
+import { readReferenceClip, type ChatClips } from "../runtime/reference-clip";
 import { MAX_DROPPED_CLIP_BYTES, REFERENCE_CLIP_OPERATION } from "../shared/reference-clip";
 import { DiscordPresence } from "./discord-presence";
 import { McpServerProcess } from "../runtime/mcp-server-process";
@@ -454,7 +454,7 @@ function selectClip(event: IpcMainInvokeEvent, payload: unknown) {
 }
 
 /** A chat's clips as `reference_clip` reads them. */
-function chatClips(chatId: string): ReferenceClipSource {
+function chatClips(chatId: string): ChatClips {
   const scope = clipScope(chatId);
   return {
     list: () => clipStore().list(scope),
@@ -1611,7 +1611,9 @@ async function startRun(event: IpcMainInvokeEvent, payload: unknown): Promise<Ru
     const heldPictures = new Set<string>();
     const session = new RunSession({
       caller: withLocalOperations(client, new Map<string, LocalOperation>([
-        [CAPTURE_MOMENTS_OPERATION, (args, options, studio) => captureMoments(args, options, studio, composeContactSheet)],
+        [CAPTURE_MOMENTS_OPERATION, (args, options, studio) => captureMoments(
+          args, options, studio, composeContactSheet, clips ? chatClips(request.chatId) : undefined,
+        )],
         [UPLOAD_ASSETS_OPERATION, uploadAssets],
         ...(blender ? [[BLENDER_OPERATION, (args, options) => runBlenderJob(args, options, request.chatId)] as [string, LocalOperation]] : []),
         ...(clips

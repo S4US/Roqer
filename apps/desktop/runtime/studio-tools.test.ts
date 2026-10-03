@@ -1600,6 +1600,21 @@ test("moments captured in one call are visual evidence, and the model receives e
   assert.equal(evidence[0].imageDataUrl, PREVIEW);
   assert.deepEqual(evidence[0].metadata?.map((entry) => entry.label), ["Images returned", "Moments"]);
   assert.equal(evidence[0].metadata?.[1]?.value, "0.1 s, 0.3 s");
+  assert.equal(evidence[0].title, "Effect captured at several moments");
+});
+
+test("moments paired with a reference clip say so on their card, as half the picture is the clip", async () => {
+  const paired = {
+    ...ok({ moments: [], comparedWith: "0123456789ab" }),
+    text: "Captured 1 of 1 moments. Each moment is paired with reference clip 0123456789ab.",
+    images: [{ data: "Rmlyc3Q=", mediaType: "image/jpeg" as const }],
+  };
+  const { context, evidence } = contextWith([paired]);
+  context.previewImage = async () => PREVIEW;
+  await createStudioToolRunner(context)("capture_moments", { code: "_G.vfx = start()", times: [0.1], reference: { clip: "0123456789ab" } });
+  assert.equal(evidence[0].title, "Effect captured beside the reference clip");
+  assert.equal(evidence[0].requirement, "visual", "the Studio half is still a look at the result");
+  assert.deepEqual(evidence[0].metadata?.at(-1), { label: "Compared with", value: "reference clip 0123456789ab (its frames are labelled R)" });
 });
 
 test("arbitrary Luau that only creates instances is left alone", async () => {

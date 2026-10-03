@@ -1,7 +1,12 @@
 import { CAPTURE_MOMENTS_OPERATION, MAX_CAPTURE_MOMENTS } from "../shared/gateway-operations";
 import { timeoutForTool } from "../shared/mcp-tools";
+import { isClipId } from "../shared/reference-clip";
+import type { CropBox } from "./clip-analysis";
+import type { ClipManifest } from "./clip-store";
 import type { StudioCaller } from "./local-operations";
 import type { McpCallOptions, McpToolImage, McpToolOutcome } from "./mcp-types";
+import { frameEffectTime, missingClip, nearestFrame, type ChatClips } from "./reference-clip";
+import { frameLabel } from "./sheet-labels";
 
 /**
  * `capture_moments`: a playing effect, seen at several moments, in one call.
@@ -68,6 +73,9 @@ type Moment = { requested: number; reached?: number; short?: "ended" | "waited";
 /** Where to aim the edit camera before the effect starts, as `selection` view takes it. */
 export type CaptureView = Readonly<{ path: string; from?: number; angleY?: number; padding?: number }>;
 
+/** A reference clip to pair the moments with, and the clip's time for each, in effect seconds. */
+export type CaptureReference = Readonly<{ clip: string; times?: readonly number[] }>;
+
 export type CaptureMomentsArgs = Readonly<{
   code: string;
   times: readonly number[];
@@ -78,7 +86,22 @@ export type CaptureMomentsArgs = Readonly<{
   slow: number;
   sheet: boolean;
   view?: CaptureView;
+  reference?: CaptureReference;
 }>;
+
+/** The reference argument, checked against the moments, or why it cannot be used. */
+function parseReference(value: unknown, times: readonly number[]): CaptureReference | string | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (typeof value !== "object" || Array.isArray(value)) return "reference must be an object such as {clip, times}.";
+  const { clip, times: clipTimes } = value as Record<string, unknown>;
+  if (!isClipId(clip)) return "reference.clip must be a clip's id, exactly as its attachment gave it (12 hexadecimal characters).";
+  if (clipTimes === undefined || clipTimes === null) return { clip };
+  if (!Array.isArray(clipTimes) || clipTimes.length !== times.length ||
+    !clipTimes.every((time) => typeof time === "number" && Number.isFinite(time) && time >= 0)) {
+    return `reference.times must list one effect second of the clip for each of the ${times.length} moments, or be left out to use the same times.`;
+  }
+  return { clip, times: clipTimes as number[] };
+}
 
 /** The view argument, checked, or why it cannot be used. */
 function parseView(value: unknown, runtime: string): CaptureView | string | undefined {
@@ -102,9 +125,14 @@ function parseView(value: unknown, runtime: string): CaptureView | string | unde
 /**
  * Tiles frames into one image, `columns` to a row, or undefined when it
  * cannot. The host supplies it, since decoding images needs Electron; without
- * one, frames go back one image each.
+ * one, frames go back one image each. A frame may be cropped first, and a
+ * tile may carry a label.
  */
-export type ContactSheet = (images: readonly McpToolImage[], columns: number) => Promise<McpToolImage | undefined>;
+export type ContactSheet = (
+  images: readonly McpToolImage[],
+  columns: number,
+  options?: Readonly<{ crops?: readonly (CropBox | undefined)[]; labels?: readonly string[]; wide?: boolean }>,
+) => Promise<McpToolImage | undefined>;
 
 /** Frames to a row on a contact sheet: two show each frame at half the width it would have sent alone (1000 pixels on a wide viewport). */
 const SHEET_COLUMNS = 2;
@@ -130,6 +158,8 @@ export function parseCaptureMoments(args: Record<string, unknown>): CaptureMomen
   if (typeof speed !== "number" || !Number.isFinite(speed) || speed < 0.01 || speed > 1) return "slow must be a playback speed from 0.01 to 1.";
   const view = parseView(args.view, runtime);
   if (typeof view === "string") return view;
+  const reference = parseReference(args.reference, times as number[]);
+  if (typeof reference === "string") return reference;
   return {
     code,
     times: times as number[],
@@ -140,6 +170,7 @@ export function parseCaptureMoments(args: Record<string, unknown>): CaptureMomen
     slow: speed,
     sheet,
     ...(view === undefined ? {} : { view }),
+    ...(reference === undefined ? {} : { reference }),
   };
 }
 
@@ -228,15 +259,65 @@ function returned(outcome: McpToolOutcome): string {
   return outcome.text;
 }
 
+/**
+ * The moments beside a reference clip's frames at the matching times, as one
+ * image: for each moment, the clip's frame (cropped to where the clip changes)
+ * then Studio's, labelled R and S with the pair's number and time, two pairs
+ * to a row. Undefined when the clip's frames cannot be read or tiled; the
+ * moments then go back on their own.
+ */
+async function pairWithReference(
+  parsed: CaptureMomentsArgs & { reference: CaptureReference },
+  manifest: ClipManifest,
+  moments: readonly Moment[],
+  images: readonly McpToolImage[],
+  references: ChatClips,
+  contactSheet: ContactSheet,
+): Promise<{ sheet: McpToolImage; lines: Map<Moment, string> } | undefined> {
+  const tiles: McpToolImage[] = [];
+  const labels: string[] = [];
+  const crops: (CropBox | undefined)[] = [];
+  const lines = new Map<Moment, string>();
+  for (const moment of moments) {
+    if (moment.image === undefined) continue;
+    const at = parsed.reference.times?.[parsed.times.indexOf(moment.requested)] ?? moment.requested;
+    const index = nearestFrame(manifest, at);
+    const clipTime = frameEffectTime(manifest, index);
+    // A time past either end of the clip shows its nearest frame, and says so.
+    const last = frameEffectTime(manifest, manifest.frames.length - 1);
+    const outside = at > last + 0.02 ? ` (the clip ends at ${last.toFixed(2)} s; its last frame is shown)` : "";
+    const frame = await references.frame(manifest, index);
+    const pair = lines.size + 1;
+    tiles.push({ data: frame.toString("base64"), mediaType: "image/jpeg" }, images[moment.image - 1] as McpToolImage);
+    labels.push(frameLabel(pair, clipTime, "R"), frameLabel(pair, moment.reached ?? moment.requested, "S"));
+    crops.push(manifest.analysis.crop, undefined);
+    lines.set(moment, `pair ${pair}, beside the clip at ${clipTime.toFixed(2)} s${outside}`);
+  }
+  if (lines.size === 0) return undefined;
+  const sheet = await contactSheet(tiles, lines.size === 1 ? 2 : 4, { labels, crops, wide: true });
+  return sheet === undefined ? undefined : { sheet, lines };
+}
+
 export async function captureMoments(
   args: Record<string, unknown>,
   options: McpCallOptions,
   studio: StudioCaller,
   contactSheet?: ContactSheet,
+  references?: ChatClips,
 ): Promise<McpToolOutcome> {
   const started = Date.now();
   const parsed = parseCaptureMoments(args);
   if (typeof parsed === "string") return failure(`${CAPTURE_MOMENTS_OPERATION} was not run: ${parsed}`, started);
+  // A clip to compare with is found before anything starts in Studio, so a
+  // wrong id costs nothing but this answer.
+  let manifest: ClipManifest | undefined;
+  if (parsed.reference !== undefined) {
+    if (references === undefined) {
+      return failure(`${CAPTURE_MOMENTS_OPERATION} was not run: this chat holds no reference clips to compare with. Leave reference out.`, started);
+    }
+    manifest = await references.read(parsed.reference.clip);
+    if (manifest === undefined) return failure(`${CAPTURE_MOMENTS_OPERATION} was not run: ${await missingClip(references, parsed.reference.clip)}`, started);
+  }
   const runner = parsed.runtime === "client" ? "eval_client_runtime" : "execute_luau";
   // Clean-up runs even after a cancel, so it is the one call without the run's signal.
   const run = (code: string, cleanup = false) => {
@@ -318,7 +399,19 @@ export async function captureMoments(
   // A sheet of up to eight frames costs the model about what two frames do, so the frames go as one unless asked otherwise.
   let delivered = images;
   let tiled = false;
-  if (parsed.sheet && contactSheet !== undefined && images.length > 1) {
+  let paired: Map<Moment, string> | undefined;
+  let pairingNote: string | undefined;
+  if (parsed.reference !== undefined && manifest !== undefined && references !== undefined && contactSheet !== undefined && images.length > 0) {
+    const comparison = await pairWithReference({ ...parsed, reference: parsed.reference }, manifest, moments, images, references, contactSheet)
+      .catch(() => undefined);
+    if (comparison === undefined) {
+      pairingNote = "Roqer could not pair the frames with the clip's, so they come back on their own.";
+    } else {
+      delivered = [comparison.sheet];
+      paired = comparison.lines;
+    }
+  }
+  if (paired === undefined && parsed.sheet && contactSheet !== undefined && images.length > 1) {
     const sheet = await contactSheet(images, SHEET_COLUMNS).catch(() => undefined);
     if (sheet !== undefined) {
       delivered = [sheet];
@@ -332,15 +425,20 @@ export async function captureMoments(
       : moment.short === "waited"
         ? ` (still short of ${moment.requested} s when the waiting ran out)`
         : "";
-    const picture = moment.image === undefined ? moment.note ?? "not captured" : `${tiled ? "frame" : "image"} ${moment.image}`;
+    const picture = moment.image === undefined
+      ? moment.note ?? "not captured"
+      : paired?.get(moment) ?? `${tiled ? "frame" : "image"} ${moment.image}`;
     return `- ${moment.requested} s${at}${short}: ${picture}`;
   });
   const how = parsed.hold ? "held still for each capture" : `kept playing at ${parsed.slow}x through each capture, so a frame may run a little past its time`;
-  const layout = tiled
-    ? `The frames are tiled into one image, ${SHEET_COLUMNS} to a row, left to right then top to bottom. For one frame at full size, call again with sheet: false and just that time.`
-    : "The images follow in this order:";
+  const layout = paired !== undefined
+    ? `Each moment is paired with reference clip ${manifest!.id} in one image, two pairs to a row, left to right then top to bottom: the clip's frame at the matching time (labelled R${manifest!.analysis.crop === undefined ? "" : ", cropped to where the clip changes"}), then Studio's (labelled S), each label carrying the pair's number and time. Compare each pair for when it starts, peaks and fades, its size against the frame, its colours and its shape; the clip was filmed from its own camera, so compare proportions rather than position.`
+    : tiled
+      ? `The frames are tiled into one image, ${SHEET_COLUMNS} to a row, left to right then top to bottom. For one frame at full size, call again with sheet: false and just that time.`
+      : "The images follow in this order:";
   const text = [
     `Captured ${images.length} of ${parsed.times.length} moments, ${how}. ${layout}`,
+    ...(pairingNote === undefined ? [] : [pairingNote]),
     ...(stillLoading ? [`Its textures were still loading after ${PRELOAD_SECONDS} s, so early frames may be missing layers; if they are, capture again.`] : []),
     ...lines,
     ...(skipped.length === 0 ? [] : [`Not captured, because this call's time ran out first: ${skipped.map((time) => `${time} s`).join(", ")}. Capture them in another call.`]),
@@ -350,7 +448,7 @@ export async function captureMoments(
   if (images.length === 0) return failure(text, started);
   return {
     ok: stopped === undefined,
-    data: { moments },
+    data: { moments, ...(paired === undefined ? {} : { comparedWith: manifest!.id }) },
     text,
     images: delivered,
     httpStatus: 200,

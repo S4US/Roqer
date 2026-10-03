@@ -137,10 +137,16 @@ const CONTACT_SHEET_MAX_HEIGHT = 2000;
 const CONTACT_SHEET_QUALITIES = [85, 78, 70, 62];
 const CONTACT_SHEET_MAX_BYTES = 500_000;
 
-/** What a sheet may add to its frames: a crop for each, and a label drawn in each tile's corner. */
+/**
+ * What a sheet may add to its frames: a crop for each, a label drawn in each
+ * tile's corner, and `wide`, for tiles as wide as the sheet allows rather than
+ * a sheet as wide as one frame. A cropped frame is narrow, and in a sheet only
+ * as wide as itself its tiles would be too small to read.
+ */
 export type ContactSheetOptions = Readonly<{
   crops?: readonly (CropBox | undefined)[];
   labels?: readonly string[];
+  wide?: boolean;
 }>;
 
 /** The part of a frame a crop box names, in whole pixels, or the frame when there is none. */
@@ -178,11 +184,13 @@ export async function composeContactSheet(images: readonly McpToolImage[], colum
   const frames = decoded.map((frame, index) => cropped(frame, options.crops?.[index]));
   const rows = Math.ceil(frames.length / columns);
   // As wide as a frame sent alone would reach the model, so a frame is never
-  // enlarged, unless the rows would then be taller than allowed. Each row gets
+  // enlarged, unless the rows would then be taller than allowed; a wide sheet
+  // gives each tile up to its widest frame's own width instead. Each row gets
   // a whole number of pixels: the resize rounds a tile's height, and three
   // rows of 666.67 would otherwise round to 2001.
   const aspect = Math.max(...frames.map((frame) => frame.getSize().height / Math.max(1, frame.getSize().width)));
-  const seenWidth = Math.min(CONTACT_SHEET_WIDTH, Math.max(...frames.map((frame) => frame.getSize().width)));
+  const widest = Math.max(...frames.map((frame) => frame.getSize().width));
+  const seenWidth = Math.min(CONTACT_SHEET_WIDTH, options.wide === true ? widest * columns : widest);
   const tileWidth = Math.floor(Math.min(seenWidth / columns, Math.floor(CONTACT_SHEET_MAX_HEIGHT / rows) / aspect));
   const tiles = frames.map((frame) => frame.resize({ width: tileWidth, quality: "good" }));
   const tileHeight = Math.max(...tiles.map((tile) => tile.getSize().height));
@@ -224,7 +232,7 @@ export async function composeContactSheet(images: readonly McpToolImage[], colum
 export const composeClipSheet: ClipSheetComposer = (frames, { columns, labels, crop }) => composeContactSheet(
   frames.map((jpeg) => ({ data: jpeg.toString("base64"), mediaType: "image/jpeg" })),
   columns,
-  { labels, crops: frames.map(() => crop) },
+  { labels, crops: frames.map(() => crop), wide: true },
 );
 
 /** The preview an attached clip keeps in the chat, made from one of its frames. */

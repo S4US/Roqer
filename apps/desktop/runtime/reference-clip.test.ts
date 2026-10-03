@@ -13,7 +13,7 @@ import {
   sheetColumns,
   spread,
   type ClipSheetComposer,
-  type ClipSource,
+  type ChatClips,
 } from "./reference-clip";
 import { MalformedToolCallError } from "./studio-tools";
 
@@ -39,7 +39,7 @@ function manifest(analysis: Partial<ClipAnalysis> = {}, overrides: Partial<ClipM
   };
 }
 
-function source(clips: ClipManifest[]): ClipSource & { reads: number[] } {
+function source(clips: ClipManifest[]): ChatClips & { reads: number[] } {
   const reads: number[] = [];
   return {
     reads,

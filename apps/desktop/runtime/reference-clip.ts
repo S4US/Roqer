@@ -36,7 +36,7 @@ export type ClipSheetComposer = (
 ) => Promise<McpToolImage | undefined>;
 
 /** Where a run reads its chat's clips. */
-export type ClipSource = Readonly<{
+export type ChatClips = Readonly<{
   list(): Promise<readonly ClipManifest[]>;
   read(id: string): Promise<ClipManifest | undefined>;
   frame(manifest: ClipManifest, index: number): Promise<Buffer>;
@@ -249,7 +249,7 @@ function failure(text: string, started: number): McpToolOutcome {
 }
 
 /** Why a clip is not there, and which are. */
-export async function missingClip(source: ClipSource, id: unknown): Promise<string> {
+export async function missingClip(source: ChatClips, id: unknown): Promise<string> {
   const clips = await source.list().catch(() => [] as ClipManifest[]);
   const known = clips.length === 0
     ? "This chat holds no reference clips now: Roqer clears a clip 30 days after it was last used, so ask the user to attach it again."
@@ -260,7 +260,7 @@ export async function missingClip(source: ClipSource, id: unknown): Promise<stri
 export async function readReferenceClip(
   args: Record<string, unknown>,
   options: McpCallOptions,
-  source: ClipSource,
+  source: ChatClips,
   compose: ClipSheetComposer,
 ): Promise<McpToolOutcome> {
   const started = Date.now();
