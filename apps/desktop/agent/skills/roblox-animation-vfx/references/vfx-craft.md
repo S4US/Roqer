@@ -48,7 +48,9 @@ See `references/vfx-design.md`. The short version:
   1. Load it with `load_skill`.
   2. Create a ModuleScript named `Emit` with `build_instances` under the build
      root `ReplicatedStorage.VFX`, so it sits at `ReplicatedStorage.VFX.Emit`
-     beside the templates.
+     beside the templates. Pass `path` `game.ReplicatedStorage.VFX`: a missing
+     root is created for you (as a Model), and a service itself cannot be a
+     build root.
   3. Read it for its revision, then write the template's body into it with
      `set_script_source`.
 
@@ -378,7 +380,7 @@ look made for its game. R is the effect's radius in studs.
 | +0.03 s | Black backing | A soft black blob behind, 2-4R |
 | +0.05 s | Streaks | `VelocityParallel` with `Squash`, Speed 60-200, Drag 8-12, with a few black twins |
 | +0.05 s | Ring | A flat `VelocityPerpendicular` ring (Speed 0.001) growing to 2-3R over 0.2-0.4 s |
-| +0.05 s | Smoke | Constant-size cel puffs (4 x 4 OneShot), Speed 50-120, Drag 8, Lifetime 1-1.5, Transparency to above 1, `TimeScale` 0.7, a warm and a grey layer; beside fire, carrying the fire's colour where it is lit |
+| +0.05 s | Smoke | Constant-size puffs (4 x 4 OneShot), cel for a toon look or mottled for a heavy one (vfx-design.md section 5), Speed 50-120, Drag 8, Lifetime 1-1.5, Transparency to above 1, `TimeScale` 0.7, a warm and a grey layer; beside fire, carrying the fire's colour where it is lit |
 | +0.05 s | Embers | Dots at `LightEmission` 1, Speed 10-120, Drag 10, Lifetime 0.75-2 |
 | 0 | Light | A PointLight at Brightness 7-16, Range 7-15, fading over 0.5 s |
 
@@ -643,8 +645,9 @@ capture instead of caught in passing.
    playtest always loads fresh code.
 2. Frame the spot two ways, and capture each moment from both:
    - **Close**, to judge shapes: `build_instances` a transparent, anchored
-     marker part about the effect's size where it will play, then
-     `selection` with `action: "view"` on it, from a side and a little above.
+     marker part about the effect's size where it will play, under its own
+     root (`path` `game.Workspace.SlamPreview`), then `selection` with
+     `action: "view"` on it, from a side and a little above.
    - **From where the player sees it.** This view decides whether the
      effect works. In a playtest, the client's own camera behind the
      character is that view: capture it as it is. In edit mode, build a
@@ -696,7 +699,10 @@ capture instead of caught in passing.
    - Is every layer meant to glow above the place's bloom threshold? A
      Brightness of 1-3 reads as flat paint at Threshold 2.
    - Does the flash frame read as one sharp, overexposed shape, bigger than
-     what follows it?
+     what follows it, and is it gone by 0.15 s, so the frames after it show
+     the body? A 30-stud flash that held for 0.2 s without fading whited out
+     the caster for a dozen frames from the player's camera *(seen in a
+     run)*.
    - Is there something dark, so the bright parts read?
    - Do the shapes have hard silhouettes, or do they look like soft smudges?
    - Is the centre a white blob? Bring the stacked bright layers down until
@@ -707,6 +713,9 @@ capture instead of caught in passing.
    - Does everything that moves carry its speed (streaks, wind rings, a
      smear), or does it float?
    - Is a large half-transparent shell covering the view?
+   - From the player's camera, does a flat ground ring grow wider than its
+     distance from the camera? It then passes under the camera, and its far
+     edge is a thin line across the view.
    - Does a light tint the whole floor?
    - Does the smoke beside the fire take its colour, or is it one flat tone?
    - Does every layer show? Thin sparks and faint smoke vanish at a normal
@@ -714,7 +723,9 @@ capture instead of caught in passing.
    - Does one layer bury another?
    - Does anything stay constant that should change?
    - Does it end cleanly, with nothing left behind?
-6. Remove the marker, and check `get_runtime_logs` for `VFXEmit` warnings: a
+6. Remove the marker with `execute_luau`
+   (`workspace.SlamPreview:Destroy()`): `build_instances` cannot remove its own
+   root. Check `get_runtime_logs` for `VFXEmit` warnings: a
    bad attribute, an emitter with nothing to play, a bounded count. Before
    calling the effect done, check that no `rbxasset://textures/roqer-preview/`
    address is left: players would see nothing there.

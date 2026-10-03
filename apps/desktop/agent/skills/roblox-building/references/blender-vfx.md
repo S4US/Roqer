@@ -100,9 +100,11 @@ The pattern behind most stylised textures:
      `tex_edge(noise - t * 1.1)`, or erase a stroke from its head by raising
      `start`.
 
-Four examples, each run in Blender 5.2:
+Five examples, each run in Blender 5.2:
 - a claw slash that sweeps on and breaks off;
 - a lopsided cel-shaded puff;
+- heavy dust, mottled rather than cel, for a brief that asks for weight or
+  grit;
 - a splinter burst;
 - branching ground cracks.
 
@@ -137,6 +139,22 @@ def puff(t, size):
     alpha = roqer.tex_edge(body, soft=0.006) * roqer.tex_edge(holes + body * 0.4, soft=0.01)
     return alpha, 0.5 + 0.5 * roqer.tex_edge(lit, 0.03, soft=0.006)   # two tones: shadow 0.5, lit 1
 
+# Heavy dust, not cel: a rim broken by small billows, a mottled inside of light and dark, torn apart by ragged holes.
+BILLOWS = roqer.tex_noise(256, scale=5, octaves=5, seed=7)
+GRIT = roqer.tex_noise(256, scale=16, octaves=3, seed=9)
+
+def dust(t, size):
+    x, y = roqer.tex_coords(size)
+    wx, wy = roqer.tex_warp(x, y, amount=0.1, scale=5, seed=3, t=t * 0.4)
+    radius = 0.2 + 0.26 * roqer.tex_ease(t * 2) + 0.06 * t                     # keeps swelling after the burst
+    body = roqer.tex_blob(wx, wy, radius=radius, lumps=11, roughness=0.8, seed=6)
+    churn = roqer.tex_sample(BILLOWS, x * 0.7 + t * 0.3, y * 0.7 - t * 0.5)     # billows that roll as it grows
+    edge = body + (roqer.tex_sample(GRIT, x + t * 0.2, y) - 0.5) * 0.28          # small billows and wisps break the rim
+    holes = roqer.tex_sample(NOISE, x * 0.5 + 0.2, y * 0.5 + t * 0.3) - t * 1.4 + 0.55
+    alpha = roqer.tex_edge(edge, soft=0.01) * roqer.tex_edge(holes + body * 0.3, soft=0.05)
+    shade = 0.5 + (churn - 0.5) * 1.9 + 0.15 * numpy.clip(y / radius, -1, 1)      # strong light and dark, lighter on top
+    return alpha, numpy.clip(shade, 0.12, 0.95)
+
 # Splinter burst: uneven tapered strokes flung out at irregular angles and lengths, then erased from the centre.
 RNG = numpy.random.default_rng(11)
 SPLINTERS = [(RNG.uniform(0, 2 * numpy.pi), RNG.uniform(0.25, 0.85), RNG.uniform(0, 0.25), RNG.uniform(-0.15, 0.15), RNG.uniform(0.07, 0.16)) for _ in range(9)]
@@ -156,6 +174,7 @@ def splinters(t, size):
 
 roqer.draw_flipbook("ClawSlash", claw, grid=4, fps=30)
 roqer.draw_flipbook("SmokePuff", puff, grid=4, fps=16)
+roqer.draw_flipbook("HeavyDust", dust, grid=4, fps=16)
 roqer.draw_flipbook("Splinters", splinters, grid=4, fps=30)
 
 # Ground cracks: a few jagged strokes from the centre, each forking once, thick at the root and tapering out.
@@ -192,7 +211,8 @@ Look at the attached sheet and ask whether it looks drawn:
 - **Silhouette:** does the shape read as a silhouette at a glance, with a
   thick-to-thin taper, lobes, notches and holes? Or is it an outline, an icon
   or a gear?
-- **Edges:** are they crisp? Soft is for an accent glow only.
+- **Edges:** are they crisp? Soft is for an accent glow, and for the inside
+  of smoke drawn mottled on purpose.
 - **Change:** does the shape change across the frames (grow, then break into
   pieces), or does it only scale or fade?
 - **Distance:** would it survive at game distance, or is it too thin?

@@ -255,6 +255,15 @@ How one orange shape renders under a new place's lighting *(verified)*:
 - **Hard edges.** Alpha is either binary with a 1-2 px anti-aliased rim, or
   posterised to about 16 steps. Soft gradients are kept for one or two accent
   textures (a glow, a soft rim). *(measured: a 49-sheet hand-drawn set)*
+- **Smoke is where the styles part.** Of the 1,108-texture community kit's
+  113 smoke, fog and cloud textures, 73 are soft-edged billows with light and
+  dark mottling inside, 29 put a crisp silhouette around a soft, mottled
+  inside, and 11 are flat cel puffs *(measured)*. Cel puffs are the clean
+  toon look. A brief that asks for weight or grit, or says "not cartoonish",
+  wants the mottled kind (`blender-vfx.md` has both). A ground slam asked to
+  be "heavy and brutal, not cartoonish" got two-tone cel dust that read as
+  cotton balls *(seen in a run)*. Soft is not the failure; no silhouette and
+  no contrast inside is.
 - **Detail from negative space, not shading.** Holes, notches, overhangs and
   scribbled interior strokes. Stroke width tapers as with pen pressure.
   Silhouettes are asymmetric. When there is shading, it is one or two flat
