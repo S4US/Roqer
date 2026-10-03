@@ -19,6 +19,7 @@ import {
   type ClipSelection,
 } from "../shared/reference-clip";
 import { analyseClip } from "./clip-analysis";
+import type { ClipMedia } from "./clip-media";
 import { frameSize, type ClipInfo, type ClipSource, type ClipSupport } from "./clip-source";
 import type { ClipManifest } from "./clip-store";
 import { clipAttachmentText, nearestFrame, planClipSheets, sheetColumns, sheetLabels, type SentSheet } from "./reference-clip";
@@ -459,6 +460,19 @@ export class AttachmentRegistry {
     } finally {
       clip.reading = false;
     }
+  }
+
+  /**
+   * A clip's own bytes, for the chat window's preview player while the user
+   * chooses the part to send: only a clip this registry issued, found by its
+   * attachment id, and gone once the clip is released.
+   */
+  clipMedia(id: unknown): ClipMedia | undefined {
+    const entry = typeof id === "string" ? this.entries.get(id) : undefined;
+    const clip = entry?.clip;
+    if (entry === undefined || clip === undefined) return undefined;
+    const mediaType = entry.attachment.mediaType ?? "application/octet-stream";
+    return clip.source.kind === "video" ? { path: clip.source.path, mediaType } : { bytes: clip.source.bytes, mediaType };
   }
 
   private requireClips(): ClipSupport {

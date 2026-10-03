@@ -12,7 +12,7 @@ import type { OpenCloudCheckResult, OpenCloudSave, OpenCloudSettingsResult } fro
 import type { BlenderSettingsResult } from "../shared/blender";
 import type { ModelPreviewResult } from "../shared/model-preview";
 import type { EvidencePictureResult } from "../shared/evidence-picture";
-import type { ClipSelection } from "../shared/reference-clip";
+import { clipMediaUrl, type ClipSelection } from "../shared/reference-clip";
 import { NO_LIMITS, type ProviderLimits } from "../shared/provider-limits";
 import {
   providerLabel,
@@ -378,6 +378,11 @@ export async function attachVideo(file: Blob, name: string): Promise<AssetAttach
 /** Thumbnails spread over a clip, or over part of it, for choosing what to send. */
 export function clipStrip(id: string, count: number, range?: { start: number; end: number }): Promise<Array<{ time: number; dataUrl: string }>> {
   return clipBridge().clipStrip(id, count, range);
+}
+
+/** Where the trim dialog plays an attached clip from; undefined outside the desktop app. */
+export function clipPreviewUrl(id: string): string | undefined {
+  return window.workbenchDesktop ? clipMediaUrl(id) : undefined;
 }
 
 /** The frame at one time in a clip. */

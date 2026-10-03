@@ -1,5 +1,5 @@
 import {
-  app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme, shell,
+  app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme, protocol, shell,
   type IpcMainEvent, type IpcMainInvokeEvent, type MessageBoxOptions, type WebContents,
 } from "electron";
 import { autoUpdater } from "electron-updater";
@@ -75,7 +75,8 @@ import { ClipDecoder } from "./clip-decoder";
 import { clipScope, ClipStore } from "../runtime/clip-store";
 import type { ClipSupport } from "../runtime/clip-source";
 import { readReferenceClip, type ChatClips } from "../runtime/reference-clip";
-import { MAX_DROPPED_CLIP_BYTES, REFERENCE_CLIP_OPERATION } from "../shared/reference-clip";
+import { CLIP_MEDIA_SCHEME, MAX_DROPPED_CLIP_BYTES, REFERENCE_CLIP_OPERATION } from "../shared/reference-clip";
+import { serveClipMedia } from "../runtime/clip-media";
 import { DiscordPresence } from "./discord-presence";
 import { McpServerProcess } from "../runtime/mcp-server-process";
 import { mcpServerMessage, type McpServerState } from "../shared/mcp-server";
@@ -146,6 +147,13 @@ const clipSupport: ClipSupport = {
 };
 
 const attachments = new AttachmentRegistry(encodeAttachmentImage, clipSupport);
+
+// The chat window plays an attached clip from this scheme while the user
+// chooses the part to send. It must be declared before the app is ready, and
+// as a streaming scheme, or a <video> cannot seek in it.
+protocol.registerSchemesAsPrivileged([
+  { scheme: CLIP_MEDIA_SCHEME, privileges: { standard: true, secure: true, stream: true, supportFetchAPI: true } },
+]);
 const discardedRuns = new Set<string>();
 const journalRuns = new Set<string>();
 const completedRuns = new Set<string>();
@@ -2012,6 +2020,8 @@ app.whenReady().then(async () => {
   ipcMain.handle("assets:clip-strip", clipStrip);
   ipcMain.handle("assets:clip-frame", clipFrame);
   ipcMain.handle("assets:clip-select", selectClip);
+  // Only clips the registry issued, by attachment id, and only while attached.
+  protocol.handle(CLIP_MEDIA_SCHEME, (request) => serveClipMedia(request, (id) => attachments.clipMedia(id)));
   ipcMain.handle("update:state", (event) => {
     if (!isTrusted(event.sender)) throw new Error("This window may not read the update state.");
     return updateState;

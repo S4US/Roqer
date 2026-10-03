@@ -47,6 +47,18 @@ export const MAX_DROPPED_CLIP_BYTES = 256 * 1024 * 1024;
 /** The largest animated picture Roqer reads as a clip. */
 export const MAX_ANIMATED_IMAGE_BYTES = 24 * 1024 * 1024;
 
+/**
+ * The scheme the chat window plays an attached clip from, while the user
+ * chooses the part to send. It serves only clips the attachment registry
+ * issued, by their attachment id, and nothing else on disk.
+ */
+export const CLIP_MEDIA_SCHEME = "roqer-clip";
+
+/** Where the chat window plays an attached clip from. */
+export function clipMediaUrl(attachmentId: string): string {
+  return `${CLIP_MEDIA_SCHEME}://media/${encodeURIComponent(attachmentId)}`;
+}
+
 /** A stored clip's id, as the attachment text and `reference_clip` name it. */
 export const CLIP_ID_PATTERN = "^[0-9a-f]{12}$";
 

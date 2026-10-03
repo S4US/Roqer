@@ -245,6 +245,22 @@ test("a dropped video that cannot be read leaves no copy behind", async () => {
   });
 });
 
+test("the trim dialog's player can reach a clip's own bytes, and only while it is attached", async () => {
+  await withRoot(async (root) => {
+    const registry = new AttachmentRegistry(undefined, fakeClips(root).support);
+    const path = await videoFile(root);
+    const clip = await registry.register(path);
+    assert.deepEqual(registry.clipMedia(clip.id), { path, mediaType: "video/mp4" });
+    const gif = await registry.registerImage({ name: "spark.gif", mediaType: "image/gif", bytes: GIF });
+    assert.deepEqual(registry.clipMedia(gif.id), { bytes: GIF, mediaType: "image/gif" });
+    const still = await registry.registerImage({ name: "a.png", mediaType: "image/png", bytes: PNG });
+    assert.equal(registry.clipMedia(still.id), undefined, "a still picture is not a clip");
+    assert.equal(registry.clipMedia("forged"), undefined);
+    registry.release([clip.id]);
+    assert.equal(registry.clipMedia(clip.id), undefined);
+  });
+});
+
 test("an animated GIF becomes a clip; a still picture stays a picture", async () => {
   await withRoot(async (root) => {
     const registry = new AttachmentRegistry(undefined, fakeClips(root).support);
