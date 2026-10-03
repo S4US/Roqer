@@ -2,12 +2,14 @@ import {
   AlertCircle, AlertTriangle, Archive, Boxes, Check, ChevronDown, ChevronRight, Circle, Download,
   CircleDot, ExternalLink, FileBox, FileCode2, FileText, Folder, FolderPlus, Gamepad2,
   HelpCircle, Info, ListChecks, Loader2, MessageSquare, MinusCircle, Moon, MoreHorizontal,
-  ArrowUp, Maximize2, Minimize2, PanelLeftClose, PanelLeftOpen, Paperclip, Pencil, Play, Plus, RotateCw, Search, Settings, Square,
-  ShieldCheck, Sparkles, Sun,
+  ArrowUp, Maximize2, Minimize2, PanelLeftClose, PanelLeftOpen, Paperclip, Pencil, Play, Plus, RotateCw, Scissors, Search, Settings, Square,
+  ShieldCheck, Sparkles, Sun, Film,
   Trash2, X, Zap,
 } from "lucide-react";
 import { Fragment, memo, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { createPortal } from "react-dom";
+import { ClipTrimDialog } from "./clip-trim-dialog";
+import { VIDEO_EXTENSIONS, type ClipSelection } from "../shared/reference-clip";
 import {
   appendMessage, createChat, createId, createInitialWorkspace, createProject,
   deleteChat, deleteProject, modelPreference, normalizeWorkspace, renameChat,
@@ -17,7 +19,7 @@ import {
 import {
   cancelRun, cancelRunStart, getStudioStatus,
   hasDesktopRuntime, loadWorkspace, pickAsset, getStorageStatus, recoverWorkspace, exportWorkspace, releaseAttachments,
-  answerRunQuestion, attachImage, ATTACHABLE_IMAGE_TYPES, steerRun,
+  answerRunQuestion, attachImage, attachVideo, ATTACHABLE_IMAGE_TYPES, ATTACHABLE_VIDEO_TYPES, selectClip, steerRun,
   getBridgeState, restartBridge, subscribeToBridge, type McpServerState,
   getUpdateState, installUpdate, subscribeToUpdates, type AppUpdateState,
   flushWorkspace, getProviderModels, getProviderStatus, openScriptInStudio, respondToRun, saveWorkspace, startRun,
@@ -131,8 +133,33 @@ const MAX_IMAGES_PER_MESSAGE = 4;
 const isImageAttachment = (attachment: AssetAttachment): boolean =>
   attachment.mediaType !== undefined && ATTACHABLE_IMAGE_TYPES.has(attachment.mediaType);
 
+/**
+ * The pictures an attachment adds to its message: a clip goes as up to two
+ * sheets of its frames, a still as itself, anything else as none.
+ */
+const imageSlots = (attachment: AssetAttachment): number =>
+  attachment.clip !== undefined ? 2 : isImageAttachment(attachment) ? 1 : 0;
+
+const totalImageSlots = (attached: readonly AssetAttachment[]): number =>
+  attached.reduce((total, attachment) => total + imageSlots(attachment), 0);
+
+/**
+ * A video by its type, or by its name when the system gave it none, as
+ * Windows does for MKV and WebM. The main process reads the bytes to be sure.
+ */
+const isVideoFile = (file: File): boolean =>
+  ATTACHABLE_VIDEO_TYPES.has(file.type) ||
+  (file.type === "" && VIDEO_EXTENSIONS.has(file.name.slice(file.name.lastIndexOf(".")).toLowerCase()));
+
 /** What the chat can promise about an attachment, given where the run will go. */
-function attachmentDetail(attachment: AssetAttachment, imagesReachModel: boolean): string {
+function attachmentDetail(attachment: AssetAttachment, imagesReachModel: boolean, reading: boolean): string {
+  const { clip } = attachment;
+  if (clip !== undefined) {
+    if (reading) return "reading its frames…";
+    if (clip.id === undefined) return "choose the part to send";
+    const length = `${((clip.end - clip.start) / clip.slow).toFixed(2)} s`;
+    return imagesReachModel ? `${length} clip shared with agent as frames` : `${length} clip saved; this sign-in cannot read images`;
+  }
   if (isImageAttachment(attachment)) {
     return imagesReachModel ? "image shared with agent" : "image saved; this sign-in cannot read images";
   }
@@ -173,6 +200,11 @@ function App() {
   const [pastedBlocks, setPastedBlocks] = useState<PastedBlock[]>([]);
   const [composerExpanded, setComposerExpanded] = useState(false);
   const [attachments, setAttachments] = useState<AssetAttachment[]>([]);
+  /** Clips whose frames Roqer is reading, and the one whose part is being chosen. */
+  const [readingClips, setReadingClips] = useState<ReadonlySet<string>>(() => new Set());
+  const [trimmingClip, setTrimmingClip] = useState<string | null>(null);
+  const attachmentsRef = useRef(attachments);
+  useEffect(() => { attachmentsRef.current = attachments; }, [attachments]);
   const [runView, setRunView] = useState<RunView | null>(null);
   /** The latest context reading per chat, for the composer's meter. Never saved; see context-usage.ts. */
   const [contextReadings, setContextReadings] = useState<ReadonlyMap<string, ContextReading>>(() => new Map());
@@ -626,6 +658,13 @@ function App() {
     const prompt = composedMessage(pastedBlocks, composer);
     if (!prompt || isRunning || !hydrated || !storageAvailable || storageRecovery.required) return;
     if (prompt.length > 64_000) { setAttachmentError("Shorten the message to 64,000 characters before sending."); return; }
+    const unread = attachments.find((attachment) => attachment.clip !== undefined && (attachment.clip.id === undefined || readingClips.has(attachment.id)));
+    if (unread !== undefined) {
+      setAttachmentError(readingClips.has(unread.id)
+        ? `Roqer is still reading “${unread.name}”. Send once it has finished.`
+        : `Choose the part of “${unread.name}” to send first.`);
+      return;
+    }
     if (hasDesktopRuntime() && providerStatus.kind !== "signed-in") {
       setShowSettings(true);
       return;
@@ -903,47 +942,96 @@ function App() {
    */
   const targetStudio = studios.find((studio) => studio.isTarget);
 
+  /**
+   * Have Roqer read the frames of the part of a clip the user chose. The chip
+   * says it is reading until the frames are kept, and the message cannot be
+   * sent before then.
+   */
+  const readClip = async (id: string, selection: ClipSelection) => {
+    setReadingClips((current) => new Set(current).add(id));
+    try {
+      const read = await selectClip(id, selection);
+      setAttachments((current) => current.map((attachment) => (attachment.id === id ? read : attachment)));
+    } catch (error) {
+      // A clip removed while it was read, with its message or by hand, needs no word.
+      if (attachmentsRef.current.some((attachment) => attachment.id === id)) {
+        setAttachmentError(error instanceof Error ? error.message : "The clip's frames could not be read.");
+      }
+    } finally {
+      setReadingClips((current) => {
+        const next = new Set(current);
+        next.delete(id);
+        return next;
+      });
+    }
+  };
+
+  /**
+   * Keep a newly attached file if the message still has room for its
+   * pictures, a clip counting as two; a clip short enough to send whole is
+   * read at once, and a longer one opens the dialog for choosing its part.
+   */
+  const keepAttached = (attached: readonly AssetAttachment[], asset: AssetAttachment): AssetAttachment[] | null => {
+    if (totalImageSlots([...attached, asset]) > MAX_IMAGES_PER_MESSAGE) {
+      void releaseAttachments([asset.id]);
+      setAttachmentError(`One message carries up to ${MAX_IMAGES_PER_MESSAGE} pictures, and a clip is sent as two. Send this one in another message.`);
+      return null;
+    }
+    const next = [...attached, asset];
+    setAttachments(next);
+    if (asset.clip !== undefined) {
+      if (asset.clip.start === 0 && asset.clip.end >= asset.clip.duration) void readClip(asset.id, asset.clip);
+      else setTrimmingClip(asset.id);
+    }
+    return next;
+  };
+
   const attachAsset = async () => {
     setAttachmentError(null);
     if (attachments.length >= MAX_ATTACHMENTS_PER_MESSAGE) { setAttachmentError("Attach up to eight files per message."); return; }
     try {
       const asset = await pickAsset();
-      if (asset) setAttachments((current) => [...current, asset]);
+      if (asset) keepAttached(attachments, asset);
     } catch (error) {
       setAttachmentError(error instanceof Error ? error.message : "The file could not be attached.");
     }
   };
 
   /**
-   * Attach pasted or dropped pictures, one at a time so that the first failure
-   * stops the batch with a reason rather than leaving a half-attached message.
+   * Attach pasted or dropped pictures and videos, one at a time so that the
+   * first failure stops the batch with a reason rather than leaving a
+   * half-attached message.
    */
   const attachImages = async (files: readonly File[]) => {
     setAttachmentError(null);
-    let attached = attachments;
+    let attached: AssetAttachment[] = attachments;
     for (const file of files) {
       if (attached.length >= MAX_ATTACHMENTS_PER_MESSAGE) {
         setAttachmentError("Attach up to eight files per message.");
         break;
       }
-      if (attached.filter(isImageAttachment).length >= MAX_IMAGES_PER_MESSAGE) {
-        setAttachmentError(`Send up to ${MAX_IMAGES_PER_MESSAGE} images in one message.`);
+      const video = isVideoFile(file);
+      if (totalImageSlots(attached) + (video ? 2 : 1) > MAX_IMAGES_PER_MESSAGE) {
+        setAttachmentError(`Send up to ${MAX_IMAGES_PER_MESSAGE} pictures in one message; a clip counts as two.`);
         break;
       }
       try {
-        const image = await attachImage(file, file.name || "screenshot.png");
-        attached = [...attached, image];
-        setAttachments(attached);
+        const asset = video
+          ? await attachVideo(file, file.name || "clip.mp4")
+          : await attachImage(file, file.name || "screenshot.png");
+        const kept = keepAttached(attached, asset);
+        if (kept === null) break;
+        attached = kept;
       } catch (error) {
-        setAttachmentError(error instanceof Error ? error.message : "The image could not be attached.");
+        setAttachmentError(error instanceof Error ? error.message : "The file could not be attached.");
         break;
       }
     }
   };
 
-  /** Pictures from a paste or a drop; anything else is left to the browser. */
+  /** Pictures and videos from a paste or a drop; anything else is left to the browser. */
   const droppedImages = (list: FileList | null | undefined): File[] =>
-    Array.from(list ?? []).filter((file) => ATTACHABLE_IMAGE_TYPES.has(file.type));
+    Array.from(list ?? []).filter((file) => ATTACHABLE_IMAGE_TYPES.has(file.type) || (hasDesktopRuntime() && isVideoFile(file)));
 
   const repairStorage = async () => {
     setStorageBusy(true);
@@ -1383,9 +1471,23 @@ function App() {
               {runLocation && <button onClick={() => selectChat(runLocation.projectId, runLocation.chatId)}>Open</button>}
               <button onClick={stopRun}>Stop</button>
             </div>}
-            {draggingImage && <div className="composer-drop-hint">Drop an image to attach it</div>}
+            {draggingImage && <div className="composer-drop-hint">Drop an image or a video to attach it</div>}
             {attachmentError && <div className="attachment-notice" role="alert">{attachmentError}<button onClick={() => setAttachmentError(null)} aria-label="Dismiss attachment error"><X size={14} /></button></div>}
-            {attachments.length > 0 && <div className="attachment-row">{attachments.map((attachment) => <div className="attachment-chip" key={attachment.id}>{attachment.thumbnailDataUrl ? <img className="attachment-thumbnail" src={attachment.thumbnailDataUrl} alt="" /> : <FileBox size={16} />}<div><strong>{attachment.name}</strong><span>{formatBytes(attachment.size)} · {attachmentDetail(attachment, imagesReachModel)}</span></div><button onClick={() => { void releaseAttachments([attachment.id]); setAttachments((current) => current.filter((item) => item.id !== attachment.id)); }} aria-label={`Remove ${attachment.name}`}><X size={14} /></button></div>)}</div>}
+            {attachments.length > 0 && <div className="attachment-row">{attachments.map((attachment) => <div className={`attachment-chip${attachment.clip === undefined ? "" : " clip"}`} key={attachment.id}>
+              {attachment.thumbnailDataUrl ? <img className="attachment-thumbnail" src={attachment.thumbnailDataUrl} alt="" /> : attachment.clip === undefined ? <FileBox size={16} /> : <Film size={16} />}
+              <div><strong>{attachment.name}</strong><span>{readingClips.has(attachment.id) && <Loader2 size={11} className="attachment-reading" />}{formatBytes(attachment.size)} · {attachmentDetail(attachment, imagesReachModel, readingClips.has(attachment.id))}</span></div>
+              {attachment.clip !== undefined && <button onClick={() => setTrimmingClip(attachment.id)} disabled={readingClips.has(attachment.id)} aria-label={`Choose the part of ${attachment.name} to send`} title="Choose the part to send"><Scissors size={14} /></button>}
+              <button onClick={() => { void releaseAttachments([attachment.id]); setAttachments((current) => current.filter((item) => item.id !== attachment.id)); }} aria-label={`Remove ${attachment.name}`}><X size={14} /></button>
+            </div>)}</div>}
+            {(() => {
+              const trimming = attachments.find((attachment) => attachment.id === trimmingClip);
+              return trimming?.clip === undefined ? null : <ClipTrimDialog
+                attachment={trimming}
+                clip={trimming.clip}
+                onClose={() => setTrimmingClip(null)}
+                onConfirm={(selection) => { setTrimmingClip(null); void readClip(trimming.id, selection); }}
+              />;
+            })()}
             {pastedBlocks.map((block) => <div className="pasted-block" key={block.id}>
               <FileText size={17} aria-hidden="true" />
               <div><strong>Pasted text</strong><span>{textSize(block.text)} · <code>{blockPreview(block.text)}</code></span></div>
@@ -1578,9 +1680,14 @@ const ConversationMessageView = memo(function ConversationMessageView({ message,
   return message.role === "user" ? (
     <section className="message user-message" key={message.id}>
       <p className="user-prompt">{message.text}</p>
-      {message.attachments && message.attachments.length > 0 && <div className="message-attachments">{message.attachments.map((asset) => asset.thumbnailDataUrl
-        ? <img key={asset.id} className="message-attachment-image" src={asset.thumbnailDataUrl} alt={`Attached image: ${asset.name}`} title={asset.name} />
-        : <span key={asset.id}><FileBox size={13} />{asset.name}</span>)}</div>}
+      {message.attachments && message.attachments.length > 0 && <div className="message-attachments">{message.attachments.map((asset) => asset.clip !== undefined
+        ? <figure key={asset.id} className="message-attachment-clip" title={asset.name}>
+          {asset.thumbnailDataUrl ? <img className="message-attachment-image" src={asset.thumbnailDataUrl} alt={`Attached clip: ${asset.name}`} /> : <span><FileBox size={13} />{asset.name}</span>}
+          <figcaption><Film size={12} /> {((asset.clip.end - asset.clip.start) / asset.clip.slow).toFixed(2)} s clip</figcaption>
+        </figure>
+        : asset.thumbnailDataUrl
+          ? <img key={asset.id} className="message-attachment-image" src={asset.thumbnailDataUrl} alt={`Attached image: ${asset.name}`} title={asset.name} />
+          : <span key={asset.id}><FileBox size={13} />{asset.name}</span>)}</div>}
     </section>
   ) : (
     <section className="message assistant-message" key={message.id}><div className="message-content">

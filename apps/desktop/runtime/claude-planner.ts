@@ -17,6 +17,8 @@ import type { SkillLibrary } from "./skill-library";
 import { createIconToolRunner, iconToolDefinition, ICON_TOOL_NAME } from "./icon-tool";
 import { blenderToolDefinition, parseBlenderToolInput } from "./blender-tool";
 import { BLENDER_TOOL_NAME } from "../shared/blender";
+import { REFERENCE_CLIP_TOOL_NAME } from "../shared/reference-clip";
+import { parseReferenceClipToolInput, referenceClipToolDefinition } from "./reference-clip";
 import { createSkillToolRunner, skillToolDefinition, SKILL_TOOL_NAME, type SkillToolRunner } from "./skill-tool";
 import {
   createStudioToolRunner, MalformedToolCallError, malformedCallsEndRun, MAX_CONSECUTIVE_MALFORMED_CALLS, parseStudioToolInput, studioToolDescription, studioToolInputSchema,
@@ -58,6 +60,7 @@ const QUALIFIED_TASK_TOOL_NAME = `mcp__${MCP_SERVER_NAME}__${TASK_TOOL_NAME}`;
 const QUALIFIED_QUESTION_TOOL_NAME = `mcp__${MCP_SERVER_NAME}__${QUESTION_TOOL_NAME}`;
 
 const QUALIFIED_BLENDER_TOOL_NAME = `mcp__${MCP_SERVER_NAME}__${BLENDER_TOOL_NAME}`;
+const QUALIFIED_REFERENCE_CLIP_TOOL_NAME = `mcp__${MCP_SERVER_NAME}__${REFERENCE_CLIP_TOOL_NAME}`;
 
 /** Every tool Roqer grants a Claude run, in the order they are announced. */
 const QUALIFIED_TOOL_NAMES = [
@@ -68,9 +71,13 @@ const QUALIFIED_TOOL_NAMES = [
   QUALIFIED_QUESTION_TOOL_NAME,
 ];
 
-/** The granted tools for these options: Blender only while the user has it on. */
+/** The granted tools for these options: Blender only while the user has it on, reference_clip only in a chat with clips. */
 function qualifiedToolNames(options: ClaudePlannerOptions): string[] {
-  return options.blender === true ? [...QUALIFIED_TOOL_NAMES, QUALIFIED_BLENDER_TOOL_NAME] : QUALIFIED_TOOL_NAMES;
+  return [
+    ...QUALIFIED_TOOL_NAMES,
+    ...(options.blender === true ? [QUALIFIED_BLENDER_TOOL_NAME] : []),
+    ...(options.referenceClips === true ? [QUALIFIED_REFERENCE_CLIP_TOOL_NAME] : []),
+  ];
 }
 
 export type ClaudePlannerOptions = {
@@ -93,6 +100,8 @@ export type ClaudePlannerOptions = {
   sessions?: ClaudeSessionStore;
   /** Offer the `blender` tool: only while the user has turned the local Blender worker on. */
   blender?: boolean;
+  /** Offer `reference_clip`: only in a chat holding a clip the user attached. */
+  referenceClips?: boolean;
 };
 
 const isRecord = (value: unknown): value is JsonRecord =>
@@ -565,7 +574,8 @@ export class ClaudeSession {
       tools: [{
         name: STUDIO_TOOL_NAME, description: studioToolDescription(), inputSchema: studioToolInputSchema(),
       }, skillToolDefinition(options.skillLibrary), iconToolDefinition(), taskToolDefinition(), questionToolDefinition(),
-      ...(options.blender === true ? [blenderToolDefinition()] : [])],
+      ...(options.blender === true ? [blenderToolDefinition()] : []),
+      ...(options.referenceClips === true ? [referenceClipToolDefinition()] : [])],
       invoke: async (name, args) => session?.binding
         ? session.binding.invoke(name, args)
         : { ok: false, text: "No Roqer run is active. End this turn." },
@@ -671,7 +681,7 @@ function sessionKey(options: ClaudePlannerOptions, { autoPlaytest, instanceId }:
   return JSON.stringify([
     instanceId,
     options.model, options.supportsEffort ? options.effort : null, autoPlaytest,
-    options.agent.id, options.agent.version, options.blender === true,
+    options.agent.id, options.agent.version, options.blender === true, options.referenceClips === true,
   ]);
 }
 
@@ -786,7 +796,9 @@ export function createClaudePlanner(options: ClaudePlannerOptions): Planner {
         try {
           call = options.blender === true && name === BLENDER_TOOL_NAME
             ? parseBlenderToolInput(args)
-            : parseStudioToolInput(args);
+            : options.referenceClips === true && name === REFERENCE_CLIP_TOOL_NAME
+              ? parseReferenceClipToolInput(args)
+              : parseStudioToolInput(args);
         } catch (error) {
           // A malformed call is the model's mistake to correct, answered like
           // any failed call; only a run of them that is not converging ends it.

@@ -241,6 +241,16 @@ contextBridge.exposeInMainWorld("workbenchDesktop", {
     /** Attach a pasted or dropped image, whose bytes the renderer already holds. */
     attachImage: (name: string, mediaType: string, bytes: ArrayBuffer) =>
       ipcRenderer.invoke("assets:attach-image", { name, mediaType, bytes }),
+    /** Attach a dropped or pasted video, whose bytes the renderer already holds. */
+    attachVideo: (name: string, bytes: ArrayBuffer) =>
+      ipcRenderer.invoke("assets:attach-video", { name, bytes }),
+    /** Thumbnails over an attached clip, or over `range` of it. */
+    clipStrip: (id: string, count: number, range?: { start: number; end: number }) =>
+      ipcRenderer.invoke("assets:clip-strip", { id, count, range }),
+    clipFrame: (id: string, time: number) => ipcRenderer.invoke("assets:clip-frame", { id, time }),
+    /** Read the frames of the part of a clip the user chose. */
+    selectClip: (id: string, selection: { start: number; end: number; slow: number }) =>
+      ipcRenderer.invoke("assets:clip-select", { id, selection }),
     release: (ids: string[]): Promise<void> => ipcRenderer.invoke("assets:release", ids),
   },
   updates: {

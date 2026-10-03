@@ -3,6 +3,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 
 import { MAX_CLIP_FRAME_RATE, MAX_CLIP_FRAMES, type ClipSelection } from "../shared/reference-clip";
+import type { ClipFrame, ClipInfo, ClipSource } from "../runtime/clip-source";
 
 /**
  * Roqer's clip decoder: a hidden window that reads frames from a video or an
@@ -24,12 +25,6 @@ import { MAX_CLIP_FRAME_RATE, MAX_CLIP_FRAMES, type ClipSelection } from "../sha
  * minute unused, and is made again if its renderer dies or a request hangs.
  */
 
-export type ClipFileSource = Readonly<{ kind: "video"; path: string }>;
-export type ClipImageSource = Readonly<{ kind: "image"; bytes: Buffer; mediaType: string }>;
-export type ClipDecodeSource = ClipFileSource | ClipImageSource;
-
-export type ClipInfo = Readonly<{ duration: number; width: number; height: number }>;
-export type DecodedFrame = Readonly<{ time: number; jpeg: Buffer }>;
 
 /** Why a clip could not be read, in Roqer's own words. */
 export class ClipDecodeError extends Error {
@@ -86,7 +81,7 @@ function isJpeg(bytes: Buffer): boolean {
   return bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff;
 }
 
-function checkedFrames(value: unknown, limit: number): DecodedFrame[] {
+function checkedFrames(value: unknown, limit: number): ClipFrame[] {
   const failed = failureOf(value);
   if (failed !== undefined) throw failed;
   if (!isRecord(value) || !Array.isArray(value.frames) || value.frames.length > limit) throw new ClipDecodeError("decode", MESSAGES.decode!);
@@ -113,6 +108,8 @@ export class ClipDecoder {
   #queue: Promise<unknown> = Promise.resolve();
   #idle: NodeJS.Timeout | null = null;
   #closed = false;
+  /** Counts closes, so a window still loading when the decoder closed is not kept. */
+  #generation = 0;
 
   /** `page`: the decoder's HTML, beside the compiled main process. */
   constructor(page: string) {
@@ -120,14 +117,14 @@ export class ClipDecoder {
   }
 
   /** How long a clip is and how large its frames are. */
-  info(source: ClipDecodeSource): Promise<ClipInfo> {
+  info(source: ClipSource): Promise<ClipInfo> {
     return this.#run(async (call) => checkedInfo(source.kind === "video"
       ? await call("probeVideo", [pathToFileURL(source.path).href], REQUEST_MARGIN_MS)
       : await call("probeImage", [source.bytes.toString("base64"), source.mediaType], REQUEST_MARGIN_MS)));
   }
 
   /** One frame at each of `times` (clip seconds), `edge` pixels on the long side: thumbnails for choosing a selection. */
-  strip(source: ClipDecodeSource, times: readonly number[], edge: number): Promise<DecodedFrame[]> {
+  strip(source: ClipSource, times: readonly number[], edge: number): Promise<ClipFrame[]> {
     const budget = REQUEST_MARGIN_MS + times.length * 1_000;
     return this.#run(async (call) => checkedFrames(source.kind === "video"
       ? await call("stripVideo", [pathToFileURL(source.path).href, times, edge], budget)
@@ -139,7 +136,7 @@ export class ClipDecoder {
    * the long side. A video plays the selection through in real time, so this
    * takes about as long as the selection lasts.
    */
-  capture(source: ClipDecodeSource, selection: ClipSelection, edge: number): Promise<Readonly<{ frames: DecodedFrame[]; nativeRate: number }>> {
+  capture(source: ClipSource, selection: ClipSelection, edge: number): Promise<Readonly<{ frames: ClipFrame[]; nativeRate: number }>> {
     const rate = captureRate(selection);
     const playback = (selection.end - selection.start) * 1000;
     const budget = playback * 2 + REQUEST_MARGIN_MS;
@@ -153,7 +150,7 @@ export class ClipDecoder {
         throw new ClipDecodeError("decode", MESSAGES.decode!);
       }
       const count = Math.min(started.count as number, MAX_CLIP_FRAMES);
-      const frames: DecodedFrame[] = [];
+      const frames: ClipFrame[] = [];
       try {
         for (let from = 0; from < count; from += TAKE_BATCH) {
           frames.push(...checkedFrames(await call("take", [from, Math.min(TAKE_BATCH, count - from)], REQUEST_MARGIN_MS), TAKE_BATCH));
@@ -171,6 +168,7 @@ export class ClipDecoder {
   /** Close the window now; a later request opens it again unless the decoder was closed for good. */
   async close(forGood = false): Promise<void> {
     this.#closed ||= forGood;
+    this.#generation++;
     if (this.#idle !== null) clearTimeout(this.#idle);
     this.#idle = null;
     const window = this.#window;
@@ -189,6 +187,7 @@ export class ClipDecoder {
         return await work((name, args, timeoutMs) => this.#call(window, name, args, timeoutMs));
       } finally {
         this.#idle = setTimeout(() => void this.close(), IDLE_CLOSE_MS);
+        this.#idle.unref();
       }
     });
     this.#queue = result.catch(() => undefined);
@@ -221,6 +220,7 @@ export class ClipDecoder {
   #open(): Promise<BrowserWindow> {
     if (this.#window !== null && !this.#window.isDestroyed()) return Promise.resolve(this.#window);
     this.#opening ??= (async () => {
+      const generation = this.#generation;
       const partition = electronSession.fromPartition("roqer-clip-decoder", { cache: false });
       partition.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
       partition.setPermissionCheckHandler(() => false);
@@ -249,7 +249,13 @@ export class ClipDecoder {
         await window.loadFile(path.resolve(this.#page));
       } catch {
         window.destroy();
-        this.#opening = null;
+        if (generation === this.#generation) this.#opening = null;
+        throw new ClipDecodeError("crashed", MESSAGES.crashed!);
+      }
+      // Closed while it loaded (the app's window went, or a request timed out):
+      // a hidden window kept now would outlive everything that could close it.
+      if (generation !== this.#generation) {
+        window.destroy();
         throw new ClipDecodeError("crashed", MESSAGES.crashed!);
       }
       this.#window = window;

@@ -1,3 +1,4 @@
+import { isAttachmentClip } from "./reference-clip";
 import { isRunRecord, withoutMalformedUsage } from "./run-events";
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -33,7 +34,8 @@ export function isPersistedAttachment(value: unknown): value is Record<string, u
     typeof value.addedAt === "string" &&
     (value.path === undefined || typeof value.path === "string") &&
     (value.mediaType === undefined || typeof value.mediaType === "string") &&
-    (value.thumbnailDataUrl === undefined || isAttachmentThumbnail(value.thumbnailDataUrl));
+    (value.thumbnailDataUrl === undefined || isAttachmentThumbnail(value.thumbnailDataUrl)) &&
+    (value.clip === undefined || isAttachmentClip(value.clip));
 }
 
 export function supportsWorkspaceSchema(value: unknown): value is Record<string, unknown> & { schemaVersion: 1 | 2 | 3 } {

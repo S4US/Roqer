@@ -4,6 +4,7 @@ import path from "node:path";
 
 import {
   isClipId,
+  isSavedSelection,
   MAX_CLIP_FRAMES,
   selectionProblem,
   type ClipSelection,
@@ -41,6 +42,8 @@ const SCOPE_PATTERN = /^[0-9a-f]{32}$/;
 const MAX_MANIFEST_BYTES = 256 * 1024;
 /** A stored frame's largest size: a 1280-pixel JPEG is far below it. */
 const MAX_FRAME_BYTES = 4 * 1024 * 1024;
+/** The most frames a stored clip may list: room above today's cap for one stored under another. */
+const MAX_STORED_FRAMES = MAX_CLIP_FRAMES * 4;
 
 /** The folder name for a chat's clips. */
 export function clipScope(chatId: string): string {
@@ -105,9 +108,10 @@ export function isClipManifest(value: unknown): value is ClipManifest {
   if (typeof value.name !== "string" || value.name.length === 0 || value.name.length > 260) return false;
   if (!isFiniteNumber(value.duration) || value.duration <= 0) return false;
   if (!Number.isSafeInteger(value.width) || !Number.isSafeInteger(value.height) || (value.width as number) < 1 || (value.height as number) < 1) return false;
-  if (selectionProblem(value.selection, value.duration) !== undefined) return false;
+  // Shape, not today's selection limits: a clip stored under older ones still reads.
+  if (!isSavedSelection(value.selection, value.duration)) return false;
   const frames = value.frames;
-  if (!Array.isArray(frames) || frames.length === 0 || frames.length > MAX_CLIP_FRAMES) return false;
+  if (!Array.isArray(frames) || frames.length === 0 || frames.length > MAX_STORED_FRAMES) return false;
   if (!frames.every((time, index) => isFiniteNumber(time) && (index === 0 || time > (frames[index - 1] as number)))) return false;
   return isClipAnalysis(value.analysis) && typeof value.createdAt === "string";
 }
@@ -166,7 +170,9 @@ export class ClipStore {
       analysis: clip.analysis,
       createdAt: new Date(this.#now()).toISOString(),
     };
-    if (!isClipManifest(manifest)) throw new Error("The clip's frames could not be stored: its description was not valid.");
+    if (!isClipManifest(manifest) || selectionProblem(clip.selection, clip.duration) !== undefined || clip.frames.length > MAX_CLIP_FRAMES) {
+      throw new Error("The clip's frames could not be stored: its description was not valid.");
+    }
     if (!clip.frames.every((frame) => isJpeg(frame.jpeg) && frame.jpeg.length <= MAX_FRAME_BYTES)) {
       throw new Error("The clip's frames could not be stored: a frame was not a JPEG.");
     }
@@ -238,7 +244,7 @@ export class ClipStore {
     return manifest;
   }
 
-  /** A pending clip's manifest, for a run about to adopt it. */
+  /** A pending clip's manifest. */
   async readPending(id: string): Promise<ClipManifest | undefined> {
     if (!isClipId(id)) return undefined;
     const manifest = await this.#readManifest(this.#pending(id));
@@ -249,14 +255,6 @@ export class ClipStore {
   async frame(scope: string, manifest: ClipManifest, index: number): Promise<Buffer> {
     if (!Number.isSafeInteger(index) || index < 0 || index >= manifest.frames.length) throw new Error("That frame is not in the clip.");
     const bytes = await fs.readFile(path.join(this.#scoped(scope, manifest.id), frameFileName(index)));
-    if (!isJpeg(bytes) || bytes.length > MAX_FRAME_BYTES) throw new Error("A stored frame of the clip is damaged.");
-    return bytes;
-  }
-
-  /** A pending clip's frame, for the attachment's own sheets before the run adopts it. */
-  async pendingFrame(manifest: ClipManifest, index: number): Promise<Buffer> {
-    if (!Number.isSafeInteger(index) || index < 0 || index >= manifest.frames.length) throw new Error("That frame is not in the clip.");
-    const bytes = await fs.readFile(path.join(this.#pending(manifest.id), frameFileName(index)));
     if (!isJpeg(bytes) || bytes.length > MAX_FRAME_BYTES) throw new Error("A stored frame of the clip is damaged.");
     return bytes;
   }

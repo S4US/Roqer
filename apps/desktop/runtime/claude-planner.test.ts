@@ -990,6 +990,49 @@ test("with Blender on, Claude may call the blender tool, and a call is one engin
   assert.match(blenderResult, /Blender job finished/);
 });
 
+test("in a chat with reference clips, Claude may look closer at one, and a call is one engine read", async () => {
+  const controller = new AbortController();
+  const { context, recorded } = makeContext(controller, () => ({
+    ok: true, data: { clip: "0123456789ab" }, text: "Clip 0123456789ab: 8 frames.", httpStatus: 200, durationMs: 1,
+  }));
+  let launchArgs: string[] = [];
+  let clipResult = "";
+  const planner = createClaudePlanner({
+    ...AGENT_OPTIONS,
+    referenceClips: true,
+    launcher: {
+      launch: async (args) => {
+        launchArgs = args;
+        const child = new FakeChildProcess();
+        void (async () => {
+          child.writeLine({
+            type: "system",
+            subtype: "init",
+            tools: [...PROVIDER_TOOLS, "mcp__workbench__reference_clip"],
+            mcp_servers: [{ name: "workbench", status: "connected" }],
+          });
+          clipResult = await callTool(await mcpTarget(args), { clip: "0123456789ab", from: 0.1, to: 0.3 }, "reference_clip");
+          child.writeLine({ type: "result", subtype: "success", is_error: false, result: "Looked." });
+          child.finish(0);
+        })();
+        return child.asChild();
+      },
+    },
+    getStatus: async () => ({ kind: "signed-in", message: "Pro connected through Claude Code", planType: "pro" }),
+    cwd: process.cwd(),
+    model: "opus",
+    effort: "high",
+  });
+
+  assert.equal(await planner.run(context), "Looked.");
+  assert.equal(
+    launchArgs[launchArgs.indexOf("--allowedTools") + 1],
+    [...PROVIDER_TOOLS, "mcp__workbench__reference_clip"].join(","),
+  );
+  assert.deepEqual(recorded.calls, ["read_reference_clip"]);
+  assert.match(clipResult, /8 frames/);
+});
+
 test("Claude Code's stream is counted for the waiting line: what streamed, then the API's own figure", () => {
   const event = (value: Record<string, unknown>, parent: string | null = null) =>
     streamedOutput({ type: "stream_event", parent_tool_use_id: parent, event: value });

@@ -13,6 +13,7 @@ import type { OpenCloudCheckResult, OpenCloudSave, OpenCloudSettingsResult } fro
 import type { BlenderSettingsResult } from "../shared/blender";
 import type { ModelPreviewResult } from "../shared/model-preview";
 import type { EvidencePictureResult } from "../shared/evidence-picture";
+import type { ClipSelection } from "../shared/reference-clip";
 
 type ProviderConnector = {
   status(): Promise<ProviderStatus>;
@@ -40,6 +41,10 @@ declare global {
       assets: {
         pick(): Promise<AssetAttachment | null>;
         attachImage(name: string, mediaType: string, bytes: ArrayBuffer): Promise<AssetAttachment>;
+        attachVideo(name: string, bytes: ArrayBuffer): Promise<AssetAttachment>;
+        clipStrip(id: string, count: number, range?: { start: number; end: number }): Promise<Array<{ time: number; dataUrl: string }>>;
+        clipFrame(id: string, time: number): Promise<string>;
+        selectClip(id: string, selection: ClipSelection): Promise<AssetAttachment>;
         release(ids: string[]): Promise<void>;
       };
       updates: {

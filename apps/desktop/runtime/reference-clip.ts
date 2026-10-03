@@ -1,11 +1,13 @@
 import {
   CLIP_ID_PATTERN,
   effectSeconds,
+  formatClipTime,
   isClipId,
   REFERENCE_CLIP_OPERATION,
   REFERENCE_CLIP_TOOL_NAME,
+  selectionEffectSeconds,
 } from "../shared/reference-clip";
-import type { CropBox } from "./clip-analysis";
+import { describeClipAnalysis, type CropBox } from "./clip-analysis";
 import type { ClipManifest } from "./clip-store";
 import type { McpCallOptions, McpToolImage, McpToolOutcome } from "./mcp-types";
 import { frameLabel } from "./sheet-labels";
@@ -137,6 +139,44 @@ export function describeSheet(manifest: ClipManifest, indexes: readonly number[]
     `${every}${rate === undefined ? "" : ` (stored at about ${Math.round(rate)} a second)`}.`,
     `Tiled ${sheetColumns(indexes.length)} to a row, left to right then top to bottom, each labelled with its number and effect time${cropped ? ", and cropped to where the clip changes" : ""}.`,
   ].join(" ");
+}
+
+/** One sheet sent with an attachment: what it shows, and its place among the message's images. */
+export type SentSheet = Readonly<{ plan: ClipSheetPlan; image: number; cropped: boolean }>;
+
+/**
+ * What the model is told about an attached clip: what it is and which part
+ * was chosen, how the images with the message show it, what Roqer measured,
+ * and how to look closer or compare. `sheets` is empty when this sign-in
+ * cannot read images; the measurements still go.
+ */
+export function clipAttachmentText(manifest: ClipManifest, size: number, sheets: readonly SentSheet[], imagesSent: boolean): string {
+  const { selection } = manifest;
+  const all = manifest.frames.map((_, index) => index);
+  const rate = storedRate(manifest, all);
+  const lines = [
+    `FILE: ${manifest.name}`,
+    `SIZE: ${size} bytes`,
+    `CONTENT: A video clip the user attached as a reference. No model reads video, so Roqer read it as frames. Clip id: ${manifest.id}.`,
+    `Selection: ${selectionEffectSeconds(selection).toFixed(2)} s of effect time, from ${formatClipTime(selection.start)} to ${formatClipTime(selection.end)} of the ${manifest.duration.toFixed(2)} s clip.`,
+    ...(selection.slow === 1
+      ? []
+      : [`The user says the clip plays ${selection.slow} times slower than real time, so every time here is real effect time: ${selection.slow} s of the clip is 1 s of the effect.`]),
+    `Times are effect seconds from the start of the selection. Roqer stored ${manifest.frames.length} frames${rate === undefined ? "" : ` (about ${Math.round(rate)} a second)`}.`,
+  ];
+  if (imagesSent) {
+    for (const sheet of sheets) {
+      lines.push(`Image ${sheet.image} of this message, ${sheet.plan.title}: ${describeSheet(manifest, sheet.plan.indexes, sheet.cropped)}`);
+    }
+  } else {
+    lines.push("Its frames were not sent: this sign-in cannot read images. Say so rather than guessing what the clip shows.");
+  }
+  lines.push(...describeClipAnalysis(manifest.analysis));
+  lines.push(
+    `To see any stretch frame by frame, call reference_clip with clip "${manifest.id}" and the effect seconds you want. To compare an effect you build with it, pass reference {"clip": "${manifest.id}"} to capture_moments: Roqer shows the clip's frames beside Studio's at the same moments.`,
+    "If it shows a visual effect, load roblox-animation-vfx references/vfx-reference.md before building it.",
+  );
+  return lines.join("\n");
 }
 
 /** A clip as the attachment text and a missing-clip answer name it. */

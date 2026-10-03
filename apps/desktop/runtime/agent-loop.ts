@@ -23,6 +23,8 @@ import type { RunUsage } from "../shared/run-events";
 import type { AgentDefinition } from "./agent-definition";
 import { blenderToolDefinition, parseBlenderToolInput } from "./blender-tool";
 import { BLENDER_TOOL_NAME } from "../shared/blender";
+import { REFERENCE_CLIP_TOOL_NAME } from "../shared/reference-clip";
+import { parseReferenceClipToolInput, referenceClipToolDefinition } from "./reference-clip";
 import { buildConversationPrompt, buildFollowUpPrompt, continuesConversation } from "./conversation-prompt";
 import {
   boundRetainedToolResults, compactHistory, describeRunState, retainedToolResultCharacters, type ToolOutputBudget,
@@ -174,6 +176,8 @@ export type AgentLoopPlannerOptions = {
   outputLimitAdvice?: string;
   /** Offer the `blender` tool: only while the user has turned the local Blender worker on. */
   blender?: boolean;
+  /** Offer `reference_clip`: only in a chat holding a clip the user attached. */
+  referenceClips?: boolean;
   /** The chat this run belongs to, which names its kept conversation. */
   chatId?: string;
   /** Where a chat's conversation waits for its next message. Without it, every run starts a new one. */
@@ -230,7 +234,7 @@ function sessionKey(options: AgentLoopPlannerOptions, { autoPlaytest, instanceId
     instanceId,
     options.transportKey ?? null, options.plannerId ?? "agent-loop", options.modelId, autoPlaytest,
     options.agent.id, options.agent.version, options.blender === true, options.images !== false,
-    options.toolOutputBudget ?? null, options.contextWindow ?? null,
+    options.toolOutputBudget ?? null, options.contextWindow ?? null, options.referenceClips === true,
   ]);
 }
 
@@ -320,18 +324,21 @@ function isTurnImageMediaType(value: string): value is TurnImageMediaType {
   return (TURN_IMAGE_MEDIA_TYPES as readonly string[]).includes(value);
 }
 
-function loopTools(library: SkillLibrary, blender: boolean): TurnTool[] {
+function loopTools(library: SkillLibrary, blender: boolean, referenceClips = false): TurnTool[] {
   const textTools = [
     skillToolDefinition(library), iconToolDefinition(), taskToolDefinition(), questionToolDefinition(),
   ];
-  const blenderTool = blender ? [blenderToolDefinition()] : [];
+  const localTools = [
+    ...(blender ? [blenderToolDefinition()] : []),
+    ...(referenceClips ? [referenceClipToolDefinition()] : []),
+  ];
   return [
     {
       name: STUDIO_TOOL_NAME,
       description: studioToolDescription(),
       parameters: studioToolInputSchema(),
     },
-    ...blenderTool.map((tool) => ({ name: tool.name, description: tool.description, parameters: tool.inputSchema })),
+    ...localTools.map((tool) => ({ name: tool.name, description: tool.description, parameters: tool.inputSchema })),
     ...textTools.map((tool) => ({
       name: tool.name,
       description: tool.description,
@@ -598,7 +605,7 @@ export function createAgentLoopPlanner(options: AgentLoopPlannerOptions): Planne
       let askedAfterSilence = false;
       // Broken tool calls in a row; a turn that forms a call resets it.
       let malformedInRow = 0;
-      const tools = loopTools(options.skillLibrary, options.blender === true);
+      const tools = loopTools(options.skillLibrary, options.blender === true, options.referenceClips === true);
       const instructions = {
         system: options.agent.systemInstructions,
         developer: runDeveloperInstructions(options.agent.developerInstructions, context.autoPlaytest),
@@ -711,12 +718,16 @@ export function createAgentLoopPlanner(options: AgentLoopPlannerOptions): Planne
           return blocks;
         };
         try {
-          // A Blender job returns text and a preview image the same way a
-          // screenshot does, so it shares this path and its image budget.
-          if (call.name === STUDIO_TOOL_NAME || (options.blender === true && call.name === BLENDER_TOOL_NAME)) {
+          // A Blender job, and a closer look at a reference clip, return text
+          // and an image the same way a screenshot does, so they share this
+          // path and its image budget.
+          const clipCall = options.referenceClips === true && call.name === REFERENCE_CLIP_TOOL_NAME;
+          if (call.name === STUDIO_TOOL_NAME || (options.blender === true && call.name === BLENDER_TOOL_NAME) || clipCall) {
             const parsed = call.name === STUDIO_TOOL_NAME
               ? parseStudioToolInput(call.arguments)
-              : parseBlenderToolInput(call.arguments);
+              : clipCall
+                ? parseReferenceClipToolInput(call.arguments)
+                : parseBlenderToolInput(call.arguments);
             measuredTool = parsed.operation;
             const result = await runStudioTool(parsed.operation, parsed.args);
             const returnedImages = result.images ?? [];

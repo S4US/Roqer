@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { BLENDER_OPERATION } from "../shared/blender";
+import { REFERENCE_CLIP_OPERATION } from "../shared/reference-clip";
 import { CAPTURE_MOMENTS_OPERATION, UPLOAD_ASSETS_OPERATION } from "../shared/gateway-operations";
 import { isClassifiedTool, isKnownTool, riskForTool } from "../shared/mcp-tools";
 import { decideToolPolicy } from "../shared/policy";
@@ -76,6 +77,15 @@ test("a Blender job is irreversible: it asks outside Full auto, and Full auto ma
   assert.equal(isClassifiedTool(BLENDER_OPERATION), true);
   assert.equal(decideToolPolicy("Auto approve", "irreversible").outcome, "ask");
   assert.equal(decideToolPolicy("Full auto", "irreversible").outcome, "allow");
+});
+
+test("a closer look at a reference clip is a read: it runs in every mode, Read only included", () => {
+  assert.equal(riskForTool(REFERENCE_CLIP_OPERATION), "read");
+  assert.equal(isClassifiedTool(REFERENCE_CLIP_OPERATION), true);
+  assert.equal(isKnownTool(REFERENCE_CLIP_OPERATION), false);
+  assert.equal(decideToolPolicy("Read only", "read").outcome, "allow");
+  const operations = ((studioToolInputSchema().properties as Record<string, { enum: string[] }>).operation).enum;
+  assert.equal(operations.includes(REFERENCE_CLIP_OPERATION), false);
 });
 
 test("Blender is not a Studio operation: roblox_studio can neither list nor call it", () => {

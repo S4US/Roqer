@@ -34,8 +34,15 @@ export const MAX_CLIP_FRAME_RATE = 60;
 /** How much slower than real time a clip may say it plays. */
 export const MAX_CLIP_SLOW = 16;
 
-/** The largest video file Roqer reads, picked or dropped. */
+/** The largest video file Roqer reads from the file picker. */
 export const MAX_CLIP_SOURCE_BYTES = 1024 * 1024 * 1024;
+
+/**
+ * The largest video dropped or pasted onto the composer. Its bytes cross from
+ * the chat window and are copied twice on the way, so the cap is lower than a
+ * picked file's; a larger video can still be attached with the paperclip.
+ */
+export const MAX_DROPPED_CLIP_BYTES = 256 * 1024 * 1024;
 
 /** The largest animated picture Roqer reads as a clip. */
 export const MAX_ANIMATED_IMAGE_BYTES = 24 * 1024 * 1024;
@@ -117,14 +124,26 @@ export function selectionProblem(selection: unknown, duration: number): string |
 
 const isFiniteNumber = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value);
 
-/** A clip record as an attachment persists it. */
+/**
+ * A selection as a saved record may hold it: its shape only. The limits a new
+ * selection must meet (`selectionProblem`) can change between versions, and a
+ * chat saved under the old ones must still load.
+ */
+export function isSavedSelection(value: unknown, duration: number): value is ClipSelection {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const { start, end, slow } = value as Record<string, unknown>;
+  return isFiniteNumber(start) && isFiniteNumber(end) && isFiniteNumber(slow) &&
+    start >= 0 && end > start && end <= duration + 0.001 && slow > 0;
+}
+
+/** A clip record as an attachment persists it, checked for shape rather than against today's limits. */
 export function isAttachmentClip(value: unknown): value is AttachmentClip {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
   const clip = value as Record<string, unknown>;
   if (!isFiniteNumber(clip.duration) || clip.duration <= 0) return false;
-  if (selectionProblem({ start: clip.start, end: clip.end, slow: clip.slow }, clip.duration) !== undefined) return false;
+  if (!isSavedSelection({ start: clip.start, end: clip.end, slow: clip.slow }, clip.duration)) return false;
   if (clip.id !== undefined && !isClipId(clip.id)) return false;
-  if (clip.frames !== undefined && !(Number.isSafeInteger(clip.frames) && (clip.frames as number) >= 1 && (clip.frames as number) <= MAX_CLIP_FRAMES)) return false;
+  if (clip.frames !== undefined && !(Number.isSafeInteger(clip.frames) && (clip.frames as number) >= 1)) return false;
   return true;
 }
 
