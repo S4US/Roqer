@@ -317,7 +317,7 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
       properties: {
         path: {
           type: 'string',
-          description: 'Build root below a service; created if missing.'
+          description: 'Root below a service, made if missing; a service only adds.'
         },
         operations: {
           type: 'array',

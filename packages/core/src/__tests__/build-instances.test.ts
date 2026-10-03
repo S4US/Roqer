@@ -740,8 +740,9 @@ describe('build_instances plugin handler', () => {
       .toContain('outside the build root');
     expect(attempt([{ op: 'set', target: 'game.Workspace.Baseplate', properties: { Name: 'x' } }]).error)
       .toContain('outside the build root');
-    expect(attempt([{ op: 'remove', target: 'game.Workspace.Map' }]).error).toContain('root itself');
-    expect(attempt([{ op: 'create', className: 'Part' }], 'game.Workspace').error).toContain('is a service');
+    expect(attempt([{ op: 'create', className: 'Part' }, { op: 'remove', target: 'game.Workspace.Map' }]).error)
+      .toContain('the build root itself can be removed only by a batch with no other step');
+    expect(attempt([{ op: 'remove', target: 'game.Workspace.Baseplate' }], 'game.Workspace').error).toContain('only adds to it');
     expect(outside.Parent).toBe(world.workspace);
   });
 
@@ -752,8 +753,8 @@ describe('build_instances plugin handler', () => {
       handlers.buildInstances({ path: buildPath, operations }).error as string;
 
     // A service: the example root is below the service that was named, not Workspace.
-    expect(attempt('game.ServerStorage'))
-      .toContain('game.ServerStorage is a service; choose a build root below it, such as game.ServerStorage.MyBuild');
+    expect(attempt('game.ServerStorage', [{ op: 'remove', target: 'game.ServerStorage.Anything' }]))
+      .toContain('game.ServerStorage is a service, and a batch whose root is a service only adds to it; remove needs a build root below it, such as game.ServerStorage.MyBuild');
     expect(attempt('game')).toContain('game cannot be a build root');
     // Directly under game is not below a service; its parent, game, does exist.
     expect(attempt('game.Preview')).toContain('game.Preview is not below a service');
@@ -764,6 +765,91 @@ describe('build_instances plugin handler', () => {
     expect(attempt('game.Workspace.Preview', [{ op: 'create', className: 'Part', parent: 'game.Workspace' }]))
       .toContain('parent game.Workspace is outside the build root game.Workspace.Preview.');
     expect(world.workspace.children).toEqual([]);
+  });
+
+  test('a service can be the root of a batch that only adds to it, reported by what it added', async () => {
+    const world = newWorld();
+    const existing = new FakeInstance('Folder', 'Kit');
+    existing.Parent = world.storage;
+    new FakeInstance('Part', 'KitPart').Parent = existing;
+    const recording = newRecording();
+    const handlers = await loadBuildHandlers(world, recording);
+
+    const result = handlers.buildInstances({
+      path: 'game.ServerStorage',
+      operations: [
+        { op: 'create', id: 'vfx', className: 'Folder', name: 'VFX' },
+        { op: 'create', className: 'Part', name: 'Marker', parent: '$vfx', position: [0, 5, 0] },
+        { op: 'create', className: 'StringValue', name: 'Note', parent: 'game.ServerStorage.Kit' },
+        { op: 'set', target: '$vfx', attributes: { EffectDuration: 2 } },
+      ],
+    });
+
+    expect(result.error).toBeUndefined();
+    expect(result.serviceRoot).toBe(true);
+    expect(result.path).toBe('game.ServerStorage');
+    expect(result.created).toBe(3);
+    // The folder, its part and the note: not the kit that was already there.
+    expect(result.descendants).toBe(3);
+    expect(result.classes).toEqual({ Folder: 1, Part: 1, StringValue: 1 });
+    expect(result.bounds.min).toEqual([-2, 4.5, -1]);
+    const vfx = find(world, 'game.ServerStorage.VFX')!;
+    expect(vfx.GetAttribute('EffectDuration')).toBe(2);
+    expect(find(world, 'game.ServerStorage.Kit.Note')).toBeDefined();
+    expect(recording.finishRecording).toHaveBeenCalledWith('recording-1', true);
+  });
+
+  test('a batch whose root is a service cannot change, remove or replace what was already there', async () => {
+    const world = newWorld();
+    const existing = new FakeInstance('StringValue', 'Setting');
+    existing.Parent = world.storage;
+    existing.Value = 'kept';
+    const recording = newRecording();
+    const handlers = await loadBuildHandlers(world, recording);
+    const attempt = (operations: unknown[]) => handlers.buildInstances({ path: 'game.ServerStorage', operations }).error as string;
+
+    expect(attempt([
+      { op: 'create', className: 'Folder', name: 'VFX' },
+      { op: 'set', target: 'game.ServerStorage.Setting', properties: { Value: 'changed' } },
+    ])).toContain('game.ServerStorage.Setting was already there, and a batch whose root is the service game.ServerStorage only adds to it');
+    expect(attempt([{ op: 'remove', target: 'game.ServerStorage.Setting' }])).toContain('remove needs a build root below it');
+    expect(attempt([{ op: 'scatter', name: 'Trees', seed: 1 }])).toContain('scatter needs a build root below it');
+    expect(existing.Value).toBe('kept');
+    expect(world.storage.children.map((child) => child.Name)).toEqual(['Setting']);
+    expect(recording.beginRecording).not.toHaveBeenCalled();
+  });
+
+  test('a batch whose one step removes its root takes the root out as one undo step', async () => {
+    const world = newWorld();
+    const preview = new FakeInstance('Model', 'SlamPreview');
+    preview.Parent = world.workspace;
+    new FakeInstance('Part', 'Marker').Parent = preview;
+    const recording = newRecording();
+    const handlers = await loadBuildHandlers(world, recording);
+
+    const result = handlers.buildInstances({ path: 'game.Workspace.SlamPreview', operations: [{ op: 'remove', target: 'game.Workspace.SlamPreview' }] });
+
+    expect(result).toEqual({ path: 'game.Workspace.SlamPreview', removedRoot: true, created: 0, cloned: 0, updated: 0, removed: 1, undoable: true });
+    expect(preview.Parent).toBeUndefined();
+    expect(preview.destroyed).toBe(false);
+    expect(recording.beginRecording).toHaveBeenCalledWith('Remove SlamPreview');
+    expect(recording.finishRecording).toHaveBeenCalledWith('recording-1', true);
+  });
+
+  test('removing a root that is not there, or a service, changes nothing', async () => {
+    const world = newWorld();
+    const recording = newRecording();
+    const handlers = await loadBuildHandlers(world, recording);
+
+    const missing = handlers.buildInstances({ path: 'game.Workspace.Gone', operations: [{ op: 'remove', target: 'game.Workspace.Gone' }] });
+    expect(missing.error).toContain('game.Workspace.Gone does not exist, so there is no build root to remove');
+    // The usual path would have created the root as a Model first.
+    expect(world.workspace.children).toEqual([]);
+
+    const service = handlers.buildInstances({ path: 'game.Workspace', operations: [{ op: 'remove', target: 'game.Workspace' }] });
+    expect(service.error).toContain('remove needs a build root below it');
+    expect(world.workspace.Parent).toBe(world.game);
+    expect(recording.beginRecording).not.toHaveBeenCalled();
   });
 
   test('refuses script source, unknown ids, reused ids, and building into a removed instance', async () => {

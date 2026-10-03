@@ -19,6 +19,17 @@ const { beginRecording, finishRecording } = Recording;
  * Every write lands at or under the root, which must sit below a service. That
  * is what makes `remove` safe to offer: a batch can delete only what it could
  * have built.
+ *
+ * A service itself may be the root of a batch that only adds to it: creates
+ * and clones, and sets on what the batch itself made. Agents kept naming
+ * `ReplicatedStorage` to put a `VFX` folder in it, and an effect such as a
+ * `BloomEffect` has to be a direct child of `Lighting`; neither had a root that
+ * could hold it. Nothing such a batch does can touch an instance that was
+ * already there, so the guarantee above still holds.
+ *
+ * The root itself can be removed only by a batch that does nothing else: a
+ * temporary preview root is cleaned up that way, and no later step can then
+ * build into something the batch has just taken away.
  */
 
 const MAX_OPERATIONS = 500;
@@ -59,6 +70,10 @@ interface BuildState {
 	scatter?: { requested: number; placed: number; attempts: number };
 	/** Models this batch created with no pivot of their own; see settlePivot. */
 	unsettled: Set<Model>;
+	/** The root is a service, so the batch may only add to it. */
+	serviceRoot: boolean;
+	/** New instances attached straight to a live parent: what a service-root batch reports on. */
+	added: Instance[];
 }
 
 /**
@@ -83,6 +98,37 @@ function settlePivot(state: BuildState, model: Model): void {
 
 function fail(step: number, op: string, message: string): never {
 	error(`step ${step} (${op}): ${message}`, 0);
+}
+
+/** Why a step that takes something away cannot run under a service root, and where it can. */
+function serviceRootRefusal(service: Instance, op: string): string {
+	const path = getInstancePath(service);
+	return `${path} is a service, and a batch whose root is a service only adds to it; ${op} needs a build root below it, such as ${path}.MyBuild (created as a Model if missing)`;
+}
+
+/**
+ * A batch whose one step removes its own root: the root taken out as one undo
+ * step. Undefined when the step names something else, or the root is not one
+ * a batch may have, so the usual checks answer it.
+ */
+function removeRootAlone(path: string, root: Instance | undefined, step: Step): Record<string, unknown> | undefined {
+	const target = step.target;
+	if (!typeIs(target, "string") || target === "") return undefined;
+	if (target !== path && (root === undefined || resolveInstance(target, undefined) !== root)) return undefined;
+	if (!root) return { error: `${path} does not exist, so there is no build root to remove. Nothing was changed.` };
+	if (root === game || root.Parent === game) return undefined;
+	const where = getInstancePath(root);
+	const recordingId = beginRecording(`Remove ${root.Name}`);
+	// Parent = nil rather than Destroy, as every remove: undo puts it back.
+	const [removed, reason] = pcall(() => {
+		root.Parent = undefined;
+	});
+	if (!removed) {
+		finishRecording(recordingId, false);
+		return { error: `Removing ${where} failed: ${reason}. Nothing was changed.` };
+	}
+	finishRecording(recordingId, true);
+	return { path: where, removedRoot: true, created: 0, cloned: 0, updated: 0, removed: 1, undoable: recordingId !== undefined };
 }
 
 function isLive(state: BuildState, instance: Instance): boolean {
@@ -250,6 +296,7 @@ function decorateDetached(state: BuildState, instance: Instance, step: Step, ind
  */
 function attach(state: BuildState, instance: Instance, parent: Instance): void {
 	if (isLive(state, parent)) {
+		state.added.push(instance);
 		state.actions.push({
 			apply: () => {
 				instance.Parent = parent;
@@ -411,6 +458,9 @@ function prepareLiveSet(state: BuildState, target: Instance, step: Step, index: 
 function prepareSet(state: BuildState, step: Step, index: number): void {
 	const op = "set";
 	const target = resolveRef(state, step.target, index, op, "target", true);
+	if (state.serviceRoot && isLive(state, target)) {
+		fail(index, op, `${getInstancePath(target)} was already there, and a batch whose root is the service ${getInstancePath(state.root)} only adds to it; change it with a build root below the service`);
+	}
 	if (isLive(state, target)) {
 		prepareLiveSet(state, target, step, index, op);
 	} else {
@@ -430,8 +480,11 @@ function prepareSet(state: BuildState, step: Step, index: number): void {
 
 function prepareRemove(state: BuildState, step: Step, index: number): void {
 	const op = "remove";
+	if (state.serviceRoot) fail(index, op, serviceRootRefusal(state.root, op));
 	const target = resolveRef(state, step.target, index, op, "target", true);
-	if (target === state.root) fail(index, op, "the build root itself cannot be removed");
+	if (target === state.root) {
+		fail(index, op, `the build root itself can be removed only by a batch with no other step: send {op: "remove", target: "${state.rootPath}"} alone`);
+	}
 	if (!isLive(state, target)) fail(index, op, "an instance created in this batch cannot be removed; leave its step out");
 	const previousParent = target.Parent;
 	state.removed.add(target);
@@ -451,6 +504,7 @@ function prepareRemove(state: BuildState, step: Step, index: number): void {
 /** Prepare a complete replacement while the previous scatter remains live. */
 function prepareScatter(state: BuildState, step: Step, index: number): void {
 	const op = "scatter";
+	if (state.serviceRoot) fail(index, op, serviceRootRefusal(state.root, op));
 	const requireUniquePath = (instance: Instance) => {
 		let current: Instance | undefined = instance;
 		while (current && current.Parent) {
@@ -565,7 +619,17 @@ function summarize(state: BuildState): Record<string, unknown> {
 	let parts = 0;
 	let minX = math.huge, minY = math.huge, minZ = math.huge;
 	let maxX = -math.huge, maxY = -math.huge, maxZ = -math.huge;
-	for (const instance of state.root.GetDescendants()) {
+	// Under a service root the root's descendants are the whole service (all
+	// of Workspace, say), so only what this batch added is counted and bounded.
+	let reported: Instance[] = state.root.GetDescendants();
+	if (state.serviceRoot) {
+		reported = [];
+		for (const top of state.added) {
+			reported.push(top);
+			for (const descendant of top.GetDescendants()) reported.push(descendant);
+		}
+	}
+	for (const instance of reported) {
 		descendants += 1;
 		classes[instance.ClassName] = (classes[instance.ClassName] ?? 0) + 1;
 		for (const tag of state.tags) {
@@ -645,7 +709,13 @@ function buildInstances(requestData: Record<string, unknown>) {
 	}
 
 	let root = resolveInstance(path as string, undefined);
+	const only = operations.size() === 1 ? operations[0] : undefined;
+	if (typeIs(only, "table") && only.op === "remove") {
+		const removal = removeRootAlone(path as string, root, only);
+		if (removal !== undefined) return removal;
+	}
 	let createdRoot = false;
+	let serviceRoot = false;
 	const made = new Set<Instance>();
 	const actions: LiveAction[] = [];
 	if (root) {
@@ -653,11 +723,14 @@ function buildInstances(requestData: Record<string, unknown>) {
 			return { error: "game cannot be a build root; choose one below a service, such as game.Workspace.MyBuild" };
 		}
 		if (root.Parent === game) {
-			// Suggest a root below the service that was named: an agent building
-			// templates into ReplicatedStorage gains nothing from a Workspace path.
-			return {
-				error: `${path} is a service; choose a build root below it, such as ${getInstancePath(root)}.MyBuild (created as a Model if missing)`,
-			};
+			// Refused before anything is prepared, naming a root below the service
+			// that was named: an agent building templates into ReplicatedStorage
+			// gains nothing from a Workspace path.
+			for (const step of operations) {
+				const op = typeIs(step, "table") ? step.op : undefined;
+				if (op === "remove" || op === "scatter") return { error: serviceRootRefusal(root, op) };
+			}
+			serviceRoot = true;
 		}
 	} else {
 		const target = resolveParentAndName(path as string);
@@ -699,6 +772,8 @@ function buildInstances(requestData: Record<string, unknown>) {
 		updated: 0,
 		removedCount: 0,
 		unsettled: new Set(),
+		serviceRoot,
+		added: [],
 	};
 
 	const [prepared, prepareError] = pcall(() => {
@@ -752,6 +827,8 @@ function buildInstances(requestData: Record<string, unknown>) {
 		...(state.scatter ? { scatter: state.scatter } : {}),
 		instanceRef: getInstanceReference(root),
 		createdRoot,
+		// Its counts and bounds cover what the batch added, not the whole service.
+		...(serviceRoot ? { serviceRoot: true } : {}),
 		created: state.created,
 		cloned: state.cloned,
 		updated: state.updated,

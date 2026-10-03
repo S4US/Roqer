@@ -200,7 +200,7 @@ export function studioToolGuide(): string {
     "A script write whose source will not compile still lands, and its result carries syntaxError {line, message}: fix that line before playtesting. syntaxCheck: 'unavailable' means the source was not checked. Only syntax is judged, not types or member names.",
     "When one script needs several exact edits, send them as one edit_script_batch rather than several edit_script_lines calls: each separate write costs its own approval, revision, and read-back, and every write after the first is resolved against source you can no longer describe.",
     "Never write a script's source inside execute_luau; that call is refused before it runs. Create the instance there when nothing structured can, then write its body with set_script_source: only the structured script operations produce the diff the user reviews and the read-back that verifies the write.",
-    "Build geometry and other instances with build_instances rather than execute_luau. For edits to existing physical 3D build geometry, prefer a bounded build_instances set under the smallest containing build root; reserve set_properties for non-build properties or cases the build operation cannot express. Each step is {op: 'create'|'clone'|'set'|'remove', id?, className?, source?, parent?, target?, name?, properties?, position?: [x, y, z], rotation?: [x, y, z] degrees, transforms?: [{position?, rotation?, scale?}], tags?, attributes?}. create needs className; clone needs source and makes one copy per transform; set and remove need target. Refer to an earlier step's instance as \"$id\". A transform's rotation sets the clone's pivot orientation outright; a Model build_instances creates gets an upright pivot, but a template from elsewhere keeps its own, so read its pivot before turning clones of it. Color3 is [r, g, b] from 0 to 1. A CFrame is {position, rotation?} in those forms. Every parent and target stays inside path, the whole batch applies or none of it does, and it is one Studio undo step.",
+    "Build geometry and other instances with build_instances rather than execute_luau. For edits to existing physical 3D build geometry, prefer a bounded build_instances set under the smallest containing build root; reserve set_properties for non-build properties or cases the build operation cannot express. Each step is {op: 'create'|'clone'|'set'|'remove', id?, className?, source?, parent?, target?, name?, properties?, position?: [x, y, z], rotation?: [x, y, z] degrees, transforms?: [{position?, rotation?, scale?}], tags?, attributes?}. create needs className; clone needs source and makes one copy per transform; set and remove need target. Refer to an earlier step's instance as \"$id\". A transform's rotation sets the clone's pivot orientation outright; a Model build_instances creates gets an upright pivot, but a template from elsewhere keeps its own, so read its pivot before turning clones of it. Color3 is [r, g, b] from 0 to 1. A CFrame is {position, rotation?} in those forms. Every parent and target stays inside path, the whole batch applies or none of it does, and it is one Studio undo step. path may be a service itself (game.ReplicatedStorage, game.Lighting) for a batch that only adds: create, clone, and set on what it made. To delete a whole build root, such as a preview marker's, send {op: 'remove', target: <its path>} as the batch's only step.",
     // Every recorded world run aimed its screenshots by writing the camera in
     // execute_luau, which is classed irreversible and so asks the user outside
     // Full auto, although this read operation frames a view deterministically.
@@ -1182,6 +1182,24 @@ function recordBuild(context: PlannerContext, args: JsonRecord, outcome: McpTool
   const root = stringField(data, "path") ?? (typeof args.path === "string" ? args.path : undefined);
   if (root === undefined) return;
 
+  if (data.removedRoot === true) {
+    context.recordChange({
+      kind: "instance",
+      target: root,
+      instanceId: context.instanceId ?? undefined,
+      summary: "Removed the build root and everything in it, in one undoable step.",
+    });
+    context.recordEvidence({
+      kind: "verification",
+      changeKind: "instance",
+      title: root,
+      passed: true,
+      detail: "Studio took the build root out of the place as the batch's only step.",
+      metadata: [{ label: "Undo", value: data.undoable !== false ? "One Studio undo step" : "Not recorded in Studio's undo history" }],
+    });
+    return;
+  }
+
   const parts = (["created", "cloned", "updated", "removed"] as const)
     .map((key) => [key, numberField(data, key) ?? 0] as const)
     .filter(([, count]) => count > 0)
@@ -1198,14 +1216,18 @@ function recordBuild(context: PlannerContext, args: JsonRecord, outcome: McpTool
   const descendants = numberField(data, "descendants");
   const bounds = describeBounds(data.bounds);
   const undoable = data.undoable !== false;
+  // Under a service root the counts and bounds cover what the batch added, not the service.
+  const serviceRoot = data.serviceRoot === true;
   context.recordEvidence({
     kind: "verification",
     changeKind: "instance",
     title: root,
     passed: true,
-    detail: "Studio checked every step before changing anything, applied the batch as a whole, and read the build root back afterwards.",
+    detail: serviceRoot
+      ? "Studio checked every step before changing anything, applied the batch as a whole, and read back what it added to the service."
+      : "Studio checked every step before changing anything, applied the batch as a whole, and read the build root back afterwards.",
     metadata: [
-      ...(descendants === undefined ? [] : [{ label: "Instances under the root", value: String(descendants) }]),
+      ...(descendants === undefined ? [] : [{ label: serviceRoot ? "Instances the batch added" : "Instances under the root", value: String(descendants) }]),
       ...(bounds === undefined ? [] : [{ label: "Bounds", value: bounds }]),
       {
         label: "Undo",

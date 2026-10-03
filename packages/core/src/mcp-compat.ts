@@ -29,12 +29,12 @@ Tool descriptions explain selection. Input schemas explain arguments. This guide
 
 Use build_instances to create, clone, update, or remove many instances in one request rather than building through execute_luau. The whole batch is one undo step, and it applies completely or not at all.
 
-- path is the build root. It must sit below a service, such as game.Workspace.Island, and is created as a Model when missing. Every parent, set target, and remove target must be the root or inside it; a clone source may be anywhere.
+- path is the build root. It sits below a service, such as game.Workspace.Island, and is created as a Model when missing. A service itself, such as game.ReplicatedStorage or game.Lighting, can be the root of a batch that only adds: create, clone, and set on what the batch made. Every parent, set target, and remove target must be the root or inside it; a clone source may be anywhere. To delete a build root, send one remove step whose target is the root, and nothing else.
 - Steps run in order. create takes className, and optionally name, parent, properties, tags, attributes, and for a part position and rotation. clone takes source and transforms, one clone per entry, each with optional position, rotation, and scale; its name, properties, tags, and attributes apply to every clone. set takes target and any of the same fields. remove takes target.
 - Give a step an id to refer to its instance later as $id, for example a Model created in step 1 as the parent of the parts in step 2. Paths only resolve instances that already exist.
 - Values follow set_properties: Vector3 as [x, y, z], Color3 as [r, g, b] from 0 to 1, enums by item name. position is world studs, rotation is Orientation in degrees. Script Source is refused; create the script, then write its body with set_script_source.
 - One batch holds up to 500 steps and 2,000 new instances (20,000 counting clone descendants). Split a larger build by area.
-- The result reports what the root holds afterwards: counts by class and tag, world bounds, and the path of each id. A step that cannot apply names its number and changes nothing.
+- The result reports what the root holds afterwards (under a service root, what the batch added): counts by class and tag, world bounds, and the path of each id. A step that cannot apply names its number and changes nothing.
 
 ### Deterministic scatter
 

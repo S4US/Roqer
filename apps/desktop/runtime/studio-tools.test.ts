@@ -2110,3 +2110,29 @@ test("a batch upload becomes one asset card per file Roblox finished, even when 
 test("the guide documents the batch upload", () => {
   assert.match(studioToolGuide(), /upload_assets \{uploads: object\[\]\}/);
 });
+test("a batch that removed its build root is recorded as that removal, with no root to count", async () => {
+  const { context, changes, evidence } = contextWith([
+    ok({ path: "game.Workspace.SlamPreview", removedRoot: true, created: 0, cloned: 0, updated: 0, removed: 1, undoable: true }),
+  ]);
+  const run = createStudioToolRunner(context);
+
+  const result = await run("build_instances", { path: "game.Workspace.SlamPreview", operations: [{ op: "remove", target: "game.Workspace.SlamPreview" }] });
+
+  assert.equal(result.ok, true);
+  assert.equal(changes.length, 1);
+  assert.equal(changes[0].summary, "Removed the build root and everything in it, in one undoable step.");
+  assert.equal(evidence[0].detail, "Studio took the build root out of the place as the batch's only step.");
+  assert.deepEqual(evidence[0].metadata, [{ label: "Undo", value: "One Studio undo step" }]);
+});
+
+test("a batch under a service root counts what it added, not the service", async () => {
+  const { context, evidence } = contextWith([
+    ok({ path: "game.ReplicatedStorage", serviceRoot: true, created: 2, cloned: 0, updated: 0, removed: 0, undoable: true, descendants: 2 }),
+  ]);
+  const run = createStudioToolRunner(context);
+
+  await run("build_instances", { path: "game.ReplicatedStorage", operations: [{ op: "create", className: "Folder", name: "VFX" }] });
+
+  assert.match(String(evidence[0].detail), /read back what it added to the service/);
+  assert.deepEqual(evidence[0].metadata?.[0], { label: "Instances the batch added", value: "2" });
+});

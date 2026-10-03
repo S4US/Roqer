@@ -44,10 +44,10 @@ export type ToolSchema = {
 };
 
 /** sha256 of `packages/core/src/tools/definitions.ts` with LF newlines. */
-export const TOOL_DEFINITIONS_DIGEST = "6f829dc836a07edb9737d05d1322bb2e7f9299733c7d4e495f1e6aa1f7405524";
+export const TOOL_DEFINITIONS_DIGEST = "1b7723891ea5f399fddb2468365473ecbd73f66e9118c82b86bf6bbf5c00a3bb";
 
 /** What a bridge built from these definitions reports as `toolCatalogDigest` on `/health`. */
-export const TOOL_CATALOG_DIGEST = "2f786bd0a803d04be6e38a6c8dd29655a6e0de5dc932d3ed02e4e98d9260a541";
+export const TOOL_CATALOG_DIGEST = "81a46fb69d9bd5cf7357ae30bf8019fa46a6190b4b7213df292dd802e2e0563f";
 
 export const TOOL_SCHEMAS: Readonly<Record<string, ToolSchema>> = {
   animation: {
@@ -97,7 +97,7 @@ export const TOOL_SCHEMAS: Readonly<Record<string, ToolSchema>> = {
   build_instances: {
     description: "Use to build, edit, remove, or scatter instances atomically under one root.",
     parameters: [
-      { name: "path", type: "string", required: true, description: "Build root below a service; created if missing." },
+      { name: "path", type: "string", required: true, description: "Root below a service, made if missing; a service only adds." },
       { name: "operations", type: "object[]", required: true, description: "Steps; all apply or none do." },
       { name: "instance_id", type: "string", required: false, description: "Connected place." },
     ],

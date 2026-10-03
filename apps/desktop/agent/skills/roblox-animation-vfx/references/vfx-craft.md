@@ -50,8 +50,7 @@ See `references/vfx-design.md`. The short version:
      root `ReplicatedStorage.VFX` (in the same build as the effect, when you
      are building one), so it sits at `ReplicatedStorage.VFX.Emit` beside the
      templates. Pass `path` `game.ReplicatedStorage.VFX`: a missing root is
-     created for you (as a Model), and a service itself cannot be a build
-     root.
+     created for you (as a Model).
   2. Call `set_script_source {instancePath: "game.ReplicatedStorage.VFX.Emit",
      template: "roblox-animation-vfx/templates/vfx/emit.lua"}`. The new script
      is empty, so it needs no read and no `expectedRevision`, and Roqer's
@@ -736,9 +735,10 @@ capture instead of caught in passing.
    - Does one layer bury another?
    - Does anything stay constant that should change?
    - Does it end cleanly, with nothing left behind?
-6. Remove the marker with `execute_luau`
-   (`workspace.SlamPreview:Destroy()`): `build_instances` cannot remove its own
-   root. Check `get_runtime_logs` for `VFXEmit` warnings: a
+6. Remove the marker with one `build_instances` call whose only step is
+   `{op: "remove", target: "game.Workspace.SlamPreview"}` and whose `path` is
+   that root: one undo step, which the user can take back. Check
+   `get_runtime_logs` for `VFXEmit` warnings: a
    bad attribute, an emitter with nothing to play, a bounded count. Before
    calling the effect done, check that no `rbxasset://textures/roqer-preview/`
    address is left: players would see nothing there.
