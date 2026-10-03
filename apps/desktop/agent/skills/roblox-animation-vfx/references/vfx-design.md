@@ -158,8 +158,12 @@ studied artists get it:
 - **Black without black:**
   - a white sprite at Brightness 0-0.01;
   - a dim twin of the same hue at Brightness 0.05-0.6, one `ZOffset` step
-    behind a Brightness 3-6 copy, with a slightly longer life; its angle
-    follows the black twin's rule above;
+    behind a Brightness 3-6 copy, with a slightly longer life, a tenth to a
+    fifth longer as in the stacked copies below; its angle follows the black
+    twin's rule above. Much longer and it is left alone on screen: a dim copy
+    of a crescent swirl that lasted 2.6 times as long as the bright one
+    (`TimeScale` 0.7 stretching it further) hung in the sky as dull blue arcs
+    after the colour had gone *(verified)*;
   - the dark tail of a gradient (section 2).
 - **Stacked copies for an inner gradient.** Three copies of one flame sheet:
 
@@ -323,6 +327,14 @@ Draw them with `roqer.draw_flipbook` (the `roblox-building` skill's
 - **Streaks:** `VelocityParallel` with `Squash` (often ramped, up to ±3, or
   -18 for extreme lines) and `Rotation` -90, so the texture's long axis follows
   the motion.
+- **Which way a `VelocityParallel` sprite points** *(verified, from both
+  sides)*: at `Rotation` -90 the image's top leads the motion, at 90 its
+  bottom leads, and at 0 the image lies across the motion. A lance or shard
+  drawn point up therefore takes -90; at 0 a volley of them flies sideways,
+  like fins.
+  - It follows the particle's own velocity, not the part's: at `Speed` 0 it
+    has none, and missile heads emitted that way stood upright whichever way
+    they flew *(verified)*.
 - **Mirrored pairs:** two copies at `Rotation` -90 and +90 make symmetric
   wings.
 
@@ -444,6 +456,12 @@ Typical lifetimes *(measured)*:
 **Projectiles** *(measured)*. A projectile has three parts:
 - **A head:** one sprite, such as a `VelocityParallel` diamond. Clear it at
   impact (`Clear()`), so it vanishes in that frame.
+  - To point it along a curved path, emit it with the projectile's own
+    velocity: not locked to the part, the part turned to face along the path
+    each frame, and `Speed` set to the projectile's speed each frame, with
+    `Rotation` -90 for a head drawn point up *(verified: a missile run's
+    heads led with their point this way)*. A `FacingCamera` head that looks
+    alike from every angle needs none of this.
 - **Ribbons:** 2-3 textured Trails across a span of about 5 studs (see the
   VFX craft reference for drawing trail textures):
   - a sharp one: lifetime about 0.6, width tapering to 0, transparent for the
