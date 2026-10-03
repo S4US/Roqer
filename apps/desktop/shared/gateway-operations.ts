@@ -15,17 +15,23 @@ import type { ToolParameterSchema, ToolSchema } from "./mcp-tool-schemas";
  */
 
 export const CAPTURE_MOMENTS_OPERATION = "capture_moments";
+export const UPLOAD_ASSETS_OPERATION = "upload_assets";
 
 /**
  * Captures run Luau the model wrote, in Studio or in a playtest client, so
  * they confirm exactly as `execute_luau` and `eval_client_runtime` do.
+ * Uploads publish files to Roblox, as `upload_asset` does.
  */
 export const GATEWAY_TOOL_RISK: Readonly<Record<string, ToolRisk>> = {
   [CAPTURE_MOMENTS_OPERATION]: "irreversible",
+  [UPLOAD_ASSETS_OPERATION]: "irreversible",
 };
 
 /** The most moments one call captures: each is an image the model reads. */
 export const MAX_CAPTURE_MOMENTS = 8;
+
+/** The most files one upload call sends: as many textures as one Blender job reads. */
+export const MAX_UPLOADS = 16;
 
 export const GATEWAY_SCHEMAS: Readonly<Record<string, ToolSchema>> = {
   [CAPTURE_MOMENTS_OPERATION]: {
@@ -40,6 +46,12 @@ export const GATEWAY_SCHEMAS: Readonly<Record<string, ToolSchema>> = {
       { name: "slow", type: "number", required: false, description: "Playback speed for the last stretch before each moment, 0.01-1; the rest plays at normal speed. Default 0.1, or 0.04 when hold is false." },
       { name: "sheet", type: "boolean", required: false, defaultValue: "true", description: "Return the frames tiled into one image, two to a row at half width, which costs about what two frames do. Pass false for each frame at full size, when small detail matters or for the final look from the player's camera." },
       { name: "view", type: "object", required: false, description: "Edit runtime only: aim the camera first, as selection view does, with {path, from?, angleY?, padding?}, instead of a separate selection call. Leave it out to keep the current view." },
+    ],
+  },
+  [UPLOAD_ASSETS_OPERATION]: {
+    description: "Use to upload several local files to Roblox in one call, as upload_asset does one: every texture of a finished set at once.",
+    parameters: [
+      { name: "uploads", type: "object[]", required: true, description: `1-${MAX_UPLOADS} files, each {filePath, assetType: 'Decal'|'Model'|'Audio'|'Animation'|'Video', displayName (at most 50 characters), description?}. Each file is uploaded on its own; the result lists every file with its assetId and, for a Decal, its imageId.` },
     ],
   },
 };

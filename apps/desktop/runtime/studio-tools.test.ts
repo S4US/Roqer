@@ -2081,3 +2081,32 @@ test("a start that failed for another reason is not counted as a timeout", async
 
   assert.deepEqual(calls.map((call) => call.args.action), ["start", "start", "start"], "no status reads and no refusal");
 });
+test("a batch upload becomes one asset card per file Roblox finished, even when another file failed", async () => {
+  const batch: McpToolOutcome = {
+    ok: false,
+    data: {
+      uploads: [
+        { filePath: "C:/jobs/flash.png", displayName: "Flash", assetType: "Decal", status: "complete", assetId: "101", imageId: "201", moderationState: "Approved", operationId: "op-101" },
+        { filePath: "C:/jobs/ring.png", displayName: "Ring", assetType: "Decal", status: "failed", error: "File not found" },
+        { filePath: "C:/jobs/smoke.png", displayName: "Smoke", assetType: "Decal", status: "processing", assetId: "103", operationId: "op-103" },
+      ],
+    },
+    text: "Uploaded 2 of 3 files.",
+    httpStatus: 200,
+    durationMs: 1,
+  };
+  const { context, changes } = contextWith([batch, batch]);
+  const run = createStudioToolRunner(context);
+
+  const result = await run("upload_assets", { uploads: [] });
+  await run("upload_assets", { uploads: [] });
+
+  assert.equal(result.ok, false);
+  assert.deepEqual(changes.map((change) => [change.kind, change.assetId, change.summary]), [
+    ["asset", "101", "Uploaded “Flash” to Roblox as asset 101. Moderation: Approved."],
+  ], "a failed or unfinished file is no card, and a repeated result is not recorded twice");
+});
+
+test("the guide documents the batch upload", () => {
+  assert.match(studioToolGuide(), /upload_assets \{uploads: object\[\]\}/);
+});

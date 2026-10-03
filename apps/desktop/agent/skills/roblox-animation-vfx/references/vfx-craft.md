@@ -181,8 +181,9 @@ sheet instead, for a lit volume or simulation.
   for free.
   - A redraw comes from a new job, with new addresses.
   - The addresses work on this computer only; players see nothing there.
-- **Upload:** use `upload_asset` as a `Decal`, and use the result's `imageId`
-  as `rbxassetid://<imageId>`.
+- **Upload:** send the whole settled set in one `upload_assets` call, each
+  file as a `Decal`, and use each result's `imageId` as
+  `rbxassetid://<imageId>`.
   - Every upload is irreversible and moderated, so upload only the settled
     set, and say how many uploads a request will use before uploading.
   - Then replace every preview address left in the place (see the

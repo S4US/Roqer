@@ -2304,7 +2304,7 @@ export class BlenderWorker {
           lines.push(
             "Previews in Studio, before any upload. Each address works on this computer only:",
             ...studioPreviews.map((preview) => `- ${preview.name}: ${preview.uri}`),
-            "Set ParticleEmitter.Texture (or a Beam's or Decal's Texture) to an address to see the texture in Studio as players would. Studio keeps a file's first image for the session, so a redrawn texture comes from a new job with new addresses. Players and other computers see nothing at these addresses: once the textures are settled, upload them (upload_asset as Decal) and replace every rbxasset://textures/roqer-preview/ address with rbxassetid://<imageId>.",
+            "Set ParticleEmitter.Texture (or a Beam's or Decal's Texture) to an address to see the texture in Studio as players would. Studio keeps a file's first image for the session, so a redrawn texture comes from a new job with new addresses. Players and other computers see nothing at these addresses: once the textures are settled, upload them all in one upload_assets call (each as a Decal) and replace every rbxasset://textures/roqer-preview/ address with rbxassetid://<imageId>.",
           );
         }
       } catch (error) {

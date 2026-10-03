@@ -1965,7 +1965,7 @@ function judgeBuiltCreature(
     // Modelled in Blender: a job, an upload, and the pieces it arrived as.
     const succeeded = (tool: string) => toolCalls.some((call) => call.tool === tool && call.ok);
     if (!succeeded("run_blender_script")) return { passed: false, detail: `No Blender job succeeded; the ${noun} was not modelled.` };
-    if (!succeeded("upload_asset")) return { passed: false, detail: `The modelled ${noun} was never uploaded.` };
+    if (!succeeded("upload_asset") && !succeeded("upload_assets")) return { passed: false, detail: `The modelled ${noun} was never uploaded.` };
   }
   if (field(probe, subject.key) === "Model") {
     const meshParts = Number(field(probe, "meshParts") ?? 0);
@@ -2019,7 +2019,7 @@ function judgeBakedCreature(
   const path = "game.Workspace.WorkbenchEvalSnake";
   const succeeded = (tool: string) => toolCalls.some((call) => call.tool === tool && call.ok);
   if (!succeeded("run_blender_script")) return { passed: false, detail: "No Blender job succeeded; the snake was neither modelled nor animated." };
-  if (!succeeded("upload_asset")) return { passed: false, detail: "The modelled snake was never uploaded." };
+  if (!succeeded("upload_asset") && !succeeded("upload_assets")) return { passed: false, detail: "The modelled snake was never uploaded." };
 
   if (field(probe, "snake") !== "Model") {
     return { passed: false, detail: field(probe, "snake") === false ? "There is no WorkbenchEvalSnake in Workspace." : "WorkbenchEvalSnake is not a Model." };
@@ -2187,7 +2187,7 @@ function judgeReferenceStyle(probe: unknown, verified: boolean, toolCalls: EvalO
   const count = (key: string) => Number(field(probe, key) ?? 0);
   const succeeded = (tool: string) => toolCalls.some((call) => call.tool === tool && call.ok);
   if (!succeeded("run_blender_script")) return { passed: false, detail: "No Blender job succeeded; the visuals were not modeled." };
-  if (!succeeded("upload_asset")) return { passed: false, detail: "No model was uploaded." };
+  if (!succeeded("upload_asset") && !succeeded("upload_assets")) return { passed: false, detail: "No model was uploaded." };
   if (count("distinctMeshes") < 3) {
     return { passed: false, detail: `The map shows ${count("distinctMeshes")} modeled kit(s); the reference's trees, rocks and cliff edges call for a set of at least 3.` };
   }
@@ -2275,7 +2275,7 @@ function judgeModeledProp(probe: unknown, verified: boolean, toolCalls: EvalOrac
   }
   const succeeded = (tool: string) => toolCalls.some((call) => call.tool === tool && call.ok);
   if (!succeeded("run_blender_script")) return { passed: false, detail: "No Blender job succeeded; the cart was not modeled." };
-  if (!succeeded("upload_asset")) return { passed: false, detail: "The modeled cart was never uploaded." };
+  if (!succeeded("upload_asset") && !succeeded("upload_assets")) return { passed: false, detail: "The modeled cart was never uploaded." };
   const count = (key: string) => Number(field(probe, key) ?? 0);
   if (count("uploadedMeshes") < 1) return { passed: false, detail: "The cart contains no uploaded mesh; it was built some other way." };
   if (count("unanchored") > 0) return { passed: false, detail: "Some of the cart's parts are not anchored." };

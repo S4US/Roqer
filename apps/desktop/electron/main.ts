@@ -18,8 +18,9 @@ import { BlenderSettings } from "../runtime/blender-settings";
 import { BlenderWorker } from "../runtime/blender-worker";
 import { readModelPreview, storeModelPreview } from "../runtime/model-preview";
 import { captureMoments } from "../runtime/capture-moments";
+import { uploadAssets } from "../runtime/upload-assets";
 import { withLocalOperations, type LocalOperation } from "../runtime/local-operations";
-import { CAPTURE_MOMENTS_OPERATION } from "../shared/gateway-operations";
+import { CAPTURE_MOMENTS_OPERATION, UPLOAD_ASSETS_OPERATION } from "../shared/gateway-operations";
 import type { McpCallOptions, McpToolOutcome } from "../runtime/mcp-types";
 import { BLENDER_OPERATION, type BlenderSettingsResult, type BlenderSettingsView } from "../shared/blender";
 import type { ModelPreviewResult } from "../shared/model-preview";
@@ -1487,6 +1488,7 @@ async function startRun(event: IpcMainInvokeEvent, payload: unknown): Promise<Ru
     const session = new RunSession({
       caller: withLocalOperations(client, new Map<string, LocalOperation>([
         [CAPTURE_MOMENTS_OPERATION, (args, options, studio) => captureMoments(args, options, studio, composeContactSheet)],
+        [UPLOAD_ASSETS_OPERATION, uploadAssets],
         ...(blender ? [[BLENDER_OPERATION, (args, options) => runBlenderJob(args, options, request.chatId)] as [string, LocalOperation]] : []),
       ])),
       bridge: bridgeRecoveryFor(client.endpoint),

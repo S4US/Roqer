@@ -37,8 +37,9 @@ import { createCustomTransport } from "../runtime/custom-provider";
 import { loadAgentRuntime } from "../runtime/agent-definition";
 import { createAgentLoopPlanner } from "../runtime/agent-loop";
 import { captureMoments } from "../runtime/capture-moments";
+import { uploadAssets } from "../runtime/upload-assets";
 import { withLocalOperations, type LocalOperation } from "../runtime/local-operations";
-import { CAPTURE_MOMENTS_OPERATION } from "../shared/gateway-operations";
+import { CAPTURE_MOMENTS_OPERATION, UPLOAD_ASSETS_OPERATION } from "../shared/gateway-operations";
 import { McpClient } from "../runtime/mcp-client";
 import { BLENDER_OPERATION } from "../shared/blender";
 import { CUSTOM_API_FORMATS, DEFAULT_CUSTOM_REASONING_EFFORTS, type CustomApiFormat, type CustomConnection } from "../shared/custom-providers";
@@ -161,6 +162,7 @@ async function main(): Promise<void> {
     : new BlenderWorker({ executable: await resolveBlender(options.blender), jobsRoot: path.join(os.tmpdir(), "roqer-eval-blender-jobs") });
   const caller = withLocalOperations(client, new Map<string, LocalOperation>([
     [CAPTURE_MOMENTS_OPERATION, captureMoments],
+    [UPLOAD_ASSETS_OPERATION, uploadAssets],
     ...(worker === undefined ? [] : [[BLENDER_OPERATION, (args, call) => worker.run(args, call)] as [string, LocalOperation]]),
   ]));
   const blender = worker !== undefined;

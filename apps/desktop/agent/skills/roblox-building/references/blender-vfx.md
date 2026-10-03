@@ -315,9 +315,10 @@ To use a sheet:
 
 1. **While it changes:** iterate on previews (above). Judge each version in
    the effect, at game distance, before drawing the next.
-2. **Once it is settled:** upload it with
-   `upload_asset {action: 'upload', filePath, assetType: 'Decal', displayName}`,
-   and set `ParticleEmitter.Texture` to `rbxassetid://<imageId>`.
+2. **Once it is settled:** upload it with every other settled texture in one
+   `upload_assets {uploads: [{filePath, assetType: 'Decal', displayName}, ...]}`
+   call (a single file can also go with `upload_asset`), and set
+   `ParticleEmitter.Texture` to `rbxassetid://<imageId>`.
    - Replace every `rbxasset://textures/roqer-preview/` address left in the
      place before calling the work done.
    - To find any that remain, scan with `execute_luau`: walk

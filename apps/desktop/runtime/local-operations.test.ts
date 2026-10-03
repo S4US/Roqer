@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { BLENDER_OPERATION } from "../shared/blender";
-import { CAPTURE_MOMENTS_OPERATION } from "../shared/gateway-operations";
+import { CAPTURE_MOMENTS_OPERATION, UPLOAD_ASSETS_OPERATION } from "../shared/gateway-operations";
 import { isClassifiedTool, isKnownTool, riskForTool } from "../shared/mcp-tools";
 import { decideToolPolicy } from "../shared/policy";
 import { blenderToolDefinition, parseBlenderToolInput } from "./blender-tool";
@@ -58,6 +58,17 @@ test("capturing moments runs Luau, so it is classified and confirmed like execut
   assert.equal(operations.includes(CAPTURE_MOMENTS_OPERATION), true);
   assert.deepEqual(parseStudioToolInput({ operation: CAPTURE_MOMENTS_OPERATION, arguments: { code: "x()", times: "[0.1, 0.3]" } }),
     { operation: CAPTURE_MOMENTS_OPERATION, args: { code: "x()", times: [0.1, 0.3] } }, "times written as text are read back as numbers");
+});
+
+test("a batch upload publishes to Roblox, so it is classified and confirmed like upload_asset, inside roblox_studio", () => {
+  assert.equal(riskForTool(UPLOAD_ASSETS_OPERATION), riskForTool("upload_asset"));
+  assert.equal(isClassifiedTool(UPLOAD_ASSETS_OPERATION), true);
+  assert.equal(isKnownTool(UPLOAD_ASSETS_OPERATION), false, "not part of the MCP surface or its drift tests");
+  const operations = ((studioToolInputSchema().properties as Record<string, { enum: string[] }>).operation).enum;
+  assert.equal(operations.includes(UPLOAD_ASSETS_OPERATION), true);
+  const uploads = [{ filePath: "C:/a.png", assetType: "Decal", displayName: "a" }];
+  assert.deepEqual(parseStudioToolInput({ operation: UPLOAD_ASSETS_OPERATION, arguments: { uploads: JSON.stringify(uploads) } }),
+    { operation: UPLOAD_ASSETS_OPERATION, args: { uploads } }, "a list written as text is read back as the list");
 });
 
 test("a Blender job is irreversible: it asks outside Full auto, and Full auto may run it", () => {

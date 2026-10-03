@@ -196,6 +196,9 @@ const TOOL_TIMEOUT_MS: Readonly<Record<string, number>> = {
   // of at most 20 s and a capture. The operation reads this budget and starts
   // no wait it could not finish within it, keeping room to stop the effect.
   capture_moments: 300_000,
+  // Uploads one file after another, each within upload_asset's own budget;
+  // the operation starts none that would not finish within this one.
+  upload_assets: 300_000,
 };
 
 /**
@@ -380,10 +383,28 @@ function summarizeAnimation(args: Record<string, unknown>): string {
 }
 
 /** One-line human summary of a proposed call, shown in the activity timeline. */
+/**
+ * A batch upload in words, naming what goes up: the approval card is one
+ * decision for every file, so it has to say which files those are.
+ */
+function summarizeUploads(args: Record<string, unknown>): string {
+  const uploads = Array.isArray(args.uploads) ? args.uploads : [];
+  const names = uploads.map((entry) => {
+    const record = typeof entry === "object" && entry !== null ? entry as Record<string, unknown> : {};
+    const name = typeof record.displayName === "string" && record.displayName !== ""
+      ? record.displayName
+      : typeof record.filePath === "string" ? record.filePath.split(/[\\/]/).pop() ?? "a file" : "a file";
+    return truncate(name, 40);
+  });
+  if (names.length === 0) return "upload_assets · upload nothing";
+  return `upload_assets · upload ${names.length} file${names.length === 1 ? "" : "s"} to Roblox: ${truncate(names.join(", "), 200)}`;
+}
+
 export function summarizeToolCall(tool: string, args: Record<string, unknown>): string {
   // A Blender job's only argument is its script, which is no summary.
   if (tool === "run_blender_script") return tool;
   if (tool === "animation") return summarizeAnimation(args);
+  if (tool === "upload_assets") return summarizeUploads(args);
   for (const key of IDENTIFYING_ARGUMENTS) {
     const value = args[key];
     if (typeof value === "string" && value !== "") {

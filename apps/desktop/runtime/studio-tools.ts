@@ -1,6 +1,6 @@
 import { BLENDER_OPERATION } from "../shared/blender";
 import { AUDITED_AFTER_LABEL, UI_AUDIT_TITLE } from "../shared/completion";
-import { CAPTURE_MOMENTS_OPERATION, GATEWAY_TOOL_RISK, isGatewayOperation } from "../shared/gateway-operations";
+import { CAPTURE_MOMENTS_OPERATION, GATEWAY_TOOL_RISK, isGatewayOperation, UPLOAD_ASSETS_OPERATION } from "../shared/gateway-operations";
 import { isKnownTool, TOOL_RISK } from "../shared/mcp-tools";
 import {
   argumentTypeProblems,
@@ -159,6 +159,7 @@ const DOCUMENTED_OPERATIONS = [
   "execute_luau",
   "get_roblox_docs",
   "upload_asset",
+  UPLOAD_ASSETS_OPERATION,
 ];
 
 /**
@@ -1622,6 +1623,38 @@ function completedUpload(
       ? stringField(response.moderationResult, "moderationState")
       : undefined);
   const operationId = stringField(data, "operation_id");
+  return uploadChange({ assetId, displayName, assetType, moderationState, operationId });
+}
+
+/**
+ * The completed uploads of an `upload_assets` call, one result card each, as
+ * if each file had been sent alone. Only a file Roblox finished is a card,
+ * exactly as for a single upload.
+ */
+function completedBatchUploads(outcome: McpToolOutcome): Array<Omit<RunChange, "id" | "taskId">> {
+  const uploads = isRecord(outcome.data) && Array.isArray(outcome.data.uploads) ? outcome.data.uploads : [];
+  return uploads.flatMap((upload) => {
+    if (!isRecord(upload) || upload.status !== "complete") return [];
+    const assetId = stringField(upload, "assetId");
+    if (!assetId || !/^\d+$/.test(assetId)) return [];
+    return [uploadChange({
+      assetId,
+      displayName: stringField(upload, "displayName"),
+      assetType: stringField(upload, "assetType"),
+      moderationState: stringField(upload, "moderationState"),
+      operationId: stringField(upload, "operationId"),
+    })];
+  });
+}
+
+function uploadChange(upload: {
+  assetId: string;
+  displayName?: string;
+  assetType?: string;
+  moderationState?: string;
+  operationId?: string;
+}): Omit<RunChange, "id" | "taskId"> {
+  const { assetId, displayName, assetType, moderationState, operationId } = upload;
   const label = displayName ? `“${displayName}”` : assetType ? `the ${assetType.toLowerCase()}` : "the asset";
   const moderation = moderationState ? ` Moderation: ${moderationState}.` : "";
 
@@ -2065,6 +2098,15 @@ export function createStudioToolRunner(context: PlannerContext, options: StudioT
     if (operation === "upload_asset") {
       const upload = completedUpload(args, outcome);
       if (upload?.assetId && !recordedAssetIds.has(upload.assetId)) {
+        recordedAssetIds.add(upload.assetId);
+        context.recordChange(upload);
+      }
+    }
+
+    // Read whether or not every file went up: the ones that did are on Roblox.
+    if (operation === UPLOAD_ASSETS_OPERATION) {
+      for (const upload of completedBatchUploads(outcome)) {
+        if (!upload.assetId || recordedAssetIds.has(upload.assetId)) continue;
         recordedAssetIds.add(upload.assetId);
         context.recordChange(upload);
       }
