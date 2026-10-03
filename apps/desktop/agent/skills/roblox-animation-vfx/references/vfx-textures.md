@@ -86,9 +86,11 @@ texture, stop and report what is failing instead of escalating.
     with smooth concave sides. None has bent arms or a lumpy core. Of the
     other three, one is a tiny glint, one a horizontal lens streak, and one
     has a longer lower arm.
-  - **Variety comes from the emitter, not the texture.** 75% of those
-    emitters rotate the flare and 41% squash it. They live about 0.35 s, at
-    `LightEmission` 1 and Brightness 5-12 for the most part.
+  - **The texture stays symmetric; the emitter stretches it.** 41% of those
+    emitters squash the flare, twice the rate of other soft textures, and
+    most rotate it as they do any layer. They live about 0.35 s, shorter
+    than the 0.5 s of most layers, at `LightEmission` 1 and Brightness 5-12
+    for the most part.
   - **Glows and dots** are round. **Lens streaks** are a thin horizontal line
     through a hot centre. **Soft shock rings** are even. **Ray bursts** are
     straight rays of uneven length from one hot centre.

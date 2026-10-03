@@ -1224,8 +1224,10 @@ flare, was built the same way.
   - 16 fall off softly and 2 are crisp concave-sided stars. Each arm thins
     and fades toward its tip from one smooth core.
   - None has bent arms or a lumpy core.
-  - The emitters vary them: 75% rotate the flare and 41% squash it. They live
-    a median 0.35 s, mostly at `LightEmission` 1 and Brightness 5-12.
+  - The emitters stretch them: 41% squash the flare, against 21% of
+    emitters on other soft textures. Rotation is not special: 75% rotate it,
+    against 86% of all emitters. They live a median 0.35 s (0.49 s across
+    all emitters), mostly at `LightEmission` 1 and Brightness 5-12.
 - **Round soft glows** (436 emitters) run at a median Brightness 2, and 39%
   at 1 or below.
 - **Drawn matter holds the old description:** crescents, cel bursts,
@@ -1248,15 +1250,19 @@ flare, was built the same way.
 
 - **`vfx-textures.md`:** textures are split into two families, drawn matter
   and light. Light keeps its symmetry, as symbols do: a four-point flare
-  mirrors on both axes with equal arms and one smooth core. Variety comes
-  from the emitter. The drawing pattern and the checklist say which family
-  they apply to. Two flare examples were added (a soft glint and a crisp
-  concave star), written in plain numpy and run in Blender 5.2 with the
-  repository's helpers; they match the studied flares side by side.
+  mirrors on both axes with equal arms and one smooth core, and the
+  emitter's `Squash` stretches it. The drawing pattern and the checklist
+  say which family they apply to. Two flare examples were added (a soft
+  glint and a crisp concave star), written in plain numpy and run in
+  Blender 5.2 with the repository's helpers; they match the studied flares
+  side by side.
 - **`vfx-design.md`:** the fourth study, and flare and glow brightness. The
   blend-edge rule lives in `vfx-textures.md`: `vfx-design.md` and
-  `vfx-craft.md` load together in one call and had under 1,000 characters
-  to spare.
+  `vfx-craft.md` load together in one call, capped at 48,000 characters
+  (`MAX_BATCH_CHARACTERS`, enforced by `vfx-craft.test.ts`). That call now
+  returns 47,843, leaving 157 characters (about 400 before this change).
+  The next addition to either file needs content moved to a topic file such
+  as `vfx-textures.md`, not a higher cap.
 - **`vfx-craft.md`:** the hard-silhouette and clip-art checks now say they
   are for drawn shapes, and ask about a flare's arms and core.
 
