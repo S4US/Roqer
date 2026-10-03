@@ -9,5 +9,5 @@
     "moduleResolution": "bundler",
     "types": ["vite/client"]
   },
-  "include": ["src", "shared", "vite.config.ts"]
+  "include": ["src", "shared", "vite.config.ts", "electron/clip-decoder-page.ts"]
 }

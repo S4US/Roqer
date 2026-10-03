@@ -34,6 +34,24 @@ export async function buildDesktopRuntime() {
   await Promise.all([
     build({ ...shared, entryPoints: ["electron/main.ts"], outfile: "dist-electron/main.cjs" }),
     build({ ...shared, entryPoints: ["electron/preload.ts"], outfile: "dist-electron/preload.cjs" }),
+    // The hidden clip decoder's page runs in a sandboxed renderer, not in
+    // Node, so its script is built for the browser, and its HTML travels
+    // beside it: the main process loads both from here in development and
+    // from inside the package alike.
+    build({
+      absWorkingDir: desktopRoot,
+      bundle: true,
+      platform: "browser",
+      target: "chrome130",
+      format: "iife",
+      logLevel: "warning",
+      entryPoints: ["electron/clip-decoder-page.ts"],
+      outfile: "dist-electron/clip-decoder.js",
+    }),
+    fs.cp(
+      path.join(desktopRoot, "electron", "clip-decoder.html"),
+      path.join(desktopRoot, "dist-electron", "clip-decoder.html"),
+    ),
     fs.cp(agentSource, agentOutput, { recursive: true }),
     // The Windows window/taskbar icon is read from beside the compiled main at
     // runtime, so it has to travel with it rather than being resolved out of
