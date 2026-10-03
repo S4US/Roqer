@@ -274,14 +274,16 @@ How one orange shape renders under a new place's lighting *(verified)*:
   counts, lengths and spacing, and strokes that taper. Draw them as tapered
   strokes, lumpy blobs and warped coordinates (`tex_stroke`, `tex_blob`,
   `tex_warp`), not as rays and rings around a centre.
-- **Symbols are the exception: they are precise.** Sigils, magic circles,
-  runes and target rings are symmetric, with even line weight and clean
-  geometry; the kit's symbols and magic circles all are. Their richness
+- **Symbols are the exception: they are precise.** The kit's 93 symbols
+  (sigils, runes, zodiac and alchemy signs) have clean geometry and even
+  line weight, all but a brush-drawn glyph and a few blurred icons, though a
+  single sign may be lopsided, as Scorpio is. The eight magic circles
+  studied, from its symbols and rings, are symmetric too. Their richness
   comes from density:
-  - ornament inside the circle, such as leaves, a filigree or an inscribed
-    triangle;
-  - a rune band of many small glyphs packed into a ring, which reads as
-    script. A dozen large glyphs read as letters instead.
+  - ornament inside the circle, such as leaves, a filigree, an inscribed
+    triangle or a compass star;
+  - a rune band of many small glyphs packed into a thin ring, which reads
+    as script. A dozen large glyphs read as letters instead.
   Make the effect around a sigil lopsided, not the sigil.
 
 Draw them with `roqer.draw_flipbook` (the `roblox-building` skill's
