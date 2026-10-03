@@ -123,7 +123,9 @@ function resolveRef(state: BuildState, ref: unknown, step: number, op: string, f
 	const found = resolveInstance(text, undefined);
 	if (!found) fail(step, op, `${field} not found: ${text}; name an instance built in this batch with $id`);
 	if (insideRoot && found !== state.root && !found.IsDescendantOf(state.root)) {
-		fail(step, op, `${field} ${text} is outside the build root ${getInstancePath(state.root)}`);
+		// The requested path, not the root's: a root this batch creates has no
+		// parent until the batch applies, so its own path would lack the service.
+		fail(step, op, `${field} ${text} is outside the build root ${state.rootPath}`);
 	}
 	if (isInsideRemoved(state, found)) fail(step, op, `${field} ${text} is removed earlier in this batch`);
 	return found;
@@ -647,12 +649,22 @@ function buildInstances(requestData: Record<string, unknown>) {
 	const made = new Set<Instance>();
 	const actions: LiveAction[] = [];
 	if (root) {
-		if (root === game || root.Parent === game) {
-			return { error: `${path} is a service; choose a build root below it, such as game.Workspace.MyBuild` };
+		if (root === game) {
+			return { error: "game cannot be a build root; choose one below a service, such as game.Workspace.MyBuild" };
+		}
+		if (root.Parent === game) {
+			// Suggest a root below the service that was named: an agent building
+			// templates into ReplicatedStorage gains nothing from a Workspace path.
+			return {
+				error: `${path} is a service; choose a build root below it, such as ${getInstancePath(root)}.MyBuild (created as a Model if missing)`,
+			};
 		}
 	} else {
 		const target = resolveParentAndName(path as string);
-		if (!target.parent || target.name === undefined) {
+		if (target.name === undefined) {
+			return { error: `${path} is not below a service; choose a build root below one, such as game.Workspace.MyBuild` };
+		}
+		if (!target.parent) {
 			return { error: `${path} does not exist, and neither does its parent; create the parent first` };
 		}
 		const parent = target.parent;

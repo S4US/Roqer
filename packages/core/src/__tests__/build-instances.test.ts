@@ -745,6 +745,27 @@ describe('build_instances plugin handler', () => {
     expect(outside.Parent).toBe(world.workspace);
   });
 
+  test('a refused build root says where a root can go', async () => {
+    const world = newWorld();
+    const handlers = await loadBuildHandlers(world, newRecording());
+    const attempt = (buildPath: string, operations: unknown[] = [{ op: 'create', className: 'Part' }]) =>
+      handlers.buildInstances({ path: buildPath, operations }).error as string;
+
+    // A service: the example root is below the service that was named, not Workspace.
+    expect(attempt('game.ServerStorage'))
+      .toContain('game.ServerStorage is a service; choose a build root below it, such as game.ServerStorage.MyBuild');
+    expect(attempt('game')).toContain('game cannot be a build root');
+    // Directly under game is not below a service; its parent, game, does exist.
+    expect(attempt('game.Preview')).toContain('game.Preview is not below a service');
+    expect(attempt('game.Workspace.Missing.Preview')).toContain('neither does its parent');
+
+    // A root this batch would create has no parent while it is checked, so the
+    // message names the requested path, not a path missing its service.
+    expect(attempt('game.Workspace.Preview', [{ op: 'create', className: 'Part', parent: 'game.Workspace' }]))
+      .toContain('parent game.Workspace is outside the build root game.Workspace.Preview.');
+    expect(world.workspace.children).toEqual([]);
+  });
+
   test('refuses script source, unknown ids, reused ids, and building into a removed instance', async () => {
     const world = newWorld();
     const root = new FakeInstance('Model', 'Map');
