@@ -5,10 +5,14 @@ import { PassThrough } from "node:stream";
 import test from "node:test";
 
 import { CodexAppServerClient, type AppServerNotification, type AppServerRequest, type AppServerRequestHandler } from "./codex-app-server";
-import { codexContextUsage, codexStreamedOutput, createChatGptPlanner, type ChatGptAppServer, type CodexThread, type CodexThreadStore } from "./chatgpt-planner";
+import {
+  codexContextUsage, codexRunUsage, codexStreamedOutput, codexUsageTotals, createChatGptPlanner,
+  type ChatGptAppServer, type CodexThread, type CodexThreadStore,
+} from "./chatgpt-planner";
 import { ProviderSessionStore } from "./provider-sessions";
 import type { AgentDefinition } from "./agent-definition";
 import type { PlannerContext } from "./run-engine";
+import type { RunUsage } from "../shared/run-events";
 import type { RunTask } from "../shared/tasks";
 import type { SkillLibrary } from "./skill-library";
 
@@ -130,7 +134,7 @@ test("ChatGPT planner routes Studio calls through PlannerContext and records ver
     status: (label, detail) => statuses.push({ label, detail }),
     progress: () => undefined,
     outputTokens: () => undefined,
-    contextUsage: () => undefined,
+    contextUsage: () => undefined, runUsage: () => undefined,
     say: (text) => said.push(text),
     recordChange: (change) => changes.push(change),
     recordEvidence: (item) => evidence.push(item),
@@ -255,7 +259,7 @@ test("ChatGPT keeps an empty history prompt byte-for-byte unchanged", async () =
     status: () => undefined,
     progress: () => undefined,
     outputTokens: () => undefined,
-    contextUsage: () => undefined,
+    contextUsage: () => undefined, runUsage: () => undefined,
     say: () => undefined,
     recordChange: () => undefined,
     recordEvidence: () => undefined,
@@ -297,7 +301,7 @@ test("ChatGPT receives user-attached images in the opening turn", async () => {
     status: () => undefined,
     progress: () => undefined,
     outputTokens: () => undefined,
-    contextUsage: () => undefined,
+    contextUsage: () => undefined, runUsage: () => undefined,
     say: () => undefined,
     recordChange: () => undefined,
     recordEvidence: () => undefined,
@@ -349,7 +353,7 @@ function lifecycleRun(
   const context: PlannerContext = {
     prompt: "Inspect Studio", conversation: { messages: [], truncated: false }, images: [],
     instanceId: null, autoPlaytest: false, signal,
-    progress: () => undefined, outputTokens: () => undefined, contextUsage: () => undefined, status: overrides.status ?? (() => undefined), say: () => undefined,
+    progress: () => undefined, outputTokens: () => undefined, contextUsage: () => undefined, runUsage: () => undefined, status: overrides.status ?? (() => undefined), say: () => undefined,
     recordChange: () => undefined, recordEvidence: () => undefined, setTasks: () => undefined,
     tasks: () => [], changes: () => [], evidence: () => [], decisions: () => [], takeSteers: () => [],
     askUser: overrides.askUser ?? (async (_question, options) => options[0]),
@@ -682,11 +686,12 @@ function sessionRun(
   messages: PlannerContext["conversation"]["messages"],
   model = "gpt-test",
   instanceId: string | null = null,
+  runUsage: PlannerContext["runUsage"] = () => undefined,
 ) {
   const context: PlannerContext = {
     prompt, conversation: { messages, truncated: false }, images: [],
     instanceId, autoPlaytest: false, signal: new AbortController().signal,
-    progress: () => undefined, outputTokens: () => undefined, contextUsage: () => undefined, status: () => undefined, say: () => undefined,
+    progress: () => undefined, outputTokens: () => undefined, contextUsage: () => undefined, runUsage, status: () => undefined, say: () => undefined,
     recordChange: () => undefined, recordEvidence: () => undefined, setTasks: () => undefined,
     tasks: () => [], changes: () => [], evidence: () => [], decisions: () => [], takeSteers: () => [],
     askUser: async (_question, options) => options[0],
@@ -714,6 +719,55 @@ test("ChatGPT keeps a chat's thread for its next message and sends only the new 
   assert.equal(appServer.turnInputs[1].text, "Add a button.");
   // Codex takes the model per turn, so changing it keeps the conversation.
   assert.equal(appServer.turnInputs[1].model, "gpt-other");
+});
+
+/** Reports the thread's running token totals, which grow by the same amount every turn. */
+class CountingAppServer extends AnsweringAppServer {
+  private readonly turnsByThread = new Map<string, number>();
+
+  override async request<T = unknown>(method: string, params?: unknown): Promise<T> {
+    if (method === "turn/start") {
+      const { threadId } = params as { threadId: string };
+      const turns = (this.turnsByThread.get(threadId) ?? 0) + 1;
+      this.turnsByThread.set(threadId, turns);
+      // Queued ahead of the answer, which the base class sends on a later tick.
+      setImmediate(() => this.notificationListener?.({
+        method: "thread/tokenUsage/updated",
+        params: {
+          threadId, turnId: "turn",
+          tokenUsage: {
+            total: { totalTokens: turns * 1_100, inputTokens: turns * 1_000, cachedInputTokens: turns * 800, outputTokens: turns * 100, reasoningOutputTokens: turns * 50 },
+            last: { totalTokens: 1_100, inputTokens: 1_000, cachedInputTokens: 800, outputTokens: 100, reasoningOutputTokens: 50 },
+            modelContextWindow: null,
+          },
+        },
+      }));
+    }
+    return super.request<T>(method, params);
+  }
+}
+
+test("ChatGPT reports a run's usage from the thread's totals, and a kept thread's next run only its own", async () => {
+  const appServer = new CountingAppServer();
+  const sessions = new ProviderSessionStore<CodexThread>();
+  const reported: RunUsage[] = [];
+  const record = (usage: RunUsage) => { reported.push(usage); };
+
+  await sessionRun(appServer, sessions, "Build the shop.", [], "gpt-test", null, record);
+  await sessionRun(appServer, sessions, "Add a button.", [
+    { role: "user", text: "Build the shop." },
+    { role: "assistant", text: "Answer 1" },
+  ], "gpt-test", null, record);
+
+  assert.equal(appServer.threadsStarted, 1);
+  const expected = { inputTokens: 200, cacheReadTokens: 800, outputTokens: 100 };
+  assert.deepEqual(reported, [expected, expected], "the second run does not count the first run's tokens again");
+
+  const totals = (total: unknown) => codexUsageTotals({ method: "thread/tokenUsage/updated", params: { threadId: "thread-1", tokenUsage: { total } } });
+  assert.equal(totals({ inputTokens: 10, cachedInputTokens: 11, outputTokens: 1 }), null, "the cached part cannot exceed the input");
+  assert.equal(totals({ inputTokens: 10, cachedInputTokens: "1", outputTokens: 1 }), null);
+  assert.equal(totals(undefined), null);
+  assert.equal(codexRunUsage({ inputTokens: 10, cachedInputTokens: 0, outputTokens: 5 }, { inputTokens: 9, cachedInputTokens: 0, outputTokens: 6 }), null, "totals do not go down");
 });
 
 test("ChatGPT starts a new thread when the chat moved on without it", async () => {

@@ -126,9 +126,10 @@ export function isImageMediaType(value: unknown): value is TurnImageMediaType {
 }
 
 /**
- * The long edge an attached picture is scaled down to. Past roughly this size
- * no provider resolves more detail from a screenshot; it only costs more to
- * send and more to bill.
+ * The long edge an attached picture is scaled down to: a choice of cost over
+ * detail. Newer models resolve more (Opus 4.7 and later up to 2576 pixels, and
+ * Claude Code passes up to 2000 x 2000), but a screenshot's text and layout
+ * read at this size, and every pixel past it costs more to send and to bill.
  */
 export const MAX_ATTACHED_IMAGE_EDGE = 1568;
 

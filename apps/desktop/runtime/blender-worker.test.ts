@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import type { ChildProcess } from "node:child_process";
+import { spawnSync, type ChildProcess } from "node:child_process";
 import { EventEmitter } from "node:events";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -10,7 +10,10 @@ import test from "node:test";
 import {
   BlenderWorker, HELPERS_SCRIPT, otherSideName, readSceneContents, RUNNER_SCRIPT, scriptEnvironment, type SpawnProcess,
 } from "./blender-worker";
+import { decodePng } from "./flipbook-sheet";
+import { VIEW_GROUND } from "./png-view";
 import { glbBytes } from "./test-glb";
+import { png, sheet } from "./test-png";
 
 /** What one fake Blender process does: optional work, printed output, and how it ends. */
 type Behaviour = (args: readonly string[]) => Promise<{ output?: string; exitCode?: number; hang?: boolean }>;
@@ -82,15 +85,114 @@ test("a job exports a model, and Roqer's own pass measures it and returns its pr
   });
 });
 
+test("the inspection reports where UVs are, their range, and meshes a texture cannot map onto", async () => {
+  await withJobs(async (jobsRoot) => {
+    const reports: Record<string, unknown> = {
+      "slash.glb": { meshes: 2, without: [], withoutCount: 0, low: [0, 0], high: [1, 1] },
+      "sword.glb": { meshes: 1, without: ["Handle"], withoutCount: 1, low: [-0.5, 0], high: [2, 1] },
+      "crate.glb": { meshes: 0, without: ["Crate"], withoutCount: 1 },
+    };
+    const blender = fakeBlender(async (args) => {
+      if (args.some((arg) => arg.endsWith("roqer_runner.py"))) {
+        for (const name of Object.keys(reports)) await fs.writeFile(path.join(argAfterDashes(args), "output", name), Buffer.alloc(64));
+        return { output: "ROQER_SCRIPT_DONE\n" };
+      }
+      const uv = reports[path.basename(argAfterDashes(args))];
+      return { output: `ROQER_INSPECT ${JSON.stringify({ meshes: 2, triangles: 64, materials: [], size: [1, 1, 1], uv })}\n` };
+    });
+    const worker = new BlenderWorker({ executable: EXECUTABLE, jobsRoot, spawn: blender.spawn, killTree: blender.killTree, env: {} });
+
+    const outcome = await worker.run({ script: "import bpy" });
+
+    assert.equal(outcome.ok, true, outcome.text);
+    // Each file's entry runs from its "- <path>" line to the next.
+    const entry = (name: string) => {
+      const lines = outcome.text.split("\n");
+      const start = lines.findIndex((line) => line.startsWith("- ") && line.includes(name));
+      const end = lines.findIndex((line, index) => index > start && !line.startsWith("  "));
+      return lines.slice(start, end).join("\n");
+    };
+    assert.match(entry("slash.glb"), /UVs on 2 meshes, spanning U 0\.00 to 1\.00 and V 0\.00 to 1\.00\./);
+    assert.match(entry("sword.glb"), /UVs on 1 mesh, spanning U -0\.50 to 2\.00 and V 0\.00 to 1\.00; outside 0 to 1 a texture repeats; no UVs on Handle, where a texture shows as one flat colour\./);
+    assert.doesNotMatch(entry("crate.glb"), /UVs/, "a model with no UVs anywhere says nothing about textures");
+  });
+});
+
 test("the runner gives the script Roqer's placement helpers, and only those", () => {
   assert.match(RUNNER_SCRIPT, /roqer_helpers\.py/);
   assert.match(RUNNER_SCRIPT, /"roqer": roqer/);
-  for (const helper of ["box", "box_between", "cylinder_between", "cone_between", "join", "paint", "vertex_color_material"]) {
+  for (const helper of ["box", "box_between", "cylinder_between", "cone_between", "join", "paint", "vertex_color_material", "flipbook",
+    "vfx_arc", "vfx_ring", "vfx_cone", "vfx_swirl", "vfx_shell", "vfx_surface",
+    "draw_flipbook", "draw_texture", "tex_coords", "tex_polar", "tex_noise", "tex_cells", "tex_sample", "tex_edge", "tex_ease", "tex_curve", "tex_stroke", "tex_warp", "tex_blob"]) {
     assert.match(HELPERS_SCRIPT, new RegExp(`^def ${helper}\\(`, "m"), helper);
   }
   // A helper places a part by its ends; it never asks the model for a rotation angle.
   assert.doesNotMatch(HELPERS_SCRIPT, /def \w+\([^)]*rotation/);
   assert.doesNotMatch(HELPERS_SCRIPT, /shade_smooth/);
+});
+
+/** A Python with numpy to run the drawing helpers under, or undefined on a machine without one. */
+function pythonWithNumpy(): string | undefined {
+  for (const command of ["python3", "python"]) {
+    if (spawnSync(command, ["-c", "import numpy"], { timeout: 20_000 }).status === 0) return command;
+  }
+  return undefined;
+}
+
+/** The source of one top-level helper function, up to the next top-level line. */
+function helperSource(name: string): string {
+  const source = new RegExp(`^def ${name}\\(.*?(?=^\\S)`, "ms").exec(HELPERS_SCRIPT)?.[0];
+  assert.ok(source, `no helper named ${name}`);
+  return source;
+}
+
+test("tex_blob draws one solid piece about its radius, never split or holed, however rough", (t) => {
+  const python = pythonWithNumpy();
+  if (python === undefined) {
+    t.skip("needs Python with numpy");
+    return;
+  }
+  // The helpers module imports bpy, so only the drawing functions run here.
+  // Run 4 subtracted an old blob from a flash and got three beads; at these
+  // settings the old blob also came apart into separate dots.
+  const script = ["import json, numpy\nfrom collections import deque\n", ...["_texture_size", "tex_coords", "tex_blob"].map(helperSource), String.raw`
+def regions(mask):
+    """For each 4-connected region of True, whether it touches the image border."""
+    h, w = mask.shape
+    seen = numpy.zeros((h, w), dtype=bool)
+    found = []
+    for sy in range(h):
+        for sx in range(w):
+            if mask[sy, sx] and not seen[sy, sx]:
+                seen[sy, sx] = True
+                queue, border = deque([(sy, sx)]), False
+                while queue:
+                    cy, cx = queue.popleft()
+                    border = border or cy in (0, h - 1) or cx in (0, w - 1)
+                    for ny, nx in ((cy + 1, cx), (cy - 1, cx), (cy, cx + 1), (cy, cx - 1)):
+                        if 0 <= ny < h and 0 <= nx < w and mask[ny, nx] and not seen[ny, nx]:
+                            seen[ny, nx] = True
+                            queue.append((ny, nx))
+                found.append(border)
+    return found
+
+x, y = tex_coords(128)
+out = []
+for radius, lumps, roughness, seed in [(0.5, 8, 0.8, 6), (0.5, 13, 0.9, 9), (0.5, 9, 0.75, 4), (0.3, 11, 0.85, 3), (0.5, 3, 1.0, 2), (0.5, 6, 2.0, 5), (0.5, 6, 0.0, 1)]:
+    inside = tex_blob(x, y, radius=radius, lumps=lumps, roughness=roughness, seed=seed) > 0
+    out.append({"case": [radius, lumps, roughness, seed], "pieces": len(regions(inside)),
+                "holes": regions(~inside).count(False), "area": float(inside.mean() * 4 / (numpy.pi * radius ** 2))})
+print(json.dumps(out))
+`].join("\n");
+  const run = spawnSync(python, ["-"], { input: script, encoding: "utf8", timeout: 60_000 });
+  assert.equal(run.status, 0, run.stderr);
+  const blobs = JSON.parse(run.stdout) as Array<{ case: number[]; pieces: number; holes: number; area: number }>;
+  assert.equal(blobs.length, 7);
+  for (const blob of blobs) {
+    assert.equal(blob.pieces, 1, `${blob.case.join(", ")} came apart`);
+    assert.equal(blob.holes, 0, `${blob.case.join(", ")} has a hole`);
+    assert.ok(blob.area > 0.5 && blob.area < 1.7, `${blob.case.join(", ")} covers ${blob.area.toFixed(2)} of a disc of its radius`);
+  }
 });
 
 test("a script that raises, or exports nothing, is a failed call the model can read", async () => {
@@ -152,6 +254,144 @@ test("a job that renders an image for UI returns it, measured from the file and 
     assert.match(outcome.text, /assetType: 'Decal'/);
     assert.match(outcome.text, /imageId/);
     assert.doesNotMatch(outcome.text, /assetType: 'Model'/, "no model upload advice without a model");
+  });
+});
+
+test("a flipbook sheet is checked from its pixels, apart from ordinary renders, with its note read only as a claim", async () => {
+  await withJobs(async (jobsRoot) => {
+    const burst = sheet(8, (i) => (i >= 62 ? 0 : 6 + Math.min(i, 61 - i)));
+    // Noise does not compress: this sheet is over the attachment limit, so its half-size copy is shown instead.
+    let seed = 7;
+    const noisy = png(1024, 1024, (x, y) => {
+      seed ^= seed << 13;
+      seed ^= seed >>> 17;
+      seed ^= seed << 5;
+      seed >>>= 0;
+      const inCell = x % 256 > 8 && x % 256 < 248 && y % 256 > 8 && y % 256 < 248;
+      return inCell ? [seed & 255, (seed >> 8) & 255, (seed >> 16) & 255, 255] : [0, 0, 0, 0];
+    });
+    const halfSize = png(512, 512, () => [128, 128, 128, 255]);
+    const blender = fakeBlender(async (args) => {
+      const output = path.join(argAfterDashes(args), "output");
+      await fs.writeFile(path.join(output, "Burst.flipbook.png"), burst);
+      await fs.writeFile(path.join(output, "Burst.flipbook.json"), JSON.stringify({
+        name: "Burst", grid: 8, mode: "alpha", padding: 4, loop: false, fps: 32, engine: "BLENDER_EEVEE",
+        renderSeconds: Array.from({ length: 64 }, () => 0.05),
+      }));
+      await fs.writeFile(path.join(output, "Noise.flipbook.png"), noisy);
+      await fs.writeFile(path.join(output, "Noise.flipbook.json"), "{ not json");
+      await fs.writeFile(path.join(output, "Noise.flipbook-preview.png"), halfSize);
+      await fs.writeFile(path.join(output, "icon.png"), pngHeader(256, 256));
+      return { output: "ROQER_SCRIPT_DONE\n" };
+    });
+    const worker = new BlenderWorker({ executable: EXECUTABLE, jobsRoot, spawn: blender.spawn, killTree: blender.killTree, env: {} });
+
+    const outcome = await worker.run({ script: "import bpy\nroqer.flipbook('Burst')" });
+
+    assert.equal(outcome.ok, true, outcome.text);
+    const data = outcome.data as {
+      images: Array<{ name: string }>;
+      otherFiles: string[];
+      flipbooks: Array<{ name: string; path: string; report?: { ok: boolean; grid?: number; settings?: { FlipbookMode: string } } }>;
+    };
+    assert.deepEqual(data.images.map((image) => image.name), ["icon.png"], "sheets, notes and copies are not ordinary renders");
+    assert.deepEqual(data.otherFiles, []);
+    assert.deepEqual(data.flipbooks.map((flipbook) => flipbook.name), ["Burst.flipbook.png", "Noise.flipbook.png"]);
+    const [checked, noise] = data.flipbooks;
+    assert.equal(checked.report?.ok, true);
+    assert.equal(checked.report?.settings?.FlipbookMode, "OneShot", "a burst played once, as its note says, may end faded out");
+    assert.match(outcome.text, /Burst\.flipbook\.png: 1024 x 1024, transparent background, 8 x 8 grid \(its gutters agree\)/);
+    assert.match(outcome.text, /FlipbookLayout = Grid8x8, FlipbookMode = OneShot, LightEmission = 0, Lifetime = 2/);
+    assert.match(outcome.text, /64 frames rendered in 3\.2 s with BLENDER_EEVEE/);
+    // An unreadable note claims nothing; the sheet is still checked from its pixels.
+    assert.equal(noise.report?.grid, 4);
+    assert.match(outcome.text, /half-size copy of it is attached instead/);
+    // A header the decoder cannot read, and an opaque copy, are attached as they are; the
+    // transparent sheet is shown over the dark ground, since a model does not see alpha.
+    const shown = outcome.images?.map((image) => Buffer.from(image.data, "base64")) ?? [];
+    assert.equal(shown.length, 3);
+    assert.deepEqual([shown[0], shown[2]], [pngHeader(256, 256), halfSize]);
+    const grounded = decodePng(shown[1]);
+    assert.equal(grounded.hasAlpha, false);
+    assert.deepEqual([...grounded.rgba.subarray(0, 3)], [...VIEW_GROUND], "a transparent corner shows as the ground");
+    const centre = (64 * 1024 + 64) * 4;
+    assert.deepEqual([...grounded.rgba.subarray(centre, centre + 3)], [255, 255, 255], "the first frame's disc stays white");
+    assert.deepEqual(await fs.readFile(data.flipbooks[0].path), burst, "the file itself is unchanged");
+    assert.match(outcome.text, /Do not go by FlipbookIncompatible/);
+  });
+});
+
+test("a job that asks for a Studio preview gets an rbxasset address for each texture", async () => {
+  await withJobs(async (jobsRoot) => {
+    const content = path.join(jobsRoot, "studio", "content");
+    await fs.mkdir(content, { recursive: true });
+    const burst = sheet(4, (i) => 20 + i * 4);
+    const blender = fakeBlender(async (args) => {
+      const output = path.join(argAfterDashes(args), "output");
+      await fs.writeFile(path.join(output, "Burst.flipbook.png"), burst);
+      await fs.writeFile(path.join(output, "Burst.flipbook.json"), JSON.stringify({ grid: 4, loop: false, fps: 24 }));
+      await fs.writeFile(path.join(output, "Cracks.png"), pngHeader(256, 256));
+      return { output: "ROQER_SCRIPT_DONE\n" };
+    });
+    const studioContentDirectories = async () => [content];
+    const worker = new BlenderWorker({ executable: EXECUTABLE, jobsRoot, spawn: blender.spawn, killTree: blender.killTree, env: {}, studioContentDirectories });
+
+    const outcome = await worker.run({ script: "import bpy", preview_in_studio: true });
+
+    assert.equal(outcome.ok, true, outcome.text);
+    const data = outcome.data as { jobId: string; studioPreviews: Array<{ name: string; uri: string }> };
+    assert.deepEqual(data.studioPreviews, [
+      { name: "Burst.flipbook.png", uri: `rbxasset://textures/roqer-preview/${data.jobId}-Burst.png` },
+      { name: "Cracks.png", uri: `rbxasset://textures/roqer-preview/${data.jobId}-Cracks.png` },
+    ]);
+    const staged = path.join(content, "textures", "roqer-preview", `${data.jobId}-Burst.png`);
+    assert.deepEqual(await fs.readFile(staged), burst);
+    assert.match(outcome.text, /Previews in Studio, before any upload/);
+    assert.match(outcome.text, /replace every rbxasset:\/\/textures\/roqer-preview\/ address/);
+
+    // Without the flag nothing leaves the job folder; without an install the job says so.
+    const plain = await worker.run({ script: "import bpy" });
+    assert.equal((plain.data as { studioPreviews?: unknown }).studioPreviews, undefined);
+    assert.doesNotMatch(plain.text, /Previews in Studio/);
+    const none = new BlenderWorker({ executable: EXECUTABLE, jobsRoot, spawn: blender.spawn, killTree: blender.killTree, env: {}, studioContentDirectories: async () => [] });
+    assert.match((await none.run({ script: "import bpy", preview_in_studio: true })).text, /No Roblox Studio install was found/);
+  });
+});
+
+test("a job that draws more textures than fit one by one shows them all as one review sheet, and previews each in Studio", async () => {
+  await withJobs(async (jobsRoot) => {
+    const content = path.join(jobsRoot, "studio", "content");
+    await fs.mkdir(content, { recursive: true });
+    // Six white shapes on transparency, as a missile run drew; it was shown four and previewed four.
+    const names = ["ArcaneSigil", "Glint", "MissileHead", "MissileTrail", "SigilCore", "SoftGlow"];
+    const texture = (size: number) => png(size, size, (x, y) => Math.hypot(x - size / 2, y - size / 2) < size / 3 ? [255, 255, 255, 255] : [255, 255, 255, 0]);
+    let writes: Array<[string, Buffer]> = names.map((name) => [`${name}.png`, texture(256)]);
+    const blender = fakeBlender(async (args) => {
+      const output = path.join(argAfterDashes(args), "output");
+      for (const [name, bytes] of writes) await fs.writeFile(path.join(output, name), bytes);
+      return { output: "ROQER_SCRIPT_DONE\n" };
+    });
+    const worker = new BlenderWorker({ executable: EXECUTABLE, jobsRoot, spawn: blender.spawn, killTree: blender.killTree, env: {}, studioContentDirectories: async () => [content] });
+
+    const outcome = await worker.run({ script: "import bpy", preview_in_studio: true });
+
+    assert.equal(outcome.ok, true, outcome.text);
+    const data = outcome.data as { images: Array<{ name: string }>; studioPreviews: Array<{ name: string }> };
+    assert.deepEqual(data.images.map((image) => image.name), names.map((name) => `${name}.png`), "every texture is read and listed");
+    assert.deepEqual(data.studioPreviews.map((preview) => preview.name), names.map((name) => `${name}.png`), "and previewed, not only the first four");
+    assert.equal(outcome.images?.length, 1, "one review sheet");
+    const reviewed = decodePng(Buffer.from(outcome.images![0].data, "base64"));
+    assert.deepEqual([reviewed.width, reviewed.height], [3 * 512 + 4 * 4, 2 * 512 + 3 * 4]);
+    assert.match(outcome.text, /There are 6 of them, so they are attached as one review sheet after any model previews, 3 to a row, left to right then top to bottom, in the order listed above/);
+    assert.match(outcome.text, /shown over a dark ground/);
+    assert.doesNotMatch(outcome.text, /more PNG files were not read/);
+
+    // One image the sheet cannot decode: the first four go one by one, and the result says the rest did not.
+    writes = [["A.png", texture(64)], ["B.png", pngHeader(64, 64)], ["C.png", texture(64)], ["D.png", texture(64)], ["E.png", texture(64)]];
+    const fallback = await worker.run({ script: "import bpy" });
+    assert.equal(fallback.images?.length, 4);
+    assert.match(fallback.text, /the first 4 only: the rest could not be tiled into a review sheet/);
+    assert.equal(decodePng(Buffer.from(fallback.images![0].data, "base64")).hasAlpha, false, "a transparent one is still shown over the ground");
   });
 });
 

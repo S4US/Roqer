@@ -1,4 +1,5 @@
 ﻿import type { Planner, PlannerContext } from "./run-engine";
+import type { RunUsage } from "../shared/run-events";
 import type { AgentDefinition } from "./agent-definition";
 import type { ProviderStatus, ReasoningEffort } from "../shared/provider";
 import type { AppServerNotification, AppServerRequest, AppServerRequestHandler } from "./codex-app-server";
@@ -179,6 +180,42 @@ export function codexContextUsage(notification: AppServerNotification): { usedTo
   return { usedTokens: used, windowTokens };
 }
 
+/** Codex's running token totals for one thread. `inputTokens` includes the cached part. */
+export type CodexUsageTotals = Readonly<{ inputTokens: number; cachedInputTokens: number; outputTokens: number }>;
+
+export const NO_CODEX_USAGE: CodexUsageTotals = { inputTokens: 0, cachedInputTokens: 0, outputTokens: 0 };
+
+/**
+ * The thread's running totals from Codex's token report: its `total`, which
+ * covers every response on the thread so far, earlier runs' included. Null
+ * when any of the three is missing or malformed, or the cached part is larger
+ * than the input it is part of.
+ */
+export function codexUsageTotals(notification: AppServerNotification): CodexUsageTotals | null {
+  if (notification.method !== "thread/tokenUsage/updated") return null;
+  const usage = notification.params.tokenUsage;
+  if (!isRecord(usage) || !isRecord(usage.total)) return null;
+  const { inputTokens, cachedInputTokens, outputTokens } = usage.total;
+  const count = (value: unknown): value is number => typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+  if (!count(inputTokens) || !count(cachedInputTokens) || !count(outputTokens) || cachedInputTokens > inputTokens) return null;
+  return { inputTokens, cachedInputTokens, outputTokens };
+}
+
+/**
+ * One run's usage: what the thread's totals grew by since `baseline`, the
+ * totals the run started from. Null when any figure went down, which no
+ * report from the same thread should do. Only input, cache reads and output
+ * are counted: a cache-write figure, where Codex gives one, is not counted
+ * apart, and Codex counts no requests and puts no price on the run.
+ */
+export function codexRunUsage(baseline: CodexUsageTotals, totals: CodexUsageTotals): RunUsage | null {
+  const input = totals.inputTokens - baseline.inputTokens;
+  const cached = totals.cachedInputTokens - baseline.cachedInputTokens;
+  const output = totals.outputTokens - baseline.outputTokens;
+  if (input < 0 || cached < 0 || output < 0 || cached > input) return null;
+  return { inputTokens: input - cached, cacheReadTokens: cached, outputTokens: output };
+}
+
 /**
  * What a Codex notification says about how much the model has written.
  *
@@ -232,6 +269,8 @@ export type CodexThread = {
   lastPrompt: string;
   /** Skill documents delivered into this thread and not compacted out of it since. */
   skills: SkillToolRunner;
+  /** The thread's token totals as its last run left them, so the next run counts only its own. */
+  usageTotals: CodexUsageTotals;
   close(): void;
 };
 
@@ -318,6 +357,9 @@ export function createChatGptPlanner(options: ChatGptPlannerOptions): Planner {
       const prose = createProseStream((text) => context.say(text));
       let turnId: string | null = null;
       let streamedItemId: string | null = null;
+      /** The thread's token totals when this run began, and as Codex last reported them. */
+      const usageBaseline = current?.usageTotals ?? NO_CODEX_USAGE;
+      let usageTotals = usageBaseline;
       /** What the model response in progress has streamed, for the waiting line's count. */
       let responseCharacters = 0;
       let settled = false;
@@ -414,6 +456,12 @@ export function createChatGptPlanner(options: ChatGptPlannerOptions): Planner {
         if (output?.exact !== undefined || output?.ended) responseCharacters = 0;
         const contextReading = codexContextUsage(notification);
         if (contextReading !== null) context.contextUsage(contextReading.usedTokens, contextReading.windowTokens);
+        const totals = codexUsageTotals(notification);
+        const usage = totals === null ? null : codexRunUsage(usageBaseline, totals);
+        if (totals !== null && usage !== null) {
+          usageTotals = totals;
+          context.runUsage(usage);
+        }
         if (notification.method === "item/agentMessage/delta") {
           const delta = notification.params.delta;
           if (typeof delta !== "string" || delta === "") return;
@@ -572,7 +620,7 @@ export function createChatGptPlanner(options: ChatGptPlannerOptions): Planner {
         // the chat now shows; any other ending simply forgets it.
         if (chatId !== undefined && completed.status === "completed") {
           options.sessions!.put(chatId, {
-            threadId, key, lastPrompt: context.prompt, skills: runSkillTool, close: () => undefined,
+            threadId, key, lastPrompt: context.prompt, skills: runSkillTool, usageTotals, close: () => undefined,
           });
         }
         return completed.summary;

@@ -28,7 +28,7 @@ import {
 import {
   activitySteps, applyRunEvent, createRunView, describeOutcome, recordAppliedAndVerified,
   recordGateIssues, recordHasWarnings, recordOnlyAnswered, recordSteps, runAppliedAndVerified,
-  runGateIssues, runHasWarnings, runOnlyAnswered, toRunRecord, hasPicture,
+  runGateIssues, runHasWarnings, runOnlyAnswered, toRunRecord, hasPicture, usageLabel,
   type ActivityStep, type PendingApproval, type RunView,
 } from "./run-view";
 import { EvidencePicture, rememberEvidencePicture } from "./evidence-picture";
@@ -67,7 +67,7 @@ import { describePolicyReason } from "../shared/policy";
 import { mcpServerMessage } from "../shared/mcp-server";
 import { appUpdateMessage, canInstallUpdate, updateInProgress } from "../shared/app-update";
 import type {
-  RunChange, RunEvent, RunEvidence, RunMetadata, RunOutcome, RunRecord, RunStartRequest,
+  RunChange, RunEvent, RunEvidence, RunMetadata, RunOutcome, RunRecord, RunStartRequest, RunUsage,
 } from "../shared/run-events";
 import { connectedStudios, resolveInstanceId } from "../shared/studio-status";
 import type { StorageStatus } from "../shared/workspace-storage";
@@ -1792,6 +1792,7 @@ function LiveRun({ view, steps, nodes, explaining, onAnswer, onExplain, onOpenIn
       note={failureNote(view.failures.length)}
       issues={runGateIssues(view)}
     />}
+    {view.usage !== null && <UsageLine usage={view.usage} />}
     {view.desynchronized && <p className="run-warning"><AlertCircle size={14} /> Some updates were missed, so this timeline may be incomplete.</p>}
   </div></section></div>;
 }
@@ -2254,6 +2255,20 @@ const ChangeSet = memo(function ChangeSet({ groups, expansion, onOpenInStudio }:
   </div>;
 });
 
+/**
+ * What a finished run used, under its outcome. Its own line rather than part
+ * of the outcome card, because a run that applied and verified its change, or
+ * only answered, shows no card, and those are runs worth measuring too.
+ */
+function UsageLine({ usage }: { usage: RunUsage }) {
+  return <p
+    className="run-usage"
+    title={usage.costUsd === undefined
+      ? "As the provider reported it."
+      : "As the provider reported it. The price is its estimate at API list prices; on a subscription it is not what you pay."}
+  >{usageLabel(usage)}</p>;
+}
+
 function AppliedStatus() {
   return <div className="applied-status"><Check size={14} /><span>Applied and verified in Studio</span></div>;
 }
@@ -2389,6 +2404,7 @@ function RunRecordView({ record, text, latest, onOpenInStudio }: { record: RunRe
       note={record.planner === DEMO_PLANNER ? "Demo" : record.approvalMode}
       issues={recordGateIssues(record)}
     />}
+    {record.usage !== undefined && <UsageLine usage={record.usage} />}
   </>;
 }
 

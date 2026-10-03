@@ -6,6 +6,7 @@ import {
   RUN_EVENT_SCHEMA_VERSION,
   isRunEvent,
   isRunRecord,
+  withoutMalformedUsage,
   type RunChange,
   type RunEvent,
   type RunEvidence,
@@ -85,6 +86,13 @@ function validSnapshot(value: unknown): value is Snapshot {
   if (pending !== undefined && (!object(pending) || !Object.values(pending).every((question) => typeof question === "string"))) return false;
   return isRunRecord(record) && typeof value.clipped === "boolean" &&
     (value.completion === undefined || (isRunEvent(value.completion) && value.completion.type === "run-completed"));
+}
+
+/** A damaged usage figure costs the recovered run its usage, not the run. */
+function withoutMalformedCompletionUsage(value: unknown): unknown {
+  if (!object(value) || !object(value.completion)) return value;
+  const completion = withoutMalformedUsage(value.completion);
+  return completion === value.completion ? value : { ...value, completion };
 }
 
 function append<T>(items: T[], item: T, snapshot: Snapshot): void {
@@ -247,6 +255,7 @@ function recoveredMessage(snapshot: Snapshot): ChatMessage {
     verification,
     ...(snapshot.decisions !== undefined && snapshot.decisions.length > 0 ? { decisions: snapshot.decisions } : {}),
     ...(snapshot.notes !== undefined && snapshot.notes.length > 0 ? { notes: snapshot.notes } : {}),
+    ...(snapshot.completion?.usage !== undefined ? { usage: snapshot.completion.usage } : {}),
   };
   const text = snapshot.text.trim() ? `${snapshot.text.trim()}\n\n${summary}` : summary;
   return { id: `recovered-${snapshot.runId}`, role: "assistant", text, createdAt: finishedAt, run };
@@ -303,7 +312,7 @@ export class RunJournal {
       const path = join(this.root, file);
       try {
         if ((await stat(path)).size > MAX_SNAPSHOT_BYTES) throw new Error("Run journal snapshot exceeds its 2 MB safety limit.");
-        const value: unknown = JSON.parse(await readFile(path, "utf8"));
+        const value = withoutMalformedCompletionUsage(JSON.parse(await readFile(path, "utf8")));
         if (!validSnapshot(value) || file !== fileFor(value.runId)) throw new Error("Invalid run journal snapshot");
         this.snapshots.set(value.runId, value);
         recovered.push({ ...value.target, message: recoveredMessage(value) });

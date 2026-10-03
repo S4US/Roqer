@@ -19,6 +19,7 @@ import {
 } from "./model-api/turn-contract";
 
 import type { RunTask } from "../shared/tasks";
+import type { RunUsage } from "../shared/run-events";
 import type { AgentDefinition } from "./agent-definition";
 import { blenderToolDefinition, parseBlenderToolInput } from "./blender-tool";
 import { BLENDER_TOOL_NAME } from "../shared/blender";
@@ -55,6 +56,47 @@ import type { ReasoningEffort } from "../shared/provider";
 
 export interface TurnTransport {
   streamTurn(request: TurnRequest, signal: AbortSignal): AsyncIterable<TurnEvent>;
+}
+
+/**
+ * A run's usage, summed over every model response the endpoint reported a
+ * count for, a failed try's included: the endpoint was paid for it either way.
+ *
+ * A turn's `inputTokens` includes what it read from the cache, so the cached
+ * part is taken out to get the run's new input. No endpoint here counts cache
+ * writes apart, so those stay in the new input; cache reads are reported only
+ * once some response gave a figure for them, and the endpoint puts no price on
+ * any of it.
+ */
+export class TurnUsageTally {
+  private input = 0;
+  private cached: number | undefined;
+  private output = 0;
+  private requests = 0;
+
+  /** Count one response; the run's usage so far, or null when the count was malformed and skipped. */
+  add(usage: TurnUsage): RunUsage | null {
+    const count = (value: unknown): value is number => typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+    const cached = usage.cachedInputTokens;
+    if (!count(usage.inputTokens) || !count(usage.outputTokens)) return null;
+    if (cached !== undefined && (!count(cached) || cached > usage.inputTokens)) return null;
+    const next = {
+      input: this.input + usage.inputTokens - (cached ?? 0),
+      cached: cached === undefined ? this.cached : (this.cached ?? 0) + cached,
+      output: this.output + usage.outputTokens,
+    };
+    if (!Number.isSafeInteger(next.input + (next.cached ?? 0) + next.output)) return null;
+    this.input = next.input;
+    this.cached = next.cached;
+    this.output = next.output;
+    this.requests += 1;
+    return {
+      inputTokens: this.input,
+      ...(this.cached === undefined ? {} : { cacheReadTokens: this.cached }),
+      outputTokens: this.output,
+      requests: this.requests,
+    };
+  }
 }
 
 export type AgentLoopTelemetryEvent =
@@ -755,6 +797,11 @@ export function createAgentLoopPlanner(options: AgentLoopPlannerOptions): Planne
       let lastSignature = "";
       let sameCalls = 0;
       let sameFailures = 0;
+      const spent = new TurnUsageTally();
+      const countUsage = (usage: TurnUsage | undefined) => {
+        const total = usage === undefined ? null : spent.add(usage);
+        if (total !== null) context.runUsage(total);
+      };
       for (let turn = 0; ; turn += 1) {
         if (context.signal.aborted) throw new RunCancelledError();
         context.progress(waitingLabel);
@@ -867,12 +914,14 @@ export function createAgentLoopPlanner(options: AgentLoopPlannerOptions): Planne
               if (event.kind === "failed") {
                 failureCode = event.code;
                 usage = event.usage;
+                countUsage(event.usage);
                 throw new Error(failureMessage(event));
               }
               completed = true;
               stopReason = event.stopReason;
               usage = event.usage;
               turnUsage = event.usage;
+              countUsage(event.usage);
               if (event.usage !== undefined) {
                 context.outputTokens(event.usage.outputTokens, true);
                 // The endpoint's own count of what this turn read and wrote;

@@ -26,9 +26,10 @@ import type {
   RunFailure,
   RunOutcome,
   RunRequest,
+  RunUsage,
   ToolProposal,
 } from "../shared/run-events";
-import { isEvidenceImage, isEvidencePictureRef } from "../shared/run-events";
+import { isEvidenceImage, isEvidencePictureRef, isRunUsage } from "../shared/run-events";
 import type { ConversationContext } from "../shared/conversation";
 import {
   evaluateCompletion, evidenceBaselineChangeId, type CompletionVerification,
@@ -128,6 +129,14 @@ export type PlannerContext = {
    * does not call this. Repeats of the same reading are dropped.
    */
   contextUsage(usedTokens: number, windowTokens: number | null): void;
+  /**
+   * The tokens this run has used so far, as the provider reported them: the
+   * running total, never one turn's share. A planner calls it again whenever
+   * the total changes; the engine keeps the latest well-formed one, ignores a
+   * malformed one, and records it with the run when it ends. Never an
+   * estimate: a planner whose provider reported nothing does not call this.
+   */
+  runUsage(usage: RunUsage): void;
   /** Record a change the agent made. */
   recordChange(change: Omit<RunChange, "id">): void;
   /** Record evidence supporting the result. */
@@ -351,6 +360,8 @@ export class RunSession {
   private readonly outputMeter = new OutputTokenMeter();
   /** The last context reading passed on, so a repeat is not sent again. */
   private lastContextUsage: { usedTokens: number; windowTokens: number | null } | null = null;
+  /** The latest usage the planner reported, recorded with `run-completed`. */
+  private usage: RunUsage | undefined;
   private seq = 0;
   private completed = false;
   private cancelled = false;
@@ -447,6 +458,19 @@ export class RunSession {
         this.lastContextUsage = { usedTokens, windowTokens };
         this.emit({ type: "context-usage", usedTokens, windowTokens });
       },
+      runUsage: (usage) => {
+        if (this.completed || !isRunUsage(usage)) return;
+        // Copied field by field, so nothing but the figures reaches the record.
+        const { inputTokens, cacheReadTokens, cacheWriteTokens, outputTokens, requests, costUsd } = usage;
+        this.usage = {
+          inputTokens,
+          ...(cacheReadTokens === undefined ? {} : { cacheReadTokens }),
+          ...(cacheWriteTokens === undefined ? {} : { cacheWriteTokens }),
+          outputTokens,
+          ...(requests === undefined ? {} : { requests }),
+          ...(costUsd === undefined ? {} : { costUsd }),
+        };
+      },
       recordChange: (change) => {
         const taskId = this.currentTasks.find((task) => task.status === "active")?.id;
         const recorded: RunChange = {
@@ -529,7 +553,10 @@ export class RunSession {
     // gate looks at the evidence, and so a failed teardown counts against it.
     await this.cleanupOwnedPlaytests();
     const verification = this.evaluateGate(outcome);
-    this.emit({ type: "run-completed", outcome, summary, verification });
+    this.emit({
+      type: "run-completed", outcome, summary, verification,
+      ...(this.usage === undefined ? {} : { usage: this.usage }),
+    });
     this.completed = true;
     return outcome;
   }

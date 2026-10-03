@@ -26,7 +26,9 @@ const CODE_TOOLS: Readonly<Record<string, CodeTool>> = {
     argument: "script",
     language: "python",
     label: "Blender script",
-    subtitle: () => "Runs this Python in Blender on your computer, with your permissions",
+    subtitle: (args) => args.preview_in_studio === true
+      ? "Runs this Python in Blender on your computer, with your permissions, then copies its textures into your Roblox Studio install to preview them"
+      : "Runs this Python in Blender on your computer, with your permissions",
   },
   execute_luau: {
     argument: "code",
@@ -47,6 +49,14 @@ const CODE_TOOLS: Readonly<Record<string, CodeTool>> = {
     language: "luau",
     label: "Luau code",
     subtitle: () => "Runs this Luau in a running game client",
+  },
+  capture_moments: {
+    argument: "code",
+    language: "luau",
+    label: "Luau code",
+    subtitle: (args) => args.runtime === "client"
+      ? "Runs this Luau in a running game client to start an effect, then screenshots it at several moments and stops it"
+      : "Runs this Luau in Studio to start an effect, then screenshots it at several moments and stops it. It cannot be undone from Studio",
   },
 };
 

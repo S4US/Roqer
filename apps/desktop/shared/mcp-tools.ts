@@ -1,3 +1,4 @@
+import { GATEWAY_TOOL_RISK, isGatewayOperation } from "./gateway-operations";
 import type { ToolRisk } from "./policy";
 
 /**
@@ -110,9 +111,9 @@ export function isKnownTool(tool: string): boolean {
   return Object.prototype.hasOwnProperty.call(TOOL_RISK, tool);
 }
 
-/** A Studio tool or one of Roqer's own local operations: something the risk tables classify. */
+/** A Studio tool, an operation Roqer composes from them, or one of its local operations: something the risk tables classify. */
 export function isClassifiedTool(tool: string): boolean {
-  return isKnownTool(tool) || Object.prototype.hasOwnProperty.call(LOCAL_TOOL_RISK, tool);
+  return isKnownTool(tool) || isGatewayOperation(tool) || Object.prototype.hasOwnProperty.call(LOCAL_TOOL_RISK, tool);
 }
 
 /** Profiler arguments that name a file on the user's disk rather than anything in Studio. */
@@ -147,6 +148,7 @@ export function riskForTool(tool: string, args?: Record<string, unknown>): ToolR
     return "mutation";
   }
   if (isKnownTool(tool)) return TOOL_RISK[tool];
+  if (isGatewayOperation(tool)) return GATEWAY_TOOL_RISK[tool];
   return Object.prototype.hasOwnProperty.call(LOCAL_TOOL_RISK, tool) ? LOCAL_TOOL_RISK[tool] : "irreversible";
 }
 
@@ -190,6 +192,10 @@ const TOOL_TIMEOUT_MS: Readonly<Record<string, number>> = {
   // The script's own limit (at most 200s) plus Roqer's inspection of up to
   // three exported models (30s each); the worker enforces both itself.
   run_blender_script: 300_000,
+  // Starts an effect, then for each of up to eight moments one or more waits
+  // of at most 20 s and a capture. The operation reads this budget and starts
+  // no wait it could not finish within it, keeping room to stop the effect.
+  capture_moments: 300_000,
 };
 
 /**

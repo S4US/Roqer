@@ -6,6 +6,7 @@ import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
+import { isGatewayOperation } from "../shared/gateway-operations";
 import { TOOL_RISK, isKnownTool } from "../shared/mcp-tools";
 import { loadAgentRuntime } from "./agent-definition";
 import { ICON_TOOL_NAME } from "./icon-tool";
@@ -117,7 +118,7 @@ test("instructions and skills name only operations that exist", async () => {
     const content = await fs.readFile(file, "utf8");
     for (const match of content.matchAll(/`([a-z]+(?:_[a-z0-9]+)+)`/g)) {
       const name = match[1];
-      if (!verbs.has(name.split("_")[0]) || isKnownTool(name) || hostTools.has(name)) continue;
+      if (!verbs.has(name.split("_")[0]) || isKnownTool(name) || isGatewayOperation(name) || hostTools.has(name)) continue;
       unknown.push(`${path.relative(agentRoot, file)}: ${name}`);
     }
   }

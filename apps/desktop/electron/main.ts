@@ -17,7 +17,9 @@ import { bridgeEnvironment, checkOpenCloudKey } from "../runtime/open-cloud";
 import { BlenderSettings } from "../runtime/blender-settings";
 import { BlenderWorker } from "../runtime/blender-worker";
 import { readModelPreview, storeModelPreview } from "../runtime/model-preview";
-import { withLocalOperations } from "../runtime/local-operations";
+import { captureMoments } from "../runtime/capture-moments";
+import { withLocalOperations, type LocalOperation } from "../runtime/local-operations";
+import { CAPTURE_MOMENTS_OPERATION } from "../shared/gateway-operations";
 import type { McpCallOptions, McpToolOutcome } from "../runtime/mcp-types";
 import { BLENDER_OPERATION, type BlenderSettingsResult, type BlenderSettingsView } from "../shared/blender";
 import type { ModelPreviewResult } from "../shared/model-preview";
@@ -65,7 +67,7 @@ import { adoptPreviousUserData, PREVIOUS_USER_DATA_SEGMENTS } from "../runtime/u
 import { RunJournal } from "../runtime/run-journal";
 import { BridgeLog } from "../runtime/bridge-log";
 import { AttachmentRegistry, MAX_IMAGE_SOURCE_BYTES } from "../runtime/attachment-context";
-import { encodeAttachmentImage, previewToolImage } from "./image-encoder";
+import { composeContactSheet, encodeAttachmentImage, previewToolImage } from "./image-encoder";
 import { DiscordPresence } from "./discord-presence";
 import { McpServerProcess } from "../runtime/mcp-server-process";
 import { mcpServerMessage, type McpServerState } from "../shared/mcp-server";
@@ -1483,9 +1485,10 @@ async function startRun(event: IpcMainInvokeEvent, payload: unknown): Promise<Ru
     /** The pictures this run stored, held in the picture store until it ends. */
     const heldPictures = new Set<string>();
     const session = new RunSession({
-      caller: blender
-        ? withLocalOperations(client, new Map([[BLENDER_OPERATION, (args, options) => runBlenderJob(args, options, request.chatId)]]))
-        : client,
+      caller: withLocalOperations(client, new Map<string, LocalOperation>([
+        [CAPTURE_MOMENTS_OPERATION, (args, options, studio) => captureMoments(args, options, studio, composeContactSheet)],
+        ...(blender ? [[BLENDER_OPERATION, (args, options) => runBlenderJob(args, options, request.chatId)] as [string, LocalOperation]] : []),
+      ])),
       bridge: bridgeRecoveryFor(client.endpoint),
       planner,
       request: { ...resolvedRequest, runId },

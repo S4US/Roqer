@@ -189,6 +189,25 @@ type PendingLogin = {
   authUrl: string;
 };
 
+/**
+ * The environment a Claude Code run starts with: the user's own, less what
+ * must stay in Roqer, plus what keeps Roqer's tool calls whole.
+ *
+ * - The model provider never talks to the Roblox MCP directly, so the bridge
+ *   secret stays in Roqer even when the server was configured by environment.
+ * - A tool call is never moved to the background. Claude Code does that to an
+ *   MCP call still running after two minutes when CLAUDE_AUTO_BACKGROUND_TASKS
+ *   is set, handing the model a placeholder instead of the result. Roqer's
+ *   calls are allowed to run that long (an approval waits on the user, a
+ *   capture or a Blender job takes minutes), and a run whose call went to the
+ *   background could end with the call still running.
+ */
+export function claudeChildEnvironment(environment: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const child: NodeJS.ProcessEnv = { ...environment, CLAUDE_CODE_MCP_AUTO_BACKGROUND_MS: "0" };
+  delete child.ROBLOX_STUDIO_AUTH_TOKEN;
+  return child;
+}
+
 export class ClaudeCodeClient implements ClaudeLauncher {
   private readonly executable?: string;
   private readonly cwd?: string;
@@ -213,10 +232,7 @@ export class ClaudeCodeClient implements ClaudeLauncher {
   async launch(args: string[]): Promise<ChildProcessWithoutNullStreams> {
     if (this.spawnProcess) return this.spawnProcess(args);
 
-    const childEnvironment = { ...process.env };
-    // The model provider never talks to the Roblox MCP directly. Keep the MCP
-    // bridge secret in Roqer even when the server was configured by env.
-    delete childEnvironment.ROBLOX_STUDIO_AUTH_TOKEN;
+    const childEnvironment = claudeChildEnvironment(process.env);
     const executable = await resolveClaudeExecutable({ executable: this.executable });
     const child = spawn(executable, args, {
       cwd: this.cwd,

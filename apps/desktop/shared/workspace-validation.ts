@@ -1,4 +1,4 @@
-import { isRunRecord } from "./run-events";
+import { isRunRecord, withoutMalformedUsage } from "./run-events";
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
@@ -70,7 +70,9 @@ export function malformedWorkspace(value: unknown): boolean {
           typeof message.text !== "string" ||
           typeof message.createdAt !== "string" ||
           messageIds.has(message.id as string) ||
-          (message.run !== undefined && !isRunRecord(message.run)) ||
+          // Normalization drops a damaged usage figure and keeps the run, so
+          // that alone is not a record recovery has to save.
+          (message.run !== undefined && !isRunRecord(withoutMalformedUsage(message.run))) ||
           (message.attachments !== undefined && (!Array.isArray(message.attachments) ||
             message.attachments.some((attachment) => !isPersistedAttachment(attachment))))) malformed = true;
         else messageIds.add(message.id);

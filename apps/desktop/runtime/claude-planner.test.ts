@@ -4,7 +4,11 @@ import http from "node:http";
 import path from "node:path";
 import test from "node:test";
 
-import { claudeContextUsage, claudeContextWindow, createClaudePlanner, streamedOutput, type ClaudeSession } from "./claude-planner";
+import {
+  CLAUDE_TOOL_CALL_TIMEOUT_MS, claudeContextUsage, claudeContextWindow, claudeResultUsage, ClaudeRunUsage, createClaudePlanner, streamedOutput, type ClaudeSession,
+} from "./claude-planner";
+import { timeoutForTool } from "../shared/mcp-tools";
+import type { RunUsage } from "../shared/run-events";
 import type { AgentDefinition } from "./agent-definition";
 import type { McpToolOutcome } from "./mcp-types";
 import type { PlannerContext } from "./run-engine";
@@ -66,7 +70,7 @@ function makeContext(controller: AbortController, outcome?: (tool: string) => Mc
     status: () => undefined,
     progress: () => undefined,
     outputTokens: () => undefined,
-    contextUsage: () => undefined,
+    contextUsage: () => undefined, runUsage: () => undefined,
     say: (text) => recorded.said.push(text),
     recordChange: (change) => recorded.changes.push(change),
     recordEvidence: (item) => recorded.evidence.push(item),
@@ -134,6 +138,7 @@ test("Claude planner routes an MCP tool call through PlannerContext and streams 
   };
   let launchArgs: string[] = [];
   let systemPrompt = "";
+  let mcpTimeout: unknown;
   let toolResult = "";
   let skillResult = "";
   const inputMessages: Record<string, unknown>[] = [];
@@ -144,6 +149,7 @@ test("Claude planner routes an MCP tool call through PlannerContext and streams 
       launch: async (args) => {
         launchArgs = args;
         systemPrompt = await fs.readFile(args[args.indexOf("--system-prompt-file") + 1], "utf8");
+        mcpTimeout = JSON.parse(await fs.readFile(args[args.indexOf("--mcp-config") + 1], "utf8")).mcpServers.workbench.timeout;
         const child = new FakeChildProcess();
         child.stdin.setEncoding("utf8");
         child.stdin.on("data", (chunk: string) => {
@@ -183,6 +189,8 @@ test("Claude planner routes an MCP tool call through PlannerContext and streams 
   const summary = await planner.run(contextWithImage);
 
   assert.equal(summary, "Main prints hi.");
+  // Claude Code's own 60 s default would cut off calls Roqer is still running.
+  assert.ok(typeof mcpTimeout === "number" && mcpTimeout >= timeoutForTool("capture_moments") && mcpTimeout === CLAUDE_TOOL_CALL_TIMEOUT_MS);
   assert.deepEqual(recorded.said, ["Main prints hi."]);
   assert.deepEqual(recorded.calls, ["get_script_source"]);
   assert.match(skillResult, /# Test skill/);
@@ -1067,6 +1075,100 @@ test("Claude reports the context as each response ends, and a kept process knows
   await planner.run(followUp(reporting, "Answer 1", "Now change it."));
   assert.equal(launches.length, 1);
   assert.deepEqual(readings[0], { usedTokens: 20_050, windowTokens: 200_000 });
+  await sessions.closeAll();
+});
+
+test("Claude's usage is read from a result's running totals, a malformed figure left out", () => {
+  const entry = (overrides: Record<string, unknown> = {}) => ({
+    inputTokens: 60, outputTokens: 140, cacheReadInputTokens: 9_000, cacheCreationInputTokens: 120, costUSD: 1, contextWindow: 200_000, ...overrides,
+  });
+  assert.deepEqual(claudeResultUsage({
+    type: "result", subtype: "success", num_turns: 4, total_cost_usd: 1.25,
+    // The main agent's own per-turn figure is not the one used.
+    usage: { input_tokens: 1, output_tokens: 1 },
+    modelUsage: { "claude-opus-5-5": entry(), "claude-haiku-4-5": entry({ inputTokens: 5, outputTokens: 1, cacheReadInputTokens: 0, cacheCreationInputTokens: 0 }) },
+  }), {
+    totals: { inputTokens: 65, cacheReadTokens: 9_000, cacheWriteTokens: 120, outputTokens: 141, costUsd: 1.25 },
+    requests: 4,
+  }, "every model's tokens count, a subagent's included");
+
+  assert.deepEqual(claudeResultUsage({
+    type: "result", subtype: "success", num_turns: -1, total_cost_usd: "1.25",
+    modelUsage: { "claude-opus-5-5": entry({ cacheReadInputTokens: 1.5 }), "claude-haiku-4-5": entry({ outputTokens: "9" }) },
+  }), { totals: { inputTokens: 120, cacheWriteTokens: 240 } }, "a malformed figure drops that total, not the rest");
+  assert.deepEqual(claudeResultUsage({ type: "result", subtype: "success" }), { totals: {} });
+  assert.equal(claudeResultUsage({ type: "result", parent_tool_use_id: "toolu_1", total_cost_usd: 1 }), null, "only the main agent's results count");
+  assert.equal(claudeResultUsage({ type: "assistant", total_cost_usd: 1 }), null);
+
+  const totals = { inputTokens: 100, cacheReadTokens: 1_000, cacheWriteTokens: 10, outputTokens: 50, costUsd: 2 };
+  const run = new ClaudeRunUsage(totals);
+  const result = (input: number, output: number, cost: unknown, extra: Record<string, unknown> = {}) => ({
+    type: "result", subtype: "success", num_turns: 2, total_cost_usd: cost,
+    modelUsage: { "claude-opus-5-5": entry({ inputTokens: input, outputTokens: output, cacheReadInputTokens: 1_500, cacheCreationInputTokens: 10 }) },
+    ...extra,
+  });
+  assert.equal(run.observe({ type: "assistant" }), null);
+  assert.deepEqual(run.observe(result(130, 70, 2.5)), {
+    inputTokens: 30, cacheReadTokens: 500, cacheWriteTokens: 0, outputTokens: 20, requests: 2, costUsd: 0.5,
+  }, "only what the totals grew by since the run began");
+  // An error result still counts, and one carrying zeroed totals changes nothing.
+  assert.deepEqual(run.observe(result(150, 75, 3, { subtype: "error_during_execution", is_error: true })), {
+    inputTokens: 50, cacheReadTokens: 500, cacheWriteTokens: 0, outputTokens: 25, requests: 4, costUsd: 1,
+  });
+  assert.deepEqual(run.observe({ type: "result", subtype: "error_during_execution", num_turns: 0, total_cost_usd: 0, modelUsage: {} }), {
+    inputTokens: 50, cacheReadTokens: 500, cacheWriteTokens: 0, outputTokens: 25, requests: 4, costUsd: 1,
+  });
+  assert.deepEqual(totals, { inputTokens: 150, cacheReadTokens: 1_500, cacheWriteTokens: 10, outputTokens: 75, costUsd: 3 }, "the process's totals move on for the next run");
+
+  const unpriced = new ClaudeRunUsage({ inputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, outputTokens: 0, costUsd: 0 });
+  assert.equal(unpriced.observe({ type: "result", subtype: "success", total_cost_usd: 1 }), null, "nothing to report without the token totals");
+  assert.deepEqual(unpriced.observe(result(10, 5, null, { num_turns: undefined })), {
+    inputTokens: 10, cacheReadTokens: 1_500, cacheWriteTokens: 10, outputTokens: 5, costUsd: 1,
+  }, "a cost seen earlier in the run still counts; requests nobody counted are absent");
+});
+
+test("Claude reports a run's usage across its notes, and a kept process's next run reports only its own", async () => {
+  const sessions = new ProviderSessionStore<ClaudeSession>();
+  let turn = 0;
+  const launcher = {
+    launch: async () => {
+      const child = new FakeChildProcess();
+      child.stdin.setEncoding("utf8");
+      child.stdin.on("data", (chunk: string) => {
+        const messages = chunk.split("\n").filter(Boolean).length;
+        for (let index = 0; index < messages; index += 1) {
+          turn += 1;
+          child.writeLine({ type: "system", subtype: "init", tools: PROVIDER_TOOLS, model: "claude-opus-5-5" });
+          child.writeLine({
+            type: "result", subtype: "success", is_error: false, result: `Answer ${turn}`, num_turns: 3, total_cost_usd: turn * 0.5,
+            usage: { input_tokens: 1, output_tokens: 1 },
+            modelUsage: {
+              "claude-opus-5-5": { inputTokens: turn * 10, outputTokens: turn * 5, cacheReadInputTokens: turn * 1_000, cacheCreationInputTokens: turn * 100 },
+              "claude-haiku-4-5": { inputTokens: turn, outputTokens: turn, cacheReadInputTokens: 0, cacheCreationInputTokens: 0 },
+            },
+          });
+        }
+      });
+      return child.asChild();
+    },
+  };
+  const planner = createClaudePlanner({ ...PLANNER_DEFAULTS, launcher, chatId: "chat-1", sessions });
+  const reported: RunUsage[] = [];
+  const notes = ["Also make it larger."];
+  const { context } = makeContext(new AbortController());
+  const reporting: PlannerContext = { ...context, takeSteers: () => notes.splice(0), runUsage: (usage) => reported.push(usage) };
+
+  assert.equal(await planner.run(reporting), "Answer 1\n\nAnswer 2");
+  assert.deepEqual(reported.at(-1), {
+    inputTokens: 22, cacheReadTokens: 2_000, cacheWriteTokens: 200, outputTokens: 12, requests: 6, costUsd: 1,
+  }, "both turns of the run, read from the latest totals rather than summed");
+
+  reported.length = 0;
+  await planner.run(followUp(reporting, "Answer 1\n\nAnswer 2", "Now change it."));
+  assert.equal(turn, 3, "the same process carried on");
+  assert.deepEqual(reported, [{
+    inputTokens: 11, cacheReadTokens: 1_000, cacheWriteTokens: 100, outputTokens: 6, requests: 3, costUsd: 0.5,
+  }], "the earlier run's usage is not counted again");
   await sessions.closeAll();
 });
 

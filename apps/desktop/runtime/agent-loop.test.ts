@@ -14,6 +14,7 @@ import {
   MALFORMED_CALL_RETRIES,
   REPEATED_CALL_TURNS,
   REPEATED_FAILURE_TURNS,
+  TurnUsageTally,
   type AgentLoopSession,
   type AgentLoopTelemetryEvent,
   type TurnTransport,
@@ -22,7 +23,7 @@ import type { McpToolOutcome } from "./mcp-types";
 import { ProviderSessionStore } from "./provider-sessions";
 import { RunCancelledError, type PlannerContext } from "./run-engine";
 import type { SkillLibrary } from "./skill-library";
-import type { RunChange, RunEvidence } from "../shared/run-events";
+import type { RunChange, RunEvidence, RunUsage } from "../shared/run-events";
 import type { RunTask } from "../shared/tasks";
 
 const AGENT: AgentDefinition = {
@@ -52,13 +53,15 @@ type Recorded = {
   outputTokens: Array<{ tokens: number; exact: boolean }>;
   /** Every context reading the loop reported, in order. */
   contextUsage: Array<{ usedTokens: number; windowTokens: number | null }>;
+  /** Every running usage total the loop reported, in order. */
+  runUsage: RunUsage[];
   /** Notes queued for the planner, drained by `takeSteers` the way the engine's are. */
   steers: string[];
 };
 
 function makeContext(controller: AbortController, outcome?: (tool: string) => McpToolOutcome) {
   const recorded: Recorded = {
-    calls: [], said: [], tasks: [], changes: [], evidence: [], questions: [], progress: [], progressDetails: [], statuses: [], outputTokens: [], contextUsage: [], steers: [],
+    calls: [], said: [], tasks: [], changes: [], evidence: [], questions: [], progress: [], progressDetails: [], statuses: [], outputTokens: [], contextUsage: [], runUsage: [], steers: [],
   };
   let currentTasks: RunTask[] = [];
   const context: PlannerContext = {
@@ -75,6 +78,7 @@ function makeContext(controller: AbortController, outcome?: (tool: string) => Mc
     },
     outputTokens: (tokens, exact) => recorded.outputTokens.push({ tokens, exact }),
     contextUsage: (usedTokens, windowTokens) => recorded.contextUsage.push({ usedTokens, windowTokens }),
+    runUsage: (usage) => recorded.runUsage.push(usage),
     say: (text) => recorded.said.push(text),
     recordChange: (change) => {
       recorded.changes.push({ ...change, id: `change_${recorded.changes.length + 1}` });
@@ -1884,4 +1888,34 @@ test("the blender tool is offered only while enabled, and a call becomes one eng
   await planner(offBridge).run(off.context);
   assert.equal(offBridge.requests[0].tools.some((tool) => tool.name === "blender"), false);
   assert.deepEqual(off.recorded.calls, []);
+});
+
+test("the run's usage sums every response's count, cached input taken out of the new input", async () => {
+  const { context, recorded } = makeContext(new AbortController());
+  const bridge = gateway([
+    [
+      { kind: "tool-call", call: { id: "call_1", name: "roblox_studio", arguments: { operation: "get_script_source", arguments: { instancePath: "ServerScriptService.Main" } } } },
+      { kind: "completed", stopReason: "tool-use", usage: { inputTokens: 450, outputTokens: 30, cachedInputTokens: 400 } },
+    ],
+    DONE("It prints a greeting."),
+  ]);
+  await planner(bridge).run(context);
+  assert.deepEqual(recorded.runUsage, [
+    { inputTokens: 50, cacheReadTokens: 400, outputTokens: 30, requests: 1 },
+    // An endpoint that gave no cached figure for a turn put all of its input in the new input.
+    { inputTokens: 60, cacheReadTokens: 400, outputTokens: 32, requests: 2 },
+  ]);
+
+  // A try that failed was still paid for.
+  const failed = makeContext(new AbortController());
+  await assert.rejects(() => planner(gateway([[
+    { kind: "failed", code: "quota_exhausted", message: "over ceiling", usage: { inputTokens: 7, outputTokens: 1 } },
+  ]])).run(failed.context));
+  assert.deepEqual(failed.recorded.runUsage, [{ inputTokens: 7, outputTokens: 1, requests: 1 }], "no cached figure was given, so none is claimed");
+
+  // A malformed count is skipped rather than folded in.
+  const tally = new TurnUsageTally();
+  assert.equal(tally.add({ inputTokens: 10, outputTokens: 1, cachedInputTokens: 11 }), null);
+  assert.equal(tally.add({ inputTokens: -1, outputTokens: 1 }), null);
+  assert.deepEqual(tally.add({ inputTokens: 10, outputTokens: 1 }), { inputTokens: 10, outputTokens: 1, requests: 1 });
 });

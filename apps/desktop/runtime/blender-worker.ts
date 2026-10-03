@@ -12,8 +12,11 @@ import {
 import { articulationOf, describeArticulation, MAX_LISTED_OBJECTS, parseObjects, type Articulation, type InspectedObject } from "./blender-articulation";
 import { ANIMATION_SUFFIX, BAKE_SUFFIX, describeBake, describeBakedFile, parseBake } from "./blender-animation";
 import { describeSkins, parseSkins, type InspectedSkin } from "./blender-skin";
+import { analyzeFlipbook, describeFlipbook, type FlipbookClaim, type FlipbookReport } from "./flipbook-sheet";
 import type { McpCallOptions, McpToolImage, McpToolOutcome } from "./mcp-types";
+import { findStudioContentDirectories, stageStudioPreviews, type StudioPreview } from "./studio-preview";
 import { isViewableGlb, JOB_RETENTION_MS, MAX_KEPT_JOBS, modelPreviewFileName, pruneJobFolders } from "./model-preview";
+import { onDarkGround, reviewSheet } from "./png-view";
 import { modelPreviewId } from "../shared/model-preview";
 
 /**
@@ -35,7 +38,10 @@ import { modelPreviewId } from "../shared/model-preview";
 
 const MODEL_EXTENSIONS = new Set([".glb", ".gltf", ".fbx", ".obj"]);
 const MAX_INSPECTED_MODELS = 3;
+/** Up to this many rendered images are attached one by one; more are tiled into one review sheet. */
 const MAX_RENDERED_IMAGES = 4;
+/** The most rendered images a job's result reads, tiles and previews in Studio. */
+const MAX_SHEETED_IMAGES = 16;
 /** Roblox stores an uploaded image at most this many pixels a side. */
 const MAX_UPLOAD_IMAGE_SIDE = 1024;
 /** The inspection re-imports, measures the layout (itself capped at 12 s) and renders four views. */
@@ -400,6 +406,602 @@ def export_animation(name, source, rig, start=None, end=None, loop=True, rest_fr
         json.dump({"name": name, "rig": rig, "loop": bool(loop), "rootJoint": root_joint, "joints": joints, "frames": baked,
                    "ignoredTravel": sorted(ignored)[:16]}, handle)
     return path
+
+
+_FLIPBOOK_SIDE = 1024
+_FLIPBOOK_GRIDS = (2, 4, 8)
+# A sheet larger than this is not attached to the result, so a half-size copy is written to look at.
+_FLIPBOOK_PREVIEW_BYTES = 1800 * 1024
+
+
+def _write_png(path, rgba):
+    """Write rows of 8-bit RGBA, top row first, as a PNG."""
+    import struct, zlib
+    height, width = rgba.shape[0], rgba.shape[1]
+
+    def chunk(kind, data):
+        return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data) & 0xFFFFFFFF)
+
+    import numpy
+    rows = numpy.zeros((height, width * 4 + 1), dtype=numpy.uint8)
+    rows[:, 1:] = rgba.reshape(height, width * 4)
+    with open(path, "wb") as handle:
+        handle.write(b"\x89PNG\r\n\x1a\n")
+        handle.write(chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 6, 0, 0, 0)))
+        handle.write(chunk(b"IDAT", zlib.compress(rows.tobytes(), 9)))
+        handle.write(chunk(b"IEND", b""))
+
+
+def flipbook(name, grid=4, mode="alpha", start=None, end=None, loop=False, padding=4):
+    """Render the scene's animation through its camera into one particle flipbook sheet.
+
+    The sheet is 1024 x 1024, the size seen playing as a flipbook in Roblox. grid is 2, 4 or
+    8: 4, 16 or 64 frames. Frames from start to end (the scene's own by default) are sampled
+    evenly to fill every cell, because Roblox plays every cell; a shorter animation holds some
+    frames for two cells. The scene is rendered as it is, so any material, simulation or
+    compositor setup shows in the sheet. mode "alpha" renders on a
+    transparent film, for smoke, dust and anything that darkens (LightEmission 0); "additive"
+    renders on black, for fire, energy and glows (LightEmission 1). Each frame is rendered
+    padding pixels inside its cell, so frames cannot run into each other. loop says the last
+    frame leads back into the first, as for a burning fire; leave it False for a burst that plays
+    once. The scene's render engine is used: Eevee or Workbench render a 64-frame sheet in
+    seconds, Cycles can take minutes. Colour is rendered with the Standard view transform, so
+    glows stay bright. Writes <name>.flipbook.png to OUTPUT_DIR, which Roqer checks.
+    """
+    import json, os, time, numpy
+    if not isinstance(name, str) or not name or any(c in name for c in '/\\:*?"<>|.'):
+        raise ValueError(f"name must be the sheet's name, usable as a file name without dots, got {name!r}")
+    if grid not in _FLIPBOOK_GRIDS:
+        raise ValueError(f"grid must be 2, 4 or 8 (Roblox's Grid2x2, Grid4x4 and Grid8x8), got {grid!r}")
+    if mode not in ("alpha", "additive"):
+        raise ValueError(f'mode must be "alpha" (transparent film, LightEmission 0) or "additive" (black background, LightEmission 1), got {mode!r}')
+    cell = _FLIPBOOK_SIDE // grid
+    if not isinstance(padding, int) or padding < 0 or padding > cell // 8:
+        raise ValueError(f"padding must be a whole number of pixels from 0 to {cell // 8} for a {grid} x {grid} grid, got {padding!r}")
+    scene = bpy.context.scene
+    if scene.camera is None:
+        raise ValueError("the scene has no camera; add one and set scene.camera, framed so the whole effect stays in view")
+    start = scene.frame_start if start is None else int(start)
+    end = scene.frame_end if end is None else int(end)
+    cells = grid * grid
+    span = end - start + (0 if loop else 1)
+    if end <= start:
+        raise ValueError(f"end ({end}) must be after start ({start})")
+    if span < cells:
+        print(f"roqer.flipbook: frames {start} to {end} give {span} distinct frames for {cells} cells, so some frames are held "
+              f"for two cells; a longer animation or a smaller grid avoids the holds", flush=True)
+    if loop:
+        frames = [start + round((end - start) * i / cells) for i in range(cells)]
+    else:
+        frames = [start + round((end - start) * i / (cells - 1)) for i in range(cells)]
+
+    render = scene.render
+    view = scene.view_settings
+    saved = {
+        "resolution_x": render.resolution_x, "resolution_y": render.resolution_y,
+        "resolution_percentage": render.resolution_percentage, "film_transparent": render.film_transparent,
+        "filepath": render.filepath, "file_format": render.image_settings.file_format,
+        "color_mode": render.image_settings.color_mode, "view_transform": view.view_transform,
+        "look": view.look, "world": scene.world, "frame": scene.frame_current,
+    }
+    inner = cell - 2 * padding
+    frames_dir = os.path.join(os.path.dirname(_OUTPUT_DIR), "flipbook-frames", name)
+    os.makedirs(frames_dir, exist_ok=True)
+    seconds = []
+    sheet = numpy.zeros((_FLIPBOOK_SIDE, _FLIPBOOK_SIDE, 4), dtype=numpy.uint8)
+    if mode == "additive":
+        sheet[:, :, 3] = 255
+    black = None
+    try:
+        render.resolution_x = render.resolution_y = inner
+        render.resolution_percentage = 100
+        render.image_settings.file_format = "PNG"
+        view.view_transform = "Standard"
+        view.look = "None"
+        if mode == "alpha":
+            render.film_transparent = True
+            render.image_settings.color_mode = "RGBA"
+        else:
+            render.film_transparent = False
+            render.image_settings.color_mode = "RGB"
+            black = bpy.data.worlds.new("RoqerFlipbookBlack")
+            black.color = (0.0, 0.0, 0.0)
+            if black.node_tree is not None:
+                for node in black.node_tree.nodes:
+                    if node.type == "BACKGROUND":
+                        node.inputs["Color"].default_value = (0.0, 0.0, 0.0, 1.0)
+                        node.inputs["Strength"].default_value = 0.0
+            scene.world = black
+        for index, frame in enumerate(frames):
+            scene.frame_set(frame)
+            path = os.path.join(frames_dir, f"{index:02d}.png")
+            render.filepath = path
+            began = time.perf_counter()
+            bpy.ops.render.render(write_still=True)
+            seconds.append(round(time.perf_counter() - began, 3))
+            image = bpy.data.images.load(path, check_existing=False)
+            try:
+                width, height = image.size
+                if (width, height) != (inner, inner):
+                    raise RuntimeError(f"frame {frame} rendered at {width} x {height}, not {inner} x {inner}")
+                pixels = numpy.empty(width * height * 4, dtype=numpy.float32)
+                image.pixels.foreach_get(pixels)
+            finally:
+                bpy.data.images.remove(image)
+            # Blender keeps rows bottom first; the sheet is written top first.
+            frame_rgba = numpy.flipud((numpy.clip(pixels, 0.0, 1.0) * 255.0 + 0.5).astype(numpy.uint8).reshape(height, width, 4))
+            if mode == "additive":
+                frame_rgba[:, :, 3] = 255
+            row, column = divmod(index, grid)
+            top, left = row * cell + padding, column * cell + padding
+            sheet[top:top + inner, left:left + inner] = frame_rgba
+    finally:
+        render.resolution_x, render.resolution_y = saved["resolution_x"], saved["resolution_y"]
+        render.resolution_percentage = saved["resolution_percentage"]
+        render.film_transparent = saved["film_transparent"]
+        render.filepath = saved["filepath"]
+        render.image_settings.file_format = saved["file_format"]
+        render.image_settings.color_mode = saved["color_mode"]
+        view.view_transform, view.look = saved["view_transform"], saved["look"]
+        scene.world = saved["world"]
+        if black is not None:
+            bpy.data.worlds.remove(black)
+        scene.frame_set(saved["frame"])
+
+    fps = render.fps / render.fps_base
+    return _write_flipbook(name, sheet, {"name": name, "grid": grid, "mode": mode, "padding": padding, "loop": bool(loop),
+                                         "fps": round(cells / ((frames[-1] - frames[0] + (frames[1] - frames[0] if loop else 0)) / fps), 3) if frames[-1] > frames[0] else None,
+                                         "frames": frames, "engine": render.engine, "renderSeconds": seconds})
+
+
+def _check_name(name):
+    if not isinstance(name, str) or not name or any(c in name for c in '/\\:*?"<>|.'):
+        raise ValueError(f"name must be usable as a file name without dots, got {name!r}")
+
+
+def _write_flipbook(name, sheet, note):
+    """Write a packed sheet and the note Roqer checks it against, plus a half-size copy when the sheet is too big to attach."""
+    import json, os, numpy
+    path = os.path.join(_OUTPUT_DIR, name + ".flipbook.png")
+    _write_png(path, sheet)
+    if os.path.getsize(path) > _FLIPBOOK_PREVIEW_BYTES:
+        half = sheet.reshape(_FLIPBOOK_SIDE // 2, 2, _FLIPBOOK_SIDE // 2, 2, 4).mean(axis=(1, 3))
+        _write_png(os.path.join(_OUTPUT_DIR, name + ".flipbook-preview.png"), (half + 0.5).astype(numpy.uint8))
+    with open(os.path.join(_OUTPUT_DIR, name + ".flipbook.json"), "w", encoding="utf-8") as handle:
+        json.dump(note, handle)
+    return path
+
+
+# 2D texture drawing with numpy, for the hard-edged, stylised shapes most Roblox
+# VFX textures are: a shape built from coordinates, broken up by noise, cut
+# with a hard edge, and eaten away over the frames. Images are float arrays,
+# row 0 at the top. tex_coords runs -1..1 with x to the right and y up.
+
+def tex_coords(size=256):
+    """Return (x, y): two size x size float arrays running -1..1 across the image, x to the right and y up."""
+    import numpy
+    size = _texture_size(size)
+    steps = (numpy.arange(size, dtype=numpy.float32) + 0.5) / size * 2.0 - 1.0
+    return numpy.tile(steps, (size, 1)), numpy.tile(-steps[:, None], (1, size))
+
+
+def tex_polar(x, y):
+    """Return (r, angle) for coordinates x, y: distance from the centre, and the angle in radians from +x, counterclockwise, -pi..pi."""
+    import numpy
+    return numpy.hypot(x, y), numpy.arctan2(y, x)
+
+
+def _texture_size(size):
+    if not isinstance(size, int) or size < 8 or size > 2048:
+        raise ValueError(f"size must be a whole number of pixels from 8 to 2048, got {size!r}")
+    return size
+
+
+def tex_noise(size=256, scale=4, octaves=4, seed=0):
+    """Smooth fractal noise in 0..1 that tiles. scale is how many blobs fit across the image at the coarsest octave; each further octave adds detail at twice the frequency and half the strength."""
+    import numpy
+    size = _texture_size(size)
+    if not isinstance(octaves, int) or octaves < 1 or octaves > 8:
+        raise ValueError(f"octaves must be a whole number from 1 to 8, got {octaves!r}")
+    rng = numpy.random.default_rng(seed)
+    total = numpy.zeros((size, size), dtype=numpy.float32)
+    weight = 0.0
+    for octave in range(octaves):
+        frequency = max(1, int(round(scale))) * 2 ** octave
+        lattice = rng.random((frequency, frequency), dtype=numpy.float32)
+        at = numpy.arange(size, dtype=numpy.float32) * frequency / size
+        low = numpy.floor(at).astype(int)
+        f = at - low
+        f = f * f * (3.0 - 2.0 * f)
+        low %= frequency
+        high = (low + 1) % frequency
+        top = lattice[numpy.ix_(low, low)] * (1 - f)[None, :] + lattice[numpy.ix_(low, high)] * f[None, :]
+        bottom = lattice[numpy.ix_(high, low)] * (1 - f)[None, :] + lattice[numpy.ix_(high, high)] * f[None, :]
+        amplitude = 0.5 ** octave
+        total += (top * (1 - f)[:, None] + bottom * f[:, None]) * amplitude
+        weight += amplitude
+    return total / weight
+
+
+def tex_cells(size=256, cells=8, seed=0):
+    """Cellular (Voronoi) noise that tiles: cells x cells jittered points. Returns (near, edge): the distance to the nearest point and the gap between the nearest and second-nearest, both in cell widths. edge is 0 on the borders between cells, so tex_edge(edge, 0.05) draws the cracks, and near < radius draws round blobs."""
+    import numpy
+    size = _texture_size(size)
+    if not isinstance(cells, int) or cells < 1 or cells > 64:
+        raise ValueError(f"cells must be a whole number from 1 to 64, got {cells!r}")
+    rng = numpy.random.default_rng(seed)
+    jitter = rng.random((cells, cells, 2), dtype=numpy.float32)
+    at = (numpy.arange(size, dtype=numpy.float32) + 0.5) * cells / size
+    px, py = numpy.meshgrid(at, at)
+    cx, cy = numpy.floor(px).astype(int), numpy.floor(py).astype(int)
+    first = numpy.full((size, size), 9.0, dtype=numpy.float32)
+    second = numpy.full((size, size), 9.0, dtype=numpy.float32)
+    for dy in (-1, 0, 1):
+        for dx in (-1, 0, 1):
+            nx, ny = cx + dx, cy + dy
+            point = jitter[ny % cells, nx % cells]
+            d = numpy.hypot(px - (nx + point[..., 0]), py - (ny + point[..., 1]))
+            second = numpy.where(d < first, first, numpy.minimum(second, d))
+            first = numpy.minimum(first, d)
+    return first, second - first
+
+
+def tex_sample(image, u, v):
+    """Look a 2D image up at u, v (0..1 across and down the image), wrapping and blending between pixels. Scroll, stretch or warp noise per frame with it, as in tex_sample(noise, x * 0.5 + t, y * 0.5)."""
+    import numpy
+    image = numpy.asarray(image, dtype=numpy.float32)
+    height, width = image.shape[:2]
+    x = (numpy.asarray(u, dtype=numpy.float32) % 1.0) * width - 0.5
+    y = (numpy.asarray(v, dtype=numpy.float32) % 1.0) * height - 0.5
+    x0, y0 = numpy.floor(x).astype(int), numpy.floor(y).astype(int)
+    fx, fy = x - x0, y - y0
+    x0, y0 = x0 % width, y0 % height
+    x1, y1 = (x0 + 1) % width, (y0 + 1) % height
+    return (image[y0, x0] * (1 - fx) * (1 - fy) + image[y0, x1] * fx * (1 - fy)
+            + image[y1, x0] * (1 - fx) * fy + image[y1, x1] * fx * fy)
+
+
+def tex_edge(value, at=0.0, soft=0.01):
+    """0 below at and 1 above it, blended over soft: the hard, cel-shaded edge. Keep soft near 0.01 for a crisp silhouette; raise it for a glow."""
+    import numpy
+    soft = max(float(soft), 1e-5)
+    t = numpy.clip((numpy.asarray(value, dtype=numpy.float32) - (at - soft)) / (2 * soft), 0.0, 1.0)
+    return t * t * (3.0 - 2.0 * t)
+
+
+def tex_ease(t, power=3.0):
+    """Ease out: fast at first, then slow, as a burst grows. t is clamped to 0..1."""
+    import numpy
+    return 1.0 - (1.0 - numpy.clip(t, 0.0, 1.0)) ** power
+
+
+_WARP_NOISE = {}
+
+
+def tex_curve(points, samples=64, closed=False):
+    """A smooth curve through control points (Catmull-Rom), as an (n, 2) array of x, y in tex_coords units. closed=True joins the last point back to the first. Feed it to tex_stroke."""
+    import numpy
+    p = numpy.asarray(points, dtype=numpy.float32)
+    if p.ndim != 2 or p.shape[1] != 2 or len(p) < 2:
+        raise ValueError("points must be at least two (x, y) pairs")
+    if not isinstance(samples, int) or samples < 4 or samples > 1024:
+        raise ValueError(f"samples must be a whole number from 4 to 1024, got {samples!r}")
+    if closed:
+        p = numpy.concatenate([p[-1:], p, p[:2]])
+    else:
+        p = numpy.concatenate([p[:1] * 2 - p[1:2], p, p[-1:] * 2 - p[-2:-1]])
+    spans = len(p) - 3
+    out = []
+    for i in range(spans):
+        p0, p1, p2, p3 = p[i], p[i + 1], p[i + 2], p[i + 3]
+        t = numpy.linspace(0, 1, max(2, samples // spans), endpoint=(i == spans - 1))[:, None]
+        out.append(0.5 * ((2 * p1) + (-p0 + p2) * t + (2 * p0 - 5 * p1 + 4 * p2 - p3) * t ** 2 + (-p0 + 3 * p1 - 3 * p2 + p3) * t ** 3))
+    return numpy.concatenate(out)
+
+
+def tex_stroke(x, y, path, width=0.08, start=0.0, end=1.0):
+    """A stroke along a path, the way a brush draws it: positive inside, about the distance to its edge, so tex_edge cuts it.
+
+    path is an (n, 2) array of points in tex_coords units; tex_curve makes a smooth one. width is
+    the full width: a number, a list of widths spread evenly from head to tail, or a function of u
+    (0 at the head, 1 at the tail). Tapering it gives the thick-to-thin pen pressure of a drawn
+    claw, crescent, wisp or crack. Only the part from start to end (0 to 1 along the path) is drawn:
+    raise end over the frames to draw the stroke on, and start to erase it from the head. Combine
+    strokes and shapes with numpy.maximum (union) or numpy.minimum (intersection; subtract one with
+    numpy.minimum(a, -b)).
+    """
+    import numpy
+    path = numpy.asarray(path, dtype=numpy.float32)
+    if path.ndim != 2 or path.shape[1] != 2 or len(path) < 2:
+        raise ValueError("path must be at least two (x, y) points, as tex_curve returns")
+    if len(path) > 2048:
+        raise ValueError(f"path has {len(path)} points; use at most 2048 (fewer tex_curve samples)")
+    seg = numpy.linalg.norm(numpy.diff(path, axis=0), axis=1)
+    along = numpy.concatenate([[0.0], numpy.cumsum(seg)])
+    along = along / max(float(along[-1]), 1e-6)
+    if callable(width):
+        def profile(u):
+            return numpy.asarray(width(u), dtype=numpy.float32)
+    elif numpy.ndim(width) == 0:
+        def profile(u):
+            return numpy.full_like(u, float(width))
+    else:
+        keys = numpy.asarray(width, dtype=numpy.float32)
+
+        def profile(u):
+            return numpy.interp(u, numpy.linspace(0, 1, len(keys)), keys).astype(numpy.float32)
+    field = numpy.full(numpy.shape(x), -1.0, dtype=numpy.float32)
+    for i in range(len(path) - 1):
+        a, b = path[i], path[i + 1]
+        d = b - a
+        length2 = max(float(d @ d), 1e-12)
+        t = numpy.clip(((x - a[0]) * d[0] + (y - a[1]) * d[1]) / length2, 0.0, 1.0)
+        u = along[i] + (along[i + 1] - along[i]) * t
+        inside = profile(u) * 0.5 - numpy.hypot(x - (a[0] + d[0] * t), y - (a[1] + d[1] * t))
+        field = numpy.maximum(field, numpy.where((u >= start) & (u <= end), inside, -1.0))
+    return field
+
+
+def tex_warp(x, y, amount=0.1, scale=3, seed=0, t=0.0):
+    """x, y pushed around by smooth noise. Shapes drawn with the warped coordinates come out lopsided and organic instead of geometric; t drifts the noise to animate it."""
+    import numpy
+    key = (int(scale), int(seed))
+    if key not in _WARP_NOISE:
+        _WARP_NOISE[key] = (tex_noise(256, scale, 3, seed), tex_noise(256, scale, 3, seed + 101))
+    nx, ny = _WARP_NOISE[key]
+    u, v = x * 0.5 + 0.5 + t, y * 0.5 + 0.5
+    return x + (tex_sample(nx, u, v) - 0.5) * 2 * amount, y + (tex_sample(ny, u, v) - 0.5) * 2 * amount
+
+
+def tex_blob(x, y, radius=0.5, lumps=6, roughness=0.5, seed=0, centre=(0.0, 0.0)):
+    """A lumpy, lopsided blob in one piece: a solid body with round lobes bulging from its edge, bigger on one side. It never splits or has holes, so it reads as one puff, not a cluster of circles. About radius from the centre; roughness runs from 0, a plain disc, to 1, the lumpiest. Positive inside; tex_edge cuts it."""
+    import numpy
+    rng = numpy.random.default_rng(seed)
+    roughness = min(max(float(roughness), 0.0), 1.0)
+    lean = rng.uniform(0, 2 * numpy.pi)
+    body = radius * (0.95 - 0.35 * roughness)
+    bx = centre[0] + numpy.cos(lean) * radius * 0.2 * roughness
+    by = centre[1] + numpy.sin(lean) * radius * 0.2 * roughness
+    field = body - numpy.hypot(x - bx, y - by)
+    for _ in range(max(1, int(lumps))):
+        # Each lobe is centred inside the body, so the union stays star-shaped
+        # around the body's centre: one piece, no holes.
+        angle = rng.uniform(0, 2 * numpy.pi)
+        reach = body * rng.uniform(0.8, 1.0)
+        r = radius * roughness * rng.uniform(0.4, 0.8) * (1 + 0.4 * roughness * numpy.cos(angle - lean))
+        cx, cy = bx + numpy.cos(angle) * reach, by + numpy.sin(angle) * reach
+        field = numpy.maximum(field, r - numpy.hypot(x - cx, y - cy))
+    return field
+
+
+def _drawn_rgba(result, size, mode, where):
+    """A drawing function's result as size x size x 4 floats: alpha alone, (alpha, value), or RGB / RGBA."""
+    import numpy
+    if isinstance(result, tuple):
+        if len(result) != 2:
+            raise ValueError(f"{where} returned a tuple of {len(result)}; return alpha, (alpha, value) or an RGBA array")
+        alpha = numpy.asarray(result[0], dtype=numpy.float32)
+        value = numpy.broadcast_to(numpy.asarray(result[1], dtype=numpy.float32), (size, size))
+        if alpha.shape != (size, size):
+            raise ValueError(f"{where} returned alpha shaped {alpha.shape}; it must be {size} x {size}")
+        rgba = numpy.stack([value, value, value, alpha], axis=-1)
+    else:
+        array = numpy.asarray(result, dtype=numpy.float32)
+        if array.shape == (size, size):
+            rgba = numpy.stack([numpy.ones_like(array)] * 3 + [array], axis=-1)
+        elif array.shape == (size, size, 4):
+            rgba = array
+        elif array.shape == (size, size, 3):
+            rgba = numpy.concatenate([array, numpy.ones((size, size, 1), dtype=numpy.float32)], axis=-1)
+        else:
+            raise ValueError(f"{where} returned an array shaped {array.shape}; it must be {size} x {size} (alpha), or {size} x {size} x 3 or 4")
+    rgba = numpy.clip(numpy.nan_to_num(rgba), 0.0, 1.0)
+    if mode == "additive":
+        rgba = numpy.concatenate([rgba[..., :3] * rgba[..., 3:4], numpy.ones((size, size, 1), dtype=numpy.float32)], axis=-1)
+    return (rgba * 255.0 + 0.5).astype(numpy.uint8)
+
+
+def draw_flipbook(name, frame, grid=4, loop=False, fps=None, mode="alpha", padding=4):
+    """Draw a particle flipbook frame by frame with numpy and pack it into a 1024 x 1024 sheet Roqer checks.
+
+    frame(t, size) draws one frame size pixels square. t runs from 0 at the first frame to 1 at
+    the last (to just under 1 for a loop, whose last frame leads back to the first). It returns
+    alpha (a size x size array, 0..1) for a white shape, or (alpha, value) where value is the grey
+    level (a number or an array), or an RGB or RGBA array. White shapes are usual: the particle's
+    Color tints them, and value lets two tones in one shape take one colour. grid is 2, 4 or 8
+    (4, 16 or 64 frames); 4 is what most studied artists' sheets use. fps is the speed the frames
+    are meant to play at, used to suggest the Lifetime or framerate. mode "alpha" keeps a
+    transparent background (LightEmission 0 or below); "additive" bakes alpha onto black for
+    LightEmission 1. padding pixels around each frame stay empty. Writes <name>.flipbook.png.
+    """
+    import numpy
+    _check_name(name)
+    if not callable(frame):
+        raise ValueError("frame must be a function frame(t, size) that returns the frame's alpha, (alpha, value) or an RGBA array")
+    if grid not in _FLIPBOOK_GRIDS:
+        raise ValueError(f"grid must be 2, 4 or 8 (Roblox's Grid2x2, Grid4x4 and Grid8x8), got {grid!r}")
+    if mode not in ("alpha", "additive"):
+        raise ValueError(f'mode must be "alpha" or "additive", got {mode!r}')
+    cell = _FLIPBOOK_SIDE // grid
+    if not isinstance(padding, int) or padding < 0 or padding > cell // 8:
+        raise ValueError(f"padding must be a whole number of pixels from 0 to {cell // 8} for a {grid} x {grid} grid, got {padding!r}")
+    if fps is not None and (not isinstance(fps, (int, float)) or fps <= 0):
+        raise ValueError(f"fps must be a positive number or None, got {fps!r}")
+    cells = grid * grid
+    inner = cell - 2 * padding
+    sheet = numpy.zeros((_FLIPBOOK_SIDE, _FLIPBOOK_SIDE, 4), dtype=numpy.uint8)
+    if mode == "additive":
+        sheet[:, :, 3] = 255
+    for index in range(cells):
+        t = index / cells if loop else index / (cells - 1)
+        where = f"frame(t={t:.3f}, size={inner})"
+        drawn = _drawn_rgba(frame(t, inner), inner, mode, where)
+        row, column = divmod(index, grid)
+        top, left = row * cell + padding, column * cell + padding
+        sheet[top:top + inner, left:left + inner] = drawn
+    return _write_flipbook(name, sheet, {"name": name, "grid": grid, "mode": mode, "padding": padding, "loop": bool(loop),
+                                         "fps": float(fps) if fps is not None else None, "drawn": True})
+
+
+def draw_texture(name, image, size=512, mode="alpha"):
+    """Draw one texture with numpy and write it as <name>.png. image is an array, or a function image(size) returning one: alpha, (alpha, value) or RGB / RGBA, as for draw_flipbook. mode "alpha" keeps transparency; "additive" bakes it onto black."""
+    import os
+    _check_name(name)
+    size = _texture_size(size)
+    if mode not in ("alpha", "additive"):
+        raise ValueError(f'mode must be "alpha" or "additive", got {mode!r}')
+    drawn = _drawn_rgba(image(size) if callable(image) else image, size, mode, "image")
+    path = os.path.join(_OUTPUT_DIR, name + ".png")
+    _write_png(path, drawn)
+    return path
+
+
+# VFX shapes. Each is one open sheet of quads with a UV map laid out the same
+# way: U runs along the sweep (0 at the start, 1 at the end), V runs across it
+# (0 inside or at the bottom, 1 outside or at the top). A texture whose alpha
+# fades along U then fades a slash toward its tail, and one that fades across V
+# softens a ring's edges. Shapes face Roblox's forward: Blender -Y.
+_MAX_VFX_SEGMENTS = 256
+
+
+def _segments(value, name, low):
+    if not isinstance(value, int) or value < low or value > _MAX_VFX_SEGMENTS:
+        raise ValueError(f"{name} must be a whole number from {low} to {_MAX_VFX_SEGMENTS}, got {value!r}")
+    return value
+
+
+def vfx_surface(name, point, columns=32, rows=1, rgba=None):
+    """Any shape you can describe as a function: a sheet of columns x rows quads, where point(u, v)
+    gives the position (three numbers, in studs) of each grid corner for u and v from 0 to 1, and
+    the corner's UV is (u, v). Corners that land on the same spot are merged, so closed loops and
+    poles need no special care. The named vfx_ shapes are built with it; use it for anything they
+    do not cover: a jagged shockwave (vary the radius with u), a forked lightning card, petals, a
+    wobbling wave, a spiked burst.
+    """
+    if not callable(point):
+        raise ValueError("point must be a function point(u, v) returning (x, y, z) in studs")
+    columns = _segments(columns, "columns", 1)
+    rows = _segments(rows, "rows", 1)
+    return _strip(name, columns, rows, lambda u, v: _vector(point(u, v), "point(u, v)"), rgba)
+
+
+def _strip(name, columns, rows, point, rgba):
+    """A grid of columns x rows quads at point(u, v), with UVs (u, v); u and v run 0 to 1."""
+    bm = bmesh.new()
+    uv = bm.loops.layers.uv.new("UVMap")
+    grid = [[bm.verts.new(point(c / columns, r / rows)) for r in range(rows + 1)] for c in range(columns + 1)]
+    for c in range(columns):
+        for r in range(rows):
+            corners = [(c, r), (c + 1, r), (c + 1, r + 1), (c, r + 1)]
+            face = bm.faces.new([grid[i][j] for i, j in corners])
+            for loop, (i, j) in zip(face.loops, corners):
+                loop[uv].uv = (i / columns, j / rows)
+    bmesh.ops.remove_doubles(bm, verts=bm.verts, dist=1e-6)
+    obj = _object(name, bm, rgba)
+    return obj
+
+
+def _around(angle):
+    """Unit direction at angle radians from Blender -Y (Roblox's forward), turning toward +X."""
+    import math
+    return Vector((math.sin(angle), -math.cos(angle), 0.0))
+
+
+def vfx_arc(name, radius, width, sweep=160, segments=32, taper=True, rgba=None):
+    """A flat crescent card for a slash, lying in the horizontal plane around the origin.
+
+    It sweeps sweep degrees centred on forward (Blender -Y), from radius - width to radius.
+    With taper the band is widest in the middle and comes to a point at both ends: a crescent.
+    U runs along the sweep from its start (+X side) to its end (-X side), V from the inner edge
+    to the outer. Roll or tilt the MeshPart in Studio for a diagonal swing, and set DoubleSided.
+    """
+    import math
+    radius, width = _positive(radius, "radius"), _positive(width, "width")
+    if width >= radius:
+        raise ValueError(f"width ({width}) must be less than radius ({radius}): the band runs from radius - width to radius")
+    if not isinstance(sweep, (int, float)) or not 10 <= sweep <= 350:
+        raise ValueError(f"sweep must be 10 to 350 degrees, got {sweep!r}")
+    segments = _segments(segments, "segments", 4)
+    half = math.radians(sweep) / 2
+
+    def point(u, v):
+        across = math.sin(math.pi * u) if taper else 1.0
+        inner = radius - width * max(across, 0.02)
+        return _around(half - 2 * half * u) * (inner + (radius - inner) * v)
+
+    return _strip(name, segments, 1 if not taper else 2, point, rgba)
+
+
+def vfx_ring(name, radius, width=0.5, height=0.0, top_radius=None, segments=48, rgba=None):
+    """A shockwave ring around the vertical axis.
+
+    With height 0 it is a flat band on the ground from radius - width to radius. With a height
+    it is a wall from radius at the bottom to top_radius (radius by default) at the top: flare
+    the top outward for a blast wave. U runs once around, V across the band or up the wall.
+    """
+    import math
+    radius = _positive(radius, "radius")
+    segments = _segments(segments, "segments", 8)
+    if not isinstance(height, (int, float)) or height < 0:
+        raise ValueError(f"height must be 0 (a flat band) or a positive number of studs, got {height!r}")
+    if height == 0:
+        width = _positive(width, "width")
+        if width >= radius:
+            raise ValueError(f"width ({width}) must be less than radius ({radius})")
+        return _strip(name, segments, 1, lambda u, v: _around(2 * math.pi * u) * (radius - width + width * v), rgba)
+    top = radius if top_radius is None else _positive(top_radius, "top_radius")
+    return _strip(name, segments, 1, lambda u, v: _around(2 * math.pi * u) * (radius + (top - radius) * v) + Vector((0, 0, height * v)), rgba)
+
+
+def vfx_cone(name, radius, height, tip_radius=0.0, segments=32, rgba=None):
+    """An open cone shell from a base of radius at the origin up to tip_radius at height.
+
+    Point it with the MeshPart's orientation in Studio: up the axis for a burst, along the
+    LookVector for a muzzle blast. U runs around, V from the base to the tip.
+    """
+    import math
+    radius, height = _positive(radius, "radius"), _positive(height, "height")
+    if not isinstance(tip_radius, (int, float)) or tip_radius < 0:
+        raise ValueError(f"tip_radius must be 0 (a point) or a positive number of studs, got {tip_radius!r}")
+    segments = _segments(segments, "segments", 8)
+    return _strip(name, segments, 4,
+                  lambda u, v: _around(2 * math.pi * u) * (radius + (max(tip_radius, 0.001) - radius) * v) + Vector((0, 0, height * v)), rgba)
+
+
+def vfx_swirl(name, radius, height, width, turns=1.5, top_radius=None, segments=96, rgba=None):
+    """A ribbon spiralling up around the vertical axis: a tornado, an aura, a charge-up.
+
+    It turns the given number of times while rising from 0 to height, its radius going from radius to
+    top_radius (radius by default), and the ribbon is width tall. U runs along the ribbon from
+    the bottom end, V across it from its lower edge.
+    """
+    import math
+    radius, height, width = _positive(radius, "radius"), _positive(height, "height"), _positive(width, "width")
+    if not isinstance(turns, (int, float)) or not 0.1 <= turns <= 8:
+        raise ValueError(f"turns must be 0.1 to 8, got {turns!r}")
+    top = radius if top_radius is None else _positive(top_radius, "top_radius")
+    segments = _segments(segments, "segments", 8)
+
+    def point(u, v):
+        return _around(2 * math.pi * turns * u) * (radius + (top - radius) * u) + Vector((0, 0, height * u + width * (v - 0.5)))
+
+    return _strip(name, segments, 1, point, rgba)
+
+
+def vfx_shell(name, radius, segments=32, rings=16, dome=False, rgba=None):
+    """A sphere, or with dome a half sphere standing on the ground, as one shell: a barrier,
+    a blast bubble, a shield. U runs around, V from the bottom (the equator for a dome) to the top.
+    """
+    import math
+    radius = _positive(radius, "radius")
+    segments = _segments(segments, "segments", 8)
+    rings = _segments(rings, "rings", 2)
+
+    def point(u, v):
+        polar = (math.pi / 2) * (1 - v) if dome else math.pi * (1 - v)
+        return _around(2 * math.pi * u) * (radius * math.sin(polar)) + Vector((0, 0, radius * math.cos(polar)))
+
+    return _strip(name, segments, rings, point, rgba)
 
 
 _MAX_INFLUENCES = 4
@@ -826,6 +1428,26 @@ for item in meshes:
         smooth.append({"object": item.name, "share": round(share, 2)})
 stats["smoothShaded"] = smooth[:8]
 
+# UVs, as they arrived: a texture (TextureID) needs them, and a VFX texture that
+# fades along a sweep needs them laid out along it.
+import numpy
+uv_low, uv_high, without_uv, with_uv = [1e9, 1e9], [-1e9, -1e9], [], 0
+for item in meshes:
+    layer = item.data.uv_layers.active
+    if layer is None or len(layer.data) == 0:
+        without_uv.append(item.name)
+        continue
+    with_uv += 1
+    coords = numpy.empty(len(layer.data) * 2, dtype=numpy.float32)
+    layer.data.foreach_get("uv", coords)
+    coords = coords.reshape(-1, 2)
+    uv_low = [min(uv_low[i], float(coords[:, i].min())) for i in range(2)]
+    uv_high = [max(uv_high[i], float(coords[:, i].max())) for i in range(2)]
+stats["uv"] = {"meshes": with_uv, "without": without_uv[:8], "withoutCount": len(without_uv)}
+if with_uv:
+    stats["uv"]["low"] = [round(value, 3) for value in uv_low]
+    stats["uv"]["high"] = [round(value, 3) for value in uv_high]
+
 # Layout: how the model's pieces sit against each other, in the script's own
 # Blender coordinates. A script usually joins many primitives into one object,
 # so each object is split back into its loose pieces (after welding the
@@ -1181,6 +1803,8 @@ export type BlenderWorkerOptions = Readonly<{
   killTree?: (child: ChildProcess) => void;
   env?: NodeJS.ProcessEnv;
   now?: () => number;
+  /** The Studio installs a job's textures are previewed in when it asks; found on this computer by default. */
+  studioContentDirectories?: () => Promise<string[]>;
 }>;
 
 type ProcessResult = Readonly<{
@@ -1217,8 +1841,12 @@ export type InspectedFile = Readonly<{
   layout?: LayoutFacts;
   /** Objects shaded smooth across hard edges, with the share of their corners bent that way. */
   smoothShaded?: ReadonlyArray<Readonly<{ object: string; share: number }>>;
+  uv?: InspectedUv;
   inspectionError?: string;
 }>;
+
+/** Which meshes arrived with UVs, and the range they span. */
+export type InspectedUv = Readonly<{ meshes: number; without: readonly string[]; withoutCount: number; low?: readonly number[]; high?: readonly number[] }>;
 
 /** A piece or group of pieces, by its size and centre in Blender coordinates (X, Y, Z up). */
 export type PieceBox = Readonly<{ size: readonly number[]; center: readonly number[] }>;
@@ -1483,14 +2111,16 @@ export class BlenderWorker {
       entries = [];
     }
     const models = entries.filter((name) => MODEL_EXTENSIONS.has(path.extname(name).toLowerCase()));
-    const renders = entries.filter((name) => path.extname(name).toLowerCase() === ".png");
+    const flipbookFiles = entries.filter((name) => isFlipbookFile(name));
+    const sheets = flipbookFiles.filter((name) => name.toLowerCase().endsWith(FLIPBOOK_SUFFIX));
+    const renders = entries.filter((name) => path.extname(name).toLowerCase() === ".png" && !flipbookFiles.includes(name));
     // Animations roqer.export_animation baked: each becomes a pose description beside it.
     const animations: BakedAnimation[] = [];
     for (const name of entries.filter((entry) => entry.toLowerCase().endsWith(BAKE_SUFFIX)).slice(0, MAX_BAKED_ANIMATIONS)) {
       animations.push(await convertBake(outputDirectory, name));
     }
-    const others = entries.filter((name) => !models.includes(name) && !renders.includes(name) && !name.toLowerCase().endsWith(BAKE_SUFFIX));
-    if (models.length === 0 && renders.length === 0 && !sceneSaved) {
+    const others = entries.filter((name) => !models.includes(name) && !renders.includes(name) && !flipbookFiles.includes(name) && !name.toLowerCase().endsWith(BAKE_SUFFIX));
+    if (models.length === 0 && renders.length === 0 && sheets.length === 0 && !sceneSaved) {
       return failure(
         `${beforeFailure}The script finished but left no model (.glb, .gltf, .fbx or .obj) or PNG image in OUTPUT_DIR. Export the model there, for example bpy.ops.export_scene.gltf(filepath=os.path.join(OUTPUT_DIR, "model.glb"), export_format="GLB", export_apply=True, use_visible=True), or render the image there.${others.length > 0 ? ` It left: ${others.join(", ")}.` : ""}`,
         "no_model_exported",
@@ -1507,8 +2137,8 @@ export class BlenderWorker {
     // A render is shown as itself: the image is the result, so there is nothing
     // to re-import. Its size is read from the file, not from the script.
     const rendered: RenderedImage[] = [];
-    const renderImages: McpToolImage[] = [];
-    for (const name of renders.slice(0, MAX_RENDERED_IMAGES)) {
+    const readable: Buffer[] = [];
+    for (const name of renders.slice(0, MAX_SHEETED_IMAGES)) {
       const filePath = path.join(outputDirectory, name);
       const bytes = await fs.readFile(filePath).catch(() => undefined);
       const header = bytes === undefined ? undefined : readPngSize(bytes);
@@ -1517,11 +2147,33 @@ export class BlenderWorker {
         continue;
       }
       rendered.push({ name, path: filePath, bytes: bytes.length, width: header.width, height: header.height });
-      if (bytes.length <= MAX_PREVIEW_BYTES) renderImages.push({ data: bytes.toString("base64"), mediaType: "image/png" });
+      readable.push(bytes);
+    }
+    // A few renders are attached one by one; more go as one review sheet, so
+    // the model sees every texture the job drew, not only the first few.
+    const renderImages: McpToolImage[] = [];
+    const sheet = readable.length > MAX_RENDERED_IMAGES ? reviewSheet(readable) : undefined;
+    const sheeted = sheet !== undefined && sheet.png.length <= MAX_PREVIEW_BYTES;
+    if (sheeted) {
+      renderImages.push({ data: sheet.png.toString("base64"), mediaType: "image/png" });
+    } else {
+      for (const bytes of readable.slice(0, MAX_RENDERED_IMAGES)) {
+        const shown = viewable(bytes);
+        if (shown !== undefined) renderImages.push({ data: shown.toString("base64"), mediaType: "image/png" });
+      }
+    }
+    // A flipbook sheet is checked from its own pixels; the note the script
+    // wrote beside it is only what it claims to have made.
+    const flipbooks: CheckedFlipbook[] = [];
+    const flipbookImages: McpToolImage[] = [];
+    for (const name of sheets.slice(0, MAX_FLIPBOOKS)) {
+      const checked = await checkFlipbook(outputDirectory, name);
+      flipbooks.push(checked);
+      if (checked.image !== undefined) flipbookImages.push(checked.image);
     }
     // Nothing exported, so the scene itself is what the model is to look at:
     // it is inspected the same way, measured as it would export.
-    const inspectScene = models.length === 0 && renders.length === 0 && sceneSaved;
+    const inspectScene = models.length === 0 && renders.length === 0 && sheets.length === 0 && sceneSaved;
     const inspected = inspectScene
       ? [{ name: "scene.blend", filePath: sceneFile }]
       : models.slice(0, MAX_INSPECTED_MODELS).map((name) => ({ name, filePath: path.join(outputDirectory, name) }));
@@ -1571,6 +2223,7 @@ export class BlenderWorker {
             ? [{ object: entry.object, share: entry.share }]
             : [])
           : undefined,
+        uv: parseUv(stats.uv),
       });
       if (stats.preview === true) {
         const png = await fs.readFile(preview).catch(() => undefined);
@@ -1588,7 +2241,7 @@ export class BlenderWorker {
     }
 
     const previews = images.length;
-    images.push(...renderImages);
+    images.push(...renderImages, ...flipbookImages);
     const durationMs = this.now() - started;
     const lines = [`Blender job ${jobId} finished in ${(durationMs / 1000).toFixed(1)} s.`, ...(notContinued === undefined ? [] : [notContinued])];
     if (inspectScene) {
@@ -1613,12 +2266,50 @@ export class BlenderWorker {
       );
     }
     if (rendered.length > 0) {
+      const attachedRenders = sheeted
+        ? `There are ${readable.length} of them, so they are attached as one review sheet after any model previews, ${sheet.columns} to a row, left to right then top to bottom, in the order listed above (leaving out any not readable).`
+        : `They are attached after any model previews${readable.length > MAX_RENDERED_IMAGES ? `, the first ${MAX_RENDERED_IMAGES} only: the rest could not be tiled into a review sheet` : ""}.`;
       lines.push(
-        "Images it rendered (attached after any model previews; look at each before using it):",
+        "Images it rendered (look at each before using it):",
         ...rendered.map(describeImage),
-        ...(renders.length > MAX_RENDERED_IMAGES ? [`${renders.length - MAX_RENDERED_IMAGES} more PNG files were not read.`] : []),
+        ...(renders.length > MAX_SHEETED_IMAGES ? [`${renders.length - MAX_SHEETED_IMAGES} more PNG files were not read.`] : []),
+        ...(readable.length === 0 ? [] : [`${attachedRenders} An image with transparency is shown over a dark ground, where a white texture reads as it will glow in the game; the file itself is unchanged.`]),
         "To use an image in UI: upload_asset {action: 'upload', filePath: <its path>, assetType: 'Decal', displayName}, then set ImageLabel.Image to rbxassetid://<imageId from that result>. The decalId does not display in an ImageLabel; if imageId is null, check the upload again with action 'status'.",
       );
+    }
+    if (flipbooks.length > 0) {
+      lines.push(
+        "Flipbook sheets it made, checked by Roqer from their pixels (attached after any renders, in this order; a transparent sheet is shown over a dark ground, the file itself unchanged):",
+        ...flipbooks.flatMap((flipbook) => flipbook.lines),
+        ...(sheets.length > MAX_FLIPBOOKS ? [`${sheets.length - MAX_FLIPBOOKS} more flipbook sheets were not checked.`] : []),
+        "To use a sheet: fix every problem first, then upload_asset {action: 'upload', filePath: <its path>, assetType: 'Decal', displayName}, set ParticleEmitter.Texture to rbxassetid://<imageId from that result>, and apply the settings listed. Confirm it plays by holding one particle at a few ages (TimeScale 0) and taking screenshots: each should show one frame, not the whole grid. Do not go by FlipbookIncompatible: Studio shows its size message even for a sheet that plays.",
+      );
+    }
+    // Textures shown in Studio before any upload, when the job asked for it:
+    // every sheet and readable render, whether or not it was attached.
+    let studioPreviews: StudioPreview[] = [];
+    if (args.preview_in_studio === true) {
+      const textures = [
+        ...flipbooks.map((flipbook) => ({ name: flipbook.name, path: flipbook.path })),
+        ...rendered.filter((image) => image.error === undefined).map((image) => ({ name: image.name, path: image.path })),
+      ].slice(0, MAX_STUDIO_PREVIEWS);
+      try {
+        const installs = await (this.options.studioContentDirectories ?? (() => findStudioContentDirectories(this.options.env ?? process.env)))();
+        studioPreviews = await stageStudioPreviews(textures, jobId, installs, this.now());
+        if (textures.length === 0) {
+          lines.push("Nothing to preview in Studio: the job made no PNG or flipbook sheet.");
+        } else if (installs.length === 0) {
+          lines.push("No Roblox Studio install was found to preview in (previews work with Studio on Windows). Upload the textures to see them in Studio.");
+        } else {
+          lines.push(
+            "Previews in Studio, before any upload. Each address works on this computer only:",
+            ...studioPreviews.map((preview) => `- ${preview.name}: ${preview.uri}`),
+            "Set ParticleEmitter.Texture (or a Beam's or Decal's Texture) to an address to see the texture in Studio as players would. Studio keeps a file's first image for the session, so a redrawn texture comes from a new job with new addresses. Players and other computers see nothing at these addresses: once the textures are settled, upload them (upload_asset as Decal) and replace every rbxasset://textures/roqer-preview/ address with rbxassetid://<imageId>.",
+          );
+        }
+      } catch (error) {
+        lines.push(`The textures could not be copied into Studio for a preview: ${error instanceof Error ? error.message : String(error)}. Upload them to see them in Studio.`);
+      }
     }
     if (animations.length > 0) {
       lines.push(
@@ -1636,7 +2327,9 @@ export class BlenderWorker {
         jobId,
         ...(continueFrom === undefined ? {} : { continuedFrom: continueFrom }),
         jobDirectory, outputDirectory, files, images: rendered, otherFiles: others, log,
+        ...(flipbooks.length > 0 ? { flipbooks: flipbooks.map(({ name, path: sheetPath, report }) => ({ name, path: sheetPath, ...(report === undefined ? {} : { report }) })) } : {}),
         ...(animations.length > 0 ? { animations: animations.flatMap((animation) => animation.path === undefined ? [] : [{ name: animation.name, path: animation.path }]) } : {}),
+        ...(studioPreviews.length > 0 ? { studioPreviews } : {}),
         scene: sceneSaved ? { path: sceneFile, ...(contents === undefined ? {} : { contents }) } : null,
       },
       text: lines.join("\n"),
@@ -1700,6 +2393,93 @@ export class BlenderWorker {
   }
 }
 
+const MAX_FLIPBOOKS = 4;
+/** The most textures one job previews in Studio: all its checked sheets and rendered images. */
+const MAX_STUDIO_PREVIEWS = MAX_FLIPBOOKS + MAX_SHEETED_IMAGES;
+const FLIPBOOK_SUFFIX = ".flipbook.png";
+const FLIPBOOK_NOTE_SUFFIX = ".flipbook.json";
+const FLIPBOOK_PREVIEW_SUFFIX = ".flipbook-preview.png";
+const MAX_FLIPBOOK_NOTE_BYTES = 64 * 1024;
+
+/** A sheet roqer.flipbook writes, its note, or the half-size copy it writes to look at. */
+function isFlipbookFile(name: string): boolean {
+  const lower = name.toLowerCase();
+  return lower.endsWith(FLIPBOOK_SUFFIX) || lower.endsWith(FLIPBOOK_NOTE_SUFFIX) || lower.endsWith(FLIPBOOK_PREVIEW_SUFFIX);
+}
+
+type CheckedFlipbook = Readonly<{ name: string; path: string; report?: FlipbookReport; image?: McpToolImage; lines: readonly string[] }>;
+
+/** The note beside a sheet, kept only where each value has the expected type: it is the script's claim. */
+async function readFlipbookNote(file: string): Promise<{ claim: FlipbookClaim; renderSeconds?: number[]; engine?: string }> {
+  const stat = await fs.stat(file).catch(() => undefined);
+  if (stat === undefined || stat.size > MAX_FLIPBOOK_NOTE_BYTES) return { claim: {} };
+  let note: unknown;
+  try {
+    note = JSON.parse(await fs.readFile(file, "utf8"));
+  } catch {
+    return { claim: {} };
+  }
+  if (!isRecord(note)) return { claim: {} };
+  const seconds = Array.isArray(note.renderSeconds) ? note.renderSeconds.filter(isNumber).slice(0, 64) : undefined;
+  return {
+    claim: {
+      ...(isNumber(note.grid) ? { grid: note.grid } : {}),
+      ...(typeof note.mode === "string" ? { mode: note.mode } : {}),
+      ...(isNumber(note.padding) ? { padding: note.padding } : {}),
+      ...(typeof note.loop === "boolean" ? { loop: note.loop } : {}),
+      ...(isNumber(note.fps) && note.fps > 0 ? { fps: note.fps } : {}),
+    },
+    ...(seconds === undefined || seconds.length === 0 ? {} : { renderSeconds: seconds }),
+    ...(typeof note.engine === "string" && note.engine.length <= 40 ? { engine: note.engine } : {}),
+  };
+}
+
+async function checkFlipbook(directory: string, name: string): Promise<CheckedFlipbook> {
+  const sheetPath = path.join(directory, name);
+  const stem = name.slice(0, -FLIPBOOK_SUFFIX.length);
+  const { claim, renderSeconds, engine } = await readFlipbookNote(path.join(directory, stem + FLIPBOOK_NOTE_SUFFIX));
+  const bytes = await fs.readFile(sheetPath).catch(() => undefined);
+  if (bytes === undefined) return { name, path: sheetPath, lines: [`- ${name}: Roqer could not read it.`] };
+  let report: FlipbookReport;
+  try {
+    report = analyzeFlipbook(bytes, claim);
+  } catch (error) {
+    return { name, path: sheetPath, lines: [`- ${name}: not a sheet Roqer can read: ${error instanceof Error ? error.message : String(error)}`] };
+  }
+  const lines = describeFlipbook(name, report);
+  if (renderSeconds !== undefined) {
+    const total = renderSeconds.reduce((sum, value) => sum + value, 0);
+    lines.push(`  The script's note says ${renderSeconds.length} frames rendered in ${total.toFixed(1)} s${engine === undefined ? "" : ` with ${engine}`} (${(total / renderSeconds.length).toFixed(2)} s a frame).`);
+  }
+  // The sheet itself when it fits in the result, otherwise the half-size copy written beside it.
+  let image: McpToolImage | undefined;
+  const shown = viewable(bytes);
+  if (shown !== undefined) {
+    image = { data: shown.toString("base64"), mediaType: "image/png" };
+  } else {
+    const preview = await fs.readFile(path.join(directory, stem + FLIPBOOK_PREVIEW_SUFFIX)).catch(() => undefined);
+    const shownPreview = preview !== undefined && readPngSize(preview) !== undefined ? viewable(preview) : undefined;
+    if (shownPreview !== undefined) {
+      image = { data: shownPreview.toString("base64"), mediaType: "image/png" };
+      lines.push("  The sheet is too large to attach, so a half-size copy of it is attached instead; the checks above read the full sheet.");
+    } else {
+      lines.push("  The sheet is too large to attach; judge it by the numbers above.");
+    }
+  }
+  return { name, path: sheetPath, report, ...(image === undefined ? {} : { image }), lines };
+}
+
+/**
+ * The PNG as the model is shown it: over the dark ground when it has
+ * transparency, which a model does not see, otherwise as it is. Undefined when
+ * neither fits in a result.
+ */
+function viewable(bytes: Buffer): Buffer | undefined {
+  const grounded = onDarkGround(bytes);
+  if (grounded !== undefined && grounded.length <= MAX_PREVIEW_BYTES) return grounded;
+  return bytes.length <= MAX_PREVIEW_BYTES ? bytes : undefined;
+}
+
 const MAX_BAKED_ANIMATIONS = 8;
 const MAX_BAKE_BYTES = 16 * 1024 * 1024;
 
@@ -1739,6 +2519,34 @@ const COLOR_SOURCE_NOTES: Readonly<Record<NonNullable<InspectedFile["colorSource
   material: "coloured by flat material colours only, which arrive white: set Color and Material on each MeshPart after insert",
 };
 
+function parseUv(value: unknown): InspectedUv | undefined {
+  if (!isRecord(value) || !isNumber(value.meshes) || !isNumber(value.withoutCount)) return undefined;
+  const pair = (entry: unknown) => Array.isArray(entry) && entry.length === 2 && entry.every(isNumber) ? entry as number[] : undefined;
+  const low = pair(value.low);
+  const high = pair(value.high);
+  return {
+    meshes: count(value.meshes, 0),
+    without: Array.isArray(value.without) ? value.without.filter((name): name is string => typeof name === "string").slice(0, 8) : [],
+    withoutCount: count(value.withoutCount, 0),
+    ...(low !== undefined && high !== undefined ? { low, high } : {}),
+  };
+}
+
+/** The UV line: only worth saying when some mesh has UVs, so a texture can be meant. */
+function describeUv(uv: InspectedUv | undefined): string {
+  if (uv === undefined || uv.meshes === 0) return "";
+  const span = uv.low !== undefined && uv.high !== undefined
+    ? `, spanning U ${uv.low[0].toFixed(2)} to ${uv.high[0].toFixed(2)} and V ${uv.low[1].toFixed(2)} to ${uv.high[1].toFixed(2)}`
+    : "";
+  const outside = uv.low !== undefined && uv.high !== undefined && (Math.min(...uv.low) < -0.001 || Math.max(...uv.high) > 1.001)
+    ? "; outside 0 to 1 a texture repeats"
+    : "";
+  const missing = uv.withoutCount > 0
+    ? `; no UVs on ${uv.without.join(", ")}${more(uv.without.length, uv.withoutCount)}, where a texture shows as one flat colour`
+    : "";
+  return `\n  UVs on ${uv.meshes} mesh${uv.meshes === 1 ? "" : "es"}${span}${outside}${missing}.`;
+}
+
 function describeFile(file: InspectedFile): string {
   const size = file.size !== undefined && file.size.length === 3 ? `, ${file.size.map((value) => value.toFixed(2)).join(" × ")} Blender units` : "";
   const facts = file.inspectionError !== undefined
@@ -1753,7 +2561,8 @@ function describeFile(file: InspectedFile): string {
   const shading = file.smoothShaded !== undefined && file.smoothShaded.length > 0
     ? `\n  shading: smooth across hard edges on ${file.smoothShaded.map((entry) => `${entry.object} (${Math.round(entry.share * 100)}% of corners)`).join(", ")}, which makes boxes and panels look puffy in Roblox. Unless the object is meant to look rounded, remove shade_smooth; roqer.join keeps what it joins flat.`
     : "";
-  return `- ${file.path} (${Math.max(1, Math.round(file.bytes / 1024))} KB): ${facts}${file.colorSource === undefined ? "" : `; ${COLOR_SOURCE_NOTES[file.colorSource]}`}${pieces}${layout}${shading}${articulated}`;
+  const uv = file.inspectionError === undefined ? describeUv(file.uv) : "";
+  return `- ${file.path} (${Math.max(1, Math.round(file.bytes / 1024))} KB): ${facts}${file.colorSource === undefined ? "" : `; ${COLOR_SOURCE_NOTES[file.colorSource]}`}${pieces}${layout}${shading}${uv}${articulated}`;
 }
 
 const MAX_LAYOUT_ENTRIES = 8;

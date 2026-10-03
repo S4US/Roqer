@@ -44,6 +44,32 @@ test("recovers an interrupted run with changes and evidence truthfully", async (
   } finally { await fixture.cleanup(); }
 });
 
+test("a finished run recovered from the journal keeps its usage, and a damaged one loses only that", async () => {
+  const fixture = await temporaryJournal();
+  const at = "2026-01-01T00:00:00.000Z";
+  const usage = { inputTokens: 60, cacheReadTokens: 9_000, outputTokens: 140, requests: 3, costUsd: 0.42 };
+  try {
+    await fixture.journal.start("run-1", { projectId: "project", chatId: "chat" }, "make it", "Ask first");
+    fixture.journal.record(event({
+      type: "run-completed", runId: "run-1", seq: 1, at, outcome: "completed", summary: "Done.",
+      verification: { verified: true, issues: [] }, usage,
+    }));
+    await fixture.journal.drain();
+
+    const [recovered] = await new RunJournal(fixture.root).recover();
+    assert.deepEqual(recovered.message.run?.usage, usage);
+
+    const [file] = (await readdir(fixture.root)).filter((name) => name.endsWith(".json"));
+    const snapshot = JSON.parse(await readFile(join(fixture.root, file), "utf8"));
+    snapshot.completion.usage = { inputTokens: -5, outputTokens: 1 };
+    await writeFile(join(fixture.root, file), JSON.stringify(snapshot), "utf8");
+    const [damaged] = await new RunJournal(fixture.root).recover();
+    assert.equal(damaged.message.run?.outcome, "completed", "the run is still recovered");
+    assert.equal(damaged.message.run !== undefined && "usage" in damaged.message.run, false);
+    assert.deepEqual((await readdir(fixture.root)).filter((name) => name.includes(".corrupt-")), [], "and nothing was set aside as corrupt");
+  } finally { await fixture.cleanup(); }
+});
+
 test("a recovered run keeps the user's notes and answers, and its newest changes", async () => {
   const fixture = await temporaryJournal();
   const at = "2026-01-01T00:00:00.000Z";

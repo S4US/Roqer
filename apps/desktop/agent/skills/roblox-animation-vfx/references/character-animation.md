@@ -474,6 +474,14 @@ give the model's path as `rig`. Load `references/creature-animation.md` for
 reading a model's rig, rigging loose pieces with `rig`, `waves` for tails,
 tentacles, wings and spines, `gait` for walking any number of legs (it works
 on R15 and R6 too), and tested creature recipes.
+
+## Posing a joint from code
+
+An effect can hold a pose without an animation asset, such as an arm raised
+toward a target for a cast, by setting the joint's `Transform` every frame.
+The recipe, for `Motor6D` and `AnimationConstraint` joints, is in
+`references/vfx-craft.md`, section 2.
+
 ## Reading the result
 
 - The contact sheet shows five evenly spaced moments, and a column for each

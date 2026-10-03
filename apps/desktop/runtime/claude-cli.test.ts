@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { ClaudeCodeClient, parseClaudeModels } from "./claude-cli";
+import { claudeChildEnvironment, ClaudeCodeClient, parseClaudeModels } from "./claude-cli";
 import { ClientNotInstalledError } from "./client-not-installed";
 import { FakeChildProcess } from "./test-child-process";
 
@@ -445,4 +445,12 @@ test("A model without effort selection still declares one effort for the picker"
   assert.deepEqual(catalog.models[0].supportedReasoningEfforts.map((entry) => entry.reasoningEffort), ["medium"]);
   assert.equal(catalog.models[0].defaultReasoningEffort, "medium");
   assert.equal(effortModels.size, 0);
+});
+
+test("Claude Code starts without the bridge secret and never moves a Roqer tool call to the background", () => {
+  const environment = claudeChildEnvironment({ PATH: "C:\\bin", ROBLOX_STUDIO_AUTH_TOKEN: "secret", CLAUDE_AUTO_BACKGROUND_TASKS: "1" });
+  assert.equal(environment.ROBLOX_STUDIO_AUTH_TOKEN, undefined);
+  assert.equal(environment.PATH, "C:\\bin");
+  // Claude Code's documented off switch for backgrounding long MCP calls, which CLAUDE_AUTO_BACKGROUND_TASKS turns on.
+  assert.equal(environment.CLAUDE_CODE_MCP_AUTO_BACKGROUND_MS, "0");
 });

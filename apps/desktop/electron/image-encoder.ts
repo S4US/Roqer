@@ -119,6 +119,69 @@ export const encodeAttachmentImage: ImageEncoder = async ({ bytes, mediaType, na
 };
 
 /**
+ * The largest image Claude Code passes a model unchanged: 2000 x 2000 for
+ * Opus 5.5, read from its model table. A sheet is drawn as wide as a frame
+ * sent alone would reach the model (a 2246-pixel frame arrives at 2000), so
+ * with two frames to a row each shows at half that width, and a sheet of up to
+ * eight frames costs about what two frames sent alone do.
+ */
+const CONTACT_SHEET_WIDTH = 2000;
+const CONTACT_SHEET_MAX_HEIGHT = 2000;
+/**
+ * Qualities tried, best first. Claude Code re-encodes an image over 512,000
+ * bytes at a quality of its own choosing, so a sheet is kept under that.
+ */
+const CONTACT_SHEET_QUALITIES = [85, 78, 70, 62];
+const CONTACT_SHEET_MAX_BYTES = 500_000;
+
+/**
+ * Several frames as one image, `columns` to a row, left to right and top to
+ * bottom, each scaled to its tile. A model reads an image at a cost set by its
+ * pixels, and every image stays in the conversation for the rest of the run,
+ * so eight full-size frames cost about four times one sheet of them. Each
+ * frame shows at half the width it would have alone; the caller offers full
+ * frames for when that detail matters. Undefined when a frame does not decode
+ * here, or the sheet cannot be kept small enough; the caller then sends the
+ * frames as they are.
+ */
+export async function composeContactSheet(images: readonly McpToolImage[], columns: number): Promise<McpToolImage | undefined> {
+  const frames = images.map((image) => nativeImage.createFromBuffer(Buffer.from(image.data, "base64")));
+  if (frames.length === 0 || frames.some((frame) => frame.isEmpty())) return undefined;
+  const rows = Math.ceil(frames.length / columns);
+  // As wide as a frame sent alone would reach the model, so a frame is never
+  // enlarged, unless the rows would then be taller than allowed. Each row gets
+  // a whole number of pixels: the resize rounds a tile's height, and three
+  // rows of 666.67 would otherwise round to 2001.
+  const aspect = Math.max(...frames.map((frame) => frame.getSize().height / Math.max(1, frame.getSize().width)));
+  const seenWidth = Math.min(CONTACT_SHEET_WIDTH, Math.max(...frames.map((frame) => frame.getSize().width)));
+  const tileWidth = Math.floor(Math.min(seenWidth / columns, Math.floor(CONTACT_SHEET_MAX_HEIGHT / rows) / aspect));
+  const tiles = frames.map((frame) => frame.resize({ width: tileWidth, quality: "good" }));
+  const tileHeight = Math.max(...tiles.map((tile) => tile.getSize().height));
+  const width = tileWidth * columns;
+  const height = tileHeight * rows;
+  // BGRA, as nativeImage's bitmaps are; untouched tiles stay opaque black.
+  const sheet = Buffer.alloc(width * height * 4);
+  for (let i = 3; i < sheet.length; i += 4) sheet[i] = 255;
+  tiles.forEach((tile, index) => {
+    const { width: w, height: h } = tile.getSize();
+    const bitmap = tile.toBitmap();
+    const left = (index % columns) * tileWidth;
+    const top = Math.floor(index / columns) * tileHeight;
+    for (let y = 0; y < h; y++) {
+      bitmap.copy(sheet, ((top + y) * width + left) * 4, y * w * 4, (y + 1) * w * 4);
+    }
+  });
+  const composed = nativeImage.createFromBitmap(sheet, { width, height });
+  for (const quality of CONTACT_SHEET_QUALITIES) {
+    const jpeg = composed.toJPEG(quality);
+    if (jpeg.byteLength > 0 && jpeg.byteLength <= CONTACT_SHEET_MAX_BYTES && fits(jpeg)) {
+      return { data: jpeg.toString("base64"), mediaType: "image/jpeg" };
+    }
+  }
+  return undefined;
+}
+
+/**
  * The preview kept with image evidence: a screenshot or a Blender preview,
  * scaled down and re-encoded as JPEG so it fits the saved-record bound.
  *

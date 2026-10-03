@@ -93,6 +93,17 @@ get the direction of wrong, and they paint it when given a colour:
 - `roqer.export_animation(name, source, rig, start=None, end=None, loop=True)`:
   bakes what a creature does in the scene into an animation for Studio (see
   "Animating a creature in Blender").
+- `roqer.draw_flipbook(name, frame, grid=4, ...)` and `roqer.draw_texture`,
+  with `roqer.tex_coords`, `tex_polar`, `tex_noise`, `tex_cells`, `tex_sample`,
+  `tex_edge` and `tex_ease`: draw particle textures and flipbooks in 2D with
+  numpy (see [Blender for visual effects](blender-vfx.md)).
+- `roqer.flipbook(name, grid=4, mode="alpha", start=None, end=None, loop=False, padding=4)`:
+  renders the scene's animation into a 1024 x 1024 particle flipbook sheet
+  (same reference).
+- `roqer.vfx_arc`, `vfx_ring`, `vfx_cone`, `vfx_swirl` and `vfx_shell`: shapes
+  for mesh effects (a crescent slash, a shockwave, a burst, a tornado, a
+  barrier), each with UVs laid out along its sweep. `roqer.vfx_surface`
+  builds any other shape from a function (see [Blender for visual effects](blender-vfx.md)).
 
 Prefer them for any part that is not upright. Raw `bpy` is still available for
 shapes they do not cover; there, keep the model flat-shaded (no
@@ -415,6 +426,15 @@ For one model on its own; a map's set follows the section above.
    Model.
 5. If it must be held, driven, opened or picked up, assemble it next: load
    [Gameplay assembly](gameplay-assembly.md).
+
+## Visual effects
+
+[Blender for visual effects](blender-vfx.md) covers:
+- particle textures and flipbooks, drawn with numpy or rendered from a scene;
+- previewing them in Studio before uploading;
+- shapes for mesh effects: crescents, rings, swirls and shells.
+
+Load it before a VFX job.
 
 ## Rendering an image for UI
 

@@ -29,6 +29,9 @@ test("approval-code - a Blender script is shown as plain Python", () => {
   assert.equal(shown.label, "Blender script");
   assert.match(shown.subtitle, /Python in Blender/);
   assert.ok(shown.lines.flat().every((token) => token.kind === "plain"));
+  assert.doesNotMatch(shown.subtitle, /Studio install/);
+  // A job that copies textures into Studio says so before the user approves it.
+  assert.match(approvalCode("run_blender_script", { script: "import bpy", preview_in_studio: true })!.subtitle, /copies its textures into your Roblox Studio install/);
 });
 
 test("approval-code - other tools and malformed code fall back to the summary", () => {
@@ -46,4 +49,12 @@ test("approval-code - every MCP tool that takes Luau code shows it when asking",
   for (const tool of codeTools) {
     assert.ok(approvalCode(tool, { code: "print(1)" }), `${tool} takes code but its approval would not show it`);
   }
+});
+
+test("approval-code - capturing moments shows the Luau that starts the effect, and where it runs", () => {
+  const shown = approvalCode("capture_moments", { code: "_G.vfx = Emit.play(t, cf)", times: [0.1] });
+  assert.ok(shown);
+  assert.equal(text(shown.lines), "_G.vfx = Emit.play(t, cf)");
+  assert.match(shown.subtitle, /^Runs this Luau in Studio to start an effect, then screenshots it/);
+  assert.match(approvalCode("capture_moments", { code: "x()", runtime: "client" })!.subtitle, /in a running game client/);
 });

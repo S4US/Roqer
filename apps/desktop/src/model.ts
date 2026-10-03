@@ -1,4 +1,4 @@
-import { isRunRecord, type RunRecord } from "../shared/run-events";
+import { isRunRecord, withoutMalformedUsage, type RunRecord } from "../shared/run-events";
 import { isPersistedAttachment } from "../shared/workspace-validation";
 import {
   DEFAULT_PROVIDER_ID,
@@ -217,12 +217,14 @@ function isMessage(value: unknown): value is ChatMessage {
 
 /**
  * A damaged run record should cost the user the record, not the message it was
- * attached to, so it is stripped before the message itself is validated.
+ * attached to, so it is stripped before the message itself is validated. A
+ * damaged usage figure costs only itself, so it goes first.
  */
 function normalizeMessage(value: unknown): ChatMessage[] {
   if (!isRecord(value)) return [];
-  const candidate = value.run === undefined || isRunRecord(value.run)
-    ? value
+  const run = withoutMalformedUsage(value.run);
+  const candidate = run === undefined || isRunRecord(run)
+    ? (run === value.run ? value : { ...value, run })
     : { ...value, run: undefined };
   return isMessage(candidate) ? [candidate] : [];
 }

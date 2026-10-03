@@ -5,6 +5,7 @@ import path from "node:path";
 import readline from "node:readline";
 
 import type { Planner, PlannerContext } from "./run-engine";
+import type { RunUsage } from "../shared/run-events";
 import type { AgentDefinition } from "./agent-definition";
 import type { ProviderStatus, ReasoningEffort } from "../shared/provider";
 import type { ClaudeLauncher } from "./claude-cli";
@@ -104,6 +105,22 @@ function deferred<T>() {
 }
 
 /**
+ * How long Claude Code waits on one call to Roqer's tools before giving up on
+ * it, in milliseconds.
+ *
+ * Claude Code's default for an HTTP server is 60 s, a hard wall-clock limit.
+ * Past it the model is told the call timed out while Roqer carries on, so a
+ * capture that finished at 65 s never reached the model, and a playtest start
+ * Roqer would have waited 90 s for was abandoned at 60. Approvals and
+ * questions wait on the user for as long as the user takes. Roqer bounds every
+ * call itself (`timeoutForTool`), and cancelling a run ends the Claude Code
+ * process, so this limit only has to stay out of the way. Claude Code also
+ * moves an MCP call still running after two minutes to the background when
+ * the user's environment asks for that; `claudeChildEnvironment` turns it off.
+ */
+export const CLAUDE_TOOL_CALL_TIMEOUT_MS = 24 * 60 * 60 * 1000;
+
+/**
  * Write the MCP endpoint and its bearer token to a private file.
  *
  * `--mcp-config` also takes the JSON inline, but a command line is readable by
@@ -116,6 +133,7 @@ async function writeMcpConfig(directory: string, server: WorkbenchMcpServerHandl
         type: "http",
         url: server.url,
         headers: { Authorization: `Bearer ${server.token}` },
+        timeout: CLAUDE_TOOL_CALL_TIMEOUT_MS,
       },
     },
   };
@@ -267,6 +285,104 @@ export function claudeContextWindow(result: JsonRecord, models: readonly (string
   return null;
 }
 
+/**
+ * Claude Code's running totals for its whole process, summed over every model
+ * it called: the main agent, Task subagents, and its own compaction.
+ */
+export type ClaudeUsageTotals = {
+  /** Input not read from or written to the prompt cache. */
+  inputTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+  outputTokens: number;
+  costUsd: number;
+};
+
+/**
+ * What a turn's `result` says about the process's usage.
+ *
+ * Claude Code documents its `result` fields this way (checked against 2.1.287):
+ * `modelUsage` and `total_cost_usd` are running totals across every turn of a
+ * streaming-input session, so the latest result is read rather than results
+ * summed, and an error result may carry them zeroed. `usage` covers only the
+ * main agent's loop, so it is not used. `num_turns` is the turn's own count of
+ * the main agent's requests, which does add up across turns.
+ *
+ * A malformed figure is left out rather than failing the run; a total is
+ * absent unless every model's entry gave a well-formed count for it. Null for
+ * anything but a top-level `result`.
+ */
+export function claudeResultUsage(message: JsonRecord): { totals: Partial<ClaudeUsageTotals>; requests?: number } | null {
+  if (message.type !== "result" || message.parent_tool_use_id != null) return null;
+  const totals: Partial<ClaudeUsageTotals> = {};
+  const models = message.modelUsage;
+  if (isRecord(models)) {
+    const entries = Object.values(models);
+    const sum = (field: string): number | undefined => {
+      let total = 0;
+      for (const entry of entries) {
+        const count = isRecord(entry) ? tokenCount(entry[field]) : undefined;
+        if (count === undefined) return undefined;
+        total += count;
+      }
+      return Number.isSafeInteger(total) ? total : undefined;
+    };
+    const fields = [
+      ["inputTokens", "inputTokens"], ["cacheReadTokens", "cacheReadInputTokens"],
+      ["cacheWriteTokens", "cacheCreationInputTokens"], ["outputTokens", "outputTokens"],
+    ] as const;
+    for (const [name, field] of fields) {
+      const total = sum(field);
+      if (total !== undefined) totals[name] = total;
+    }
+  }
+  const cost = message.total_cost_usd;
+  if (typeof cost === "number" && Number.isFinite(cost) && cost >= 0) totals.costUsd = cost;
+  const requests = tokenCount(message.num_turns);
+  return requests === undefined ? { totals } : { totals, requests };
+}
+
+/**
+ * One run's share of a Claude Code process's running totals.
+ *
+ * A kept process carries the totals of every earlier run in the chat, so the
+ * run reports what they grew by since it began. A figure that went down is a
+ * zeroed error result, not a refund, and is ignored. Nothing is reported until
+ * a result has given both the input and the output totals.
+ */
+export class ClaudeRunUsage {
+  private readonly baseline: ClaudeUsageTotals;
+  private readonly seen = new Set<keyof ClaudeUsageTotals>();
+  private requests: number | undefined;
+
+  /** `totals` is the process's own record, advanced in place for the next run. */
+  constructor(private readonly totals: ClaudeUsageTotals) {
+    this.baseline = { ...totals };
+  }
+
+  /** Fold in one message; the run's usage so far when it was a result that said enough, else null. */
+  observe(message: JsonRecord): RunUsage | null {
+    const reading = claudeResultUsage(message);
+    if (reading === null) return null;
+    for (const [name, value] of Object.entries(reading.totals) as Array<[keyof ClaudeUsageTotals, number]>) {
+      if (value < this.totals[name]) continue;
+      this.totals[name] = value;
+      this.seen.add(name);
+    }
+    if (reading.requests !== undefined) this.requests = (this.requests ?? 0) + reading.requests;
+    if (!this.seen.has("inputTokens") || !this.seen.has("outputTokens")) return null;
+    const grown = (name: keyof ClaudeUsageTotals) => this.totals[name] - this.baseline[name];
+    return {
+      inputTokens: grown("inputTokens"),
+      ...(this.seen.has("cacheReadTokens") ? { cacheReadTokens: grown("cacheReadTokens") } : {}),
+      ...(this.seen.has("cacheWriteTokens") ? { cacheWriteTokens: grown("cacheWriteTokens") } : {}),
+      outputTokens: grown("outputTokens"),
+      ...(this.requests === undefined ? {} : { requests: this.requests }),
+      ...(this.seen.has("costUsd") ? { costUsd: grown("costUsd") } : {}),
+    };
+  }
+}
+
 function assistantText(message: JsonRecord): string {
   if (message.parent_tool_use_id != null) return "";
   const payload = message.message;
@@ -308,6 +424,14 @@ export class ClaudeSession {
   mainModel: string | null = null;
   /** The context window Claude Code last reported for that model, kept for the next run. */
   contextWindow: number | null = null;
+  /**
+   * Claude Code's running usage totals for this process, as of its latest
+   * result. They start from nothing, since the process never resumes a saved
+   * session, and each run reports only what they grew by while it ran.
+   */
+  readonly usageTotals: ClaudeUsageTotals = {
+    inputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, outputTokens: 0, costUsd: 0,
+  };
   /** Skill documents delivered into this process's conversation and still in it. */
   readonly skills: SkillToolRunner;
 
@@ -493,6 +617,8 @@ export function createClaudePlanner(options: ClaudePlannerOptions): Planner {
       let responseCharacters = 0;
       /** The latest main-agent response's context, as Claude Code reported it. */
       let contextReading: { usedTokens: number; model: string | null } | null = null;
+      /** This run's share of the session's usage, from the moment the session is bound. */
+      let runUsage: ClaudeRunUsage | undefined;
       /** Malformed Studio or Blender calls since the last well-formed one. */
       let malformedCalls = 0;
 
@@ -640,6 +766,9 @@ export function createClaudePlanner(options: ClaudePlannerOptions): Planner {
         }
 
         if (message.type === "result") {
+          // Before the error check: a failed turn was still spent.
+          const usage = runUsage?.observe(message);
+          if (usage) context.runUsage(usage);
           if (session !== undefined) {
             session.contextWindow = claudeContextWindow(message, [session.mainModel, contextReading?.model ?? null]) ?? session.contextWindow;
           }
@@ -687,6 +816,7 @@ export function createClaudePlanner(options: ClaudePlannerOptions): Planner {
         // but the model.
         if (resumed) context.progress(waitingLabel);
 
+        runUsage = new ClaudeRunUsage(session.usageTotals);
         session.bind({
           invoke: async (name, args) => {
             // A tool call is Roqer's time, not the model's: an approval or a

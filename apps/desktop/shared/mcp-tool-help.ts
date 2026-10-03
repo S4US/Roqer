@@ -1,3 +1,4 @@
+import { GATEWAY_SCHEMAS } from "./gateway-operations";
 import {
   TOOL_SCHEMAS,
   type ToolArgumentRequirement,
@@ -29,8 +30,9 @@ const MAX_HINT_PARAMETERS = 16;
  * `Object.prototype` and be treated as a known schema.
  */
 export function toolSchema(operation: string): ToolSchema | undefined {
-  return Object.prototype.hasOwnProperty.call(TOOL_SCHEMAS, operation)
-    ? TOOL_SCHEMAS[operation]
+  if (Object.prototype.hasOwnProperty.call(TOOL_SCHEMAS, operation)) return TOOL_SCHEMAS[operation];
+  return Object.prototype.hasOwnProperty.call(GATEWAY_SCHEMAS, operation)
+    ? GATEWAY_SCHEMAS[operation]
     : undefined;
 }
 
