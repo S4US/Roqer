@@ -19,9 +19,19 @@ texture, stop and report what is failing instead of escalating.
 - **They are custom.** In the first study 915 distinct textures appear, and
   only 8 emitters used a Roblox built-in *(measured)*.
 - **White, with the shape in alpha.** The particle's `Color` tints them.
-- **Hard edges.** Alpha is either binary with a 1-2 px anti-aliased rim, or
-  posterised to about 16 steps. Soft gradients are kept for one or two accent
-  textures (a glow, a soft rim). *(measured: a 49-sheet hand-drawn set)*
+- **Two families, and the blend tells them apart** *(measured: the 1,215
+  textures behind 4,950 studied particle emitters)*:
+  - **Drawn matter:** slashes and claws, puffs, cel bursts, splashes, debris,
+    flame tongues. Edges are crisp: alpha is binary with a 1-2 px anti-aliased
+    rim, or posterised to about 16 steps (the 49-sheet hand-drawn set is all
+    drawn matter). Most of it sits at `LightEmission` 0, where 57% of
+    emitters use a crisp or nearly crisp texture. Most flipbooks are drawn
+    matter: 65% of flipbook emitters use a crisp or nearly crisp sheet.
+  - **Light:** flares and glints, glows, halos, lens streaks, soft shock
+    rings, ray bursts and dots. Brightness falls off smoothly from a hot core
+    or line, and the shape keeps the symmetry of light (below). Of the
+    `LightEmission` 1 emitters, 83% use a texture that falls off softly; so
+    do 77% of emitters that use a single image rather than a sheet.
 - **Smoke is where the styles part.** Of the 1,108-texture community kit's
   113 smoke, fog and cloud textures, 73 are soft-edged billows with light and
   dark mottling inside, 29 put a crisp silhouette around a soft, mottled
@@ -33,8 +43,8 @@ texture, stop and report what is failing instead of escalating.
   no contrast inside is.
 - **Detail from negative space, not shading.** Holes, notches, overhangs and
   scribbled interior strokes. Stroke width tapers as with pen pressure.
-  Silhouettes are asymmetric. When there is shading, it is one or two flat
-  tones (a lit and a shadow side).
+  Drawn silhouettes are asymmetric. When there is shading, it is one or two
+  flat tones (a lit and a shadow side).
   - Holes belong where a shape breaks apart (a puff thinning out, a burst's
     last frames) or where the cut-out is the design (a ring, a crescent).
   - **A flash's centre is solid, glowing, or a deliberate ring.** In a
@@ -47,7 +57,10 @@ texture, stop and report what is failing instead of escalating.
 - **Frames change by growing and then breaking apart.** A shape grows with
   an ease-out to a peak around frame 4-6, then is eaten into 2-6 fragments.
   The last few cells may be blank, so a one-shot particle vanishes early.
-  Most sheets are 4 x 4.
+  Most sheets are 4 x 4. Across 463 one-shot sheets in the study, 57% break
+  apart, 15% shrink and fade, and 6% erode in one piece; the drawing is
+  largest at a median 27% of the way through, and half end in blank cells.
+  4 x 4 is on 81% of flipbook emitters *(measured)*.
 - **Size within the cell varies.**
   - Many sheets fill most of the cell at their largest frame.
   - The hand-drawn set keeps shapes small: half span less than 27% of the
@@ -60,11 +73,31 @@ texture, stop and report what is failing instead of escalating.
   - A later attempt: a perfectly radial impact star with even, thin outlines,
     a snowflake-symmetric frost patch, and a ring with gear-like notches. They
     read as clip art and icons, not drawings.
-- **Not symmetric, not even.** Hand-drawn shapes are lopsided, with uneven
-  counts, lengths and spacing, and strokes that taper. Draw them as tapered
-  strokes, lumpy blobs and warped coordinates (`tex_stroke`, `tex_blob`,
-  `tex_warp`), not as rays and rings around a centre.
-- **Symbols are the exception: they are precise.** The kit's 93 symbols
+- **Drawn matter is not symmetric, not even.** Hand-drawn shapes are
+  lopsided, with uneven counts, lengths and spacing, and strokes that taper.
+  Draw them as tapered strokes, lumpy blobs and warped coordinates
+  (`tex_stroke`, `tex_blob`, `tex_warp`), not as rays and rings around a
+  centre.
+- **Light keeps the symmetry of light.**
+  - **Four-point flares and glints** *(measured: 19 in the study, on 124
+    emitters)*: in 16 of the 19, four straight arms of the same length
+    (within 4%). Each arm thins and fades toward its tip from one smooth hot
+    core, often with a faint halo. 16 fall off softly; 2 are a crisp star
+    with smooth concave sides. None has bent arms or a lumpy core. Of the
+    other three, one is a tiny glint, one a horizontal lens streak, and one
+    has a longer lower arm.
+  - **The texture stays symmetric; the emitter stretches it.** 41% of those
+    emitters squash the flare, twice the rate of other soft textures, and
+    most rotate it as they do any layer. They live about 0.35 s, shorter
+    than the 0.5 s of most layers, at `LightEmission` 1 and Brightness 5-12
+    for the most part.
+  - **Glows and dots** are round. **Lens streaks** are a thin horizontal line
+    through a hot centre. **Soft shock rings** are even. **Ray bursts** are
+    straight rays of uneven length from one hot centre.
+  - Made lopsided, lumpy or hard-cut, light reads as a broken drawing: a
+    flare drawn as four bent strokes around a lumpy blob, with a glow pasted
+    underneath, looked wrong to the user *(seen in a run)*.
+- **Symbols are precise too.** The kit's 93 symbols
   (sigils, runes, zodiac and alchemy signs) have clean geometry and even
   line weight, all but a brush-drawn glyph and a few blurred icons, though a
   single sign may be lopsided, as Scorpio is. The eight magic circles
@@ -143,21 +176,25 @@ sheet instead, for a lit volume or simulation (`vfx-rendered-flipbooks.md`).
 ## Particle textures and flipbooks
 
 A particle texture decides most of how an effect looks. Most textures by
-experienced Roblox VFX artists are 2D drawings, not renders: a white,
-hard-edged silhouette on transparency, cel-shaded in two or three flat tones,
-that the particle's `Color` tints. This comes from studies of published
-effects and a 49-sheet hand-drawn texture set (see "What textures look like"
-above):
+experienced Roblox VFX artists are 2D images, not renders, white on
+transparency so the particle's `Color` tints them. They come in two families
+(see "What textures look like" above): drawn matter, a hard-edged silhouette
+cel-shaded in two or three flat tones, and light, a soft falloff from a hot
+core.
 
 - **Shapes:** flame tongues, spiky impact stars, crisp smoke puffs with a lit
   and a shadow side, crescents and claws, wobbly rings, wisps, zig-zags,
-  splinters, shaded rocks, four-point flares and dots.
-- **Edges:** hard. Alpha is binary with a 1-2 px anti-aliased rim, or
-  posterised to about 16 steps. Only an accent texture or two is soft.
+  splinters and shaded rocks are drawn matter. Four-point flares, glows,
+  halos, lens streaks, soft shock rings and dots are light.
+- **Edges:** drawn matter is crisp: alpha is binary with a 1-2 px
+  anti-aliased rim, or posterised to about 16 steps. Light falls off softly
+  and is not cut.
 - **Detail:** from negative space (holes, notches, overhangs, scribbled
   interior strokes) and tapering stroke widths, not from shading. Silhouettes
-  are asymmetric. Two exceptions:
+  are asymmetric. Three exceptions:
   - a flash keeps a solid centre;
+  - light keeps its symmetry: a four-point flare mirrors on both axes with
+    equal arms, and a glow is round;
   - a symbol (a sigil, magic circle or rune band) is precise and symmetric.
 - **Trails and beams** take a texture too, drawn as a vertical strip: the
   image's top is a Trail's head and its left edge `Attachment0` (see
@@ -207,16 +244,20 @@ The building blocks:
 | `tex_sample(image, u, v)` | `image` looked up at 0..1 with wrapping, to scroll or warp noise per frame |
 | `tex_curve(points, samples, closed)` | A smooth path through control points |
 | `tex_stroke(x, y, path, width, start, end)` | A brush stroke along a path, with width tapering from head to tail, drawn on or erased by `start` and `end` |
-| `tex_blob(x, y, radius, lumps, roughness, seed)` | A lumpy, lopsided blob in one solid piece, about `radius` from the centre. `roughness` runs from 0 (a disc) to 1 |
+| `tex_blob(x, y, radius, lumps, roughness, seed)` | A lumpy, lopsided blob in one solid piece, about `radius` from the centre, for a puff or a body. `roughness` runs from 0 (a disc) to 1 |
 | `tex_warp(x, y, amount, scale, seed, t)` | Coordinates pushed around by noise, so whatever is drawn with them is organic |
-| `tex_edge(value, at, soft)` | The hard edge: 0 below `at`, 1 above it, blended over `soft` |
+| `tex_edge(value, at, soft)` | The hard edge of drawn matter: 0 below `at`, 1 above it, blended over `soft` |
 | `tex_ease(t, power)` | Ease out, for a burst that grows fast then slows |
 
 `tex_stroke`, `tex_blob` and the shapes below are fields: positive inside,
 negative outside. Combine them with `numpy.maximum` (union) and
 `numpy.minimum` (intersection), and subtract one with `numpy.minimum(a, -b)`.
 
-The pattern behind most stylised textures:
+The helpers are shortcuts, not the whole vocabulary: a texture is any numpy
+array. Drawn matter is easiest with them; light is easiest written directly
+as a falloff (see "Light" below).
+
+The pattern behind drawn matter:
 1. **Draw the shape the way an artist would:**
    - brush strokes that taper (`tex_stroke` along a `tex_curve`) for claws,
      crescents, wisps, cracks and splinters;
@@ -334,17 +375,57 @@ roqer.draw_texture("GroundCracks", cracks, size=512)
 It runs in seconds. Draw at the final size: a sheet is 1024 x 1024, so a 4 x 4
 frame is 256 px.
 
-Look at the attached sheet and ask whether it looks drawn:
+**Light** is a falloff, not a cut shape. Build it from smooth functions of the
+distance to a centre or a line (`numpy.exp`), keep its symmetry, and leave
+variety to the emitter's `Rotation`, `Squash`, `Size` and `Brightness`. Two
+four-point flares, both run in Blender 5.2, that match the studied ones:
+
+```python
+import numpy
+
+# Four-point glint: four equal straight arms, mirrored on both axes, that thin and fade toward
+# their tips from one smooth hot core, with a faint halo.
+def glint(size):
+    x, y = roqer.tex_coords(size)
+    r = numpy.hypot(x, y)
+    def arm(along, across, length, width):
+        fade = numpy.clip(1 - numpy.abs(along) / length, 0, 1)
+        return numpy.exp(-(across / (width * fade + 1e-4)) ** 2) * fade ** 1.5
+    rays = numpy.maximum(arm(y, x, 0.95, 0.035), arm(x, y, 0.95, 0.035))
+    core = numpy.exp(-(r / 0.07) ** 2)
+    halo = 0.3 * numpy.exp(-(r / 0.3) ** 2)
+    return numpy.clip(rays + core + halo, 0, 1)
+
+# Crisp four-point star: the same symmetry as a solid shape with smooth concave sides
+# (|x|^p + |y|^p below 1; a lower p gives thinner points), cut with a hard edge.
+def star(size):
+    x, y = roqer.tex_coords(size)
+    p = 0.4
+    return roqer.tex_edge(0.9 - (numpy.abs(x) ** p + numpy.abs(y) ** p) ** (1 / p), soft=0.006)
+
+roqer.draw_texture("Glint", glint, size=512)
+roqer.draw_texture("CrispStar", star, size=512)
+```
+
+A round glow is `numpy.exp(-(r / radius) ** 2)`. A lens streak is the
+glint's horizontal arm alone, long and thin.
+
+Look at the attached sheet and ask whether it looks drawn, or, for light,
+whether it looks like light:
 - **Symmetry:** is anything radially or mirror symmetric, evenly spaced, or
-  of uniform line width? Break it up, unless it is a symbol: a sigil, magic
-  circle or rune band is drawn precise and symmetric.
+  of uniform line width? Break it up, unless it is a symbol (a sigil, magic
+  circle or rune band is drawn precise and symmetric) or light.
+- **Light:** is a flare one smooth hot core with straight arms of equal
+  length that fade toward their tips, and a glow round? Bent or unequal arms,
+  a lumpy core, or a hard cut with a glow underneath read as a broken
+  drawing.
 - **Holes:** is there a small hole or dot inside a shape that should be
   solid, such as a flash's centre? It reads as an eye or damage; fill it.
 - **Silhouette:** does the shape read as a silhouette at a glance, with a
   thick-to-thin taper, lobes, notches and holes? Or is it an outline, an icon
   or a gear?
-- **Edges:** are they crisp? Soft is for an accent glow, and for the inside
-  of smoke drawn mottled on purpose.
+- **Edges:** is drawn matter crisp? Soft is for light, and for the inside of
+  smoke drawn mottled on purpose.
 - **Change:** does the shape change across the frames (grow, then break into
   pieces), or does it only scale or fade?
 - **Distance:** would it survive at game distance, or is it too thin?
