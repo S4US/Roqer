@@ -51,7 +51,22 @@ const MAX_CODE_CHARS = 20_000;
 const MAX_TIME_SECONDS = 60;
 const HANDLE_NAME = /^[A-Za-z_][A-Za-z0-9_]{0,40}$/;
 
+/**
+ * Real seconds the effect is held at its start while its textures load.
+ *
+ * A texture fetched for the first time takes a moment to arrive, and an
+ * uploaded one always is the first time: the explosion run's first capture
+ * after its upload missed layers in its early frames and had to be taken
+ * again, a whole call and a whole image for nothing. Holding the effect while
+ * `ContentProvider` loads what it uses costs a few seconds instead. Kept well
+ * under one wait so it never eats the budget the moments need.
+ */
+const PRELOAD_SECONDS = 10;
+
 type Moment = { requested: number; reached?: number; short?: "ended" | "waited"; image?: number; note?: string };
+
+/** Where to aim the edit camera before the effect starts, as `selection` view takes it. */
+export type CaptureView = Readonly<{ path: string; from?: number; angleY?: number; padding?: number }>;
 
 export type CaptureMomentsArgs = Readonly<{
   code: string;
@@ -62,7 +77,27 @@ export type CaptureMomentsArgs = Readonly<{
   hold: boolean;
   slow: number;
   sheet: boolean;
+  view?: CaptureView;
 }>;
+
+/** The view argument, checked, or why it cannot be used. */
+function parseView(value: unknown, runtime: string): CaptureView | string | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (runtime === "client") return "view aims the edit camera; with runtime client the frames are the player's own view, so leave view out.";
+  if (typeof value !== "object" || Array.isArray(value)) return "view must be an object such as {path, from, angleY, padding}.";
+  const { path, from, angleY, padding } = value as Record<string, unknown>;
+  if (typeof path !== "string" || path === "") return "view.path must name the instance to frame, such as the effect's marker part.";
+  const numbers = { from, angleY, padding };
+  for (const [name, entry] of Object.entries(numbers)) {
+    if (entry !== undefined && (typeof entry !== "number" || !Number.isFinite(entry))) return `view.${name} must be a number.`;
+  }
+  return {
+    path,
+    ...(from === undefined ? {} : { from: from as number }),
+    ...(angleY === undefined ? {} : { angleY: angleY as number }),
+    ...(padding === undefined ? {} : { padding: padding as number }),
+  };
+}
 
 /**
  * Tiles frames into one image, `columns` to a row, or undefined when it
@@ -93,6 +128,8 @@ export function parseCaptureMoments(args: Record<string, unknown>): CaptureMomen
   if (typeof sheet !== "boolean") return "sheet must be true or false.";
   const speed = slow === undefined ? (hold ? 0.1 : 0.04) : slow;
   if (typeof speed !== "number" || !Number.isFinite(speed) || speed < 0.01 || speed > 1) return "slow must be a playback speed from 0.01 to 1.";
+  const view = parseView(args.view, runtime);
+  if (typeof view === "string") return view;
   return {
     code,
     times: times as number[],
@@ -102,7 +139,33 @@ export function parseCaptureMoments(args: Record<string, unknown>): CaptureMomen
     hold,
     slow: speed,
     sheet,
+    ...(view === undefined ? {} : { view }),
   };
+}
+
+/**
+ * Luau that holds the effect where it is and waits, for at most
+ * `PRELOAD_SECONDS`, for everything under its root to load: "loaded",
+ * "loading" when the wait ran out, or "no-root" for a handle that does not
+ * say what it is playing. The first moment's playback sets the speed again.
+ */
+export function preloadLuau(handle: string): string {
+  return [
+    `local h = _G[${JSON.stringify(handle)}]`,
+    `if type(h) ~= "table" or type(h.setTimeScale) ~= "function" then return "no-handle" end`,
+    "local root = h.root",
+    `if typeof(root) ~= "Instance" then return "no-root" end`,
+    "if h.finished ~= true then h:setTimeScale(0) end",
+    `local ContentProvider = game:GetService("ContentProvider")`,
+    "local done = false",
+    "task.spawn(function()",
+    "\tpcall(function() ContentProvider:PreloadAsync({ root }) end)",
+    "\tdone = true",
+    "end)",
+    "local started = os.clock()",
+    `while not done and os.clock() - started < ${PRELOAD_SECONDS} do task.wait() end`,
+    `return done and "loaded" or "loading"`,
+  ].join("\n");
 }
 
 /**
@@ -181,12 +244,24 @@ export async function captureMoments(
     return studio(runner, runArgs, { ...(cleanup ? {} : { signal: options.signal }), timeoutMs: timeoutForTool(runner, runArgs) });
   };
 
+  if (parsed.view !== undefined) {
+    // The same read a separate selection call makes, without a model turn of its own.
+    const viewArgs = { action: "view", ...parsed.view };
+    const aimed = await studio("selection", viewArgs, { signal: options.signal, timeoutMs: timeoutForTool("selection", viewArgs) });
+    if (!aimed.ok) return failure(`Aiming the camera at ${parsed.view.path} failed, so nothing was started or captured: ${aimed.message ?? aimed.text}`, started);
+  }
+
   const start = await run(parsed.code);
   if (!start.ok) {
     // It may have failed after making something, so the effect is ended either way.
     await run(stopLuau(parsed.handle), true).catch(() => undefined);
     return failure(`The code that starts the effect failed, so nothing was captured: ${start.message ?? start.text}`, started);
   }
+
+  // A failed or unanswered preload only costs the frames it would have
+  // filled in, so the moments are captured either way.
+  const preload = await run(preloadLuau(parsed.handle)).catch(() => undefined);
+  const stillLoading = preload?.ok === true && returned(preload).trim() === "loading";
 
   // The whole call stays inside the budget the engine gave it, with room left
   // for the last screenshot and for stopping the effect.
@@ -266,6 +341,7 @@ export async function captureMoments(
     : "The images follow in this order:";
   const text = [
     `Captured ${images.length} of ${parsed.times.length} moments, ${how}. ${layout}`,
+    ...(stillLoading ? [`Its textures were still loading after ${PRELOAD_SECONDS} s, so early frames may be missing layers; if they are, capture again.`] : []),
     ...lines,
     ...(skipped.length === 0 ? [] : [`Not captured, because this call's time ran out first: ${skipped.map((time) => `${time} s`).join(", ")}. Capture them in another call.`]),
     ...(stopped === undefined ? [] : [stopped]),

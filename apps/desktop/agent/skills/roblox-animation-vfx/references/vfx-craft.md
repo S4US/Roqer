@@ -2,8 +2,9 @@
 
 Load this before building any visual effect: a hit, a slash, an explosion, a
 spell, an aura or a pickup. It covers:
+- where effects live and how they play;
 - the engine properties that matter;
-- textures, layer skeletons and how to play effects;
+- layer skeletons;
 - how to check an effect.
 
 It does not replace looking: screenshot every effect you build.
@@ -16,26 +17,16 @@ experienced Roblox VFX artists do and why, measured from their published
 effects:
 - what the effect is for;
 - palette, value and brightness;
-- textures, layers and the intensity curve of timing;
-- projectiles, slashes, beams and sustained forms;
-- camera, screen and world reactions.
+- layers and the intensity curve of timing.
+
+Load the topics the effect needs with them, as the skill's `SKILL.md` lists
+them: textures, motion, mesh shapes, camera and world, rendered flipbooks.
 
 Numbers here carry the same marks: *(measured)* from those studies,
 *(verified)* checked in Studio, *(starting point)* common practice to tune by
 looking.
 
-## 1. What experienced artists do
-
-See `references/vfx-design.md`. The short version:
-- custom, hard-edged white textures tinted by `Color`;
-- many single-sprite layers;
-- a palette of about five colours that is never broken;
-- dark layers or dim twins so the bright parts read;
-- Brightness and `LightEmission` chosen against the place's bloom;
-- one emit whose layers die in order, getting quieter and never brighter
-  again.
-
-## 2. Where effects live and how they play
+## 1. Where effects live and how they play
 
 - **Templates** go in `ReplicatedStorage.VFX`, one Model per effect.
   - Each Model has an invisible root part (`Transparency = 1`, anchored, no
@@ -44,28 +35,30 @@ See `references/vfx-design.md`. The short version:
     after its layer. The studied artists split a long effect into one Model or
     Folder per beat (`Dash`, `Up`, `Down`).
 - **The player module** is the template `templates/vfx/emit.lua` in this
-  skill.
-  1. Load it with `load_skill`.
-  2. Create a ModuleScript named `Emit` with `build_instances` under the build
-     root `ReplicatedStorage.VFX`, so it sits at `ReplicatedStorage.VFX.Emit`
-     beside the templates. Pass `path` `game.ReplicatedStorage.VFX`: a missing
-     root is created for you (as a Model), and a service itself cannot be a
-     build root.
-  3. Read it for its revision, then write the template's body into it with
-     `set_script_source`.
+  skill. Roqer writes it into the place for you, so don't load it or type it
+  out.
+  1. Create a ModuleScript named `Emit` with `build_instances` under the build
+     root `ReplicatedStorage.VFX` (in the same build as the effect, when you
+     are building one), so it sits at `ReplicatedStorage.VFX.Emit` beside the
+     templates. Pass `path` `game.ReplicatedStorage.VFX`: a missing root is
+     created for you (as a Model).
+  2. Call `set_script_source {instancePath: "game.ReplicatedStorage.VFX.Emit",
+     template: "roblox-animation-vfx/templates/vfx/emit.lua"}`. The new script
+     is empty, so it needs no read and no `expectedRevision`, and Roqer's
+     read-back verifies the write: don't read it afterwards.
 
-  If `ReplicatedStorage.VFX.Emit` already exists, read only its first line
-  (`line_range` `"1"`). If it matches the template's first line exactly,
-  version included, it is this module: use it without reading the rest.
-  Otherwise it is an older or changed copy, so read it before deciding
-  whether to replace it. Don't read other effects' modules for ideas
+  If `ReplicatedStorage.VFX.Emit` already exists, send the same call: a
+  script that already holds this template exactly is left as it is. If the
+  call is refused, the script is an older or changed copy, so read it before
+  deciding whether to replace it. Don't read other effects' modules for ideas
   either; this skill's references are the better source. Everything read
   stays in the conversation and is re-read on every later call.
 
   It is a starting point, not a cage. Extend it, or write your own player,
   when an effect needs something it does not do: camera shake, Bezier paths,
-  colour over time, chained effects. If you change it, keep the attribute
-  names so VFX editors can still read the effect.
+  colour over time, chained effects. Only then load the template, since
+  changing it means writing its source yourself, and keep the attribute names
+  so VFX editors can still read the effect.
 - **Playing an effect:**
   - `VFX.play(template, cframe)` clones the template, places it, plays it and
     removes it once the last particle is gone.
@@ -76,6 +69,10 @@ See `references/vfx-design.md`. The short version:
     lights and trail lifetimes, so they stay in step. The handle's scale
     multiplies each emitter's own `TimeScale`, so a slowed smoke layer stays
     slower than the core.
+  - The handle also has `time` (effect seconds so far), `finished` (true once
+    it has ended), `root` (what is being played) and `stop()` (end it now).
+    Both functions end with an optional `options` table: `timeScale` and
+    `onDone` for either, and `parent` (default `workspace`) for `play`.
 - **The attributes it reads**, the convention VFX Editor, VFX Forge and other
   editors share:
 
@@ -116,79 +113,16 @@ effect.
 - **Timing to an animation.** Put a marker on the keyframe where the hit lands
   (`markers: [{ "name": "Impact" }]` with the `animation` tool). Play the
   effect from `GetMarkerReachedSignal("Impact")`; see `references/full.md` §2.
-- **A cast pose from code**, such as the caster's arm raised toward the
-  target, needs no animation asset:
-  - The shoulder is `RightUpperArm.RightShoulder` on R15 and
-    `Torso["Right Shoulder"]` on R6. It is a `Motor6D`, or an
-    `AnimationConstraint` on newer avatars, where `C0` cannot be set and
-    turning its attachments does not move the limb.
-  - Every frame in `RunService.PreSimulation`, which runs after the Animator
-    has posed the frame, set the joint's `Transform`. Disconnect when the
-    pose ends; the playing animations take over again.
-  - `CFrame.Angles(math.rad(95), 0, 0)` on `RightShoulder` brings the right
-    hand up to shoulder height and forward *(verified on
-    `AnimationConstraint` shoulders, in two missile runs' playtests)*.
-  - To point the arm at a target, turn its hanging direction onto the
-    direction to the target, both in the joint's own frame *(verified on
-    `AnimationConstraint` shoulders in a missile run's playtest)*:
+- **A cast pose from code** (the caster's arm or hand raised toward a target
+  while the effect plays, with no animation asset) is in
+  `vfx-camera-world.md`. Load it first: newer avatars' shoulders are
+  `AnimationConstraint`s, which code written for `Motor6D` skips without an
+  error.
 
-    ```lua
-    -- part0, c0, c1: a Motor6D's Part0, C0 and C1, or an AnimationConstraint's
-    -- Attachment0.Parent, Attachment0.CFrame and Attachment1.CFrame.
-    local function rotationBetween(a: Vector3, b: Vector3): CFrame
-    	local axis = a:Cross(b)
-    	local dot = math.clamp(a:Dot(b), -1, 1)
-    	if axis.Magnitude < 1e-4 then
-    		return if dot > 0 then CFrame.identity else CFrame.fromAxisAngle(Vector3.xAxis, math.pi)
-    	end
-    	return CFrame.fromAxisAngle(axis.Unit, math.acos(dot))
-    end
+## 2. Textures without drawing
 
-    RunService.PreSimulation:Connect(function()
-    	local joint = part0.CFrame * c0
-    	local hanging = c1:Inverse():VectorToWorldSpace(Vector3.new(0, -1, 0))
-    	local wanted = joint:VectorToObjectSpace((target - joint.Position).Unit)
-    	-- weight eases from 0 to 1 as the arm rises, and back as it lowers
-    	shoulder.Transform = shoulder.Transform:Lerp(rotationBetween(hanging, wanted), weight)
-    end)
-    ```
-
-## 3. Textures
-
-**Draw your own.** In a Blender job (load the `roblox-building` skill's
-`references/blender-vfx.md`, with its `references/blender.md`), `roqer.draw_flipbook` and
-`roqer.draw_texture` draw textures with numpy:
-- describe a shape from coordinates;
-- break it up with noise;
-- cut it with a hard edge;
-- eat it away over the frames.
-
-Roqer checks each sheet from its pixels and attaches it. One job can make
-every texture an effect needs. `roqer.flipbook` renders a 3D scene into a
-sheet instead, for a lit volume or simulation.
-
-- **Preview first.** A Blender job run with `preview_in_studio: true`
-  returns an `rbxasset://textures/roqer-preview/...` address for each
-  texture. That address plays on a particle in Studio as an upload would
-  (checked in Studio on Windows), so iterate on textures inside the effect
-  for free.
-  - A redraw comes from a new job, with new addresses.
-  - The addresses work on this computer only; players see nothing there.
-- **Upload:** use `upload_asset` as a `Decal`, and use the result's `imageId`
-  as `rbxassetid://<imageId>`.
-  - Every upload is irreversible and moderated, so upload only the settled
-    set, and say how many uploads a request will use before uploading.
-  - Then replace every preview address left in the place (see the
-    `roblox-building` skill's `references/blender-vfx.md`).
-  - Reuse one texture across layers by changing `Color`, `Size`, `Rotation`
-    and `Squash`.
-- **Size:** keep a single texture square, 512 px or less, and 256 px for
-  small ones; memory scales with pixels. A flipbook sheet is 1024 x 1024.
-- **White on transparency** suits almost everything: the particle's `Color`
-  tints it, and `LightEmission` picks the blending (`vfx-design.md`, section 4). Bake onto black
-  (`mode="additive"`) only for a layer that will only ever be additive.
-- Roblox has no multiply or premultiplied mode. For darkening, use a black
-  layer at `LightEmission` 0, or negative `LightEmission`.
+To draw the effect's own textures, which most effects should, load
+`vfx-textures.md`.
 
 **Built-in textures, no upload.** These ship with Roblox for the legacy Fire,
 Smoke, Sparkles and Explosion effects. They are fine as stand-ins while
@@ -207,32 +141,7 @@ blocking an effect out, and every Roblox player has seen them.
 The Creator Store (`search_assets` with `assetType: "VFX"` or `"Particle"`,
 then `preview_asset`) is worth a look when a texture there matches the style.
 
-**Flipbook rules:**
-
-- `FlipbookLayout` is `Grid2x2`, `Grid4x4` or `Grid8x8` (4, 16 or 64 frames).
-  4 x 4 is the usual choice. `Custom` with `FlipbookSizeX/Y` was in client
-  beta from October 2025; do not rely on it until confirmed.
-- Make the sheet 1024×1024, the size uploaded and seen playing frame by frame.
-  That is 512 px a frame at 2×2, 256 at 4×4 and 128 at 8×8.
-- Do not judge a sheet by `FlipbookIncompatible`. Studio shows "Particle
-  texture must be 1024 by 1024 to use flipbooks." there even for a 1024 sheet
-  that plays, and for a texture with no flipbook layout at all. Every studied
-  emitter carries the message.
-- To check a sheet, hold one particle at a few ages (`TimeScale = 0`) and
-  screenshot it. Each capture should show one frame, not the whole grid.
-- Leave a few pixels of empty space inside each cell. A frame that touches its
-  cell edge bleeds into its neighbour.
-- `FlipbookMode`:
-  - `OneShot` plays once across the particle's lifetime. It is almost always
-    the choice for a burst *(measured)*.
-  - `Loop` repeats at `FlipbookFramerate` (at most 30 fps);
-  - `PingPong` plays forward and back;
-  - `Random` shows one random frame.
-  - Use `Loop` with `FlipbookStartRandom = true` for a burning fire.
-- Some low-memory devices switch flipbooks off, so the first frame should
-  still read on its own.
-
-## 4. Particle properties worth knowing
+## 3. Particle properties worth knowing
 
 - **Slowing down:** `Drag` is the half-life of speed in seconds.
 - **Shapes:**
@@ -251,118 +160,7 @@ then `preview_asset`) is worth a look when a texture there matches the style.
 - **Lighting:** `LightInfluence = 0` keeps a glowing layer at its own colour.
   Smoke reads better lit by the scene (`LightInfluence` 0.35-1).
 
-## 5. Beams, trails and meshes
-
-- **Beams:**
-  - A Beam is a curve between two attachments. `CurveSize0` and `CurveSize1`
-    bend it into an arc.
-  - Give it enough `Segments` to look smooth: at least one fewer than the
-    number of Color and Transparency keypoints, and 20 or more for a visible
-    curve. The studied slash beams use 100-360.
-  - `TextureSpeed` scrolls the texture along the beam, the one built-in way
-    to scroll a texture. Use it for flowing energy, lasers and lightning
-    arcs.
-  - **Launch beams** *(measured)*: a beam whose width starts at 40-200 and
-    tweens to 0 over 0.15-0.4 s, with a transparency band that is clear at
-    both ends (`0:1, 0.5:0, 1:1`), reads as a streak passing through.
-- **Linking:** `build_instances` cannot set a Beam's or Trail's
-  `Attachment0`/`Attachment1`. Build everything, then link them in one
-  `execute_luau` (`trail.Attachment0, trail.Attachment1 = inner, outer`) and
-  read the result back.
-- **Trails** draw a ribbon behind two attachments as they move.
-  - For a weapon slash, put the attachments at the base and tip of the blade
-    and keep the trail disabled. Enable it only for the swing
-    (`EmitDelay` and `EmitDuration`, timed to the animation).
-  - Weapon trails come in pairs *(measured)*:
-    - a thin hot core: Lifetime 0.04-0.15, Brightness 10-30;
-    - a wide, soft, dark or coloured wisp: Lifetime 0.15-0.4,
-      `LightEmission` 0.55-0.75.
-    Both have a `WidthScale` that tapers to 0.
-  - **Give every trail a texture** *(measured: 58 of 66 studied trails have
-    one)*. Without one, a Trail is an even band of colour: a missile volley's
-    three untextured trails read as flat purple tubes *(verified)*. The
-    studied textures are streaks, such as a bright torn or dripping edge with
-    streaks running back from it, a tapered shard, or a wisp. Their clear
-    areas also hide part of the ribbon, so widen it or raise `Brightness` to
-    keep its weight *(verified: the same volley with textures read thinner
-    and fainter)*.
-  - **Which way a texture lies** *(verified)*: on a Trail or a Beam, the
-    image's vertical axis runs along its length and its horizontal axis
-    across its width. On a Trail the top of the image is at the head and the
-    bottom at the tail, and its left edge is at `Attachment0`. Draw trail and
-    beam textures as vertical strips; a drawing made lengthwise comes out
-    turned across the ribbon.
-- **A crescent slash without a mesh:** sweep a trail through an arc.
-  - Make a Model with `Start` and `End` parts at the same CFrame, both
-    invisible, and give it `Spin` (160), `Duration` (0.14) and `Easing`
-    `Quart` `Out`.
-  - Put two Attachments on `Start` at the blade's inner and outer radius,
-    along -Z. A narrow band reads as a crescent; a wide one reads as a fan.
-  - A Trail between them, with `FaceCamera = false` and a width tapering to
-    0, draws the crescent as `Start` spins.
-  - Roll the whole effect for a diagonal swing. A flat slash seen from a
-    low camera is edge-on and almost invisible, so check it from the game's
-    real camera height.
-- **Mesh effects** are tweened shapes: a crescent slash, a shockwave ring, a
-  twisting swirl, a sphere shell. Strong battleground-style games are built
-  on them.
-  - Build one as a Model with `Start` and `End` parts. The emit module moves
-    `Start` to `End`.
-  - **How the studied artists tween them** *(measured)*:
-    - ease out (cubic) over 0.2-1 s;
-    - a shockwave flattens (height x0.1-0.3) while it widens (x2-7) and spins
-      120-170°;
-    - a swirl stretches upward as it narrows.
-  - **How they surface them** *(measured)*:
-    - Faint `Neon` that fades out: starting `Transparency` 0.9-0.96 for white
-      wind swirls, or 0 for a coloured one.
-    - Black `Neon` swirls as dark accents.
-    - A `SpecialMesh` (FileMesh) on an invisible part, with a Decal whose
-      `Color3` is above 1 so it blooms, fading the Decal. `build_instances`
-      takes colour components from 0 to 1 only, so build the Decal there and
-      set `Color3.new(4, 6, 8)` and the like with `execute_luau` afterwards.
-  - Use `Material = "Neon"` for a glowing shape, or `"ForceField"` with a
-    texture for a shimmering, edge-lit shell. ForceField's animation speed
-    cannot be controlled, so it suits a shield or aura, not a timed wipe.
-  - A one-sided card mesh (a slash) needs `DoubleSided = true` to show from
-    behind.
-  - Under vertex colours, keep the part's `Color` white, because `Color`
-    multiplies them.
-  - A MeshPart's texture cannot scroll (`TextureID` has no offset) and
-    ignores alpha (checked in Studio: nothing shows through). Animate the
-    mesh's size, rotation and `Transparency` instead, or put a scrolling Beam
-    alongside.
-  - Set `RenderFidelity = Precise` on thin curved shapes. Automatic level of
-    detail turns a crescent into a straight-sided wedge at distance.
-  - For a texture that fades, put a `Decal` on the card's face and set the
-    part's `Transparency` to 1. The emit module fades each Decal on `Start`
-    toward the same-named Decal on `End`.
-    - On a MeshPart, a Decal is projected across the part's box face and
-      ignores UVs, so draw its texture for that projection.
-    - On a part with a FileMesh `SpecialMesh`, the studied artists' Decals
-      follow the mesh's surface. *(measured; not checked here)*
-  - **Verified crescent slash:** two crescents from `roqer.vfx_arc`.
-    - A white `Neon` core goes from `Transparency` 0.05 to 1 over 0.2 s.
-    - A larger blue `Neon` glow goes from 0.55 to 1 over 0.32 s.
-    - Each grows from about 0.8 to 1.2 times its size with `Spin` 50 and
-      `Quart` `Out`, and sparks come off the edge.
-  - Make the shapes in a Blender job with `roqer.vfx_arc` (crescent),
-    `vfx_ring` (shockwave or blast wall), `vfx_cone`, `vfx_swirl` (tornado,
-    aura), `vfx_shell` (barrier, dome) or `vfx_surface` (anything else). See
-    the `roblox-building` skill's `references/blender-vfx.md`, "Shapes for
-    mesh effects". Each has UVs laid out along its sweep.
-  - Upload all of an effect's shapes as one model. Without Blender, a flat
-    Neon cylinder part works as a ground wave.
-- **Shells, domes and columns:** a large mesh that is half transparent across
-  its whole surface reads as tinted plastic and covers the screen. That holds
-  for a blast dome, a shockwave sphere or a light column; below a
-  `Transparency` of about 0.75 it looks solid against a bright sky.
-  - Keep a big shell faint (0.85-0.96, as the studied wind swirls start).
-  - Or give it a texture (a Decal on a FileMesh) that puts shape on its
-    surface: streaks, a broken edge.
-  - Let particles and a flash carry the brightness.
-
-## 6. Layer skeletons
+## 4. Layer skeletons
 
 Skeletons from the studied effects, with their numbers *(measured)*. Fill
 each role with your own texture and colour, and add or drop roles as the
@@ -380,23 +178,9 @@ look made for its game. R is the effect's radius in studs.
 | +0.03 s | Black backing | A soft black blob behind, 2-4R |
 | +0.05 s | Streaks | `VelocityParallel` with `Squash`, Speed 60-200, Drag 8-12, with a few black twins |
 | +0.05 s | Ring | A flat `VelocityPerpendicular` ring (Speed 0.001) growing to 2-3R over 0.2-0.4 s |
-| +0.05 s | Smoke | Constant-size puffs (4 x 4 OneShot), cel for a toon look or mottled for a heavy one (vfx-design.md section 5), Speed 50-120, Drag 8, Lifetime 1-1.5, Transparency to above 1, `TimeScale` 0.7, a warm and a grey layer; beside fire, carrying the fire's colour where it is lit |
+| +0.05 s | Smoke | Constant-size puffs (4 x 4 OneShot), cel for a toon look or mottled for a heavy one (`vfx-textures.md`), Speed 50-120, Drag 8, Lifetime 1-1.5, Transparency to above 1, `TimeScale` 0.7, a warm and a grey layer; beside fire, carrying the fire's colour where it is lit |
 | +0.05 s | Embers | Dots at `LightEmission` 1, Speed 10-120, Drag 10, Lifetime 0.75-2 |
 | 0 | Light | A PointLight at Brightness 7-16, Range 7-15, fading over 0.5 s |
-
-**Orb** (a sustained form: every layer at Speed 0.001, `LockedToPart`, `Rate`
-2-4, Lifetime 0.5-1, Transparency `0:1, 0.5:0, 1:1`, random `Rotation`; front to
-back):
-
-| ZOffset | Role | Make |
-| --- | --- | --- |
-| +0.4 | Black linework | A spiral or rune sheet, 1R, black |
-| +0.3 | Hard ring | `LightEmission` 0, Brightness 20-150, 0.9R |
-| +0.1 | Black pupil | A small disc pulsing 0.15-0.5R |
-| 0 | Core | Rays and fill, `LightEmission` 1, Brightness 5-10, 0.45R, `RotSpeed` ±10-20 |
-| -1 | Outer ring | `LightEmission` 1, Brightness 1-4, growing 0.9-1.5R |
-| -1.05 | Halo | A soft blob, `LightEmission` 1, Brightness 0.3, 1.6R |
-| -1.1 | Black backdrop | A soft black blob, 2R, and a black disc 0.6R behind the core |
 
 **Wind and smoke:**
 - **Wind:** 3-6 nearly transparent grey arcs and rings.
@@ -570,43 +354,7 @@ Light flash:
 }
 ```
 
-Slash trail, the hot core of a pair (on the weapon; the attachments are at the
-base and tip of the blade; time `EmitDelay` to the swing):
-
-```json
-{
-  "op": "create", "className": "Trail", "name": "SlashCore",
-  "properties": {
-    "Enabled": false, "Lifetime": 0.12, "MinLength": 0.05, "FaceCamera": false,
-    "LightEmission": 0, "LightInfluence": 0, "Brightness": 15,
-    "Color": [{ "time": 0, "value": [1, 1, 1] }, { "time": 1, "value": [1, 0.3, 0.1] }],
-    "Transparency": [{ "time": 0, "value": 0 }, { "time": 1, "value": 1 }],
-    "WidthScale": [{ "time": 0, "value": 0.5 }, { "time": 1, "value": 0 }]
-  },
-  "attributes": { "EmitDelay": 0, "EmitDuration": 0.25 }
-}
-```
-
-Ground wave, a mesh effect from a flat neon cylinder, timed to the hit (replace
-both parts with a Blender ring mesh for a real shockwave, which can also take
-`Spin`):
-
-```json
-[
-  { "op": "create", "id": "wave", "className": "Model", "name": "GroundWave",
-    "attributes": { "Duration": 0.35, "Easing": "Cubic", "EasingDirection": "Out", "EmitDelay": 0.16 } },
-  { "op": "create", "className": "Part", "name": "Start", "parent": "$wave",
-    "properties": { "Shape": "Cylinder", "Size": [0.1, 2, 2], "Material": "Neon",
-      "Color": [1, 0.75, 0.4], "Transparency": 0.55, "Anchored": true, "CanCollide": false },
-    "rotation": [0, 0, 90] },
-  { "op": "create", "className": "Part", "name": "End", "parent": "$wave",
-    "properties": { "Shape": "Cylinder", "Size": [0.05, 20, 20], "Material": "Neon",
-      "Color": [1, 0.45, 0.15], "Transparency": 1, "Anchored": true, "CanCollide": false },
-    "rotation": [0, 0, 90] }
-]
-```
-
-## 7. Budgets
+## 5. Budgets
 
 - **Particle count:** a few hundred particles per effect is fine
   *(starting point)*; the studied hits stay there by emitting one or a few
@@ -626,7 +374,7 @@ both parts with a Blender ring mesh for a real shockwave, which can also take
   `UserSettings():GetService("UserGameSettings").SavedQualityLevel` and play a
   lighter variant at low settings. Automatic quality does not expose its level.
 
-## 8. Checking an effect
+## 6. Checking an effect
 
 Effects play in the edit viewport, so no playtest is needed to look at one.
 Tune there, on a stand-in character if the effect needs one: every edit to a
@@ -636,7 +384,7 @@ real character from the player's camera. A screenshot takes most of a
 second, longer than a whole burst, so the effect is held still for each
 capture instead of caught in passing.
 
-1. Build the template and install the module (section 2).
+1. Build the template and install the module (section 1).
 
    In edit mode, `require` keeps a ModuleScript's first result for the whole
    Studio session. After changing the emit module, or any module an effect
@@ -647,29 +395,33 @@ capture instead of caught in passing.
    - **Close**, to judge shapes: `build_instances` a transparent, anchored
      marker part about the effect's size where it will play, under its own
      root (`path` `game.Workspace.SlamPreview`, and no `parent` on the step:
-     it goes in the root), then `selection` with `action: "view"` on it, from
-     a side and a little above.
+     it goes in the root), and aim at it from a side and a little above with
+     `capture_moments`' `view` (step 3), which takes what `selection`'s
+     `action: "view"` does: `path`, `from`, `angleY`, `padding`.
    - **From where the player sees it.** This view decides whether the
      effect works. In a playtest, the client's own camera behind the
      character is that view: capture it as it is. In edit mode, build a
-     marker that spans from the caster's spot to the effect, and `selection`
-     view it from the caster's side at `angleY` 5-15; the camera then sits
-     about where the player's would. A projectile's impact is seen from its
-     whole range away. The close view hides an impact that is a speck at
-     range; the far view shows it.
-
-   A new texture can take a moment to load the first time, so a first capture
-   may miss layers; take it again.
-3. See it with one `capture_moments` call. Pass the code that starts the
-   effect and stores its handle in `_G.vfx`, and the effect seconds to see:
+     marker that spans from the caster's spot to the effect, and `view` it
+     from the caster's side at `angleY` 5-15; the camera then sits about
+     where the player's would. A projectile's impact is seen from its whole
+     range away. The close view hides an impact that is a speck at range; the
+     far view shows it.
+3. See it with one `capture_moments` call. Pass the view, the code that
+   starts the effect and stores its handle in `_G.vfx`, and the effect
+   seconds to see:
    ```json
    { "operation": "capture_moments", "arguments": {
+     "view": { "path": "game.Workspace.SlamPreview", "from": 30, "angleY": 20 },
      "code": "_G.vfx = require(game.ReplicatedStorage.VFX.Emit).play(game.ReplicatedStorage.VFX.Slam, CFrame.new(0, 3, 0))",
      "times": [0.03, 0.1, 0.25, 0.45, 0.9] } }
    ```
-   Roqer plays it at normal speed, slows down for the last stretch before
-   each time, holds it there, captures the viewport, and returns the frames
-   tiled into one image, two to a row at half width, then stops the effect.
+   Roqer aims the camera, starts the effect and holds it while its textures
+   load (a texture shown for the first time, such as one just uploaded,
+   takes a moment), then plays it at normal speed, slows down for the last
+   stretch before each time, holds it there, captures the viewport, and
+   returns the frames tiled into one image, two to a row at half width, then
+   stops the effect. The result says when textures were still loading; only
+   then capture again.
    A sheet of up to eight frames costs about what two full frames do. Pick
    the 4-6 moments that matter: anticipation, the flash, the peak, the body
    at about 0.3 s, the smoke, and a time just past the effect's end, to see
@@ -690,8 +442,8 @@ capture instead of caught in passing.
      runs in the client, and the frames are the player's view.
    - **Your own module's handle** works too, if it has a `time` field in effect
      seconds and `setTimeScale(scale)`.
-4. Aim the other view (step 2) and make a second `capture_moments` call with
-   the same times: two calls for both views, never a call per moment.
+4. Make a second `capture_moments` call with the other view (step 2) and the
+   same times: two calls for both views, never a call per moment.
 5. Ask of each capture:
    - From the player's view, does the payoff fill its share of the screen
      (vfx-design.md section 1)? Does it grow taller for a moment, or stay a
@@ -724,9 +476,10 @@ capture instead of caught in passing.
    - Does one layer bury another?
    - Does anything stay constant that should change?
    - Does it end cleanly, with nothing left behind?
-6. Remove the marker with `execute_luau`
-   (`workspace.SlamPreview:Destroy()`): `build_instances` cannot remove its own
-   root. Check `get_runtime_logs` for `VFXEmit` warnings: a
+6. Remove the marker with one `build_instances` call whose only step is
+   `{op: "remove", target: "game.Workspace.SlamPreview"}` and whose `path` is
+   that root: one undo step, which the user can take back. Check
+   `get_runtime_logs` for `VFXEmit` warnings: a
    bad attribute, an emitter with nothing to play, a bounded count. Before
    calling the effect done, check that no `rbxasset://textures/roqer-preview/`
    address is left: players would see nothing there.

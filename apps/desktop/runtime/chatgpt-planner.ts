@@ -349,7 +349,7 @@ export function createChatGptPlanner(options: ChatGptPlannerOptions): Planner {
       const completion = deferred<{ status: string; summary: string }>();
       // Notifications and cancellation can reject before turn/start responds.
       void completion.promise.catch(() => undefined);
-      const runStudioTool = createStudioToolRunner(context);
+      const runStudioTool = createStudioToolRunner(context, { templates: options.skillLibrary });
       // A kept thread still holds what earlier messages loaded, so its cache
       // comes with it; a new thread starts from nothing.
       const runSkillTool = current !== undefined ? current.skills : createSkillToolRunner(options.skillLibrary);

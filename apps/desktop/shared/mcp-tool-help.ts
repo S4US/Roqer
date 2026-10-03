@@ -1,4 +1,4 @@
-import { GATEWAY_SCHEMAS } from "./gateway-operations";
+import { GATEWAY_ARGUMENTS, GATEWAY_SCHEMAS } from "./gateway-operations";
 import {
   TOOL_SCHEMAS,
   type ToolArgumentRequirement,
@@ -30,10 +30,37 @@ const MAX_HINT_PARAMETERS = 16;
  * `Object.prototype` and be treated as a known schema.
  */
 export function toolSchema(operation: string): ToolSchema | undefined {
-  if (Object.prototype.hasOwnProperty.call(TOOL_SCHEMAS, operation)) return TOOL_SCHEMAS[operation];
+  if (Object.prototype.hasOwnProperty.call(TOOL_SCHEMAS, operation)) {
+    const schema = TOOL_SCHEMAS[operation];
+    return Object.prototype.hasOwnProperty.call(GATEWAY_ARGUMENTS, operation)
+      ? withGatewayArguments(schema, GATEWAY_ARGUMENTS[operation])
+      : schema;
+  }
   return Object.prototype.hasOwnProperty.call(GATEWAY_SCHEMAS, operation)
     ? GATEWAY_SCHEMAS[operation]
     : undefined;
+}
+
+/**
+ * A server schema with the arguments Roqer resolves itself laid over it: a
+ * parameter of the same name is replaced where it stands, and a new one goes
+ * after the parameter it was listed after, so a signature still reads in the
+ * server's order.
+ */
+function withGatewayArguments(schema: ToolSchema, overlay: readonly ToolParameterSchema[]): ToolSchema {
+  const parameters = [...schema.parameters];
+  let after = -1;
+  for (const parameter of overlay) {
+    const index = parameters.findIndex((candidate) => candidate.name === parameter.name);
+    if (index >= 0) {
+      parameters[index] = parameter;
+      after = index;
+    } else {
+      after += 1;
+      parameters.splice(after, 0, parameter);
+    }
+  }
+  return { ...schema, parameters };
 }
 
 /**

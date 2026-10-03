@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { captureMoments, momentLuau, parseCaptureMoments, stopLuau } from "./capture-moments";
+import { captureMoments, momentLuau, parseCaptureMoments, preloadLuau, stopLuau } from "./capture-moments";
 import type { StudioCaller } from "./local-operations";
 import type { McpCallOptions, McpToolOutcome } from "./mcp-types";
 
@@ -11,7 +11,7 @@ const ok = (data: unknown, extra: Partial<McpToolOutcome> = {}): McpToolOutcome 
 const image = (n: number) => ({ data: `image-${n}`, mediaType: "image/jpeg" as const });
 
 /** A Studio that plays the effect to whatever time a moment asks for. */
-function fakeStudio(overrides: { start?: McpToolOutcome; reached?: (time: number) => string; capture?: (n: number) => McpToolOutcome } = {}) {
+function fakeStudio(overrides: { start?: McpToolOutcome; reached?: (time: number) => string; capture?: (n: number) => McpToolOutcome; preload?: string; view?: McpToolOutcome } = {}) {
   const calls: Call[] = [];
   let shots = 0;
   const studio: StudioCaller = async (tool, args, options) => {
@@ -20,8 +20,10 @@ function fakeStudio(overrides: { start?: McpToolOutcome; reached?: (time: number
       shots += 1;
       return overrides.capture?.(shots) ?? ok({}, { images: [image(shots)] });
     }
+    if (tool === "selection") return overrides.view ?? ok({ success: true });
     const code = String(args.code);
     if (code.includes("pcall(h.stop")) return ok({ returnValue: "stopped" });
+    if (code.includes("PreloadAsync")) return ok({ returnValue: overrides.preload ?? "loaded" });
     const wanted = /local target = ([\d.]+)/.exec(code);
     if (wanted) return ok({ returnValue: overrides.reached?.(Number(wanted[1])) ?? `${Number(wanted[1]).toFixed(3)}|done` });
     return overrides.start ?? ok({ returnValue: "" });
@@ -69,7 +71,8 @@ test("one call starts the effect, captures every moment in order and stops it", 
   const outcome = await captureMoments({ code: "_G.vfx = start()", times: [0.05, 0.3] }, {}, studio);
   assert.equal(outcome.ok, true, outcome.text);
   assert.deepEqual(outcome.images?.map((picture) => picture.data), ["image-1", "image-2"]);
-  assert.deepEqual(calls.map((call) => call.tool), ["execute_luau", "execute_luau", "capture_screenshot", "execute_luau", "capture_screenshot", "execute_luau"]);
+  assert.deepEqual(calls.map((call) => call.tool), ["execute_luau", "execute_luau", "execute_luau", "capture_screenshot", "execute_luau", "capture_screenshot", "execute_luau"]);
+  assert.match(String(calls[1].args.code), /PreloadAsync/, "the effect waits for its textures before the first moment");
   assert.equal(calls[0].args.code, "_G.vfx = start()");
   assert.match(String(calls.at(-1)?.args.code), /pcall\(h\.stop, h\)/);
   assert.match(outcome.text, /Captured 2 of 2 moments, held still/);
@@ -163,4 +166,50 @@ test("frames come back one image each when asked, when there is one, or when til
   const failing = await captureMoments({ code: "_G.vfx = start()", times: [0.1, 0.2] }, {}, fakeStudio().studio, async () => { throw new Error("no decoder"); });
   assert.equal(failing.images?.length, 2);
   assert.match(String(parseCaptureMoments({ code: "x()", times: [0.1], sheet: "yes" })), /sheet must be true or false/);
+});
+
+test("the effect is held where it is while everything under its root loads, for a bounded time", () => {
+  const preload = preloadLuau("vfx");
+  assert.match(preload, /_G\["vfx"\]/);
+  assert.match(preload, /local root = h\.root/);
+  assert.match(preload, /if typeof\(root\) ~= "Instance" then return "no-root" end/);
+  assert.match(preload, /if h\.finished ~= true then h:setTimeScale\(0\) end/);
+  assert.match(preload, /ContentProvider:PreloadAsync\(\{ root \}\)/);
+  assert.match(preload, /os\.clock\(\) - started < 10/);
+  assert.match(preload, /return done and "loaded" or "loading"/);
+});
+
+test("textures still loading after the wait are said so; loaded ones and handles without a root say nothing", async () => {
+  const loading = await captureMoments({ code: "_G.vfx = start()", times: [0.1] }, {}, fakeStudio({ preload: "loading" }).studio);
+  assert.match(loading.text, /textures were still loading after 10 s, so early frames may be missing layers/);
+  for (const preload of ["loaded", "no-root"]) {
+    const outcome = await captureMoments({ code: "_G.vfx = start()", times: [0.1] }, {}, fakeStudio({ preload }).studio);
+    assert.equal(outcome.ok, true);
+    assert.doesNotMatch(outcome.text, /still loading/);
+  }
+});
+
+test("a view aims the edit camera before the effect starts, in the same call", async () => {
+  const { studio, calls } = fakeStudio();
+  const outcome = await captureMoments({
+    code: "_G.vfx = start()", times: [0.1], view: { path: "game.Workspace.SlamPreview", from: 30, angleY: 20 },
+  }, {}, studio);
+  assert.equal(outcome.ok, true, outcome.text);
+  assert.deepEqual(calls[0].args, { action: "view", path: "game.Workspace.SlamPreview", from: 30, angleY: 20 });
+  assert.equal(calls[0].tool, "selection");
+  assert.equal(calls[1].args.code, "_G.vfx = start()");
+
+  const refused = fakeStudio({ view: { ok: false, data: undefined, text: "", message: "Instance not found", httpStatus: 200, durationMs: 1 } });
+  const missed = await captureMoments({ code: "_G.vfx = start()", times: [0.1], view: { path: "game.Workspace.Nope" } }, {}, refused.studio);
+  assert.equal(missed.ok, false);
+  assert.match(missed.text, /Aiming the camera at game\.Workspace\.Nope failed, so nothing was started or captured: Instance not found/);
+  assert.deepEqual(refused.calls.map((call) => call.tool), ["selection"]);
+});
+
+test("a view is checked with the other arguments", () => {
+  assert.match(String(parseCaptureMoments({ code: "x()", times: [0.1], view: "game.Workspace.A" })), /view must be an object/);
+  assert.match(String(parseCaptureMoments({ code: "x()", times: [0.1], view: { from: 30 } })), /view\.path must name the instance/);
+  assert.match(String(parseCaptureMoments({ code: "x()", times: [0.1], view: { path: "game.Workspace.A", angleY: "20" } })), /view\.angleY must be a number/);
+  assert.match(String(parseCaptureMoments({ code: "x()", times: [0.1], runtime: "client", view: { path: "game.Workspace.A" } })), /player's own view, so leave view out/);
+  assert.deepEqual((parseCaptureMoments({ code: "x()", times: [0.1], view: { path: "game.Workspace.A", padding: 2 } }) as { view?: unknown }).view, { path: "game.Workspace.A", padding: 2 });
 });

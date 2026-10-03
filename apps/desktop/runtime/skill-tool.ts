@@ -32,12 +32,13 @@ export const MAX_SKILL_RESOURCES = 8;
  * and Roqer's Claude sessions have no file tools, so the model then works
  * without the guidance it asked for and nothing reports it. A SIM screen's route
  * (about 61,000 characters) lost its whole theme and layout that way. This cap
- * leaves room for each document's framing and the note naming what was held
- * back. Resources past it are named rather than dropped, so the model asks for
- * them in one more call; no single resource in the pack is larger than the cap,
- * so each stays loadable on its own.
+ * leaves room for the note naming what was held back. Resources past it are
+ * named rather than dropped, so the model asks for them in one more call; no
+ * single resource in the pack is larger than the cap, so each stays loadable on
+ * its own. The two references every visual effect loads, VFX design and VFX
+ * craft, fit under it together, so they arrive in one call.
  */
-export const MAX_BATCH_CHARACTERS = 45_000;
+export const MAX_BATCH_CHARACTERS = 48_000;
 
 const isRecord = (value: unknown): value is JsonRecord =>
   typeof value === "object" && value !== null && !Array.isArray(value);

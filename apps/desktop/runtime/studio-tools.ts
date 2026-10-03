@@ -1,6 +1,6 @@
 import { BLENDER_OPERATION } from "../shared/blender";
 import { AUDITED_AFTER_LABEL, UI_AUDIT_TITLE } from "../shared/completion";
-import { CAPTURE_MOMENTS_OPERATION, GATEWAY_TOOL_RISK, isGatewayOperation } from "../shared/gateway-operations";
+import { CAPTURE_MOMENTS_OPERATION, GATEWAY_TOOL_RISK, isGatewayOperation, UPLOAD_ASSETS_OPERATION } from "../shared/gateway-operations";
 import { isKnownTool, TOOL_RISK } from "../shared/mcp-tools";
 import {
   argumentTypeProblems,
@@ -25,6 +25,7 @@ import {
 } from "../shared/model-preview";
 import type { McpToolImage, McpToolOutcome } from "./mcp-types";
 import type { PlannerContext } from "./run-engine";
+import type { SkillLibrary } from "./skill-library";
 import { compactValue, truncateText } from "./result-summary";
 
 /**
@@ -158,6 +159,7 @@ const DOCUMENTED_OPERATIONS = [
   "execute_luau",
   "get_roblox_docs",
   "upload_asset",
+  UPLOAD_ASSETS_OPERATION,
 ];
 
 /**
@@ -193,11 +195,12 @@ export function studioToolGuide(): string {
     "Important operations and arguments:",
     ...signatures,
     "Other operations in the enum are called the same way. To read one's schema first, call it with {help: true} as its only argument: that is answered locally, never reaches Studio, and is not a failed call. Calling with arguments that do not fit also returns the schema.",
-    "Always read a script and its sourceRevision before changing it. Roqer automatically reads back every successful script mutation and tells you whether its reported revision was verified.",
+    "Always read a script and its sourceRevision before changing it, except one that is still empty, such as a script build_instances just created: omit expectedRevision and Roqer checks it is empty and supplies the revision. Roqer automatically reads back every successful script mutation and tells you whether its reported revision was verified; that is the check, so do not read a script again only to confirm a write.",
+    `To write a skill's Lua template unchanged, pass template (its skill path, e.g. ${TEMPLATE_EXAMPLE}) instead of source: Roqer writes the file itself, so do not load a template you are not changing, and never retype one. A script that already holds it exactly is left alone.`,
     "A script write whose source will not compile still lands, and its result carries syntaxError {line, message}: fix that line before playtesting. syntaxCheck: 'unavailable' means the source was not checked. Only syntax is judged, not types or member names.",
     "When one script needs several exact edits, send them as one edit_script_batch rather than several edit_script_lines calls: each separate write costs its own approval, revision, and read-back, and every write after the first is resolved against source you can no longer describe.",
     "Never write a script's source inside execute_luau; that call is refused before it runs. Create the instance there when nothing structured can, then write its body with set_script_source: only the structured script operations produce the diff the user reviews and the read-back that verifies the write.",
-    "Build geometry and other instances with build_instances rather than execute_luau. For edits to existing physical 3D build geometry, prefer a bounded build_instances set under the smallest containing build root; reserve set_properties for non-build properties or cases the build operation cannot express. Each step is {op: 'create'|'clone'|'set'|'remove', id?, className?, source?, parent?, target?, name?, properties?, position?: [x, y, z], rotation?: [x, y, z] degrees, transforms?: [{position?, rotation?, scale?}], tags?, attributes?}. create needs className; clone needs source and makes one copy per transform; set and remove need target. Refer to an earlier step's instance as \"$id\". A transform's rotation sets the clone's pivot orientation outright; a Model build_instances creates gets an upright pivot, but a template from elsewhere keeps its own, so read its pivot before turning clones of it. Color3 is [r, g, b] from 0 to 1. A CFrame is {position, rotation?} in those forms. Every parent and target stays inside path, the whole batch applies or none of it does, and it is one Studio undo step.",
+    "Build geometry and other instances with build_instances rather than execute_luau. For edits to existing physical 3D build geometry, prefer a bounded build_instances set under the smallest containing build root; reserve set_properties for non-build properties or cases the build operation cannot express. Each step is {op: 'create'|'clone'|'set'|'remove', id?, className?, source?, parent?, target?, name?, properties?, position?: [x, y, z], rotation?: [x, y, z] degrees, transforms?: [{position?, rotation?, scale?}], tags?, attributes?}. create needs className; clone needs source and makes one copy per transform; set and remove need target. Refer to an earlier step's instance as \"$id\". A transform's rotation sets the clone's pivot orientation outright; a Model build_instances creates gets an upright pivot, but a template from elsewhere keeps its own, so read its pivot before turning clones of it. Color3 is [r, g, b] from 0 to 1. A CFrame is {position, rotation?} in those forms. Every parent and target stays inside path, the whole batch applies or none of it does, and it is one Studio undo step. path may be a service itself (game.ReplicatedStorage, game.Lighting) for a batch that only adds: create, clone, and set on what it made. To delete a whole build root, such as a preview marker's, send {op: 'remove', target: <its path>} as the batch's only step.",
     // Every recorded world run aimed its screenshots by writing the camera in
     // execute_luau, which is classed irreversible and so asks the user outside
     // Full auto, although this read operation frames a view deterministically.
@@ -1179,6 +1182,24 @@ function recordBuild(context: PlannerContext, args: JsonRecord, outcome: McpTool
   const root = stringField(data, "path") ?? (typeof args.path === "string" ? args.path : undefined);
   if (root === undefined) return;
 
+  if (data.removedRoot === true) {
+    context.recordChange({
+      kind: "instance",
+      target: root,
+      instanceId: context.instanceId ?? undefined,
+      summary: "Removed the build root and everything in it, in one undoable step.",
+    });
+    context.recordEvidence({
+      kind: "verification",
+      changeKind: "instance",
+      title: root,
+      passed: true,
+      detail: "Studio took the build root out of the place as the batch's only step.",
+      metadata: [{ label: "Undo", value: data.undoable !== false ? "One Studio undo step" : "Not recorded in Studio's undo history" }],
+    });
+    return;
+  }
+
   const parts = (["created", "cloned", "updated", "removed"] as const)
     .map((key) => [key, numberField(data, key) ?? 0] as const)
     .filter(([, count]) => count > 0)
@@ -1195,14 +1216,18 @@ function recordBuild(context: PlannerContext, args: JsonRecord, outcome: McpTool
   const descendants = numberField(data, "descendants");
   const bounds = describeBounds(data.bounds);
   const undoable = data.undoable !== false;
+  // Under a service root the counts and bounds cover what the batch added, not the service.
+  const serviceRoot = data.serviceRoot === true;
   context.recordEvidence({
     kind: "verification",
     changeKind: "instance",
     title: root,
     passed: true,
-    detail: "Studio checked every step before changing anything, applied the batch as a whole, and read the build root back afterwards.",
+    detail: serviceRoot
+      ? "Studio checked every step before changing anything, applied the batch as a whole, and read back what it added to the service."
+      : "Studio checked every step before changing anything, applied the batch as a whole, and read the build root back afterwards.",
     metadata: [
-      ...(descendants === undefined ? [] : [{ label: "Instances under the root", value: String(descendants) }]),
+      ...(descendants === undefined ? [] : [{ label: serviceRoot ? "Instances the batch added" : "Instances under the root", value: String(descendants) }]),
       ...(bounds === undefined ? [] : [{ label: "Bounds", value: bounds }]),
       {
         label: "Undo",
@@ -1620,6 +1645,38 @@ function completedUpload(
       ? stringField(response.moderationResult, "moderationState")
       : undefined);
   const operationId = stringField(data, "operation_id");
+  return uploadChange({ assetId, displayName, assetType, moderationState, operationId });
+}
+
+/**
+ * The completed uploads of an `upload_assets` call, one result card each, as
+ * if each file had been sent alone. Only a file Roblox finished is a card,
+ * exactly as for a single upload.
+ */
+function completedBatchUploads(outcome: McpToolOutcome): Array<Omit<RunChange, "id" | "taskId">> {
+  const uploads = isRecord(outcome.data) && Array.isArray(outcome.data.uploads) ? outcome.data.uploads : [];
+  return uploads.flatMap((upload) => {
+    if (!isRecord(upload) || upload.status !== "complete") return [];
+    const assetId = stringField(upload, "assetId");
+    if (!assetId || !/^\d+$/.test(assetId)) return [];
+    return [uploadChange({
+      assetId,
+      displayName: stringField(upload, "displayName"),
+      assetType: stringField(upload, "assetType"),
+      moderationState: stringField(upload, "moderationState"),
+      operationId: stringField(upload, "operationId"),
+    })];
+  });
+}
+
+function uploadChange(upload: {
+  assetId: string;
+  displayName?: string;
+  assetType?: string;
+  moderationState?: string;
+  operationId?: string;
+}): Omit<RunChange, "id" | "taskId"> {
+  const { assetId, displayName, assetType, moderationState, operationId } = upload;
   const label = displayName ? `“${displayName}”` : assetType ? `the ${assetType.toLowerCase()}` : "the asset";
   const moderation = moderationState ? ` Moderation: ${moderationState}.` : "";
 
@@ -1644,6 +1701,52 @@ export type StudioToolResult = {
 
 export type StudioToolRunner = (operation: string, args: JsonRecord) => Promise<StudioToolResult>;
 
+const PLAYTEST_OPERATIONS = new Set(["solo_playtest", "multiplayer_playtest"]);
+
+/**
+ * A playtest start that waited out its timeout. The server says so only in
+ * prose, under an error code that is whatever the bridge passed on, so it is
+ * matched on the message; "did not answer within" is the client giving up on
+ * the call itself.
+ */
+const PLAYTEST_START_TIMEOUT = /before timeout|did not answer within/i;
+
+/**
+ * Start timeouts in a row after which a run sends no more starts.
+ *
+ * Once Studio refuses a start, it refuses every start after it, each one
+ * waiting out its timeout: one missile run sent five, about eight minutes and
+ * ten model calls with the status checks between them, though the
+ * instructions already said to try once more at most.
+ */
+const MAX_PLAYTEST_START_TIMEOUTS = 2;
+
+const PLAYTEST_RECOVERY = "Ask the user to press Play and then Stop once in Studio (that cleared it in the runs studied), or finish in the edit viewport and say runtime verification is pending.";
+
+/** Where `set_script_source {template}` is read from: Roqer's own skill pack. */
+export type TemplateLibrary = Pick<SkillLibrary, "load">;
+
+export type StudioToolRunnerOptions = Readonly<{
+  /** Without it, a template write is refused and the model sends source instead. */
+  templates?: TemplateLibrary;
+}>;
+
+const TEMPLATE_EXAMPLE = "roblox-animation-vfx/templates/vfx/emit.lua";
+
+/** `<skill>/templates/<path>.lua`, split into the skill and its resource. */
+function templatePath(value: string): { name: string; resource: string } | undefined {
+  const [name, ...rest] = value.split("/");
+  const resource = rest.join("/");
+  if (!name || rest[0] !== "templates" || !resource.toLowerCase().endsWith(".lua")) return undefined;
+  return { name, resource };
+}
+
+/** An optional argument the model filled with nothing, which some models send rather than leaving it out. */
+const omitted = (value: unknown): boolean => value === undefined || value === null || value === "";
+
+/** A write made ready to send, with what to tell the model about it; or the answer that ends it here. */
+type PreparedWrite = { args: JsonRecord; note?: string } | { result: StudioToolResult };
+
 /**
  * Run one Studio operation through the engine and record what it proves.
  *
@@ -1652,7 +1755,7 @@ export type StudioToolRunner = (operation: string, args: JsonRecord) => Promise<
  * follow-up read returns, so the reads and writes of a single run have to be
  * remembered together.
  */
-export function createStudioToolRunner(context: PlannerContext): StudioToolRunner {
+export function createStudioToolRunner(context: PlannerContext, options: StudioToolRunnerOptions = {}): StudioToolRunner {
   const scriptReads = new Map<string, ScriptSnapshot>();
   const changedScripts = new Map<string, string | undefined>();
   const recordedAssetIds = new Set<string>();
@@ -1661,6 +1764,27 @@ export function createStudioToolRunner(context: PlannerContext): StudioToolRunne
   // own start and stop calls move it, so a playtest someone else started is
   // never claimed.
   let playtestRunning = false;
+  // Playtest starts in a row that timed out, and how many questions the user
+  // had answered when they reached the limit: an answer since then is how
+  // the user says they cleared it, so a start is allowed again.
+  let startTimeouts = 0;
+  let decisionsAtLimit = 0;
+
+  /** What a timed-out start is answered with: Studio's own status, read for the model, and what to do next. */
+  const afterStartTimeout = async (operation: string): Promise<string> => {
+    const status = await context.call(operation, { action: "status" }).catch(() => undefined);
+    const data = status?.ok === true && isRecord(status.data) ? status.data : undefined;
+    const roles = Array.isArray(data?.roles) ? data.roles.filter((role): role is string => typeof role === "string") : [];
+    const seen = data === undefined
+      ? "Roqer could not read the playtest's status afterwards."
+      : data.running === true
+        ? `Roqer read the playtest's status afterwards: it is running now (${roles.join(", ")}), so use it rather than starting another.`
+        : `Roqer read the playtest's status afterwards: it is not running${roles.length > 0 ? ` (peers: ${roles.join(", ")})` : ""}.`;
+    if (startTimeouts < MAX_PLAYTEST_START_TIMEOUTS) {
+      return `${seen} A start that timed out may be tried once more; if that one times out too, Roqer sends no more starts in this run.`;
+    }
+    return `${seen} That is the second start in a row that timed out, so Roqer will not send another. ${PLAYTEST_RECOVERY}`;
+  };
 
   const recordVerification = (
     target: string,
@@ -1767,7 +1891,61 @@ export function createStudioToolRunner(context: PlannerContext): StudioToolRunne
     }
   };
 
-  return async function runStudioTool(operation, args) {
+  /**
+   * A full-source write made ready to send: a template read into its source,
+   * and an empty script's revision supplied.
+   *
+   * Both are resolved here, before anything else sees the call, so the
+   * approval, the diff card, the run record and Studio all get the source that
+   * is actually written and a revision that was actually read. A script with
+   * anything in it still needs the revision the model read: only a script with
+   * nothing to lose is written against the revision Roqer read itself, and
+   * Studio still refuses the write if it changed in between.
+   */
+  const prepareSourceWrite = async (args: JsonRecord): Promise<PreparedWrite> => {
+    const refuse = (reason: string): PreparedWrite => ({ result: { ok: false, text: `set_script_source was not called: ${reason}` } });
+    let prepared = args;
+    let note: string | undefined;
+    let templateSource: string | undefined;
+    const template = args.template;
+    if (!omitted(template)) {
+      if (typeof template !== "string") return refuse(`template must be a skill template path, such as ${TEMPLATE_EXAMPLE}.`);
+      if (!omitted(args.source)) return refuse("pass source or template, not both.");
+      const path = templatePath(template);
+      if (path === undefined) return refuse(`template must name a Lua file in a skill's templates folder, such as ${TEMPLATE_EXAMPLE}.`);
+      if (options.templates === undefined) return refuse("skill templates are not available in this run; send the source instead.");
+      try {
+        templateSource = normalizeNewlines((await options.templates.load(path.name, path.resource)).content);
+      } catch (error) {
+        return refuse(`${template} could not be read: ${error instanceof Error ? error.message : String(error)}`);
+      }
+      prepared = { ...args, source: templateSource };
+      delete prepared.template;
+      note = `Roqer wrote ${template} (${countLines(templateSource)} lines) as this script's source. It has not changed, so there is no need to read it.`;
+    } else if (typeof args.source !== "string") {
+      return refuse(`source is required: the script's whole new text, or template for a skill template such as ${TEMPLATE_EXAMPLE}.`);
+    }
+
+    const target = typeof prepared.instancePath === "string" ? prepared.instancePath : undefined;
+    if (target === undefined || !omitted(prepared.expectedRevision)) return { args: prepared, ...(note === undefined ? {} : { note }) };
+    const read = await readWholeScript(target);
+    if (!read.ok) {
+      const reason = boundedVerificationReason(read.message || read.text || read.errorCode || "Studio did not return the script");
+      return refuse(`expectedRevision was omitted, and Roqer could not read ${target} to check that it is empty: ${reason}`);
+    }
+    const snapshot = snapshotFromOutcome(read);
+    if (snapshot.source !== undefined) scriptReads.set(target, snapshot);
+    if (templateSource !== undefined && snapshot.complete === true && snapshot.source === templateSource) {
+      return { result: { ok: true, text: `${target} already holds ${String(template)} exactly, so nothing was written.` } };
+    }
+    if (snapshot.complete !== true || snapshot.source?.trim() !== "" || snapshot.revision === undefined) {
+      const how = templateSource === undefined ? "" : " (for a template, line_range \"1\" is enough)";
+      return refuse(`${target} is not empty, so expectedRevision is required: read it with get_script_source${how} and pass that revision.`);
+    }
+    return { args: { ...prepared, expectedRevision: snapshot.revision }, ...(note === undefined ? {} : { note }) };
+  };
+
+  const runOperation = async (operation: string, args: JsonRecord): Promise<StudioToolResult> => {
     // An operation's schema is a local fact. Making the model discover it by
     // sending a call it expects to fail costs a Studio round trip, an approval
     // decision on a write it did not mean yet, and a failed row in the timeline
@@ -1808,6 +1986,20 @@ export function createStudioToolRunner(context: PlannerContext): StudioToolRunne
       return { ok: false, text: SOURCE_WRITE_REFUSAL };
     }
 
+    // Refused here once starts have kept timing out, for the same reason as a
+    // malformed call: the answer is already known, and sending it again only
+    // spends another timeout and another model call finding that out.
+    const playtestStart = PLAYTEST_OPERATIONS.has(operation) && args.action === "start";
+    if (playtestStart && startTimeouts >= MAX_PLAYTEST_START_TIMEOUTS) {
+      if (context.decisions().length <= decisionsAtLimit) {
+        return {
+          ok: false,
+          text: `${operation} was not started: ${startTimeouts} starts in a row timed out in this run, and another would only wait out the timeout again. ${PLAYTEST_RECOVERY} If you ask the user with ask_user and they say it is cleared, a start is allowed again.`,
+        };
+      }
+      startTimeouts = 0;
+    }
+
     const target = typeof args.instancePath === "string" ? args.instancePath : undefined;
     if (target && SCRIPT_MUTATIONS.has(operation)) await widenSourceContext(target);
 
@@ -1816,9 +2008,19 @@ export function createStudioToolRunner(context: PlannerContext): StudioToolRunne
     const outcome = await context.call(operation, args);
     let modelNote: string | undefined;
 
-    if (outcome.ok && (operation === "solo_playtest" || operation === "multiplayer_playtest")) {
+    if (outcome.ok && PLAYTEST_OPERATIONS.has(operation)) {
       if (args.action === "start") playtestRunning = true;
       else if (args.action === "stop" || args.action === "end") playtestRunning = false;
+    }
+    if (playtestStart) {
+      const reason = outcome.message || stringField(outcome.data, "message") || outcome.text;
+      if (outcome.ok) {
+        startTimeouts = 0;
+      } else if (PLAYTEST_START_TIMEOUT.test(reason)) {
+        startTimeouts += 1;
+        if (startTimeouts >= MAX_PLAYTEST_START_TIMEOUTS) decisionsAtLimit = context.decisions().length;
+        modelNote = await afterStartTimeout(operation);
+      }
     }
     const observed = observationEvidence(operation, args, outcome, playtestRunning);
     const preview = observed !== undefined || operation === BLENDER_OPERATION
@@ -1923,10 +2125,29 @@ export function createStudioToolRunner(context: PlannerContext): StudioToolRunne
       }
     }
 
+    // Read whether or not every file went up: the ones that did are on Roblox.
+    if (operation === UPLOAD_ASSETS_OPERATION) {
+      for (const upload of completedBatchUploads(outcome)) {
+        if (!upload.assetId || recordedAssetIds.has(upload.assetId)) continue;
+        recordedAssetIds.add(upload.assetId);
+        context.recordChange(upload);
+      }
+    }
+
     return {
       ok: outcome.ok && !refused,
       text: appendModelNote(studioToolResultText(operation, outcome), modelNote),
       ...(outcome.images && outcome.images.length > 0 ? { images: outcome.images } : {}),
     };
+  };
+
+  return async function runStudioTool(operation, args) {
+    if (operation !== "set_script_source" || args.help === true) return runOperation(operation, args);
+    const prepared = await prepareSourceWrite(args);
+    if ("result" in prepared) return prepared.result;
+    const result = await runOperation(operation, prepared.args);
+    return result.ok && prepared.note !== undefined
+      ? { ...result, text: appendModelNote(result.text, prepared.note) }
+      : result;
   };
 }

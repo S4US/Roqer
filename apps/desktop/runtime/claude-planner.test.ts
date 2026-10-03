@@ -1172,6 +1172,56 @@ test("Claude reports a run's usage across its notes, and a kept process's next r
   await sessions.closeAll();
 });
 
+test("Claude's usage is also recorded request by request, with the tools each request carried the results of", async () => {
+  const controller = new AbortController();
+  const { context } = makeContext(controller);
+  const reported: RunUsage[] = [];
+  const start = (usage: Record<string, unknown>, parent: string | null = null) => ({
+    type: "stream_event", parent_tool_use_id: parent, event: { type: "message_start", message: { usage } },
+  });
+  const delta = (output: number) => ({ type: "stream_event", parent_tool_use_id: null, event: { type: "message_delta", usage: { output_tokens: output } } });
+
+  const planner = createClaudePlanner({
+    ...PLANNER_DEFAULTS,
+    launcher: {
+      launch: async (args) => {
+        const child = new FakeChildProcess();
+        void (async () => {
+          child.writeLine({ type: "system", subtype: "init", tools: PROVIDER_TOOLS });
+          child.writeLine(start({ input_tokens: 5, cache_creation_input_tokens: 9_000, cache_read_input_tokens: 0, output_tokens: 1 }));
+          child.writeLine(delta(40));
+          const target = await mcpTarget(args);
+          await callTool(target, { operation: "get_place_info", arguments: {} });
+          await callTool(target, { operation: "no_such_operation", arguments: {} });
+          await callTool(target, { name: "roblox-test", resources: ["references/vfx-design.md", "templates/vfx/emit.lua"] }, "load_skill");
+          await callTool(target, { name: "roblox-test", resource: "../secrets" }, "load_skill");
+          // A subagent's request is its own context, not the conversation's.
+          child.writeLine(start({ input_tokens: 100, output_tokens: 1 }, "toolu_sub"));
+          child.writeLine(start({ input_tokens: 3, cache_creation_input_tokens: 250, cache_read_input_tokens: 9_000, output_tokens: 2 }));
+          child.writeLine(delta(12));
+          child.writeLine({
+            type: "result", subtype: "success", is_error: false, result: "Done.", num_turns: 2, total_cost_usd: 0.1,
+            modelUsage: { "claude-opus-5-5": { inputTokens: 8, outputTokens: 52, cacheReadInputTokens: 9_000, cacheCreationInputTokens: 9_250 } },
+          });
+          child.finish(0);
+        })();
+        return child.asChild();
+      },
+    },
+  });
+
+  assert.equal(await planner.run({ ...context, runUsage: (usage) => reported.push(usage) }), "Done.");
+  assert.deepEqual(reported.at(-1)?.perRequest, [
+    { inputTokens: 5, cacheReadTokens: 0, cacheWriteTokens: 9_000, outputTokens: 40 },
+    // The unknown operation is named by the tool it went to, never by what the
+    // model wrote; a skill load names its documents only when they are plain paths.
+    {
+      inputTokens: 3, cacheReadTokens: 9_000, cacheWriteTokens: 250, outputTokens: 12,
+      after: ["get_place_info", "roblox_studio", "load_skill roblox-test: vfx-design, emit", "load_skill roblox-test"],
+    },
+  ]);
+});
+
 test("Claude answers a malformed Studio call to the model, and the run goes on", async () => {
   const controller = new AbortController();
   const { context, recorded } = makeContext(controller);

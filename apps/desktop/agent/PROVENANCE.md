@@ -44,21 +44,24 @@ scene, export into `OUTPUT_DIR`), reading Roqer's re-import and preview, and
 bringing the model into Studio through upload and insert, and rendering PNG
 icons for UI. It is distributed under the repository's licence.
 
-The repository-authored `skills/roblox-building/references/blender-vfx.md`
-covers drawing particle textures and flipbooks with numpy, rendering flipbook
-sheets from a scene, previewing textures in Studio before upload, and shapes
-for mesh effects. Its observations about how experienced Roblox VFX artists
-build textures come from a study of published effects the user supplied
-(recorded in `docs/vfx-plan.md`); no third-party text or asset is included. It
-is distributed under the repository's licence.
+The repository-authored `skills/roblox-animation-vfx/references/vfx-textures.md`,
+`vfx-rendered-flipbooks.md` and `vfx-mesh-shapes.md` (once
+`skills/roblox-building/references/blender-vfx.md`) cover drawing particle
+textures and flipbooks with numpy, rendering flipbook sheets from a scene,
+previewing textures in Studio before upload, and shapes for mesh effects. Their
+observations about how experienced Roblox VFX artists build textures come from
+a study of published effects the user supplied (recorded in
+`docs/vfx-plan.md`); no third-party text or asset is included. They are
+distributed under the repository's licence.
 
-The repository-authored `skills/roblox-animation-vfx/references/vfx-design.md`
-summarises how experienced Roblox VFX artists design effects: palette, value,
-brightness, textures, layering, timing and the camera and world around an
-effect. It is drawn from studies of published effects the user supplied and
-from a captioned tutorial by the artist snaliel. It paraphrases their
-observations with measured numbers; no third-party text or asset is included.
-It is distributed under the repository's licence.
+The repository-authored `skills/roblox-animation-vfx/references/vfx-design.md`,
+with the design parts of `vfx-textures.md`, `vfx-motion.md` and
+`vfx-camera-world.md`, summarises how experienced Roblox VFX artists design
+effects: palette, value, brightness, textures, layering, timing and the camera
+and world around an effect. It is drawn from studies of published effects the
+user supplied and from a captioned tutorial by the artist snaliel. It
+paraphrases their observations with measured numbers; no third-party text or
+asset is included. It is distributed under the repository's licence.
 
 The repository-authored `skills/roblox-building/references/paths.md` covers
 building along a line or curve: placing a part by its two ends, deriving every

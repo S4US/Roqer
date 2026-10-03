@@ -74,6 +74,8 @@ const KIND_BY_TOOL: Readonly<Record<string, ToolActivityKind>> = {
   import_rbxm: "edit",
   export_rbxm: "edit",
   upload_asset: "edit",
+  // Roqer's own operation: several upload_asset calls in one.
+  upload_assets: "edit",
   animation: "edit",
   generate_model: "edit",
   breakpoints: "edit",
@@ -288,6 +290,7 @@ export function activityLabel(tool: string, target: string | null, past: boolean
   const verb = past ? PAST[kind] : PRESENT[kind];
   if (tool === "upload_asset" && target === "status") return `${verb} upload status`;
   if (tool === "upload_asset" && target === "upload") return past ? "Uploaded an asset" : "Uploading an asset";
+  if (tool === "upload_assets") return past ? "Uploaded assets" : "Uploading assets";
   if (tool === "run_blender_script") return past ? "Modeled in Blender" : "Modeling in Blender";
   if (tool === "capture_moments") return past ? "Captured an effect at several moments" : "Capturing an effect at several moments";
   if (tool === "animation") {

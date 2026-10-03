@@ -25,6 +25,16 @@ test("capturing moments reads as checking the result, not as its operation name"
   assert.equal(activityPhase("capture_moments"), "verify");
 });
 
+test("a batch upload reads as uploading, and its card names every file it sends", () => {
+  assert.equal(activityLabel("upload_assets", null, false), "Uploading assets");
+  assert.equal(activityLabel("upload_assets", "upload 2 files to Roblox: Flash, Smoke", true), "Uploaded assets");
+  assert.equal(activityKind("upload_assets"), "edit");
+  assert.equal(
+    summarizeToolCall("upload_assets", { uploads: [{ filePath: "C:/jobs/flash.png", displayName: "Flash" }, { filePath: "C:\\jobs\\smoke.png" }] }),
+    "upload_assets · upload 2 files to Roblox: Flash, smoke.png",
+  );
+});
+
 test("a Blender job reads as modeling, not as its operation name", () => {
   assert.equal(activityLabel("run_blender_script", null, false), "Modeling in Blender");
   assert.equal(activityLabel("run_blender_script", null, true), "Modeled in Blender");

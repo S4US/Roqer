@@ -1,13 +1,144 @@
-# Blender for visual effects
+# VFX textures
 
-Load this with [Blender modeling](blender.md), which covers what a job is
-and how to read its result. This reference covers:
-- drawing particle textures and flipbooks;
-- previewing them in Studio before uploading;
-- making shapes for mesh effects.
+Load this with `vfx-design.md` and `vfx-craft.md` when an effect draws its own
+textures, which most effects should: what the studied textures look like,
+drawing textures and flipbooks in a Blender job, previewing them in Studio, and
+uploading the settled set.
 
-For how an effect is layered and timed, see the `roblox-animation-vfx`
-skill's VFX craft reference.
+## A Blender job
+
+One `blender` call runs one Python script in the user's own Blender, in the
+background. `bpy` is imported, `OUTPUT_DIR` is defined, and the `roqer`
+helpers below are there; the `blender` tool's description gives the rules
+every job follows. A script that raises returns Blender's traceback. Fix the
+cause and run the corrected script; after two failed attempts at the same
+texture, stop and report what is failing instead of escalating.
+
+## What textures look like
+
+- **They are custom.** In the first study 915 distinct textures appear, and
+  only 8 emitters used a Roblox built-in *(measured)*.
+- **White, with the shape in alpha.** The particle's `Color` tints them.
+- **Hard edges.** Alpha is either binary with a 1-2 px anti-aliased rim, or
+  posterised to about 16 steps. Soft gradients are kept for one or two accent
+  textures (a glow, a soft rim). *(measured: a 49-sheet hand-drawn set)*
+- **Smoke is where the styles part.** Of the 1,108-texture community kit's
+  113 smoke, fog and cloud textures, 73 are soft-edged billows with light and
+  dark mottling inside, 29 put a crisp silhouette around a soft, mottled
+  inside, and 11 are flat cel puffs *(measured)*. Cel puffs are the clean
+  toon look. A brief that asks for weight or grit, or says "not cartoonish",
+  wants the mottled kind (the examples below have both). A ground slam asked to
+  be "heavy and brutal, not cartoonish" got two-tone cel dust that read as
+  cotton balls *(seen in a run)*. Soft is not the failure; no silhouette and
+  no contrast inside is.
+- **Detail from negative space, not shading.** Holes, notches, overhangs and
+  scribbled interior strokes. Stroke width tapers as with pen pressure.
+  Silhouettes are asymmetric. When there is shading, it is one or two flat
+  tones (a lit and a shadow side).
+  - Holes belong where a shape breaks apart (a puff thinning out, a burst's
+    last frames) or where the cut-out is the design (a ring, a crescent).
+  - **A flash's centre is solid, glowing, or a deliberate ring.** In a
+    1,108-texture community kit, flashes have a solid or bright centre, or
+    are a ring of rays around a fully empty middle (8 of its 92 shines). Only
+    one, a shatter burst, has scattered holes in its core. A few small holes
+    punched into a solid core read as beads, eyes or a face, not as detail.
+- **Common shapes:** crescents and claws, lumpy puffs, wobbly rings, wisps,
+  flame tongues, zig-zags, spiky stars, splinters, shaded rocks and dots.
+- **Frames change by growing and then breaking apart.** A shape grows with
+  an ease-out to a peak around frame 4-6, then is eaten into 2-6 fragments.
+  The last few cells may be blank, so a one-shot particle vanishes early.
+  Most sheets are 4 x 4.
+- **Size within the cell varies.**
+  - Many sheets fill most of the cell at their largest frame.
+  - The hand-drawn set keeps shapes small: half span less than 27% of the
+    cell, and the particle's `Size` does the scaling.
+
+  Either works; what matters is the edge and the motion.
+- **What made a generic texture look generic:**
+  - Roqer's first attempt: soft, grey, rendered smoke with no silhouette, low
+    contrast, and frames that barely changed.
+  - A later attempt: a perfectly radial impact star with even, thin outlines,
+    a snowflake-symmetric frost patch, and a ring with gear-like notches. They
+    read as clip art and icons, not drawings.
+- **Not symmetric, not even.** Hand-drawn shapes are lopsided, with uneven
+  counts, lengths and spacing, and strokes that taper. Draw them as tapered
+  strokes, lumpy blobs and warped coordinates (`tex_stroke`, `tex_blob`,
+  `tex_warp`), not as rays and rings around a centre.
+- **Symbols are the exception: they are precise.** The kit's 93 symbols
+  (sigils, runes, zodiac and alchemy signs) have clean geometry and even
+  line weight, all but a brush-drawn glyph and a few blurred icons, though a
+  single sign may be lopsided, as Scorpio is. The eight magic circles
+  studied, from its symbols and rings, are symmetric too. Their richness
+  comes from density:
+  - ornament inside the circle, such as leaves, a filigree, an inscribed
+    triangle or a compass star;
+  - a rune band of many small glyphs packed into a thin ring, which reads
+    as script. A dozen large glyphs read as letters instead.
+  Make the effect around a sigil lopsided, not the sigil.
+
+Draw them with `roqer.draw_flipbook` (below).
+
+## Drawing, previewing and uploading
+
+**Draw your own.** In a Blender job, `roqer.draw_flipbook` and
+`roqer.draw_texture` draw textures with numpy (below):
+- describe a shape from coordinates;
+- break it up with noise;
+- cut it with a hard edge;
+- eat it away over the frames.
+
+Roqer checks each sheet from its pixels and attaches it. One job can make
+every texture an effect needs. `roqer.flipbook` renders a 3D scene into a
+sheet instead, for a lit volume or simulation (`vfx-rendered-flipbooks.md`).
+
+- **Preview first.** A Blender job run with `preview_in_studio: true`
+  returns an `rbxasset://textures/roqer-preview/...` address for each
+  texture. That address plays on a particle in Studio as an upload would
+  (checked in Studio on Windows), so iterate on textures inside the effect
+  for free.
+  - A redraw comes from a new job, with new addresses.
+  - The addresses work on this computer only; players see nothing there.
+- **Upload:** send the whole settled set in one `upload_assets` call, each
+  file as a `Decal`, and use each result's `imageId` as
+  `rbxassetid://<imageId>`.
+  - Every upload is irreversible and moderated, so upload only the settled
+    set, and say how many uploads a request will use before uploading.
+  - Then replace every preview address left in the place (see "To use a
+    sheet" below).
+  - Reuse one texture across layers by changing `Color`, `Size`, `Rotation`
+    and `Squash`.
+- **Size:** keep a single texture square, 512 px or less, and 256 px for
+  small ones; memory scales with pixels. A flipbook sheet is 1024 x 1024.
+- **White on transparency** suits almost everything: the particle's `Color`
+  tints it, and `LightEmission` picks the blending (`vfx-design.md`, section 4). Bake onto black
+  (`mode="additive"`) only for a layer that will only ever be additive.
+- Roblox has no multiply or premultiplied mode. For darkening, use a black
+  layer at `LightEmission` 0, or negative `LightEmission`.
+
+**Flipbook rules:**
+
+- `FlipbookLayout` is `Grid2x2`, `Grid4x4` or `Grid8x8` (4, 16 or 64 frames).
+  4 x 4 is the usual choice. `Custom` with `FlipbookSizeX/Y` was in client
+  beta from October 2025; do not rely on it until confirmed.
+- Make the sheet 1024×1024, the size uploaded and seen playing frame by frame.
+  That is 512 px a frame at 2×2, 256 at 4×4 and 128 at 8×8.
+- Do not judge a sheet by `FlipbookIncompatible`. Studio shows "Particle
+  texture must be 1024 by 1024 to use flipbooks." there even for a 1024 sheet
+  that plays, and for a texture with no flipbook layout at all. Every studied
+  emitter carries the message.
+- To check a sheet, hold one particle at a few ages (`TimeScale = 0`) and
+  screenshot it. Each capture should show one frame, not the whole grid.
+- Leave a few pixels of empty space inside each cell. A frame that touches its
+  cell edge bleeds into its neighbour.
+- `FlipbookMode`:
+  - `OneShot` plays once across the particle's lifetime. It is almost always
+    the choice for a burst *(measured)*.
+  - `Loop` repeats at `FlipbookFramerate` (at most 30 fps);
+  - `PingPong` plays forward and back;
+  - `Random` shows one random frame.
+  - Use `Loop` with `FlipbookStartRandom = true` for a burning fire.
+- Some low-memory devices switch flipbooks off, so the first frame should
+  still read on its own.
 
 ## Particle textures and flipbooks
 
@@ -15,8 +146,8 @@ A particle texture decides most of how an effect looks. Most textures by
 experienced Roblox VFX artists are 2D drawings, not renders: a white,
 hard-edged silhouette on transparency, cel-shaded in two or three flat tones,
 that the particle's `Color` tints. This comes from studies of published
-effects and a 49-sheet hand-drawn texture set (see the `roblox-animation-vfx`
-skill's `references/vfx-design.md`):
+effects and a 49-sheet hand-drawn texture set (see "What textures look like"
+above):
 
 - **Shapes:** flame tongues, spiky impact stars, crisp smoke puffs with a lit
   and a shadow side, crescents and claws, wobbly rings, wisps, zig-zags,
@@ -29,8 +160,8 @@ skill's `references/vfx-design.md`):
   - a flash keeps a solid centre;
   - a symbol (a sigil, magic circle or rune band) is precise and symmetric.
 - **Trails and beams** take a texture too, drawn as a vertical strip: the
-  image's top is a Trail's head and its left edge `Attachment0` (see the VFX
-  craft reference).
+  image's top is a Trail's head and its left edge `Attachment0` (see
+  `vfx-motion.md`).
 - **Frames:** 4 x 4 sheets are the most common. The shape grows to a peak
   around frame 4-6, then breaks into 2-6 pieces; the last cells may be blank.
 - **Size in the cell varies.** Many sheets fill most of the cell. The
@@ -41,8 +172,9 @@ skill's `references/vfx-design.md`):
 A soft, grey, rendered smoke ball with no silhouette, whose frames barely
 change, is the look to avoid. It reads as a smudge at game distance.
 
-There are two ways to make one. Both write a sheet that Roqer checks the same
-way.
+There are two ways to make one: drawing with numpy (below), or rendering a 3D
+scene (`vfx-rendered-flipbooks.md`). Both write a sheet that Roqer checks the
+same way.
 
 ### Drawing with numpy
 
@@ -220,68 +352,6 @@ Look at the attached sheet and ask whether it looks drawn:
   out, frost creeping from the centre), or is it an even pattern of cells
   that reads as tiles?
 
-### Rendering the scene
-
-`roqer.flipbook(name, grid=4, mode="alpha", start=None, end=None, loop=False, padding=4)`
-renders the scene's animation through `scene.camera` into
-`<name>.flipbook.png`. Use it when a 3D look is the point: a simulation, a
-lit volume, shaded debris, a realistic fireball. It handles the size, grid,
-padding, frame sampling, colour management and packing. Use any materials,
-geometry nodes, simulations, compositor passes or lighting; the helper
-renders whatever the scene shows.
-
-- **Frames:** the frames from `start` to `end` (the scene's range by default)
-  are sampled evenly to fill every cell, because Roblox plays every cell. With
-  fewer frames than cells, some frames are held for two cells, and Roqer
-  reports the repeats.
-- **Mode:** `"alpha"` renders on a transparent film. `"additive"` renders on
-  black for `LightEmission = 1`.
-- **Framing:** frame the camera so the subject stays inside the view on every
-  frame, at the size you want in the cell. An orthographic camera looking
-  at the effect is simplest.
-- **Speed:** colour uses the Standard view transform, so glows stay bright.
-  - Use Eevee for emission and Workbench for flat shapes; Eevee measured
-    0.06 s a frame for the example below.
-  - Cycles measured 0.28 s a frame at 32 samples for a simple sphere, and
-    volumes take far longer. Note the per-frame time Roqer reports.
-
-```python
-import bpy, math
-
-scene = bpy.context.scene
-scene.render.engine = "BLENDER_EEVEE"
-scene.frame_start, scene.frame_end = 1, 16
-
-camera = bpy.data.objects.new("Camera", bpy.data.cameras.new("Camera"))
-scene.collection.objects.link(camera)
-camera.data.type = "ORTHO"
-camera.data.ortho_scale = 4.0
-camera.location = (0, -10, 0)
-camera.rotation_euler = (math.radians(90), 0, 0)
-scene.camera = camera
-
-bpy.ops.mesh.primitive_uv_sphere_add(radius=0.5, segments=24, ring_count=12)
-ball = bpy.context.active_object
-material = bpy.data.materials.new("Glow")
-material.use_nodes = True
-nodes = material.node_tree.nodes
-nodes.clear()
-emission = nodes.new("ShaderNodeEmission")
-output = nodes.new("ShaderNodeOutputMaterial")
-material.node_tree.links.new(emission.outputs[0], output.inputs[0])
-emission.inputs["Color"].default_value = (1.0, 0.55, 0.15, 1.0)
-ball.data.materials.append(material)
-
-# A burst: grows fast, then fades out while it keeps spreading.
-for frame, scale, strength in ((1, 0.6, 6.0), (6, 3.0, 4.0), (16, 3.8, 0.0)):
-    ball.scale = (scale, scale, scale)
-    ball.keyframe_insert("scale", frame=frame)
-    emission.inputs["Strength"].default_value = strength
-    emission.inputs["Strength"].keyframe_insert("default_value", frame=frame)
-
-roqer.flipbook("GlowBurst", grid=4, mode="additive")
-```
-
 ### What Roqer checks, and using a sheet
 
 A sheet you pack yourself (frames from several jobs, a hand-ordered
@@ -315,9 +385,10 @@ To use a sheet:
 
 1. **While it changes:** iterate on previews (above). Judge each version in
    the effect, at game distance, before drawing the next.
-2. **Once it is settled:** upload it with
-   `upload_asset {action: 'upload', filePath, assetType: 'Decal', displayName}`,
-   and set `ParticleEmitter.Texture` to `rbxassetid://<imageId>`.
+2. **Once it is settled:** upload it with every other settled texture in one
+   `upload_assets {uploads: [{filePath, assetType: 'Decal', displayName}, ...]}`
+   call (a single file can also go with `upload_asset`), and set
+   `ParticleEmitter.Texture` to `rbxassetid://<imageId>`.
    - Replace every `rbxasset://textures/roqer-preview/` address left in the
      place before calling the work done.
    - To find any that remain, scan with `execute_luau`: walk
@@ -332,116 +403,4 @@ To use a sheet:
 Every upload is irreversible and moderated, so upload only settled sheets.
 Put several textures an effect needs into one job, and reuse one sheet across
 layers by changing `Color`, `Size`, `Rotation` and `Squash`. For layering,
-timing and the rest of the effect, see the `roblox-animation-vfx` skill's VFX
-craft reference.
-
-## Shapes for mesh effects
-
-Mesh effects are shapes that grow, spin and fade in Studio: a crescent slash,
-a shockwave ring, a twisting tornado, a barrier dome.
-- **The named helpers** cover the common shapes.
-- **`roqer.vfx_surface`** builds any other shape you can describe as a
-  function: a jagged shockwave, a forked lightning card, petals, a spiked
-  burst, a wobbling wave.
-- **Raw `bpy`** remains available for anything else: modifiers, geometry
-  nodes, sculpted or boolean shapes. Roqer inspects every mesh the same way.
-
-**What every shape has in common:**
-- It is one open sheet, so set `DoubleSided` on the MeshPart in Studio.
-- Its UVs run the same way: U along the sweep (0 at the start, 1 at the end),
-  V across it (0 inside or at the bottom, 1 outside or at the top). They are
-  for maps that follow the surface. In Roblox, `TextureID` ignores alpha (see
-  below), so the shape itself, the part's `Transparency` and a Neon colour do
-  most of the work.
-- It is built around the origin, horizontal or upright, facing Roblox's
-  forward (Blender -Y).
-- Sizes are in studs.
-
-**The shapes:**
-- **`roqer.vfx_arc(name, radius, width, sweep=160, segments=32, taper=True)`**: a
-  flat crescent for a slash. It sweeps `sweep` degrees centred on forward,
-  from radius - width out to radius. With `taper`, it is widest in the middle
-  and pointed at both ends; U runs from the +X end to the -X end. Roll the
-  MeshPart for a diagonal swing.
-- **`roqer.vfx_ring(name, radius, width=0.5, height=0, top_radius=None, segments=48)`**:
-  - with `height` 0, a flat band on the ground: a shockwave;
-  - with a height, a wall from `radius` at the bottom to `top_radius` at the
-    top. A flared top makes a blast wave.
-- **`roqer.vfx_cone(name, radius, height, tip_radius=0, segments=32)`**: an
-  open cone from its base at the origin up to its tip. Point it with the
-  MeshPart's orientation, for example along the LookVector for a muzzle
-  blast.
-- **`roqer.vfx_swirl(name, radius, height, width, turns=1.5, top_radius=None, segments=96)`**:
-  a ribbon `width` tall, spiralling up `turns` times to `height`, widening
-  to `top_radius`. Use it for a tornado, an aura or a charge-up.
-- **`roqer.vfx_shell(name, radius, segments=32, rings=16, dome=False)`**: a
-  sphere, or a dome standing on the ground. Use it for a barrier or a blast
-  bubble.
-- **`roqer.vfx_surface(name, point, columns=32, rows=1)`**: anything else.
-  - `point(u, v)` returns the position of each grid corner for u and v from
-    0 to 1, and that corner's UV is (u, v).
-  - Corners that meet are merged, so closed loops and poles need no special
-    care.
-  - Vary the radius with `u` for a jagged or wobbling ring. Offset a strip
-    sideways with noise for lightning. Shape a petal by tapering it with
-    `v`.
-
-```python
-import bpy, math, os, random
-from mathutils import Vector
-
-random.seed(4)
-spikes = [1.0 + random.uniform(-0.25, 0.45) for _ in range(24)]
-
-def jagged(u, v):
-    # A shockwave ring whose outer edge is torn into spikes.
-    angle = 2 * math.pi * u
-    i = u * len(spikes)
-    spike = spikes[int(i) % len(spikes)] * (1 - (i % 1)) + spikes[int(i + 1) % len(spikes)] * (i % 1)
-    radius = 4.0 + v * 1.5 * spike
-    return Vector((math.sin(angle) * radius, -math.cos(angle) * radius, 0.0))
-
-roqer.vfx_surface("TornWave", jagged, columns=96, rows=2)
-bpy.ops.export_scene.gltf(filepath=os.path.join(OUTPUT_DIR, "torn-wave.glb"), export_format="GLB", export_apply=True, use_visible=True)
-```
-
-Put several shapes in one job and export one GLB. Each arrives as its own
-MeshPart named after it. Roqer reports their UVs and triangles.
-
-In Studio:
-1. Set `Material` (`Neon` to glow, `ForceField` to shimmer), `Color`,
-   `DoubleSided`, `RenderFidelity = Precise` and `Anchored`.
-2. Turn off `CanCollide`, `CanQuery`, `CanTouch` and `CastShadow`.
-3. Animate the parts with the emit module's `Start`/`End` parts (see the
-   `roblox-animation-vfx` skill's VFX craft reference).
-
-What arrives, and what works on it, was checked in Studio:
-- A shape arrives as a MeshPart inside a Model, under a child named after the
-  node (`Crescent_Node`). A flat shape is 0.001 studs thick. Its pivot is the
-  centre of its box, not the origin it was built around, so a crescent spins
-  about its middle.
-- Set `RenderFidelity = Precise`. With Automatic, Roblox simplifies a thin
-  curved card at distance until a crescent reads as a straight-sided wedge.
-- `TextureID` ignores alpha on a MeshPart: the texture's colour covers the
-  whole surface, and nothing shows through. Do not put a fading texture
-  there.
-- What does fade:
-  - **The part's own `Transparency`.** A `Neon` card fading from about 0 to 1
-    is the reliable mesh effect.
-  - **A `Decal` on the card's face** (`Top`, plus `Bottom` to show from
-    below), on a part with `Transparency = 1`. It fades cleanly and takes
-    `Color3` and `Transparency`, but it is projected across the part's box
-    face and ignores the UVs. Its texture must be drawn for that flat
-    projection, not along the sweep.
-  - A `SurfaceAppearance` with `AlphaMode = Transparency` follows the UVs,
-    but rendered dithered in Studio, and scripts cannot change its maps at
-    runtime.
-
-```python
-import bpy, os
-
-slash = roqer.vfx_arc("Slash", radius=6, width=1.5, sweep=150)
-wave = roqer.vfx_ring("Shockwave", radius=5, width=0.8)
-wave.location = (0, 0, -3)
-bpy.ops.export_scene.gltf(filepath=os.path.join(OUTPUT_DIR, "slash-effect.glb"), export_format="GLB", export_apply=True, use_visible=True)
-```
+timing and the rest of the effect, see `vfx-craft.md`.

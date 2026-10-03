@@ -3,8 +3,8 @@ import test from "node:test";
 import type { McpCallOptions, McpToolCaller, McpToolOutcome } from "./mcp-types";
 import { OutputTokenMeter, RunCancelledError, RunSession } from "./run-engine";
 import type { Planner, PlannerContext } from "./run-engine";
-import type { RunEvent, RunRequest } from "../shared/run-events";
-import { isRunEvent } from "../shared/run-events";
+import type { RunEvent, RunRequest, RunRequestUsage } from "../shared/run-events";
+import { isRunEvent, isRunUsage, MAX_RECORDED_REQUESTS, MAX_REQUEST_TOOL_CHARS } from "../shared/run-events";
 import { DEFAULT_TOOL_TIMEOUT_MS, timeoutForTool } from "../shared/mcp-tools";
 
 function outcome(overrides: Partial<McpToolOutcome> = {}): McpToolOutcome {
@@ -205,6 +205,39 @@ test("the run's usage is the latest well-formed total, recorded with run-complet
   assert.equal(isRunEvent({ ...base, usage: { inputTokens: 1, outputTokens: 2, costUsd: 0 } }), true);
   assert.equal(isRunEvent({ ...base, usage: { inputTokens: 1 } }), false);
   assert.equal(isRunEvent({ ...base, usage: { inputTokens: 1, outputTokens: 2, costUsd: -1 } }), false);
+});
+
+test("a run's usage keeps each request's figures and the tools it followed, and nothing else", async () => {
+  const events: RunEvent[] = [];
+  await new RunSession({
+    caller: makeCaller(async () => outcome()),
+    planner: planner(async (ctx) => {
+      ctx.runUsage({
+        inputTokens: 3, cacheReadTokens: 900, cacheWriteTokens: 40, outputTokens: 12, requests: 2,
+        perRequest: [
+          { inputTokens: 2, cacheWriteTokens: 30, outputTokens: 5, note: "kept out" } as RunRequestUsage,
+          { inputTokens: 1, cacheReadTokens: 900, cacheWriteTokens: 10, outputTokens: 7, after: ["get_place_info", "load_skill"] },
+        ],
+      });
+      // A malformed request makes the whole reading malformed, so the last good one stands.
+      ctx.runUsage({ inputTokens: 9, outputTokens: 9, perRequest: [{ inputTokens: -1, outputTokens: 1 }] });
+      ctx.runUsage({ inputTokens: 9, outputTokens: 9, perRequest: [{ inputTokens: 1, outputTokens: 1, after: ["x".repeat(MAX_REQUEST_TOOL_CHARS + 1)] }] });
+      return "done";
+    }),
+    request: makeRequest(),
+    emit: (event) => events.push(event),
+  }).execute();
+  assertAllValid(events);
+  const completed = events.at(-1);
+  assert.equal(completed?.type, "run-completed");
+  assert.deepEqual(completed?.type === "run-completed" ? completed.usage : undefined, {
+    inputTokens: 3, cacheReadTokens: 900, cacheWriteTokens: 40, outputTokens: 12, requests: 2,
+    perRequest: [
+      { inputTokens: 2, cacheWriteTokens: 30, outputTokens: 5 },
+      { inputTokens: 1, cacheReadTokens: 900, cacheWriteTokens: 10, outputTokens: 7, after: ["get_place_info", "load_skill"] },
+    ],
+  });
+  assert.equal(isRunUsage({ inputTokens: 1, outputTokens: 1, perRequest: Array.from({ length: MAX_RECORDED_REQUESTS + 1 }, () => ({ inputTokens: 1, outputTokens: 1 })) }), false);
 });
 
 test("the planner receives the bounded conversation attached to its run", async () => {

@@ -86,6 +86,22 @@ these rules on top of the MCP response contract:
   carries what every Studio task needs, so a run does not spend a model turn
   loading `roblox-studio-mcp` before it starts; that skill holds only the deeper
   reference on assets, imports, simulation, profiling, and Studio lifecycle.
+- **Templates are written, not retyped.** `set_script_source` takes `template`,
+  a skill template path, in place of `source`, and Roqer writes the file from
+  its own skill pack; the VFX emit module is installed this way, so the model
+  never loads, retypes or reads back its 13,000 characters. A script that is
+  still empty needs no `expectedRevision`: Roqer reads it and supplies the
+  revision only when there is nothing in it to lose.
+- **One call for a sequence.** Roqer's own operations inside `roblox_studio`
+  do in one model call what took several: `capture_moments` aims the camera
+  (`view`), waits for the effect's textures and captures every moment, and
+  `upload_assets` uploads a finished set of files. A playtest start that timed
+  out comes back with Studio's status already read, and after two in a row
+  Roqer answers further starts itself.
+- **Measured per request.** A Claude Code run records each model request's
+  input, cache reads and writes, and output, with the tools whose results it
+  carried, as `usage.perRequest` on the run, so the cost of a skill document,
+  an image or a script can be read off the request that first sent it.
 - **Skills once per conversation.** `load_skill` returns a document in full once
   and a short pointer on repeats. The cache belongs to the kept Claude Code
   process or Codex thread, so a follow-up message is not sent guidance its

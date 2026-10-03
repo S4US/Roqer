@@ -59,7 +59,7 @@ Keep the state machine responsible for selecting tracks. The effect system shoul
 
 ## 4. Particle emitters
 
-To build an effect rather than wire one up, load `references/vfx-craft.md`: it has layering, textures, flipbooks, recipes and the emit module.
+To build an effect rather than wire one up, load `references/vfx-design.md` and `references/vfx-craft.md`, with the topics `SKILL.md` lists: they have layering, recipes and the emit module, and the topics have textures, flipbooks, motion, mesh shapes and camera work.
 
 For a continuous effect, tune `Rate`, `Lifetime`, `Speed`, `Size`, and `Color`. For a one-shot effect, keep emission manual:
 
