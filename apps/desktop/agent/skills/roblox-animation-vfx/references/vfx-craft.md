@@ -114,6 +114,42 @@ effect.
 - **Timing to an animation.** Put a marker on the keyframe where the hit lands
   (`markers: [{ "name": "Impact" }]` with the `animation` tool). Play the
   effect from `GetMarkerReachedSignal("Impact")`; see `references/full.md` §2.
+- **A cast pose from code**, such as the caster's arm raised toward the
+  target, needs no animation asset:
+  - The shoulder is `RightUpperArm.RightShoulder` on R15 and
+    `Torso["Right Shoulder"]` on R6. It is a `Motor6D`, or an
+    `AnimationConstraint` on newer avatars, where `C0` cannot be set and
+    turning its attachments does not move the limb.
+  - Every frame in `RunService.PreSimulation`, which runs after the Animator
+    has posed the frame, set the joint's `Transform`. Disconnect when the
+    pose ends; the playing animations take over again.
+  - `CFrame.Angles(math.rad(95), 0, 0)` on `RightShoulder` brings the right
+    hand up to shoulder height and forward *(verified on
+    `AnimationConstraint` shoulders, in two missile runs' playtests)*.
+  - To point the arm at a target, turn its hanging direction onto the
+    direction to the target, both in the joint's own frame *(verified on
+    `AnimationConstraint` shoulders in a missile run's playtest)*:
+
+    ```lua
+    -- part0, c0, c1: a Motor6D's Part0, C0 and C1, or an AnimationConstraint's
+    -- Attachment0.Parent, Attachment0.CFrame and Attachment1.CFrame.
+    local function rotationBetween(a: Vector3, b: Vector3): CFrame
+    	local axis = a:Cross(b)
+    	local dot = math.clamp(a:Dot(b), -1, 1)
+    	if axis.Magnitude < 1e-4 then
+    		return if dot > 0 then CFrame.identity else CFrame.fromAxisAngle(Vector3.xAxis, math.pi)
+    	end
+    	return CFrame.fromAxisAngle(axis.Unit, math.acos(dot))
+    end
+
+    RunService.PreSimulation:Connect(function()
+    	local joint = part0.CFrame * c0
+    	local hanging = c1:Inverse():VectorToWorldSpace(Vector3.new(0, -1, 0))
+    	local wanted = joint:VectorToObjectSpace((target - joint.Position).Unit)
+    	-- weight eases from 0 to 1 as the arm rises, and back as it lowers
+    	shoulder.Transform = shoulder.Transform:Lerp(rotationBetween(hanging, wanted), weight)
+    end)
+    ```
 
 ## 3. Textures
 

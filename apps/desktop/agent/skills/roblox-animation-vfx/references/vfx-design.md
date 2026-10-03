@@ -138,18 +138,28 @@ studied artists get it:
     crescent.
   - **Black twins** *(measured: 56 pairs)*: a copy of the coloured emitter
     made black, with `Color` `#000000` or `Brightness` 0-0.01.
-    - Most keep its texture, size curve, lifetime, rotation and `EmitDelay`
-      exactly (45-51 of the 56), at the same `ZOffset` or a step in front.
+    - Most keep its texture, size curve, lifetime, `Rotation` range and
+      `EmitDelay` exactly (45-51 of the 56), at the same `ZOffset` or a step
+      in front.
     - Where the two differ, the black one moves differently: its own
       `Acceleration`, `Speed` or count, so it breaks the bright shape up
       instead of muting it.
     - None was both smaller than its colour and behind it. Shrunk, set behind
       and fired later, the black copy of a crescent burst read as separate
       dark brush strokes floating in the effect *(verified)*.
+    - **The same settings do not give the same angle.** Each particle draws
+      its own angle from the `Rotation` range, so a dark copy of a lopsided
+      shape (a crescent, a slash, a blade) lines up with its bright one only
+      when both lock `Rotation` to one value and share `RotSpeed`. With a
+      random range it shows as a dark crescent of its own *(verified: a
+      missile finale's dim copy of its crescent blades, with random
+      `Rotation` and its own `RotSpeed` and count)*. A random range suits a
+      shape that looks alike at any angle, such as a round burst.
 - **Black without black:**
   - a white sprite at Brightness 0-0.01;
   - a dim twin of the same hue at Brightness 0.05-0.6, one `ZOffset` step
-    behind a Brightness 3-6 copy, with a slightly longer life;
+    behind a Brightness 3-6 copy, with a slightly longer life; its angle
+    follows the black twin's rule above;
   - the dark tail of a gradient (section 2).
 - **Stacked copies for an inner gradient.** Three copies of one flame sheet:
 

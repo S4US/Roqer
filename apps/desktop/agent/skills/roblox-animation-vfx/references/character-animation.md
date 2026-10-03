@@ -478,18 +478,9 @@ on R15 and R6 too), and tested creature recipes.
 ## Posing a joint from code
 
 An effect can hold a pose without an animation asset, such as an arm raised
-for a cast:
-- In `RunService.PreSimulation`, which runs after the Animator has posed the
-  frame, set the joint's `Transform` to the pose's rotation, every frame.
-- When the pose ends, disconnect and set `Transform` back. The playing
-  animations take over again.
-
-This works for a `Motor6D` and for the `AnimationConstraint` joints that newer
-avatars use. On an `AnimationConstraint`, `C0` cannot be set and turning its
-attachments does not move the limb. In two missile runs on an avatar with
-`AnimationConstraint` shoulders, writing `Transform` raised the arm in a
-playtest. `CFrame.Angles(math.rad(95), 0, 0)` on `RightShoulder` brought the
-right hand up to shoulder height and forward.
+toward a target for a cast, by setting the joint's `Transform` every frame.
+The recipe, for `Motor6D` and `AnimationConstraint` joints, is in
+`references/vfx-craft.md`, section 2.
 
 ## Reading the result
 
