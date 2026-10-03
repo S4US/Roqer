@@ -750,15 +750,22 @@ def tex_warp(x, y, amount=0.1, scale=3, seed=0, t=0.0):
 
 
 def tex_blob(x, y, radius=0.5, lumps=6, roughness=0.5, seed=0, centre=(0.0, 0.0)):
-    """A lumpy, asymmetric blob: overlapping circles scattered around a centre. Positive inside; tex_edge cuts it. More lumps and roughness give more lobes and overhangs."""
+    """A lumpy, lopsided blob in one piece: a solid body with round lobes bulging from its edge, bigger on one side. It never splits or has holes, so it reads as one puff, not a cluster of circles. About radius from the centre; roughness runs from 0, a plain disc, to 1, the lumpiest. Positive inside; tex_edge cuts it."""
     import numpy
     rng = numpy.random.default_rng(seed)
-    field = numpy.full(numpy.shape(x), -1.0, dtype=numpy.float32)
+    roughness = min(max(float(roughness), 0.0), 1.0)
+    lean = rng.uniform(0, 2 * numpy.pi)
+    body = radius * (0.95 - 0.35 * roughness)
+    bx = centre[0] + numpy.cos(lean) * radius * 0.2 * roughness
+    by = centre[1] + numpy.sin(lean) * radius * 0.2 * roughness
+    field = body - numpy.hypot(x - bx, y - by)
     for _ in range(max(1, int(lumps))):
+        # Each lobe is centred inside the body, so the union stays star-shaped
+        # around the body's centre: one piece, no holes.
         angle = rng.uniform(0, 2 * numpy.pi)
-        reach = rng.uniform(0, radius * roughness * 1.6)
-        r = radius * rng.uniform(1 - min(roughness, 0.9), 1.0) * 0.75
-        cx, cy = centre[0] + numpy.cos(angle) * reach, centre[1] + numpy.sin(angle) * reach
+        reach = body * rng.uniform(0.8, 1.0)
+        r = radius * roughness * rng.uniform(0.4, 0.8) * (1 + 0.4 * roughness * numpy.cos(angle - lean))
+        cx, cy = bx + numpy.cos(angle) * reach, by + numpy.sin(angle) * reach
         field = numpy.maximum(field, r - numpy.hypot(x - cx, y - cy))
     return field
 

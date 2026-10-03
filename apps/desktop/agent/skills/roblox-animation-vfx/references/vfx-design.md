@@ -12,12 +12,15 @@ reference is a set of observations, not a style. Depart from it when the
 effect calls for it.
 
 How far to trust a number:
-- *(measured)*: from two studies of published effects by experienced Roblox
-  VFX artists.
+- *(measured)*: from three studies of published effects and textures by
+  experienced Roblox VFX artists.
   - The first covered 22 effects: 3,950 particle emitters, their scripts and
     videos of them playing.
   - The second covered 27 effects: skills, showcases, practice pieces and a
     hand-drawn texture set, plus a tutorial by the artist snaliel.
+  - A third looked at every texture in a widely shared community particle
+    kit: 1,108 textures sorted into shines, sparkles, shapes, rings,
+    symbols, beams and trails, fogs and nature.
 - *(verified)*: checked in Studio.
 - *(starting point)*: common practice; tune it by looking.
 
@@ -133,8 +136,16 @@ studied artists get it:
     size.
   - **Accents:** in front and smaller: ink lines, a dark pupil, cuts through a
     crescent.
-  - **Black twins:** a black copy that moves differently from the bright one,
-    so it breaks the shape up instead of muting it.
+  - **Black twins** *(measured: 56 pairs)*: a copy of the coloured emitter
+    made black, with `Color` `#000000` or `Brightness` 0-0.01.
+    - Most keep its texture, size curve, lifetime, rotation and `EmitDelay`
+      exactly (45-51 of the 56), at the same `ZOffset` or a step in front.
+    - Where the two differ, the black one moves differently: its own
+      `Acceleration`, `Speed` or count, so it breaks the bright shape up
+      instead of muting it.
+    - None was both smaller than its colour and behind it. Shrunk, set behind
+      and fired later, the black copy of a crescent burst read as separate
+      dark brush strokes floating in the effect *(verified)*.
 - **Black without black:**
   - a white sprite at Brightness 0-0.01;
   - a dim twin of the same hue at Brightness 0.05-0.6, one `ZOffset` step
@@ -159,8 +170,8 @@ studied artists get it:
   `ZOffset` +1) in front of a white additive halo (width 12, Transparency 0.5),
   with black and white twins of the same particles. The only colour is one
   accent.
-- **The three-value stack on impacts:** colour at `ZOffset` z, black at
-  z + 0.25, white at z + 1, all short-lived.
+- **The three-value stack on impacts:** colour at `ZOffset` z, its black
+  twin at z or z + 0.25, white at z + 1, all short-lived.
 - **White is a thin shape, not a fill.** The short-lived pure-white layers
   are rings, crescents, winds and spiky stars, at Brightness 1-2.
   *(measured: 67 layers)*
@@ -234,6 +245,13 @@ How one orange shape renders under a new place's lighting *(verified)*:
   scribbled interior strokes. Stroke width tapers as with pen pressure.
   Silhouettes are asymmetric. When there is shading, it is one or two flat
   tones (a lit and a shadow side).
+  - Holes belong where a shape breaks apart (a puff thinning out, a burst's
+    last frames) or where the cut-out is the design (a ring, a crescent).
+  - **A flash's centre is solid, glowing, or a deliberate ring.** In a
+    1,108-texture community kit, flashes have a solid or bright centre, or
+    are a ring of rays around a fully empty middle (8 of its 92 shines). Only
+    one, a shatter burst, has scattered holes in its core. A few small holes
+    punched into a solid core read as beads, eyes or a face, not as detail.
 - **Common shapes:** crescents and claws, lumpy puffs, wobbly rings, wisps,
   flame tongues, zig-zags, spiky stars, splinters, shaded rocks and dots.
 - **Frames change by growing and then breaking apart.** A shape grows with
@@ -256,6 +274,15 @@ How one orange shape renders under a new place's lighting *(verified)*:
   counts, lengths and spacing, and strokes that taper. Draw them as tapered
   strokes, lumpy blobs and warped coordinates (`tex_stroke`, `tex_blob`,
   `tex_warp`), not as rays and rings around a centre.
+- **Symbols are the exception: they are precise.** Sigils, magic circles,
+  runes and target rings are symmetric, with even line weight and clean
+  geometry; the kit's symbols and magic circles all are. Their richness
+  comes from density:
+  - ornament inside the circle, such as leaves, a filigree or an inscribed
+    triangle;
+  - a rune band of many small glyphs packed into a ring, which reads as
+    script. A dozen large glyphs read as letters instead.
+  Make the effect around a sigil lopsided, not the sigil.
 
 Draw them with `roqer.draw_flipbook` (the `roblox-building` skill's
 `references/blender-vfx.md`).
@@ -357,9 +384,10 @@ Typical lifetimes *(measured)*:
 - **The flash itself** is a growing sprite, a shrinking one (7 to 0 in 0.1
   s), and a thin squashed flare line (`Squash` -2 to -5, 0.04-0.12 s). In
   its frames it is the biggest thing on screen, larger than the burst that
-  follows. Its body is a filled spiky shape covering most of its cell; the
-  thin flare is an addition. A thin four-ray flare used as the whole flash
-  shows as two white beams in a V once it is rotated *(verified)*.
+  follows. Its body is a filled spiky shape covering most of its cell, solid
+  at the centre (section 5); the thin flare is an addition. A thin four-ray
+  flare used as the whole flash shows as two white beams in a V once it is
+  rotated *(verified)*.
 - **A held contact point** (a beam hitting a wall) strobes its flash:
   Lifetime 0.1 at `Rate` 50.
 
@@ -404,7 +432,8 @@ Typical lifetimes *(measured)*:
 **Projectiles** *(measured)*. A projectile has three parts:
 - **A head:** one sprite, such as a `VelocityParallel` diamond. Clear it at
   impact (`Clear()`), so it vanishes in that frame.
-- **Ribbons:** 2-3 Trails across a span of about 5 studs:
+- **Ribbons:** 2-3 textured Trails across a span of about 5 studs (see the
+  VFX craft reference for drawing trail textures):
   - a sharp one: lifetime about 0.6, width tapering to 0, transparent for the
     first 15% of its length so there is a gap behind the head;
   - a soft one that bulges in the middle: lifetime about 0.85;

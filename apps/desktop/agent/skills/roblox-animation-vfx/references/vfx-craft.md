@@ -240,6 +240,20 @@ then `preview_asset`) is worth a look when a texture there matches the style.
     - a wide, soft, dark or coloured wisp: Lifetime 0.15-0.4,
       `LightEmission` 0.55-0.75.
     Both have a `WidthScale` that tapers to 0.
+  - **Give every trail a texture** *(measured: 58 of 66 studied trails have
+    one)*. Without one, a Trail is an even band of colour: a missile volley's
+    three untextured trails read as flat purple tubes *(verified)*. The
+    studied textures are streaks, such as a bright torn or dripping edge with
+    streaks running back from it, a tapered shard, or a wisp. Their clear
+    areas also hide part of the ribbon, so widen it or raise `Brightness` to
+    keep its weight *(verified: the same volley with textures read thinner
+    and fainter)*.
+  - **Which way a texture lies** *(verified)*: on a Trail or a Beam, the
+    image's vertical axis runs along its length and its horizontal axis
+    across its width. On a Trail the top of the image is at the head and the
+    bottom at the tail, and its left edge is at `Attachment0`. Draw trail and
+    beam textures as vertical strips; a drawing made lengthwise comes out
+    turned across the ribbon.
 - **A crescent slash without a mesh:** sweep a trail through an arc.
   - Make a Model with `Start` and `End` parts at the same CFrame, both
     invisible, and give it `Spin` (160), `Duration` (0.14) and `Easing`
@@ -324,7 +338,7 @@ look made for its game. R is the effect's radius in studs.
 | --- | --- | --- |
 | -0.15 s | Anticipation | A glow that shrinks from 1.5R to 0 over 0.1-0.15 s, spinning fast |
 | 0 | Flash | A soft ball or four-point flare, 0 to 2.5R, Lifetime 0.06-0.1, Brightness 10, `ZOffset` in front |
-| +0.03 s | Impact stars | A spiky 4 x 4 sheet, Lifetime 0.075-0.15, EmitCount 2-6, as a colour layer (`ZOffset` z), a black copy (z + 0.25) and a white copy (z + 1) |
+| +0.03 s | Impact stars | A spiky 4 x 4 sheet, Lifetime 0.075-0.15, EmitCount 2-6, as a colour layer (`ZOffset` z), its black twin (the same size, life and count, z to z + 0.25) and a white copy (z + 1) |
 | +0.03 s | Black backing | A soft black blob behind, 2-4R |
 | +0.05 s | Streaks | `VelocityParallel` with `Squash`, Speed 60-200, Drag 8-12, with a few black twins |
 | +0.05 s | Ring | A flat `VelocityPerpendicular` ring (Speed 0.001) growing to 2-3R over 0.2-0.4 s |
@@ -397,8 +411,9 @@ Flash, in front of everything, for a frame or two:
 }
 ```
 
-The impact's three-value stack: colour, a black copy just in front of it, and
-a small white core in front of both:
+The impact's three-value stack: colour; its black twin just in front, the
+same emitter with only the colour and blending changed; and a small white
+core in front of both:
 
 ```json
 [
@@ -414,12 +429,12 @@ a small white core in front of both:
   { "op": "create", "className": "ParticleEmitter", "name": "ImpactBlack",
     "properties": {
       "Texture": "rbxasset://textures/particles/explosion01_core_main.dds",
-      "Rate": 0, "Enabled": false, "Lifetime": [0.08, 0.12], "Speed": 0.001, "LockedToPart": true,
+      "Rate": 0, "Enabled": false, "Lifetime": [0.1, 0.15], "Speed": 0.001, "LockedToPart": true,
       "LightEmission": 0, "LightInfluence": 0, "Brightness": 1, "ZOffset": 1.25,
       "Rotation": [0, 360], "Color": [0, 0, 0],
-      "Size": [{ "time": 0, "value": 4 }, { "time": 0.25, "value": 8 }, { "time": 1, "value": 9 }],
+      "Size": [{ "time": 0, "value": 6 }, { "time": 0.25, "value": 11 }, { "time": 1, "value": 12 }],
       "Transparency": 0 },
-    "attributes": { "EmitCount": 1, "EmitDelay": 0.16 } },
+    "attributes": { "EmitCount": 2, "EmitDelay": 0.16 } },
   { "op": "create", "className": "ParticleEmitter", "name": "ImpactWhite",
     "properties": {
       "Texture": "rbxasset://textures/particles/explosion01_core_main.dds",

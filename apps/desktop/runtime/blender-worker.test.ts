@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import type { ChildProcess } from "node:child_process";
+import { spawnSync, type ChildProcess } from "node:child_process";
 import { EventEmitter } from "node:events";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -127,6 +127,70 @@ test("the runner gives the script Roqer's placement helpers, and only those", ()
   // A helper places a part by its ends; it never asks the model for a rotation angle.
   assert.doesNotMatch(HELPERS_SCRIPT, /def \w+\([^)]*rotation/);
   assert.doesNotMatch(HELPERS_SCRIPT, /shade_smooth/);
+});
+
+/** A Python with numpy to run the drawing helpers under, or undefined on a machine without one. */
+function pythonWithNumpy(): string | undefined {
+  for (const command of ["python3", "python"]) {
+    if (spawnSync(command, ["-c", "import numpy"], { timeout: 20_000 }).status === 0) return command;
+  }
+  return undefined;
+}
+
+/** The source of one top-level helper function, up to the next top-level line. */
+function helperSource(name: string): string {
+  const source = new RegExp(`^def ${name}\\(.*?(?=^\\S)`, "ms").exec(HELPERS_SCRIPT)?.[0];
+  assert.ok(source, `no helper named ${name}`);
+  return source;
+}
+
+test("tex_blob draws one solid piece about its radius, never split or holed, however rough", (t) => {
+  const python = pythonWithNumpy();
+  if (python === undefined) {
+    t.skip("needs Python with numpy");
+    return;
+  }
+  // The helpers module imports bpy, so only the drawing functions run here.
+  // Run 4 subtracted an old blob from a flash and got three beads; at these
+  // settings the old blob also came apart into separate dots.
+  const script = ["import json, numpy\nfrom collections import deque\n", ...["_texture_size", "tex_coords", "tex_blob"].map(helperSource), String.raw`
+def regions(mask):
+    """For each 4-connected region of True, whether it touches the image border."""
+    h, w = mask.shape
+    seen = numpy.zeros((h, w), dtype=bool)
+    found = []
+    for sy in range(h):
+        for sx in range(w):
+            if mask[sy, sx] and not seen[sy, sx]:
+                seen[sy, sx] = True
+                queue, border = deque([(sy, sx)]), False
+                while queue:
+                    cy, cx = queue.popleft()
+                    border = border or cy in (0, h - 1) or cx in (0, w - 1)
+                    for ny, nx in ((cy + 1, cx), (cy - 1, cx), (cy, cx + 1), (cy, cx - 1)):
+                        if 0 <= ny < h and 0 <= nx < w and mask[ny, nx] and not seen[ny, nx]:
+                            seen[ny, nx] = True
+                            queue.append((ny, nx))
+                found.append(border)
+    return found
+
+x, y = tex_coords(128)
+out = []
+for radius, lumps, roughness, seed in [(0.5, 8, 0.8, 6), (0.5, 13, 0.9, 9), (0.5, 9, 0.75, 4), (0.3, 11, 0.85, 3), (0.5, 3, 1.0, 2), (0.5, 6, 2.0, 5), (0.5, 6, 0.0, 1)]:
+    inside = tex_blob(x, y, radius=radius, lumps=lumps, roughness=roughness, seed=seed) > 0
+    out.append({"case": [radius, lumps, roughness, seed], "pieces": len(regions(inside)),
+                "holes": regions(~inside).count(False), "area": float(inside.mean() * 4 / (numpy.pi * radius ** 2))})
+print(json.dumps(out))
+`].join("\n");
+  const run = spawnSync(python, ["-"], { input: script, encoding: "utf8", timeout: 60_000 });
+  assert.equal(run.status, 0, run.stderr);
+  const blobs = JSON.parse(run.stdout) as Array<{ case: number[]; pieces: number; holes: number; area: number }>;
+  assert.equal(blobs.length, 7);
+  for (const blob of blobs) {
+    assert.equal(blob.pieces, 1, `${blob.case.join(", ")} came apart`);
+    assert.equal(blob.holes, 0, `${blob.case.join(", ")} has a hole`);
+    assert.ok(blob.area > 0.5 && blob.area < 1.7, `${blob.case.join(", ")} covers ${blob.area.toFixed(2)} of a disc of its radius`);
+  }
 });
 
 test("a script that raises, or exports nothing, is a failed call the model can read", async () => {

@@ -25,7 +25,12 @@ skill's `references/vfx-design.md`):
   posterised to about 16 steps. Only an accent texture or two is soft.
 - **Detail:** from negative space (holes, notches, overhangs, scribbled
   interior strokes) and tapering stroke widths, not from shading. Silhouettes
-  are asymmetric.
+  are asymmetric. Two exceptions:
+  - a flash keeps a solid centre;
+  - a symbol (a sigil, magic circle or rune band) is precise and symmetric.
+- **Trails and beams** take a texture too, drawn as a vertical strip: the
+  image's top is a Trail's head and its left edge `Attachment0` (see the VFX
+  craft reference).
 - **Frames:** 4 x 4 sheets are the most common. The shape grows to a peak
   around frame 4-6, then breaks into 2-6 pieces; the last cells may be blank.
 - **Size in the cell varies.** Many sheets fill most of the cell. The
@@ -64,7 +69,7 @@ The building blocks:
 | `tex_sample(image, u, v)` | `image` looked up at 0..1 with wrapping, to scroll or warp noise per frame |
 | `tex_curve(points, samples, closed)` | A smooth path through control points |
 | `tex_stroke(x, y, path, width, start, end)` | A brush stroke along a path, with width tapering from head to tail, drawn on or erased by `start` and `end` |
-| `tex_blob(x, y, radius, lumps, roughness, seed)` | A lumpy, lopsided blob |
+| `tex_blob(x, y, radius, lumps, roughness, seed)` | A lumpy, lopsided blob in one solid piece, about `radius` from the centre. `roughness` runs from 0 (a disc) to 1 |
 | `tex_warp(x, y, amount, scale, seed, t)` | Coordinates pushed around by noise, so whatever is drawn with them is organic |
 | `tex_edge(value, at, soft)` | The hard edge: 0 below `at`, 1 above it, blended over `soft` |
 | `tex_ease(t, power)` | Ease out, for a burst that grows fast then slows |
@@ -174,7 +179,10 @@ frame is 256 px.
 
 Look at the attached sheet and ask whether it looks drawn:
 - **Symmetry:** is anything radially or mirror symmetric, evenly spaced, or
-  of uniform line width? Break it up.
+  of uniform line width? Break it up, unless it is a symbol: a sigil, magic
+  circle or rune band is drawn precise and symmetric.
+- **Holes:** is there a small hole or dot inside a shape that should be
+  solid, such as a flash's centre? It reads as an eye or damage; fill it.
 - **Silhouette:** does the shape read as a silhouette at a glance, with a
   thick-to-thin taper, lobes, notches and holes? Or is it an outline, an icon
   or a gear?
