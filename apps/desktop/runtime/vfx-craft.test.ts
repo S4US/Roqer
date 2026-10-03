@@ -4,11 +4,13 @@
 // recipe to the class's real properties, the shapes the plugin converts, and
 // the attributes the emit module it ships with actually reads.
 import assert from "node:assert/strict";
+import fs from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
 import { loadAgentRuntime } from "./agent-definition";
+import { createSkillToolRunner } from "./skill-tool";
 
 const runtimeDirectory = path.dirname(fileURLToPath(import.meta.url));
 const agentRoot = path.resolve(runtimeDirectory, "../agent");
@@ -124,6 +126,19 @@ async function loadSkill(resource?: string): Promise<string> {
   return (await runtime.skillLibrary.load(SKILL, resource)).content;
 }
 
+/** Every VFX reference in the skill, as `references/vfx-*.md`: the core pair and the topics. */
+async function vfxReferences(): Promise<string[]> {
+  const names = await fs.readdir(path.join(agentRoot, "skills", SKILL, "references"));
+  return names.filter((name) => /^vfx-.+\.md$/.test(name)).sort().map((name) => `references/${name}`);
+}
+
+/** The build steps of every VFX reference's examples. */
+async function allRecipes(): Promise<Step[]> {
+  const steps: Step[] = [];
+  for (const resource of await vfxReferences()) steps.push(...recipes(await loadSkill(resource)));
+  return steps;
+}
+
 function recipes(reference: string): Step[] {
   const steps: Step[] = [];
   for (const match of reference.matchAll(/```json\r?\n([\s\S]*?)```/g)) {
@@ -154,7 +169,7 @@ test("the VFX skill links its reference and emit module, and both load", async (
 });
 
 test("every VFX recipe sets only real properties, in shapes the plugin converts", async () => {
-  const steps = recipes(await loadSkill(REFERENCE));
+  const steps = await allRecipes();
   assert.ok(steps.length >= 10, `expected the recipes, found ${steps.length} steps`);
   const problems: string[] = [];
   const ids = new Set<string>();
@@ -199,7 +214,7 @@ test("recipe attributes are ones the emit module reads, with values it accepts",
     ["Duration", "Easing", "EasingDirection", "EffectDuration", "EmitCount", "EmitDelay", "EmitDuration", "Spin"],
   );
   const problems: string[] = [];
-  for (const step of recipes(await loadSkill(REFERENCE))) {
+  for (const step of await allRecipes()) {
     for (const [name, value] of Object.entries(step.attributes ?? {})) {
       const where = `${step.className} ${step.name}: ${name}`;
       if (!read.has(name)) problems.push(`${where} is not read by the emit module`);
@@ -222,5 +237,52 @@ test("the reference documents every attribute the emit module reads", async () =
   const table = reference.slice(start).split(/\r?\n(?!\|)/)[0];
   for (const name of moduleAttributes(await loadSkill(MODULE))) {
     assert.ok(table.includes(`\`${name}\``), `${name} is read by the module but not in the attribute table`);
+  }
+});
+
+test("the VFX skill names every topic it ships, and each one loads", async () => {
+  const entrypoint = await loadSkill();
+  const shipped = await vfxReferences();
+  assert.ok(shipped.length >= 7, `expected the core pair and the topics, found ${shipped.join(", ")}`);
+  for (const resource of shipped) {
+    assert.ok(entrypoint.includes(`\`${resource}\``) || entrypoint.includes(`(${resource})`), `SKILL.md does not name ${resource}`);
+    assert.match(await loadSkill(resource), /^# /, `${resource} does not load as a document`);
+  }
+});
+
+test("no shipped guidance points at the Blender VFX reference that moved into the VFX skill", async () => {
+  const skills = path.join(agentRoot, "skills");
+  const stale: string[] = [];
+  for (const file of await fs.readdir(skills, { recursive: true })) {
+    if (!file.endsWith(".md")) continue;
+    if ((await fs.readFile(path.join(skills, file), "utf8")).includes("blender-vfx.md")) stale.push(file);
+  }
+  assert.deepEqual(stale, []);
+});
+
+/** Claude Code keeps a tool result inline only up to this many characters; past it the model gets a path it cannot open. */
+const CLAUDE_CODE_INLINE_CHARACTERS = 50_000;
+
+test("an effect's references arrive in at most two calls, the core pair together in the first", async () => {
+  const runtime = await loadAgentRuntime(agentRoot);
+  const core = ["references/vfx-design.md", "references/vfx-craft.md"];
+  const routes = {
+    explosion: [...core, "references/vfx-textures.md"],
+    missile: [...core, "references/vfx-textures.md", "references/vfx-motion.md", "references/vfx-camera-world.md"],
+    slam: [...core, "references/vfx-textures.md", "references/vfx-mesh-shapes.md", "references/vfx-camera-world.md"],
+  };
+  for (const [effect, route] of Object.entries(routes)) {
+    const run = createSkillToolRunner(runtime.skillLibrary);
+    const delivered: string[][] = [];
+    let request = route;
+    while (request.length > 0) {
+      assert.ok(delivered.length < 2, `${effect} needed more than two calls`);
+      const result = await run({ name: SKILL, resources: request });
+      assert.ok(result.length <= CLAUDE_CODE_INLINE_CHARACTERS, `${effect} call ${delivered.length + 1} is ${result.length} characters`);
+      delivered.push([...result.matchAll(new RegExp(`<skill name="${SKILL}" resource="([^"]+)">`, "g"))].map((match) => match[1]));
+      request = [...result.matchAll(/^- (\S+): not loaded yet/gm)].map((match) => match[1]);
+    }
+    assert.deepEqual(delivered[0].slice(0, 2), core, `${effect}: the core pair did not arrive together first`);
+    assert.deepEqual(delivered.flat().sort(), [...route].sort(), `${effect} arrived incomplete`);
   }
 });

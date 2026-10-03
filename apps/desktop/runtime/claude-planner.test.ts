@@ -1193,6 +1193,8 @@ test("Claude's usage is also recorded request by request, with the tools each re
           const target = await mcpTarget(args);
           await callTool(target, { operation: "get_place_info", arguments: {} });
           await callTool(target, { operation: "no_such_operation", arguments: {} });
+          await callTool(target, { name: "roblox-test", resources: ["references/vfx-design.md", "templates/vfx/emit.lua"] }, "load_skill");
+          await callTool(target, { name: "roblox-test", resource: "../secrets" }, "load_skill");
           // A subagent's request is its own context, not the conversation's.
           child.writeLine(start({ input_tokens: 100, output_tokens: 1 }, "toolu_sub"));
           child.writeLine(start({ input_tokens: 3, cache_creation_input_tokens: 250, cache_read_input_tokens: 9_000, output_tokens: 2 }));
@@ -1211,8 +1213,12 @@ test("Claude's usage is also recorded request by request, with the tools each re
   assert.equal(await planner.run({ ...context, runUsage: (usage) => reported.push(usage) }), "Done.");
   assert.deepEqual(reported.at(-1)?.perRequest, [
     { inputTokens: 5, cacheReadTokens: 0, cacheWriteTokens: 9_000, outputTokens: 40 },
-    // The unknown operation is named by the tool it went to, never by what the model wrote.
-    { inputTokens: 3, cacheReadTokens: 9_000, cacheWriteTokens: 250, outputTokens: 12, after: ["get_place_info", "roblox_studio"] },
+    // The unknown operation is named by the tool it went to, never by what the
+    // model wrote; a skill load names its documents only when they are plain paths.
+    {
+      inputTokens: 3, cacheReadTokens: 9_000, cacheWriteTokens: 250, outputTokens: 12,
+      after: ["get_place_info", "roblox_studio", "load_skill roblox-test: vfx-design, emit", "load_skill roblox-test"],
+    },
   ]);
 });
 

@@ -480,7 +480,7 @@ on R15 and R6 too), and tested creature recipes.
 An effect can hold a pose without an animation asset, such as an arm raised
 toward a target for a cast, by setting the joint's `Transform` every frame.
 The recipe, for `Motor6D` and `AnimationConstraint` joints, is in
-`references/vfx-craft.md`, section 2.
+`references/vfx-camera-world.md`, "A cast pose from code".
 
 ## Reading the result
 

@@ -4,12 +4,13 @@ Load this with `references/vfx-craft.md` before building a visual effect. It
 covers what experienced Roblox VFX artists do and why:
 - what the effect is for;
 - colour, value and brightness;
-- textures, layers and timing;
-- projectiles, beams, sustained forms, and the camera and world around them.
+- layers, timing and motion.
 
-`vfx-craft.md` covers the engine, the tools and how to check an effect. This
-reference is a set of observations, not a style. Depart from it when the
-effect calls for it.
+`vfx-craft.md` covers the engine, the tools and how to check an effect. What
+textures look like is in `vfx-textures.md`; projectiles, beams, slashes and
+held forms in `vfx-motion.md`; camera, screen and world reactions in
+`vfx-camera-world.md`. This reference is a set of observations, not a style.
+Depart from it when the effect calls for it.
 
 How far to trust a number:
 - *(measured)*: from three studies of published effects and textures by
@@ -45,7 +46,7 @@ How far to trust a number:
     Zoltraak beam's end): 70-360 studs. A meteor slam's smoke grows to 237.
   - **A skill's finishing explosion:** 40-275 studs. Seven of nine
     explosions and slams kept growing for 0.25-1.35 s after the hit
-    (section 7).
+    (section 6).
 
   The solid bodies are smaller: a practice explosion's crescents grow to 19
   studs, and a fireball skill's crescents and lightning to 125.
@@ -247,72 +248,7 @@ How one orange shape renders under a new place's lighting *(verified)*:
 - **A glowing crack that cools:** a decal at `Color3` around 10, tweened to
   black over about 1.3 s.
 
-## 5. Textures
-
-- **They are custom.** In the first study 915 distinct textures appear, and
-  only 8 emitters used a Roblox built-in *(measured)*.
-- **White, with the shape in alpha.** The particle's `Color` tints them.
-- **Hard edges.** Alpha is either binary with a 1-2 px anti-aliased rim, or
-  posterised to about 16 steps. Soft gradients are kept for one or two accent
-  textures (a glow, a soft rim). *(measured: a 49-sheet hand-drawn set)*
-- **Smoke is where the styles part.** Of the 1,108-texture community kit's
-  113 smoke, fog and cloud textures, 73 are soft-edged billows with light and
-  dark mottling inside, 29 put a crisp silhouette around a soft, mottled
-  inside, and 11 are flat cel puffs *(measured)*. Cel puffs are the clean
-  toon look. A brief that asks for weight or grit, or says "not cartoonish",
-  wants the mottled kind (`blender-vfx.md` has both). A ground slam asked to
-  be "heavy and brutal, not cartoonish" got two-tone cel dust that read as
-  cotton balls *(seen in a run)*. Soft is not the failure; no silhouette and
-  no contrast inside is.
-- **Detail from negative space, not shading.** Holes, notches, overhangs and
-  scribbled interior strokes. Stroke width tapers as with pen pressure.
-  Silhouettes are asymmetric. When there is shading, it is one or two flat
-  tones (a lit and a shadow side).
-  - Holes belong where a shape breaks apart (a puff thinning out, a burst's
-    last frames) or where the cut-out is the design (a ring, a crescent).
-  - **A flash's centre is solid, glowing, or a deliberate ring.** In a
-    1,108-texture community kit, flashes have a solid or bright centre, or
-    are a ring of rays around a fully empty middle (8 of its 92 shines). Only
-    one, a shatter burst, has scattered holes in its core. A few small holes
-    punched into a solid core read as beads, eyes or a face, not as detail.
-- **Common shapes:** crescents and claws, lumpy puffs, wobbly rings, wisps,
-  flame tongues, zig-zags, spiky stars, splinters, shaded rocks and dots.
-- **Frames change by growing and then breaking apart.** A shape grows with
-  an ease-out to a peak around frame 4-6, then is eaten into 2-6 fragments.
-  The last few cells may be blank, so a one-shot particle vanishes early.
-  Most sheets are 4 x 4.
-- **Size within the cell varies.**
-  - Many sheets fill most of the cell at their largest frame.
-  - The hand-drawn set keeps shapes small: half span less than 27% of the
-    cell, and the particle's `Size` does the scaling.
-
-  Either works; what matters is the edge and the motion.
-- **What made a generic texture look generic:**
-  - Roqer's first attempt: soft, grey, rendered smoke with no silhouette, low
-    contrast, and frames that barely changed.
-  - A later attempt: a perfectly radial impact star with even, thin outlines,
-    a snowflake-symmetric frost patch, and a ring with gear-like notches. They
-    read as clip art and icons, not drawings.
-- **Not symmetric, not even.** Hand-drawn shapes are lopsided, with uneven
-  counts, lengths and spacing, and strokes that taper. Draw them as tapered
-  strokes, lumpy blobs and warped coordinates (`tex_stroke`, `tex_blob`,
-  `tex_warp`), not as rays and rings around a centre.
-- **Symbols are the exception: they are precise.** The kit's 93 symbols
-  (sigils, runes, zodiac and alchemy signs) have clean geometry and even
-  line weight, all but a brush-drawn glyph and a few blurred icons, though a
-  single sign may be lopsided, as Scorpio is. The eight magic circles
-  studied, from its symbols and rings, are symmetric too. Their richness
-  comes from density:
-  - ornament inside the circle, such as leaves, a filigree, an inscribed
-    triangle or a compass star;
-  - a rune band of many small glyphs packed into a thin ring, which reads
-    as script. A dozen large glyphs read as letters instead.
-  Make the effect around a sigil lopsided, not the sigil.
-
-Draw them with `roqer.draw_flipbook` (the `roblox-building` skill's
-`references/blender-vfx.md`).
-
-## 6. Layers and orientation
+## 5. Layers and orientation
 
 - **Many layers, usually one sprite each** *(measured)*:
   - one hit in the studied slashes has 40-60 distinct layers;
@@ -347,7 +283,7 @@ Draw them with `roqer.draw_flipbook` (the `roblox-building` skill's
 - **Mirrored pairs:** two copies at `Rotation` -90 and +90 make symmetric
   wings.
 
-## 7. Timing: the intensity curve
+## 6. Timing: the intensity curve
 
 From the tutorial *(measured)*, in four rules:
 - **Fire once, die at different times.** An effect is usually one emit in
@@ -418,7 +354,7 @@ Typical lifetimes *(measured)*:
   s), and a thin squashed flare line (`Squash` -2 to -5, 0.04-0.12 s). In
   its frames it is the biggest thing on screen, larger than the burst that
   follows. Its body is a filled spiky shape covering most of its cell, solid
-  at the centre (section 5); the thin flare is an addition. A thin four-ray
+  at the centre (`vfx-textures.md`); the thin flare is an addition. A thin four-ray
   flare used as the whole flash shows as two white beams in a V once it is
   rotated *(verified)*.
 - **A held contact point** (a beam hitting a wall) strobes its flash:
@@ -436,7 +372,7 @@ Typical lifetimes *(measured)*:
 - **Tie it to the animation.** Without markers, keep one table of delays, and
   make the last event match the clip's length.
 
-## 8. Motion and curves
+## 7. Motion and curves
 
 - **Burst, then hang.** High `Speed` with strong `Drag` so pieces shoot out
   and stop:
@@ -459,139 +395,3 @@ Typical lifetimes *(measured)*:
   *(verified)*.
 - **Glitch frames:** flip `Squash` from +3 to -3 partway through a short
   flash.
-
-## 9. Projectiles, slashes, beams and sustained forms
-
-**Projectiles** *(measured)*. A projectile has three parts:
-- **A head:** one sprite, such as a `VelocityParallel` diamond. Clear it at
-  impact (`Clear()`), so it vanishes in that frame.
-  - To point it along a curved path, emit it with the projectile's own
-    velocity: not locked to the part, the part turned to face along the path
-    each frame, and `Speed` set to the projectile's speed each frame, with
-    `Rotation` -90 for a head drawn point up *(verified: a missile run's
-    heads led with their point this way)*. A `FacingCamera` head that looks
-    alike from every angle needs none of this.
-- **Ribbons:** 2-3 textured Trails across a span of about 5 studs (see the
-  VFX craft reference for drawing trail textures):
-  - a sharp one: lifetime about 0.6, width tapering to 0, transparent for the
-    first 15% of its length so there is a gap behind the head;
-  - a soft one that bulges in the middle: lifetime about 0.85;
-  - a short tendril: lifetime about 0.3.
-- **Shed particles:** droplets or specks at 15-60 a second, with gravity or
-  drag, not locked to the part.
-
-Paths and volleys:
-- **Paths:** Bezier curves with 2-3 random control points 10-25 studs up.
-  - Give each projectile its own flight time (0.65-1.5 s), so the hits drum
-    rather than land together.
-  - A summoned dragon swirls about 45 studs sideways.
-- **Volleys:** 10-15 sources, one every 0.1 s, fanned ±20 studs behind and
-  above the caster. Each source's emitters stop after 0.1-0.2 s, and their
-  particles close it over 0.8-1.5 s.
-
-**Anything that moves carries its speed** *(measured)*:
-- `VelocityParallel` streaks shed behind it, with `Squash`;
-- flat wind rings shed backwards: negative Speed, growing to 7-12 studs over
-  0.3-0.6 s;
-- curved wind beams from head to tail;
-- a one-frame smear at launch.
-
-A projectile that is only a sprite with a thin trail reads as floating, not
-thrown.
-
-**Slashes are drawn in time, not only in space.** One crescent sprite (flat,
-about 6.6 studs, 0.2-0.3 s) plus about five invisible points along the arc.
-Each point emits sparks at an `EmitDelay` 0.04-0.05 s after the one before, so
-the eye follows the blade around the arc.
-
-**Stabs and dashes:**
-- A one-frame (0.04 s) flash moving at 155-444 studs a second, with `Squash`
-  -0.5, reads as a motion smear.
-- Pair it with a real move: about 15 studs in 0.075 s.
-
-**Held beams.** Use a few Beams plus many particles:
-- **The body:** 2-3 camera-facing Beams, width 5-12.
-  - Give each its own `TextureLength` (0.75-150) and `TextureSpeed` (1-12), so
-    the scrolls never line up.
-  - Fade the ends over 5-10% of the length, or make the body a capsule
-    (Transparency `1, 0, 1` along it).
-- **Fill:** `VelocityParallel` flame streaks at `Rate` 500-2000, Speed up to
-  300, Drag 10, `Squash` ramping 0 to 3.
-- **The muzzle:** a crown of short curved beams, and flat shockwave rings.
-- **Duration:** hold the beam 3.5-5 s, then collapse the widths to 0 over
-  0.5-1 s.
-- **A drilling dash:** three beams around one axis that roll 180° while
-  their widths fall from 6 to 0 over 0.75 s.
-
-**Teleports and blinks:**
-- an implosion flash (31 to 0 over 0.23 s) with `Squash` glitch frames;
-- upward streaks at 45-200 studs a second with drag 4-9, dying in 0.12-0.4
-  s;
-- a white ground ring growing from 1 to 19 in 0.14 s.
-
-**Sustained forms:** orbs, sigils and auras.
-- **The stack:** stationary billboards on one attachment, with `Speed` 0.001
-  and `LockedToPart`.
-- **The cross-fade:** `Rate` x `Lifetime` about 2-4, Transparency `0:1,
-  0.5:0, 1:1` and a random `Rotation`. Copies cross-fade, so the form holds but
-  shimmers.
-- **Size ladder:** core 1, rings about 2, halo about 3.5, black backdrop about
-  4.5.
-- **Ground sigils:** 5-7 studs, lifetime 2, spinning 0.5-5° a second, in two
-  or three sizes that shrink slightly as they live, so the circle breathes.
-- **Healing over time pulses:** a burst every 1.6 s with lifetimes up to 1.25
-  s, so the pulses read as ticks.
-
-## 10. Camera, screen and world
-
-The studied scripts do these around the particles *(measured)*. The emit
-module does not; write them alongside it when the effect needs them.
-
-**Field of view:**
-- Widen it by 10-20° over 0.6-1.5 s while charging.
-- Snap it back past the default (by up to 20°) in 0.15-0.25 s at release.
-- For a hit, punch it in by 5-7° over 4 frames and recover on Back Out.
-
-**Blur and tint:**
-- Blur 6-15 at release: 0.01 s in, 0.1-0.65 s out.
-- A 0.25 s screen tint toward the effect's hue.
-
-**Impact frames** (`ColorCorrectionEffect`), 1-3 frames each:
-- black: Contrast 2 to 3, Saturation -1;
-- white: Brightness 1, Saturation -1;
-- the two can overlap about 0.15 s apart.
-
-A tinted full-screen flash fading over 0.4 s is a lighter alternative.
-
-**Camera shake:** rotation only, gated by distance (150-350 studs). Stop
-every sustained shake. Take each frame's offset back off: the player's
-camera works out its next frame from where it is now, so a shake written as
-`camera.CFrame *= offset` every frame builds up and tips the view toward the
-floor or the sky. Undo last frame's offset in a `BindToRenderStep` step just
-before the camera scripts (`Enum.RenderPriority.Camera.Value - 1`) and apply
-the new one just after them (`+ 1`). Two missile runs drifted the camera this
-way and fixed it like this.
-
-| Use | Magnitude | Roughness | Fade out |
-| --- | --- | --- | --- |
-| Light hit | 0.3-0.55 | 3-23 | 0.15-0.3 s |
-| Heavy hit | 2.5-5 | 6-10 | 0.9-1.5 s |
-| Held beam | 1.4-2 | 8-50 | 6-6.5 s |
-
-**Lights:**
-- Flash a light, then fade it, ideally with its Range growing as Brightness
-  falls: from Brightness 3-9 and Range 0-8 to 0 and 35-40 over 0.3-1 s.
-- Clone a fresh light per shot.
-- Keep a light's Range short enough that it marks the spot rather than
-  tinting the whole floor.
-
-**The world reacts:**
-- **Craters:** 6-36 rocks at radius 3-54, tilted 8-55°, copying the hit
-  surface's Material, Color and Textures from a raycast. They grow over 0.4 s,
-  hold 1.5-5 s, then sink or shrink over 1.5-3 s.
-- **A held beam** throws 1-2 rocks every 0.1 s.
-- **A scorch decal** stays 5-6 s.
-
-**Clean up everything.** One studied showcase leaves its explosion dome, a
-ring loop and a sustained shake running until the next cast. That is the
-failure to avoid.

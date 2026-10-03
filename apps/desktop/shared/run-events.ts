@@ -237,9 +237,12 @@ export type RunUsage = {
 
 /** The most requests one run records apart; the run's totals still cover the rest. */
 export const MAX_RECORDED_REQUESTS = 400;
-/** The most tool names one request lists, and the longest name kept. */
+/**
+ * The most tool names one request lists, and the longest name kept: long
+ * enough for a skill load that names its documents.
+ */
 export const MAX_REQUEST_TOOLS = 16;
-export const MAX_REQUEST_TOOL_CHARS = 64;
+export const MAX_REQUEST_TOOL_CHARS = 120;
 
 /**
  * One model request's usage, split as `RunUsage` splits a run's. Carries names

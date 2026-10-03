@@ -450,10 +450,35 @@ export class ClaudeRequestLog {
 
 /** What a request log names a tool call by: the Studio operation it asks for, else the tool. */
 function requestToolLabel(name: string, args: JsonRecord): string {
+  if (name === SKILL_TOOL_NAME) return skillLoadLabel(args);
   const operation = args.operation;
   return name === STUDIO_TOOL_NAME && typeof operation === "string" && (isKnownTool(operation) || isGatewayOperation(operation))
     ? operation
     : name;
+}
+
+const SKILL_NAME = /^[a-z0-9-]{1,63}$/;
+/** A relative path of plain segments, as the skill library itself accepts: no `.` or `..`. */
+const SKILL_RESOURCE = /^(?:[A-Za-z0-9_-][A-Za-z0-9_.-]*\/)*[A-Za-z0-9_-][A-Za-z0-9_.-]*$/;
+
+/**
+ * A skill load named by its documents, `load_skill roblox-animation-vfx:
+ * vfx-design, vfx-craft`, so a run's log shows which guidance each request
+ * paid to write: the documents a run needs are what splitting a skill into
+ * topics is meant to change. A call that does not name them plainly is
+ * logged as the bare tool.
+ */
+function skillLoadLabel(args: JsonRecord): string {
+  const skill = args.name;
+  if (typeof skill !== "string" || !SKILL_NAME.test(skill)) return SKILL_TOOL_NAME;
+  const requested: unknown[] = Array.isArray(args.resources) && args.resources.length > 0
+    ? args.resources
+    : [typeof args.resource === "string" && args.resource !== "" ? args.resource : "SKILL.md"];
+  if (!requested.every((resource) => typeof resource === "string" && resource.length <= 200 && SKILL_RESOURCE.test(resource))) {
+    return `${SKILL_TOOL_NAME} ${skill}`;
+  }
+  const documents = (requested as string[]).map((resource) => (resource.split("/").pop() ?? resource).replace(/\.(md|lua)$/i, ""));
+  return `${SKILL_TOOL_NAME} ${skill}: ${documents.join(", ")}`;
 }
 
 function assistantText(message: JsonRecord): string {

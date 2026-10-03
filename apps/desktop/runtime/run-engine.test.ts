@@ -4,7 +4,7 @@ import type { McpCallOptions, McpToolCaller, McpToolOutcome } from "./mcp-types"
 import { OutputTokenMeter, RunCancelledError, RunSession } from "./run-engine";
 import type { Planner, PlannerContext } from "./run-engine";
 import type { RunEvent, RunRequest, RunRequestUsage } from "../shared/run-events";
-import { isRunEvent, isRunUsage, MAX_RECORDED_REQUESTS } from "../shared/run-events";
+import { isRunEvent, isRunUsage, MAX_RECORDED_REQUESTS, MAX_REQUEST_TOOL_CHARS } from "../shared/run-events";
 import { DEFAULT_TOOL_TIMEOUT_MS, timeoutForTool } from "../shared/mcp-tools";
 
 function outcome(overrides: Partial<McpToolOutcome> = {}): McpToolOutcome {
@@ -221,7 +221,7 @@ test("a run's usage keeps each request's figures and the tools it followed, and 
       });
       // A malformed request makes the whole reading malformed, so the last good one stands.
       ctx.runUsage({ inputTokens: 9, outputTokens: 9, perRequest: [{ inputTokens: -1, outputTokens: 1 }] });
-      ctx.runUsage({ inputTokens: 9, outputTokens: 9, perRequest: [{ inputTokens: 1, outputTokens: 1, after: ["x".repeat(65)] }] });
+      ctx.runUsage({ inputTokens: 9, outputTokens: 9, perRequest: [{ inputTokens: 1, outputTokens: 1, after: ["x".repeat(MAX_REQUEST_TOOL_CHARS + 1)] }] });
       return "done";
     }),
     request: makeRequest(),
