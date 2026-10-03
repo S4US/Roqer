@@ -2020,3 +2020,64 @@ test("the shipped emit template can be written by the path the VFX reference giv
   assert.match(source, /\nreturn VFX\n?$/);
   assert.doesNotMatch(source, /\r/);
 });
+const startTimedOut = (): McpToolOutcome => ({
+  ok: false,
+  data: { success: false, action: "start", error: "start_failed", message: "Playtest did not become ready before timeout." },
+  text: "",
+  message: "Playtest did not become ready before timeout.",
+  httpStatus: 200,
+  durationMs: 60_000,
+});
+
+test("a timed-out playtest start comes back with Studio's status, and after two in a row no more starts are sent", async () => {
+  const decisions: Array<{ question: string; answer: string }> = [];
+  const { context, calls } = contextWith([
+    startTimedOut(), ok({ success: true, action: "status", running: false, roles: ["edit"] }),
+    startTimedOut(), ok({ success: true, action: "status", running: false, roles: ["edit"] }),
+    ok({ success: true, action: "start", roles: ["edit", "server", "client-1"] }),
+  ]);
+  const run = createStudioToolRunner({ ...context, decisions: () => decisions });
+
+  const first = await run("solo_playtest", { action: "start", mode: "play" });
+  assert.equal(first.ok, false);
+  assert.match(first.text, /status afterwards: it is not running \(peers: edit\)\. A start that timed out may be tried once more/);
+  const second = await run("solo_playtest", { action: "start", mode: "play" });
+  assert.match(second.text, /second start in a row that timed out, so Roqer will not send another\. Ask the user to press Play and then Stop/);
+  const third = await run("solo_playtest", { action: "start", mode: "play" });
+  assert.equal(third.ok, false);
+  assert.match(third.text, /solo_playtest was not started: 2 starts in a row timed out/);
+  assert.deepEqual(calls.map((call) => `${call.tool}:${String(call.args.action)}`), [
+    "solo_playtest:start", "solo_playtest:status", "solo_playtest:start", "solo_playtest:status",
+  ], "the third start never reached Studio");
+
+  // An answer from the user is how they say it is cleared.
+  decisions.push({ question: "Press Play and then Stop in Studio?", answer: "Done" });
+  const fourth = await run("solo_playtest", { action: "start", mode: "play" });
+  assert.equal(fourth.ok, true);
+  assert.equal(calls.at(-1)?.args.action, "start");
+});
+
+test("a start that became ready late is reported as running, and a success clears the count", async () => {
+  const { context, calls } = contextWith([
+    startTimedOut(), ok({ success: true, action: "status", running: true, roles: ["edit", "server", "client-1"] }),
+    ok({ success: true, action: "start" }),
+    startTimedOut(), ok({ success: true, action: "status", running: false }),
+  ]);
+  const run = createStudioToolRunner(context);
+
+  assert.match((await run("solo_playtest", { action: "start", mode: "play" })).text, /it is running now \(edit, server, client-1\), so use it rather than starting another/);
+  assert.equal((await run("solo_playtest", { action: "start", mode: "play" })).ok, true);
+  // One timeout since the last success is a first timeout again, not a second.
+  assert.match((await run("solo_playtest", { action: "start", mode: "play" })).text, /may be tried once more/);
+  assert.equal(calls.length, 5);
+});
+
+test("a start that failed for another reason is not counted as a timeout", async () => {
+  const failed: McpToolOutcome = { ok: false, data: { success: false, message: "Playtest did not start." }, text: "", message: "Playtest did not start.", httpStatus: 200, durationMs: 5 };
+  const { context, calls } = contextWith([failed, failed, failed]);
+  const run = createStudioToolRunner(context);
+
+  for (let attempt = 0; attempt < 3; attempt += 1) await run("solo_playtest", { action: "start", mode: "play" });
+
+  assert.deepEqual(calls.map((call) => call.args.action), ["start", "start", "start"], "no status reads and no refusal");
+});

@@ -1646,6 +1646,28 @@ export type StudioToolResult = {
 
 export type StudioToolRunner = (operation: string, args: JsonRecord) => Promise<StudioToolResult>;
 
+const PLAYTEST_OPERATIONS = new Set(["solo_playtest", "multiplayer_playtest"]);
+
+/**
+ * A playtest start that waited out its timeout. The server says so only in
+ * prose, under an error code that is whatever the bridge passed on, so it is
+ * matched on the message; "did not answer within" is the client giving up on
+ * the call itself.
+ */
+const PLAYTEST_START_TIMEOUT = /before timeout|did not answer within/i;
+
+/**
+ * Start timeouts in a row after which a run sends no more starts.
+ *
+ * Once Studio refuses a start, it refuses every start after it, each one
+ * waiting out its timeout: one missile run sent five, about eight minutes and
+ * ten model calls with the status checks between them, though the
+ * instructions already said to try once more at most.
+ */
+const MAX_PLAYTEST_START_TIMEOUTS = 2;
+
+const PLAYTEST_RECOVERY = "Ask the user to press Play and then Stop once in Studio (that cleared it in the runs studied), or finish in the edit viewport and say runtime verification is pending.";
+
 /** Where `set_script_source {template}` is read from: Roqer's own skill pack. */
 export type TemplateLibrary = Pick<SkillLibrary, "load">;
 
@@ -1687,6 +1709,27 @@ export function createStudioToolRunner(context: PlannerContext, options: StudioT
   // own start and stop calls move it, so a playtest someone else started is
   // never claimed.
   let playtestRunning = false;
+  // Playtest starts in a row that timed out, and how many questions the user
+  // had answered when they reached the limit: an answer since then is how
+  // the user says they cleared it, so a start is allowed again.
+  let startTimeouts = 0;
+  let decisionsAtLimit = 0;
+
+  /** What a timed-out start is answered with: Studio's own status, read for the model, and what to do next. */
+  const afterStartTimeout = async (operation: string): Promise<string> => {
+    const status = await context.call(operation, { action: "status" }).catch(() => undefined);
+    const data = status?.ok === true && isRecord(status.data) ? status.data : undefined;
+    const roles = Array.isArray(data?.roles) ? data.roles.filter((role): role is string => typeof role === "string") : [];
+    const seen = data === undefined
+      ? "Roqer could not read the playtest's status afterwards."
+      : data.running === true
+        ? `Roqer read the playtest's status afterwards: it is running now (${roles.join(", ")}), so use it rather than starting another.`
+        : `Roqer read the playtest's status afterwards: it is not running${roles.length > 0 ? ` (peers: ${roles.join(", ")})` : ""}.`;
+    if (startTimeouts < MAX_PLAYTEST_START_TIMEOUTS) {
+      return `${seen} A start that timed out may be tried once more; if that one times out too, Roqer sends no more starts in this run.`;
+    }
+    return `${seen} That is the second start in a row that timed out, so Roqer will not send another. ${PLAYTEST_RECOVERY}`;
+  };
 
   const recordVerification = (
     target: string,
@@ -1888,6 +1931,20 @@ export function createStudioToolRunner(context: PlannerContext, options: StudioT
       return { ok: false, text: SOURCE_WRITE_REFUSAL };
     }
 
+    // Refused here once starts have kept timing out, for the same reason as a
+    // malformed call: the answer is already known, and sending it again only
+    // spends another timeout and another model call finding that out.
+    const playtestStart = PLAYTEST_OPERATIONS.has(operation) && args.action === "start";
+    if (playtestStart && startTimeouts >= MAX_PLAYTEST_START_TIMEOUTS) {
+      if (context.decisions().length <= decisionsAtLimit) {
+        return {
+          ok: false,
+          text: `${operation} was not started: ${startTimeouts} starts in a row timed out in this run, and another would only wait out the timeout again. ${PLAYTEST_RECOVERY} If you ask the user with ask_user and they say it is cleared, a start is allowed again.`,
+        };
+      }
+      startTimeouts = 0;
+    }
+
     const target = typeof args.instancePath === "string" ? args.instancePath : undefined;
     if (target && SCRIPT_MUTATIONS.has(operation)) await widenSourceContext(target);
 
@@ -1896,9 +1953,19 @@ export function createStudioToolRunner(context: PlannerContext, options: StudioT
     const outcome = await context.call(operation, args);
     let modelNote: string | undefined;
 
-    if (outcome.ok && (operation === "solo_playtest" || operation === "multiplayer_playtest")) {
+    if (outcome.ok && PLAYTEST_OPERATIONS.has(operation)) {
       if (args.action === "start") playtestRunning = true;
       else if (args.action === "stop" || args.action === "end") playtestRunning = false;
+    }
+    if (playtestStart) {
+      const reason = outcome.message || stringField(outcome.data, "message") || outcome.text;
+      if (outcome.ok) {
+        startTimeouts = 0;
+      } else if (PLAYTEST_START_TIMEOUT.test(reason)) {
+        startTimeouts += 1;
+        if (startTimeouts >= MAX_PLAYTEST_START_TIMEOUTS) decisionsAtLimit = context.decisions().length;
+        modelNote = await afterStartTimeout(operation);
+      }
     }
     const observed = observationEvidence(operation, args, outcome, playtestRunning);
     const preview = observed !== undefined || operation === BLENDER_OPERATION
