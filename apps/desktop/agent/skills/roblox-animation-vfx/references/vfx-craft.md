@@ -457,12 +457,14 @@ capture instead of caught in passing.
      the caster for a dozen frames from the player's camera *(seen in a
      run)*.
    - Is there something dark, so the bright parts read?
-   - Do the shapes have hard silhouettes, or do they look like soft smudges?
+   - Do the drawn shapes have hard silhouettes, or do they look like soft
+     smudges? (Flares and glows are soft.)
    - Is the centre a white blob? Bring the stacked bright layers down until
      the coloured shapes show through. A pale effect on a light floor needs
      its darks most (cobalt, navy, black accents).
-   - Does any texture look like clip art or an icon: radially symmetric,
-     evenly spaced, or drawn with even outlines?
+   - Does any drawn texture look like clip art or an icon: radially
+     symmetric, evenly spaced, or drawn with even outlines? Does a flare
+     have bent or unequal arms or a lumpy core?
    - Does everything that moves carry its speed (streaks, wind rings, a
      smear), or does it float?
    - Is a large half-transparent shell covering the view?

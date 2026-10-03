@@ -22,6 +22,7 @@ How far to trust a number:
   - A third looked at every texture in a widely shared community particle
     kit: 1,108 textures sorted into shines, sparkles, shapes, rings,
     symbols, beams and trails, fogs and nature.
+  - A fourth measured the 1,215 textures behind 4,950 particle emitters.
 - *(verified)*: checked in Studio.
 - *(starting point)*: common practice; tune it by looking.
 
@@ -233,8 +234,9 @@ How one orange shape renders under a new place's lighting *(verified)*:
 
 - **Hard cel shapes:** `LightEmission` 0 or negative with Brightness 5-55.
   Solid fire bodies go to Brightness 25-100 at `LightEmission` -1 to -5.
-- **Glows, flares and halos:** `LightEmission` 1 at Brightness 0.05-1.
-  Their job is the bloom around a shape.
+- **Glows and halos:** `LightEmission` 1 at Brightness 1-6, often below 1.
+  Their job is the bloom around a shape. Four-point flares run at 5-12
+  *(measured)*.
 - **Glow-first is a different style.** One studied artist ran `LightEmission`
   1 on more than half the layers, with fractional values as a mixing dial and
   colour-correction frames on top. It works in a dark scene.

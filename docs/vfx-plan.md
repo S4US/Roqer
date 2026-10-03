@@ -1180,6 +1180,93 @@ same frames sent alone).
 - **Per-request usage** is not kept, so where context grows can only be
   estimated.
 
+## Texture study: light and drawn matter
+
+Done 2026-10-04, after a void-slash run drew its four-point flare as four
+bent strokes of different lengths around a lumpy blob, cut hard, with a glow
+pasted underneath. The user asked why it looked weird. The cause was the
+guidance: "Not symmetric, not even… not as rays and rings around a centre"
+and "Hard edges… only an accent texture or two is soft" applied to every
+texture. The run followed them. The same chat's first version, a cross
+flare, was built the same way.
+
+### Method
+
+- **Files:** the 47 place and model files of the user's collection were
+  parsed again. They hold 5,803 texture uses (4,950 particle emitters, plus
+  beams, trails, decals and meshes) and 1,438 distinct textures.
+- **Pixels:** every texture was fetched from Roblox's public thumbnail
+  service, which serves an image asset as a 420 px PNG with its alpha and
+  needs no login. Asset delivery at full size now requires authentication.
+  1,431 came back; 5 are blocked by moderation and 2 were still pending.
+- **Measured per texture:** how far faint alpha reaches past the shape's
+  0.5 outline (about 1 px for a crisp edge at any thickness, tens of pixels
+  for a glow), mirror and radial symmetry, and, for flipbooks, each cell's
+  coverage, pieces and mean alpha. Each use was joined with its emitter's
+  `LightEmission`, `Brightness`, `Lifetime`, `Squash` and `Rotation`.
+- **Kinds** come from the emitters' and their parents' names (flare, shine,
+  glow, ring, burst and so on), which is approximate. The 19 four-point
+  flares were picked by eye from contact sheets of the flare, shine and
+  flash kinds.
+- **Limits:** 420 px is resampled from the 1,024 px originals, so this
+  cannot check the hand-drawn set's posterised alpha, and an 8 x 8 cell is
+  only 52 px.
+
+### Findings
+
+- **The blend predicts the edge.** At `LightEmission` 1, 83% of 1,734
+  emitters use a texture that falls off softly. At `LightEmission` 0, 57% of
+  2,440 use a crisp or nearly crisp one. Flipbook emitters are 65% crisp or
+  nearly crisp; single-image emitters are 77% soft.
+- **Four-point flares (19, on 124 emitters):**
+  - 16 have four straight arms of the same length within 4%. The others are
+    a tiny glint, a horizontal lens streak, and one with a longer lower arm.
+  - 16 fall off softly and 2 are crisp concave-sided stars. Each arm thins
+    and fades toward its tip from one smooth core.
+  - None has bent arms or a lumpy core.
+  - The emitters vary them: 75% rotate the flare and 41% squash it. They live
+    a median 0.35 s, mostly at `LightEmission` 1 and Brightness 5-12.
+- **Round soft glows** (436 emitters) run at a median Brightness 2, and 39%
+  at 1 or below.
+- **Drawn matter holds the old description:** crescents, cel bursts,
+  splashes, debris and puffs are crisp, lopsided and two-toned.
+- **Flipbooks (463 one-shot sheets):** 57% break apart, 15% shrink and fade,
+  6% erode in one piece. Coverage peaks a median 27% of the way through, and
+  half end in blank cells. 4 x 4 is on 81% of flipbook emitters.
+- **Decals:** one splash is 16 Decals swapped frame by frame on a part.
+  Ornament and magic-circle decals are symmetric.
+
+### Corrections
+
+- "Almost all are white, hard-edged, cel-shaded drawings" (first study) was
+  from the 144 most-used textures viewed by eye. It holds for drawn matter
+  and for most flipbooks, not for the textures as a whole: light is soft.
+- "Glows, flares and halos: `LightEmission` 1 at Brightness 0.05-1" holds for
+  glows only. Flares run at 5-12.
+
+### What changed
+
+- **`vfx-textures.md`:** textures are split into two families, drawn matter
+  and light. Light keeps its symmetry, as symbols do: a four-point flare
+  mirrors on both axes with equal arms and one smooth core. Variety comes
+  from the emitter. The drawing pattern and the checklist say which family
+  they apply to. Two flare examples were added (a soft glint and a crisp
+  concave star), written in plain numpy and run in Blender 5.2 with the
+  repository's helpers; they match the studied flares side by side.
+- **`vfx-design.md`:** the fourth study, and flare and glow brightness. The
+  blend-edge rule lives in `vfx-textures.md`: `vfx-design.md` and
+  `vfx-craft.md` load together in one call and had under 1,000 characters
+  to spare.
+- **`vfx-craft.md`:** the hard-silhouette and clip-art checks now say they
+  are for drawn shapes, and ask about a flare's arms and core.
+
+**The helpers were not changed.** They are thin numpy primitives and forbid
+nothing. What steered two runs to the same broken flare was the
+documentation around them: every example was drawn matter, the one pattern
+was "draw, make it lopsided, cut it hard", and light was named only as the
+thing not to draw ("rays and rings around a centre"). The guidance now says
+the helpers are shortcuts for drawn matter and shows light written directly.
+
 ## Deferred, and why
 
 - **Runtime EditableMesh/EditableImage effects** (UV scrolling on meshes,
