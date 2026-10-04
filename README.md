@@ -22,13 +22,13 @@
 
 ## Made with Roqer
 
-a sword combat system with a combo, a dash, and two special attacks, in a Studio playtest against training dummies.
+a magic missile VFX: the caster charges inside a rune circle, launches glowing missiles that arc to the target, and each hit opens a rune circle with dark tendrils and a bright burst.
 
 <p align="center">
-  <img src="docs/media/eclipse-blade.webp" alt="A Roblox Studio playtest of the Eclipse Blade: the player draws the sword, dashes, lands a hit combo on training dummies, and uses the Crescent and Eclipse attacks, with ability cooldowns in the hotbar" width="900">
+  <img src="docs/media/magic-missile.webp" alt="A Roblox Studio playtest of a magic missile effect: a purple rune circle forms around the caster, pink missiles with trailing arcs fly out, and each impact leaves a glowing rune circle on the ground with dark purple tendrils and a bright burst of light" width="900">
 </p>
 
-a second weapon, the Scarlet Requiem, with its own combo, a flash step, and three special attacks, ending in a red domain that slashes every dummy inside it.
+a sword, the Scarlet Requiem, with a combo, a flash step, and three special attacks, ending in a red domain that slashes every dummy inside it.
 
 <p align="center">
   <img src="docs/media/scarlet-requiem.webp" alt="A Roblox Studio playtest of the Scarlet Requiem: the player uses its combo, Flash Step, Rift, and Lotus attacks on training, moving, and heavy dummies, then casts Requiem, a red domain that slashes every dummy inside it, with ability cooldowns in the hotbar" width="900">
