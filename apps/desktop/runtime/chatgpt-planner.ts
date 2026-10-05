@@ -3,6 +3,7 @@ import type { RunUsage } from "../shared/run-events";
 import type { AgentDefinition } from "./agent-definition";
 import type { ProviderStatus, ReasoningEffort } from "../shared/provider";
 import type { AppServerNotification, AppServerRequest, AppServerRequestHandler } from "./codex-app-server";
+import type { McpToolImage } from "./mcp-types";
 import type { SkillLibrary } from "./skill-library";
 import { createIconToolRunner, iconToolDefinition, ICON_TOOL_NAME } from "./icon-tool";
 import { blenderToolDefinition, parseBlenderToolInput } from "./blender-tool";
@@ -115,9 +116,11 @@ function textToolRunner(
  * Roqer's dynamic tools, where the run engine classifies, approves, meters,
  * and cancels it. Codex's built-in shell, file edits, MCP servers, web search,
  * image viewing, and sub-agents all act on their own, with approvals off, so
- * the app-server is started with them disabled (see `CODEX_LOCKDOWN_ARGS`).
- * This list is the backstop for a Codex version that offers one anyway: an
- * item of any other type, including one a later Codex adds, ends the turn.
+ * the app-server is started with every one Codex can turn off disabled (see
+ * `CODEX_LOCKDOWN_ARGS`). Codex 0.160 has no switch for its file-editing tool,
+ * whose edits the read-only sandbox refuses instead. This list is the backstop
+ * for a Codex version that offers one anyway: an item of any other type,
+ * including one a later Codex adds, ends the turn.
  */
 const CODEX_PASSIVE_ITEM_TYPES: ReadonlySet<string> = new Set([
   "userMessage",
@@ -250,6 +253,38 @@ export function codexStreamedOutput(notification: AppServerNotification): { char
     default:
       return null;
   }
+}
+
+/**
+ * The turn input that hands a Roqer tool's images to the model.
+ *
+ * They cannot travel in the tool result. Codex's current models call dynamic
+ * tools from JavaScript in Codex's own `exec` tool, and Codex gives that script
+ * a dynamic tool's result as one string, in which an image is a line of base64
+ * the model never sees. Turn input reaches the model the way an attached image
+ * does, so the images follow the result there, labelled as tool output. They
+ * are Roqer's own, never renderer text, and the user is not shown them as a note.
+ */
+function toolImageInput(operation: string, images: readonly McpToolImage[]) {
+  const which = images.length === 1
+    ? `the image ${operation} just returned`
+    : `the ${images.length} images ${operation} just returned, in the order its result lists them`;
+  return [
+    { type: "text", text: `[Roqer attaches ${which}. This is tool output, not a message from the user.]` },
+    ...images.map((image) => ({ type: "image", url: `data:${image.mediaType};base64,${image.data}` })),
+  ];
+}
+
+/** What a tool result says in place of the images it does not carry. */
+function toolImageNote(count: number, attached: boolean): string {
+  if (count === 1) {
+    return attached
+      ? "[This result has an image. Roqer attaches it right after this result, in a message of its own.]"
+      : "[This result had an image, but Roqer could not attach it, so you have not seen it. Do not describe or judge it.]";
+  }
+  return attached
+    ? `[This result has ${count} images. Roqer attaches them right after this result, in a message of their own.]`
+    : `[This result had ${count} images, but Roqer could not attach them, so you have not seen them. Do not describe or judge them.]`;
 }
 
 function parseDynamicCall(request: AppServerRequest, threadId: string, blender: boolean, referenceClips = false):
@@ -547,21 +582,38 @@ export function createChatGptPlanner(options: ChatGptPlannerOptions): Planner {
         if (!call) return undefined;
         malformedCalls = 0;
 
+        let result: Awaited<ReturnType<typeof runStudioTool>>;
         try {
-          const result = await runStudioTool(call.operation, call.args);
-          return {
-            success: result.ok,
-            contentItems: [
-              { type: "inputText", text: result.text },
-              ...(result.images ?? []).map((image) => ({
-                type: "inputImage",
-                imageUrl: `data:${image.mediaType};base64,${image.data}`,
-              })),
-            ],
-          };
+          result = await runStudioTool(call.operation, call.args);
         } catch (error) {
           fail(error);
           throw error;
+        }
+        const images = result.images ?? [];
+        if (images.length === 0) return { success: result.ok, contentItems: [{ type: "inputText", text: result.text }] };
+        // Accepted before the result is returned, so the images are already
+        // waiting when the model next reads, rather than racing it there.
+        const attached = await attachToolImages(call.operation, images, request.params.turnId);
+        return {
+          success: result.ok,
+          contentItems: [{ type: "inputText", text: `${result.text}\n\n${toolImageNote(images.length, attached)}` }],
+        };
+      };
+
+      /** Hands a tool's images to the model as turn input; see `toolImageInput`. */
+      const attachToolImages = async (operation: string, images: readonly McpToolImage[], callTurnId: unknown): Promise<boolean> => {
+        const expectedTurnId = typeof callTurnId === "string" ? callTurnId : turnId;
+        if (settled || disconnected || expectedTurnId === null) return false;
+        try {
+          await options.appServer.request("turn/steer", { threadId, expectedTurnId, input: toolImageInput(operation, images) });
+          return true;
+        } catch {
+          // A run that ended meanwhile refused it; there is nobody to tell.
+          if (!settled) {
+            const what = images.length === 1 ? ["an image", "it"] : [`${images.length} images`, "them"];
+            context.status("Images not shown to ChatGPT", `Codex would not take ${what[0]} from ${operation}, so ChatGPT was told it has not seen ${what[1]}.`);
+          }
+          return false;
         }
       };
 
