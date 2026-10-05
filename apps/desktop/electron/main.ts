@@ -1,5 +1,5 @@
 import {
-  app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme, protocol, shell,
+  app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme, Notification, protocol, shell,
   type IpcMainEvent, type IpcMainInvokeEvent, type MessageBoxOptions, type WebContents,
 } from "electron";
 import { autoUpdater } from "electron-updater";
@@ -66,6 +66,7 @@ import { PendingRuns } from "../runtime/pending-runs";
 import { WorkspaceStore } from "../runtime/workspace-store";
 import { adoptPreviousUserData, PREVIOUS_USER_DATA_SEGMENTS } from "../runtime/user-data-location";
 import { RunJournal } from "../runtime/run-journal";
+import { RunAttention, type AttentionSurface } from "../runtime/run-attention";
 import { BridgeLog } from "../runtime/bridge-log";
 import { AttachmentRegistry, MAX_IMAGE_SOURCE_BYTES } from "../runtime/attachment-context";
 import {
@@ -117,6 +118,8 @@ const trustedSenders = new Set<number>();
 const runSessions = new Map<string, RunSession>();
 const runExecutions = new Set<Promise<unknown>>();
 const pendingRuns = new PendingRuns();
+/** Calls the person back to the window while a run waits on them. Null while there is no window. */
+let runAttention: RunAttention | null = null;
 
 /** Reads frames from reference clips in a hidden window of its own; opened on first use. */
 const clipDecoder = new ClipDecoder(path.join(__dirname, "clip-decoder.html"));
@@ -256,6 +259,13 @@ if (process.env.WORKBENCH_USER_DATA) {
   const chosen = adoptPreviousUserData(current, path.join(app.getPath("appData"), ...PREVIOUS_USER_DATA_SEGMENTS));
   if (chosen !== current) app.setPath("userData", chosen);
 }
+
+// Windows shows an app's notifications only under an identity a Start menu
+// shortcut has registered. The installer registers `appId` from
+// electron-builder.yml, so the installed app runs under that identity too;
+// without it, Electron's default identity matches no shortcut and Roqer's
+// notifications are dropped. A development run keeps Electron's own.
+if (process.platform === "win32" && app.isPackaged) app.setAppUserModelId("com.s4us.roqer");
 
 /**
  * The Discord profile entry, driven from here because the main process is the
@@ -1648,6 +1658,7 @@ async function startRun(event: IpcMainInvokeEvent, payload: unknown): Promise<Ru
         runJournal().record(runEvent);
         if (runEvent.type === "run-completed") completedRuns.add(runId);
         if (!sender.isDestroyed()) sender.send("run:event", runEvent);
+        runAttention?.observe(runEvent);
       },
     });
 
@@ -1658,6 +1669,8 @@ async function startRun(event: IpcMainInvokeEvent, payload: unknown): Promise<Ru
     executionStarted = true;
     const execution = session.execute().finally(async () => {
       runSessions.delete(runId);
+      // However the run ended, it waits on no one now.
+      runAttention?.endRun(runId);
       // The saved chat refers to them from here on; the picture store's grace
       // covers the moment before it is saved.
       store().pictures.release(heldPictures);
@@ -1769,6 +1782,38 @@ async function resolveWindowBackground(): Promise<string> {
   return theme === "light" ? "#f2f3f5" : "#15171b";
 }
 
+/**
+ * The window's taskbar button and the system's notifications, for
+ * `RunAttention`. A notification is held by `RunAttention` until its decision
+ * is made, which also keeps its click handler from being collected.
+ */
+function attentionSurface(window: BrowserWindow): AttentionSurface {
+  return {
+    isFocused: () => !window.isDestroyed() && window.isFocused(),
+    flash: (on) => {
+      if (!window.isDestroyed()) window.flashFrame(on);
+    },
+    notify: (notice, onClick) => {
+      if (!Notification.isSupported()) return null;
+      try {
+        const shown = new Notification({ title: notice.title, body: notice.body });
+        shown.on("click", onClick);
+        shown.show();
+        return shown;
+      } catch (error) {
+        console.error("Roqer could not show a notification:", error);
+        return null;
+      }
+    },
+    bringForward: () => {
+      if (window.isDestroyed()) return;
+      if (window.isMinimized()) window.restore();
+      window.show();
+      window.focus();
+    },
+  };
+}
+
 function createWindow(): void {
   const window = new BrowserWindow({
     width: 1500,
@@ -1835,6 +1880,15 @@ function createWindow(): void {
     void window.loadURL("data:text/html,<title>Roqer bridge smoke test</title>");
     return;
   }
+
+  // Not for the smoke test: its window is never shown, so it is never in front.
+  const attention = new RunAttention(attentionSurface(window));
+  runAttention = attention;
+  window.on("focus", () => attention.focused());
+  window.on("closed", () => {
+    attention.clear();
+    if (runAttention === attention) runAttention = null;
+  });
 
   const devServer = process.env.WORKBENCH_DEV_SERVER_URL;
   if (devServer) {

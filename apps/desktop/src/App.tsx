@@ -624,9 +624,12 @@ function App() {
    * the run ended first -- then the words stay in the composer and the next
    * Send starts a fresh run with them.
    *
-   * When the note is the answer to a question, the answer follows the note:
-   * the note has to be queued before the model resumes, so that the turn it
-   * resumes into carries both.
+   * While a question waits, the note is the answer to it, whether or not the
+   * person chose "none of these" first: the run cannot read a note until the
+   * question is answered, so a note sent without answering would leave the run
+   * paused on a reply it already has. The answer follows the note: the note
+   * has to be queued before the model resumes, so that the turn it resumes
+   * into carries both.
    */
   const sendSteer = async () => {
     const text = composer.trim();
@@ -646,7 +649,7 @@ function App() {
     }));
     setComposer("");
     const pending = runView?.pendingQuestion;
-    if (explaining && pending) {
+    if (pending) {
       setExplainingQuestion(null);
       if (demoHandle.current) demoHandle.current.answer(pending.callId, pending.options.length);
       else if (activeRunId.current !== null) void answerRunQuestion(activeRunId.current, pending.callId, pending.options.length);
@@ -1138,6 +1141,14 @@ function App() {
    * card inside the stream scrolls away from the user it is waiting for.
    */
   const pendingApproval = runBelongsToSelectedChat ? runView?.pendingApproval ?? null : null;
+  /**
+   * The question the run is stopped on, docked for the same reason. In the
+   * stream it was drawn at the top of the run, above the plan and the reply
+   * already on screen, so it arrived where nobody was looking.
+   */
+  const pendingQuestion = runBelongsToSelectedChat ? runView?.pendingQuestion ?? null : null;
+  /** Words in the composer while a question waits: Send will answer with them. */
+  const answeringInWords = pendingQuestion !== null && (explaining || composer.trim() !== "");
   // Keyed on the three arrays the steps are built from rather than on the view,
   // so a streamed delta -- which replaces the view but none of these -- leaves
   // the steps, the model, and everything memoised on them untouched. Measured:
@@ -1427,7 +1438,7 @@ function App() {
             ? <ConversationMessages key={selectedChat.id} messages={selectedChat.messages} onOpenInStudio={openArtifactInStudio} />
             : <EmptyConversation onSuggestion={setComposer} />}
           {runView && runBelongsToSelectedChat
-            ? <LiveRun view={runView} steps={runSteps} nodes={runActivityNodes} explaining={explaining} onAnswer={answerQuestion} onExplain={explainAnswer} onOpenInStudio={openArtifactInStudio} />
+            ? <LiveRun view={runView} steps={runSteps} nodes={runActivityNodes} onOpenInStudio={openArtifactInStudio} />
             // The run is still being started, so the dots stand in for the
             // assistant block that is about to exist.
             : runStarting && runBelongsToSelectedChat && <div className="mock-run"><section className="message assistant-message"><div className="message-content">
@@ -1437,6 +1448,8 @@ function App() {
 
         <div className={`composer-dock${composerExpanded ? " expanded" : ""}`} ref={dockRef}>
           {pendingApproval && <div className="approval-dock"><ApprovalCard pending={pendingApproval} onApprove={() => answerApproval("approved")} onReject={() => answerApproval("rejected")} /></div>}
+          {/* Keyed by the question, so each new one arrives with its own rings. */}
+          {pendingQuestion && <div className="approval-dock question-dock" key={pendingQuestion.callId}><QuestionCard question={pendingQuestion} explaining={answeringInWords} onAnswer={answerQuestion} onExplain={explainAnswer} /></div>}
           <div
             className={`composer-card${draggingImage ? " dropping" : ""}`}
             onDragOver={(event) => {
@@ -1462,6 +1475,12 @@ function App() {
               </div>
               : canExpand && <button type="button" className="icon-button composer-expand" onClick={() => { setComposerExpanded(true); composerRef.current?.focus(); }} aria-label="Open the larger editor" title="Open the larger editor"><Maximize2 size={15} /></button>}
             {thinking && <div className="composer-status" role="status"><Loader2 size={13} /><span>Thinking…</span></div>}
+            {/* The spinner stands down while the run waits on the person, and
+                without this the box would say nothing at all about the wait. */}
+            {pendingQuestion && <div className="composer-status waiting-choice" role="status">
+              <CircleDot size={13} />
+              <span>{answeringInWords ? "Send answers the question in your words" : "Roqer is waiting for your choice"}</span>
+            </div>}
             {/* A disabled composer with no reason reads as a broken one. This
                 says where the run is and offers the two things that can be done
                 about it from here: go to it, or stop it. */}
@@ -1511,7 +1530,7 @@ function App() {
               if (!isLongPaste(text)) return;
               event.preventDefault();
               setPastedBlocks((current) => [...current, { id: createId("paste"), text }]);
-            }} placeholder={runElsewhere ? "Roqer is busy in another chat" : explaining ? "Your answer, in your own words" : steering ? "Add a note. Roqer reads it at its next step." : "Describe what you want to build or change…"} aria-label="Message" disabled={isRunning && !steering} />
+            }} placeholder={runElsewhere ? "Roqer is busy in another chat" : explaining ? "Your answer, in your own words" : pendingQuestion ? "Or write your own answer…" : steering ? "Add a note. Roqer reads it at its next step." : "Describe what you want to build or change…"} aria-label="Message" disabled={isRunning && !steering} />
             <div className="composer-toolbar">
               {/* A note carries words only; a picture cannot be attached to a
                   turn that is already in progress. */}
@@ -1544,7 +1563,9 @@ function App() {
               <ContextMeter view={contextView} modelName={selectedModel?.displayName ?? null} onNewChat={newChat} />
               {showRunControls && <button className="stop-button" onClick={stopRun}><Square size={11} fill="currentColor" aria-hidden="true" /> Stop</button>}
               {steering
-                ? <button className="send-button" onClick={() => void sendSteer()} disabled={!composer.trim()} aria-label="Send note to the running task"><ArrowUp size={18} /></button>
+                ? pendingQuestion && composer.trim()
+                  ? <button className="send-button answer-send" onClick={() => void sendSteer()}>Send as answer <ArrowUp size={16} aria-hidden="true" /></button>
+                  : <button className="send-button" onClick={() => void sendSteer()} disabled={!composer.trim()} aria-label="Send note to the running task"><ArrowUp size={18} /></button>
                 : !showRunControls && <button className="send-button" onClick={() => void sendPrompt()} disabled={!hydrated || !storageAvailable || storageRecovery.required || isRunning || message === "" || (hasDesktopRuntime() && providerStatus.kind === "signed-in" && !selectedModel)} aria-label="Send message"><ArrowUp size={18} /></button>}
             </div>
           </div>
@@ -1858,12 +1879,13 @@ function WaitingNotice({ label, detail, output }: { label: string; detail?: stri
   </div>;
 }
 
-function LiveRun({ view, steps, nodes, explaining, onAnswer, onExplain, onOpenInStudio }: { view: RunView; steps: ActivityStep[]; nodes: ActivityNode[]; explaining: boolean; onAnswer: (index: number) => void; onExplain: () => void; onOpenInStudio: OpenInStudio }) {
+function LiveRun({ view, steps, nodes, onOpenInStudio }: { view: RunView; steps: ActivityStep[]; nodes: ActivityNode[]; onOpenInStudio: OpenInStudio }) {
   const answered = view.text.trim() !== "";
   const running = view.outcome === null;
   const appliedAndVerified = runAppliedAndVerified(view);
   // Anything the run has put on screen retires the dots: a plan, an activity
-  // row, a question to answer, or the first words of the reply.
+  // row, a question to answer (docked above the composer), or the first words
+  // of the reply.
   const produced = view.tasks.length > 0 || steps.length > 0 || answered || view.pendingQuestion !== null;
   // The same rule the composer's spinner uses, so the two can never disagree
   // about who is working. A run waiting on Studio or on the user is not
@@ -1880,7 +1902,6 @@ function LiveRun({ view, steps, nodes, explaining, onAnswer, onExplain, onOpenIn
       {...(view.status?.detail === undefined ? {} : { detail: view.status.detail })}
       output={view.outputTokens}
     />}
-    {view.pendingQuestion && <QuestionCard question={view.pendingQuestion} explaining={explaining} onAnswer={onAnswer} onExplain={onExplain} />}
     <TaskList tasks={view.tasks} />
     <ActivitySection steps={steps} nodes={nodes} running={running} />
     <ResultsCard runId={view.runId} changes={view.changes} evidence={view.evidence} renderFiles={renderFiles} />
