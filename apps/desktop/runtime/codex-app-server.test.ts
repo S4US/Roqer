@@ -286,10 +286,12 @@ test("app-server starts with Codex's own tools turned off in a form every versio
   // `features` override is ignored instead, so only that form is allowed.
   assert.equal(args.includes("--disable"), false);
   const overrides = args.filter((_, index) => args[index - 1] === "-c");
-  for (const feature of ["shell_tool", "unified_exec", "apps", "plugins", "computer_use", "browser_use"]) {
+  for (const feature of ["shell_tool", "unified_exec", "apps", "plugins", "computer_use", "browser_use", "view_image"]) {
     assert.ok(overrides.includes(`features.${feature}=false`), feature);
   }
-  assert.ok(overrides.every((value) => /^features\.[a-z0-9_]+=false$/.test(value)));
+  // Web search is a setting rather than a feature, and on unless turned off.
+  assert.ok(overrides.includes('web_search="disabled"'));
+  assert.ok(overrides.every((value) => /^features\.[a-z0-9_]+=false$/.test(value) || value === 'web_search="disabled"'));
 });
 
 test("app-server runs in Roqer's own Codex home without the bridge credential", () => {

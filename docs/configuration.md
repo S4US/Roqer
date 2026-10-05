@@ -113,6 +113,9 @@ zero.
 ChatGPT runs use a Codex home of Roqer's own, inside Roqer's data folder, so
 Roqer asks you to sign in to ChatGPT once even if the Codex CLI is already
 signed in, and your own Codex MCP servers and plugins are not loaded there.
+Codex's own tools, such as its shell, web search and image viewer, are turned
+off, so the model acts through Roqer's tools and approvals. Codex's file editor
+cannot be turned off, but Codex runs read-only, so any edit it tries is refused.
 
 A model endpoint you configure runs on Roqer's own agent loop. The next
 message in the same chat continues the conversation it left, tool results

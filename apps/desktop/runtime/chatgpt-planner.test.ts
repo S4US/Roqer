@@ -28,6 +28,11 @@ const SKILLS: SkillLibrary = {
   load: async (name, resource = "SKILL.md") => ({ name, resource, content: "# Test skill" }),
 };
 
+/** A steer that carries a tool's images, as opposed to a note the user typed. */
+const isImageSteer = (request: { method: string; params: unknown }) =>
+  request.method === "turn/steer" &&
+  ((request.params as { input?: Array<{ type: string }> }).input ?? []).some((item) => item.type === "image");
+
 class FakeAppServer implements ChatGptAppServer {
   notificationListener: ((notification: AppServerNotification) => void) | null = null;
   requestHandler: AppServerRequestHandler | null = null;
@@ -35,6 +40,10 @@ class FakeAppServer implements ChatGptAppServer {
   readonly requests: Array<{ method: string; params: unknown }> = [];
   readonly studioResults: unknown[] = [];
   skillResult = "";
+  /** How many image steers had been sent when the first Studio result came back. */
+  imageSteersAtFirstResult: number | null = null;
+  /** Answer image steers the way Codex answers one for a turn that has ended. */
+  rejectImageSteers = false;
 
   async getChatGptStatus() {
     return { kind: "signed-in" as const, message: "Plus connected", planType: "plus" };
@@ -57,6 +66,7 @@ class FakeAppServer implements ChatGptAppServer {
 
   async request<T = unknown>(method: string, params?: unknown): Promise<T> {
     this.requests.push({ method, params });
+    if (this.rejectImageSteers && isImageSteer({ method, params })) throw new Error("no active turn to steer");
     if (method === "thread/start") return { thread: { id: "thread-1" } } as T;
     if (method === "turn/start") {
       queueMicrotask(() => void this.runTurn());
@@ -94,6 +104,7 @@ class FakeAppServer implements ChatGptAppServer {
     this.studioResults.push(await handler(
       studioRequest("get_script_source", { instancePath: "game.ServerScriptService.Main" }, "call-1"),
     ));
+    this.imageSteersAtFirstResult = this.requests.filter(isImageSteer).length;
     this.studioResults.push(await handler(studioRequest("set_script_source", {
       instancePath: "game.ServerScriptService.Main",
       source: "print('new')",
@@ -196,19 +207,31 @@ test("ChatGPT planner routes Studio calls through PlannerContext and records ver
   assert.deepEqual(said, ["Reading Main.", "\n\n", "Updated and verified Main."]);
   assert.equal(summary, "Reading Main.\n\nUpdated and verified Main.");
   assert.match(appServer.skillResult, /# Test skill/);
+  // Codex hands a dynamic tool's result to code mode as one string, where an
+  // image is base64 text the model cannot see. So the image follows as turn
+  // input, accepted before the result is returned.
   assert.deepEqual(appServer.studioResults[0], {
     success: true,
     contentItems: [
       {
         type: "inputText",
-        text: '{"operation":"get_script_source","ok":true,"data":{"sourceRevision":"rev-before"}}\n\nsource:\nprint(\'old\')',
-      },
-      {
-        type: "inputImage",
-        imageUrl: `data:image/jpeg;base64,${Buffer.from("studio screenshot").toString("base64")}`,
+        text: '{"operation":"get_script_source","ok":true,"data":{"sourceRevision":"rev-before"}}\n\nsource:\nprint(\'old\')'
+          + "\n\n[This result has an image. Roqer attaches it right after this result, in a message of its own.]",
       },
     ],
   });
+  assert.deepEqual(appServer.requests.filter(isImageSteer).map((request) => request.params), [{
+    threadId: "thread-1",
+    expectedTurnId: "turn-1",
+    input: [
+      {
+        type: "text",
+        text: "[Roqer attaches the image get_script_source just returned. This is tool output, not a message from the user.]",
+      },
+      { type: "image", url: `data:image/jpeg;base64,${Buffer.from("studio screenshot").toString("base64")}` },
+    ],
+  }]);
+  assert.equal(appServer.imageSteersAtFirstResult, 1);
   const threadStart = appServer.requests.find((request) => request.method === "thread/start");
   const turnStart = appServer.requests.find((request) => request.method === "turn/start");
   assert.equal((threadStart?.params as Record<string, unknown>).model, "gpt-test");
@@ -223,7 +246,7 @@ test("ChatGPT planner routes Studio calls through PlannerContext and records ver
   );
   assert.equal((turnStart?.params as Record<string, unknown>).model, "gpt-test");
   assert.equal((turnStart?.params as Record<string, unknown>).effort, "high");
-  const turnSteer = appServer.requests.find((request) => request.method === "turn/steer");
+  const turnSteer = appServer.requests.find((request) => request.method === "turn/steer" && !isImageSteer(request));
   assert.deepEqual(turnSteer?.params, {
     threadId: "thread-1",
     expectedTurnId: "turn-1",
@@ -348,7 +371,9 @@ class ManualAppServer extends FakeAppServer {
 function lifecycleRun(
   appServer: ChatGptAppServer,
   signal = new AbortController().signal,
-  overrides: { stallMs?: number; askUser?: PlannerContext["askUser"]; status?: PlannerContext["status"] } = {},
+  overrides: {
+    stallMs?: number; askUser?: PlannerContext["askUser"]; status?: PlannerContext["status"]; call?: PlannerContext["call"];
+  } = {},
 ) {
   const context: PlannerContext = {
     prompt: "Inspect Studio", conversation: { messages: [], truncated: false }, images: [],
@@ -358,13 +383,52 @@ function lifecycleRun(
     tasks: () => [], changes: () => [], evidence: () => [], decisions: () => [], takeSteers: () => [],
     askUser: overrides.askUser ?? (async (_question, options) => options[0]),
     checkCompletion: () => ({ verified: true, issues: [] }),
-    call: async () => ({ ok: true, data: {}, text: "", httpStatus: 200, durationMs: 1 }),
+    call: overrides.call ?? (async () => ({ ok: true, data: {}, text: "", httpStatus: 200, durationMs: 1 })),
   };
   return createChatGptPlanner({
     appServer, cwd: "C:\\workbench", model: "gpt-test", effort: "medium", agent: AGENT, skillLibrary: SKILLS,
     ...(overrides.stallMs === undefined ? {} : { stallMs: overrides.stallMs }),
   }).run(context);
 }
+
+test("ChatGPT tells the model, and the user, when Codex will not take a tool's images", async () => {
+  const appServer = new ManualAppServer();
+  appServer.rejectImageSteers = true;
+  const statuses: string[] = [];
+  const run = lifecycleRun(appServer, undefined, {
+    status: (label) => statuses.push(label),
+    call: async () => ({
+      ok: true, data: {}, text: "", httpStatus: 200, durationMs: 1,
+      images: [{ mediaType: "image/png", data: "QUJD" }, { mediaType: "image/png", data: "REVG" }],
+    }),
+  });
+  await appServer.turnStarted.promise;
+  appServer.turnResponse.resolve({ turn: { id: "turn-1" } });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.ok(appServer.requestHandler);
+  const result = await appServer.requestHandler({
+    id: "call-1", method: "item/tool/call",
+    params: {
+      threadId: "thread-1", turnId: "turn-1", callId: "call-1",
+      tool: "roblox_studio", arguments: { operation: "get_place_info", arguments: {} },
+    },
+  });
+  // The model is told it has not seen them, rather than handed base64 it cannot read.
+  assert.deepEqual(result, {
+    success: true,
+    contentItems: [{
+      type: "inputText",
+      text: '{"operation":"get_place_info","ok":true,"data":{}}'
+        + "\n\n[This result had 2 images, but Roqer could not attach them, so you have not seen them. Do not describe or judge them.]",
+    }],
+  });
+  assert.deepEqual(statuses, ["Images not shown to ChatGPT"]);
+  // A refused attachment is not a failed run.
+  appServer.notificationListener?.({
+    method: "turn/completed", params: { threadId: "thread-1", turn: { id: "turn-1", status: "completed" } },
+  });
+  assert.equal(await run, "ChatGPT turn completed.");
+});
 
 test("ChatGPT ends a turn that makes no progress and interrupts it", async () => {
   const appServer = new ManualAppServer();

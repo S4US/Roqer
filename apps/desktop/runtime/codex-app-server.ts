@@ -41,8 +41,8 @@ export type CodexAppServerOptions = {
 
 /**
  * Codex features that act on their own rather than through Roqer's tools:
- * the shell, apps and plugins, the browser and computer use, image
- * generation, sub-agents, hooks, memories, and tool suggestions.
+ * the shell, apps and plugins, the browser and computer use, image viewing
+ * and generation, sub-agents, hooks, memories, and tool suggestions.
  *
  * Passed as `-c features.<name>=false` rather than `--disable <name>`: Codex
  * refuses to start on a `--disable` it does not recognize, but ignores an
@@ -59,6 +59,7 @@ const CODEX_DISABLED_FEATURES = [
   "browser_use_external",
   "computer_use",
   "in_app_browser",
+  "view_image",
   "image_generation",
   "multi_agent",
   "multi_agent_v2",
@@ -68,8 +69,16 @@ const CODEX_DISABLED_FEATURES = [
   "skill_mcp_dependency_install",
 ] as const;
 
-export const CODEX_LOCKDOWN_ARGS: readonly string[] =
-  CODEX_DISABLED_FEATURES.flatMap((feature) => ["-c", `features.${feature}=false`]);
+/**
+ * Web search is not a feature flag but a setting of its own, and it is on by
+ * default. Codex 0.149, 0.155 and 0.160 all start with this override.
+ */
+const CODEX_DISABLED_SETTINGS = ['web_search="disabled"'] as const;
+
+export const CODEX_LOCKDOWN_ARGS: readonly string[] = [
+  ...CODEX_DISABLED_FEATURES.flatMap((feature) => ["-c", `features.${feature}=false`]),
+  ...CODEX_DISABLED_SETTINGS.flatMap((setting) => ["-c", setting]),
+];
 
 export function codexAppServerArgs(): string[] {
   return ["app-server", ...CODEX_LOCKDOWN_ARGS, "--stdio"];
