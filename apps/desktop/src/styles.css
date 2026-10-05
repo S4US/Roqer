@@ -410,6 +410,9 @@ button:focus-visible, textarea:focus-visible, select:focus-visible, input:focus-
 .run-elsewhere strong { color: var(--ink); font-weight: var(--weight-medium); }
 .run-elsewhere.needs-input { color: var(--warning); }
 .run-elsewhere.needs-input > svg { animation: pulse 1.2s ease-in-out infinite; }
+/* A question waiting in this chat, said where the answer would be typed. */
+.composer-status.waiting-choice { color: var(--warning); }
+.composer-status.waiting-choice > svg { animation: pulse 1.2s ease-in-out infinite; }
 .run-elsewhere button { padding: 2px 7px; color: var(--ink-secondary); background: transparent; border: 1px solid var(--border); border-radius: 6px; font-size: var(--type-meta); }
 .run-elsewhere button:first-of-type { margin-left: 4px; }
 .run-elsewhere button:hover { color: var(--ink); background: var(--surface-raised); }
@@ -547,6 +550,8 @@ button:focus-visible, textarea:focus-visible, select:focus-visible, input:focus-
 .send-button { display: grid; place-items: center; width: 36px; height: 36px; color: var(--action-ink); background: var(--action); border: 0; border-radius: 10px; transition: .18s ease; }
 .send-button:hover { background: var(--action-hover); }
 .send-button:disabled { cursor: default; opacity: .35; }
+/* While a question waits, Send answers it, and says so. */
+.send-button.answer-send { display: flex; align-items: center; gap: 6px; width: auto; padding: 0 12px 0 14px; font-size: var(--type-label); font-weight: var(--weight-medium); white-space: nowrap; }
 .attachment-row { display: flex; flex-wrap: wrap; gap: 7px; padding: 10px 10px 0; }
 .attachment-chip { display: grid; grid-template-columns: 27px 1fr 22px; align-items: center; width: fit-content; min-width: 250px; padding: 7px 7px 7px 9px; color: var(--muted); background: var(--surface-sunken); border: 1px solid var(--border); border-radius: 9px; }
 .attachment-chip div { display: flex; flex-direction: column; }
@@ -705,6 +710,14 @@ button:focus-visible, textarea:focus-visible, select:focus-visible, input:focus-
 .question-escape { margin-left: auto; color: var(--muted); background: transparent; border-style: dashed; }
 .question-escape:hover { color: var(--ink); }
 .question-escape.active { color: var(--ink); border-style: solid; border-color: var(--warning); }
+/* The question waits in the dock, as an approval does, and arrives with two
+ * rings of the warning colour: it is the one thing the run is stopped on, and
+ * the person may not have been watching when it came. */
+.question-dock .question-card { animation: attention-ring 1.6s ease-out .2s 2; }
+@keyframes attention-ring {
+  0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--warning) 40%, transparent), var(--shadow-md); }
+  70%, 100% { box-shadow: 0 0 0 12px color-mix(in srgb, var(--warning) 0%, transparent), var(--shadow-md); }
+}
 
 .task-list { margin-top: 12px; padding: 11px 13px; background: var(--surface-sunken); border: 1px solid var(--border-subtle); border-radius: 11px; }
 .task-list-heading { display: flex; align-items: center; gap: 7px; color: var(--ink-secondary); font-size: var(--type-meta); }
@@ -1420,6 +1433,9 @@ a.small-button:focus-visible { outline: 2px solid var(--accent); outline-offset:
  * those is feedback rather than decoration. */
 @media (prefers-reduced-motion: reduce) {
   .user-message, .mock-run, .approval-dock { animation: fade .16s ease both; }
+  /* A ring that spreads is travel. The card, the pulsing dot and the taskbar
+     still say the run is waiting. */
+  .question-dock .question-card { animation: none; }
   .mock-run .message-content > *:not(.typing-indicator) { animation: fade .16s ease both; }
   .completed-run-card, .applied-status { animation: fade .16s ease both; }
   .conversation-scroll { scroll-behavior: auto; }
