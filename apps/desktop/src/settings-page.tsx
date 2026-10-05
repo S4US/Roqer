@@ -6,6 +6,7 @@ import { ENABLED_PROVIDER_IDS, providerLabel, type ProviderId, type ProviderStat
 import { NO_LIMITS, type ProviderLimits } from "../shared/provider-limits";
 import type { StudioStatus } from "../shared/studio-status";
 import type { WorkspaceState } from "./model";
+import { accountDetail } from "./account-detail";
 import { BlenderSettings } from "./blender-settings";
 import { EndpointPage, endpointDetail, useCustomConnections } from "./custom-connections";
 import { OpenCloudSettings } from "./open-cloud-settings";
@@ -353,11 +354,9 @@ function AccountRow({ provider, onChanged }: { provider: ProviderId; onChanged: 
   const canCheckOnly = signedIn || status.kind === "not-installed";
   const client = ACCOUNT_CLIENTS[provider];
   const installable = status.kind === "not-installed" && status.installable === true;
-  const detail = signedIn
-    ? [status.planType === undefined ? undefined : capitalized(status.planType), status.email, client === undefined ? undefined : `through ${client}`]
-      .filter((part): part is string => part !== undefined && part !== "")
-      .join(" · ") || status.message
-    : installing ? `Installing ${client ?? name}… This can take a few minutes.` : waitingMessage ?? status.message;
+  const detail = !signedIn && installing
+    ? `Installing ${client ?? name}… This can take a few minutes.`
+    : !signedIn && waitingMessage !== null ? waitingMessage : accountDetail(status, client);
   const usage = signedIn ? planUsageView(limits, USAGE_SCOPES[provider] ?? name, Date.now()) : null;
 
   return <>
@@ -404,10 +403,6 @@ function AccountRow({ provider, onChanged }: { provider: ProviderId; onChanged: 
       {codeError !== null && <span className="custom-message error">{codeError}</span>}
     </label>}
   </>;
-}
-
-function capitalized(value: string): string {
-  return value.length === 0 ? value : value[0].toUpperCase() + value.slice(1);
 }
 
 function LeaveConfirm({ onStay, onLeave }: { onStay: () => void; onLeave: () => void }) {

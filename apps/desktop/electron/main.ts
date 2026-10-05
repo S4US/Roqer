@@ -48,10 +48,13 @@ import {
   type CustomModelTestResult,
 } from "../shared/custom-providers";
 import { ClaudeCodeClient } from "../runtime/claude-cli";
+import { resolveClaudeExecutable } from "../runtime/claude-executable";
 import { ClaudeLimitsTracker } from "../runtime/claude-limits";
 import {
   ClientInstallRunner, clientInstallerFor, clientInstallSupported, installCommand, type ClientInstaller,
 } from "../runtime/client-installer";
+import { ClientVersionReader } from "../runtime/client-version";
+import { resolveCodexExecutable } from "../runtime/codex-executable";
 import { createClaudePlanner, type ClaudeSession } from "../runtime/claude-planner";
 import { ProviderSessionStore } from "../runtime/provider-sessions";
 import { CodexAppServerClient } from "../runtime/codex-app-server";
@@ -212,6 +215,7 @@ let codexLimits: CodexLimitsTracker | null = null;
 let claudeLimits: ClaudeLimitsTracker | null = null;
 let claudeCode: ClaudeCodeClient | null = null;
 const clientInstalls = new ClientInstallRunner();
+const clientVersions = new ClientVersionReader();
 /** A ChatGPT sign-in waiting in the browser, and how it ends. */
 let pendingChatGptLogin: { loginId: string; done: Promise<ProviderLoginResult> } | null = null;
 /** Set from the confirmation onwards, so a second request cannot open a second dialog. */
@@ -986,15 +990,30 @@ async function readProviderCatalog(provider: ProviderId): Promise<ProviderModelC
     : chatGptProvider().listChatGptModels();
 }
 
+/**
+ * The version of the client a subscription runs through, from the same
+ * executable its runs start, or null when there is none or it did not answer.
+ */
+async function readClientVersion(provider: ProviderId): Promise<string | null> {
+  try {
+    if (provider === "claude") return await clientVersions.read("claude", await resolveClaudeExecutable());
+    if (provider === "chatgpt") return await clientVersions.read("codex", await resolveCodexExecutable());
+  } catch {
+    // Not installed: the status says so itself.
+  }
+  return null;
+}
+
 async function getProviderStatus(event: IpcMainInvokeEvent, value: unknown): Promise<ProviderStatus> {
   if (!isTrusted(event.sender)) return { kind: "unavailable", message: "This window may not access providers." };
   const provider = providerArgument(value);
   if (!provider) return { kind: "unavailable", message: "Unknown provider." };
-  const status = await readProviderStatus(provider);
+  const [status, clientVersion] = await Promise.all([readProviderStatus(provider), readClientVersion(provider)]);
   // Whether an install can be offered is decided here, where it would run.
-  return status.kind === "not-installed" && clientInstallSupported() && clientInstallerFor(provider) !== null
-    ? { ...status, installable: true }
-    : status;
+  if (status.kind === "not-installed") {
+    return clientInstallSupported() && clientInstallerFor(provider) !== null ? { ...status, installable: true } : status;
+  }
+  return status.kind === "checking" || clientVersion === null ? status : { ...status, clientVersion };
 }
 
 async function getProviderModels(event: IpcMainInvokeEvent, value: unknown): Promise<ProviderModelCatalog> {

@@ -46,6 +46,13 @@ export function providerLabel(provider: ProviderId): string {
   }
 }
 
+/**
+ * The version of the client a subscription runs through (Codex, Claude Code),
+ * as the executable Roqer runs reports it. Set by the main process when that
+ * client was found and answered; a custom endpoint has none.
+ */
+type ClientVersion = { clientVersion?: string };
+
 /** Sanitized provider state that is safe to expose to the renderer. */
 export type ProviderStatus =
   | { kind: "checking"; message: string }
@@ -56,14 +63,14 @@ export type ProviderStatus =
    */
   | { kind: "not-installed"; message: string; installable?: boolean }
   /** The client is there but failing; installing it again is not the answer. */
-  | { kind: "unavailable"; message: string }
-  | { kind: "signed-out"; message: string }
-  | {
+  | ({ kind: "unavailable"; message: string } & ClientVersion)
+  | ({ kind: "signed-out"; message: string } & ClientVersion)
+  | ({
     kind: "signed-in";
     message: string;
     email?: string;
     planType?: string;
-  };
+  } & ClientVersion);
 
 /**
  * The result of asking a provider to start sign-in.
@@ -126,6 +133,8 @@ export function isProviderStatus(value: unknown): value is ProviderStatus {
   if (!isRecord(value) || typeof value.kind !== "string" || typeof value.message !== "string") return false;
   if (!["checking", "not-installed", "unavailable", "signed-out", "signed-in"].includes(value.kind)) return false;
   if (value.kind === "not-installed") return value.installable === undefined || typeof value.installable === "boolean";
+  if (value.kind === "checking") return true;
+  if (value.clientVersion !== undefined && typeof value.clientVersion !== "string") return false;
   if (value.kind !== "signed-in") return true;
   return (value.email === undefined || typeof value.email === "string") &&
     (value.planType === undefined || typeof value.planType === "string");
