@@ -40,6 +40,25 @@ export const MAX_SKILL_RESOURCES = 8;
  */
 export const MAX_BATCH_CHARACTERS = 48_000;
 
+/**
+ * Aggregate size of one batch when the guidance travels as turn input.
+ *
+ * Codex's current models call tools from a script, and everything that script
+ * passes on shares one budget of 10,000 tokens, other tools' results included,
+ * so the ChatGPT planner hands guidance over as a message of its own instead
+ * (see `chatgpt-planner.ts`). That message has no inline limit to stay under,
+ * so the cap only keeps one call from filling the context: it lets the five
+ * references a visual effect asks for together, about 94,000 characters,
+ * arrive in one call. A run that was held to 48,000 asked for the mesh-shapes
+ * reference twice, was told twice to ask again, and went on without it.
+ */
+export const STEERED_BATCH_CHARACTERS = 128_000;
+
+export type SkillToolRunnerOptions = Readonly<{
+  /** How much one call may return; `MAX_BATCH_CHARACTERS` unless the guidance travels some other way. */
+  maxBatchCharacters?: number;
+}>;
+
 const isRecord = (value: unknown): value is JsonRecord =>
   typeof value === "object" && value !== null && !Array.isArray(value);
 
@@ -74,8 +93,22 @@ export function skillToolDefinition(library: SkillLibrary): SkillToolDefinition 
 
 export type SkillToolRequest = { name: string; resources: string[] };
 
+/** One call's result, with which documents it carried in full for the first time. */
+export type SkillDelivery = Readonly<{
+  name: string;
+  text: string;
+  /** Resources sent in full by this call, rather than as a pointer to an earlier one. */
+  delivered: readonly string[];
+  /** What the call could not load, and why, one line each; also listed in `text`. */
+  notLoaded: readonly string[];
+}>;
+
 export type SkillToolRunner = {
   (value: unknown): Promise<string>;
+  /** The same call, saying what it delivered, for a caller that sends the text on itself. */
+  deliver(value: unknown): Promise<SkillDelivery>;
+  /** Forget documents a call returned that never reached the model. */
+  forget(name: string, resources: readonly string[]): void;
   /** Forget what was sent, because the conversation that held it no longer does. */
   clearCache(): void;
   /** Whether this resource has been delivered in full and not forgotten since. */
@@ -165,34 +198,39 @@ export async function runSkillTool(library: SkillLibrary, value: unknown): Promi
  * it already has must not be resent because it happened to be asked for beside
  * a new one. The call fails only when nothing in it could be loaded.
  */
-export function createSkillToolRunner(library: SkillLibrary): SkillToolRunner {
+export function createSkillToolRunner(library: SkillLibrary, options: SkillToolRunnerOptions = {}): SkillToolRunner {
+  const maxBatchCharacters = options.maxBatchCharacters ?? MAX_BATCH_CHARACTERS;
   const loaded = new Map<string, Promise<string>>();
   const keyOf = (name: string, resource: string) => JSON.stringify([name, resource]);
 
-  const loadOne = async (name: string, resource: string): Promise<string> => {
+  const loadOne = async (name: string, resource: string): Promise<{ text: string; fresh: boolean }> => {
     const key = keyOf(name, resource);
     const existing = loaded.get(key);
     if (existing !== undefined) {
       await existing;
-      return `Client skill ${name} (${resource}) was already loaded earlier in this conversation. Use that guidance; it has not changed.`;
+      return {
+        text: `Client skill ${name} (${resource}) was already loaded earlier in this conversation. Use that guidance; it has not changed.`,
+        fresh: false,
+      };
     }
     const loading = library.load(name, resource).then(renderDocument);
     loaded.set(key, loading);
     try {
-      return await loading;
+      return { text: await loading, fresh: true };
     } catch (error) {
       if (loaded.get(key) === loading) loaded.delete(key);
       throw error;
     }
   };
 
-  const run = async (value: unknown): Promise<string> => {
+  const deliver = async (value: unknown): Promise<SkillDelivery> => {
     const request = parseSkillToolInput(value);
     const settled = await Promise.allSettled(
       request.resources.map((resource) => loadOne(request.name, resource)));
 
     const sections: string[] = [];
     const failures: string[] = [];
+    const delivered: string[] = [];
     let characters = 0;
     for (const [index, result] of settled.entries()) {
       const resource = request.resources[index];
@@ -201,16 +239,17 @@ export function createSkillToolRunner(library: SkillLibrary): SkillToolRunner {
         failures.push(`${resource}: ${reason instanceof Error ? reason.message : String(reason)}`);
         continue;
       }
-      if (characters + result.value.length > MAX_BATCH_CHARACTERS && sections.length > 0) {
+      if (characters + result.value.text.length > maxBatchCharacters && sections.length > 0) {
         // Read but not delivered, so the cache must forget it: otherwise the
         // retry this line asks for would come back as "already loaded earlier
         // in this conversation", pointing at guidance the model never saw.
-        loaded.delete(keyOf(request.name, resource));
+        if (result.value.fresh) loaded.delete(keyOf(request.name, resource));
         failures.push(`${resource}: not loaded yet, because this call already returned as much as one result can carry. Load it with the others listed here in one more call before relying on it.`);
         continue;
       }
-      characters += result.value.length;
-      sections.push(result.value);
+      characters += result.value.text.length;
+      sections.push(result.value.text);
+      if (result.value.fresh) delivered.push(resource);
     }
 
     if (sections.length === 0) {
@@ -219,12 +258,19 @@ export function createSkillToolRunner(library: SkillLibrary): SkillToolRunner {
       // arrived.
       throw new Error(failures.join("\n"));
     }
-    if (failures.length === 0) return sections.join("\n\n");
-    return [...sections, `Not loaded in this call:\n${failures.map((line) => `- ${line}`).join("\n")}`]
-      .join("\n\n");
+    const text = failures.length === 0
+      ? sections.join("\n\n")
+      : [...sections, `Not loaded in this call:\n${failures.map((line) => `- ${line}`).join("\n")}`].join("\n\n");
+    return { name: request.name, text, delivered, notLoaded: failures };
   };
 
+  const run = async (value: unknown): Promise<string> => (await deliver(value)).text;
+
   return Object.assign(run, {
+    deliver,
+    forget: (name: string, resources: readonly string[]) => {
+      for (const resource of resources) loaded.delete(keyOf(name, resource));
+    },
     clearCache: () => loaded.clear(),
     isLoaded: (name: string, resource = "SKILL.md") => loaded.has(keyOf(name, resource)),
   });

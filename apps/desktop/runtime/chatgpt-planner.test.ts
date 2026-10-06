@@ -33,6 +33,15 @@ const isImageSteer = (request: { method: string; params: unknown }) =>
   request.method === "turn/steer" &&
   ((request.params as { input?: Array<{ type: string }> }).input ?? []).some((item) => item.type === "image");
 
+/** A steer that carries the guidance `load_skill` loaded. */
+const isSkillSteer = (request: { method: string; params: unknown }) =>
+  request.method === "turn/steer" &&
+  ((request.params as { input?: Array<{ text?: string }> }).input ?? [])[0]?.text?.startsWith("[Roqer attaches the guidance") === true;
+
+/** The guidance text each skill steer carried, in order. */
+const steeredGuidance = (requests: ReadonlyArray<{ method: string; params: unknown }>) =>
+  requests.filter(isSkillSteer).map((request) => (request.params as { input: Array<{ text: string }> }).input[1].text);
+
 class FakeAppServer implements ChatGptAppServer {
   notificationListener: ((notification: AppServerNotification) => void) | null = null;
   requestHandler: AppServerRequestHandler | null = null;
@@ -44,6 +53,8 @@ class FakeAppServer implements ChatGptAppServer {
   imageSteersAtFirstResult: number | null = null;
   /** Answer image steers the way Codex answers one for a turn that has ended. */
   rejectImageSteers = false;
+  /** The same for steers carrying skill guidance. */
+  rejectSkillSteers = false;
 
   async getChatGptStatus() {
     return { kind: "signed-in" as const, message: "Plus connected", planType: "plus" };
@@ -67,6 +78,7 @@ class FakeAppServer implements ChatGptAppServer {
   async request<T = unknown>(method: string, params?: unknown): Promise<T> {
     this.requests.push({ method, params });
     if (this.rejectImageSteers && isImageSteer({ method, params })) throw new Error("no active turn to steer");
+    if (this.rejectSkillSteers && isSkillSteer({ method, params })) throw new Error("no active turn to steer");
     if (method === "thread/start") return { thread: { id: "thread-1" } } as T;
     if (method === "turn/start") {
       queueMicrotask(() => void this.runTurn());
@@ -206,7 +218,25 @@ test("ChatGPT planner routes Studio calls through PlannerContext and records ver
   // concatenation that would read "Reading Main.Updated and verified Main."
   assert.deepEqual(said, ["Reading Main.", "\n\n", "Updated and verified Main."]);
   assert.equal(summary, "Reading Main.\n\nUpdated and verified Main.");
-  assert.match(appServer.skillResult, /# Test skill/);
+  // The script a Codex model calls tools from passes on only 10,000 tokens of
+  // their results, so the guidance follows as turn input, accepted before the
+  // result is returned, and the result only says so.
+  assert.deepEqual(JSON.parse(appServer.skillResult), {
+    success: true,
+    contentItems: [{
+      type: "inputText",
+      text: "[Roqer attaches the roblox-test guidance this call loaded (SKILL.md) right after this result, "
+        + "in a message of its own. Read it there before relying on it.]",
+    }],
+  });
+  const skillSteers = appServer.requests.filter(isSkillSteer);
+  assert.equal(skillSteers.length, 1);
+  assert.equal((skillSteers[0].params as Record<string, unknown>).expectedTurnId, "turn-1");
+  assert.equal(
+    (skillSteers[0].params as { input: Array<{ text: string }> }).input[0].text,
+    "[Roqer attaches the guidance load_skill just returned. This is tool output, not a message from the user.]",
+  );
+  assert.match(steeredGuidance(appServer.requests)[0], /<skill name="roblox-test" resource="SKILL.md">\n\n# Test skill/);
   // Codex hands a dynamic tool's result to code mode as one string, where an
   // image is base64 text the model cannot see. So the image follows as turn
   // input, accepted before the result is returned.
@@ -246,7 +276,8 @@ test("ChatGPT planner routes Studio calls through PlannerContext and records ver
   );
   assert.equal((turnStart?.params as Record<string, unknown>).model, "gpt-test");
   assert.equal((turnStart?.params as Record<string, unknown>).effort, "high");
-  const turnSteer = appServer.requests.find((request) => request.method === "turn/steer" && !isImageSteer(request));
+  const turnSteer = appServer.requests.find((request) =>
+    request.method === "turn/steer" && !isImageSteer(request) && !isSkillSteer(request));
   assert.deepEqual(turnSteer?.params, {
     threadId: "thread-1",
     expectedTurnId: "turn-1",
@@ -373,6 +404,7 @@ function lifecycleRun(
   signal = new AbortController().signal,
   overrides: {
     stallMs?: number; askUser?: PlannerContext["askUser"]; status?: PlannerContext["status"]; call?: PlannerContext["call"];
+    skillLibrary?: SkillLibrary;
   } = {},
 ) {
   const context: PlannerContext = {
@@ -386,7 +418,7 @@ function lifecycleRun(
     call: overrides.call ?? (async () => ({ ok: true, data: {}, text: "", httpStatus: 200, durationMs: 1 })),
   };
   return createChatGptPlanner({
-    appServer, cwd: "C:\\workbench", model: "gpt-test", effort: "medium", agent: AGENT, skillLibrary: SKILLS,
+    appServer, cwd: "C:\\workbench", model: "gpt-test", effort: "medium", agent: AGENT, skillLibrary: overrides.skillLibrary ?? SKILLS,
     ...(overrides.stallMs === undefined ? {} : { stallMs: overrides.stallMs }),
   }).run(context);
 }
@@ -484,7 +516,10 @@ test("ChatGPT keeps tool handlers alive through a retryable error", async () => 
   });
   const skillResult = JSON.stringify(result);
   assert.match(skillResult, /"success":true/);
-  assert.match(skillResult, /# Test skill/);
+  assert.match(skillResult, /Roqer attaches the roblox-test guidance this call loaded/);
+  // A call without its own turn id is steered into the run's turn.
+  assert.equal((appServer.requests.filter(isSkillSteer)[0]?.params as Record<string, unknown>).expectedTurnId, "turn-1");
+  assert.match(steeredGuidance(appServer.requests)[0], /# Test skill/);
   appServer.notificationListener?.({
     method: "item/agentMessage/delta", params: { threadId: "thread-1", itemId: "message-1", delta: "Recovered." },
   });
@@ -931,12 +966,74 @@ test("ChatGPT keeps delivered skills with the chat's thread and a UI follow-up i
   assert.equal(await sessionRun(appServer, sessions, "Make the shop panel wider", SHOP_EXCHANGE), "Answer 2");
 
   assert.equal(appServer.threadsStarted, 1);
-  assert.match(appServer.skillTexts[0], /# Test skill/);
+  assert.match(appServer.skillTexts[0], /Roqer attaches the roblox-ui-design guidance this call loaded \(SKILL\.md\)/);
+  assert.deepEqual(steeredGuidance(appServer.requests).map((text) => /# Test skill/.test(text)), [true]);
   assert.match(appServer.turnTexts[0], /Load `roblox-ui-design` before any Studio mutation/);
   assert.match(appServer.turnTexts[1], /`roblox-ui-design` is already loaded in this conversation/);
-  // The thread still holds the document, so a repeat request is a pointer.
+  // The thread still holds the document, so a repeat request is a pointer,
+  // answered in the result with nothing attached.
   assert.doesNotMatch(appServer.skillTexts[1], /# Test skill/);
   assert.match(appServer.skillTexts[1], /already loaded earlier in this conversation/);
+  assert.equal(steeredGuidance(appServer.requests).length, 1);
+});
+
+test("ChatGPT forgets guidance Codex would not take, and sends it in full when asked again", async () => {
+  const appServer = new ManualAppServer();
+  const statuses: Array<{ label: string; detail?: string }> = [];
+  const skillLibrary: SkillLibrary = {
+    catalog: AGENT.skills,
+    load: async (name, resource = "SKILL.md") => {
+      if (resource === "references/missing.md") throw new Error(`Skill resource not found: ${name}/${resource}`);
+      return { name, resource, content: `# Test ${resource}` };
+    },
+  };
+  const run = lifecycleRun(appServer, undefined, { status: (label, detail) => statuses.push({ label, detail }), skillLibrary });
+  await appServer.turnStarted.promise;
+  appServer.turnResponse.resolve({ turn: { id: "turn-1" } });
+  await new Promise((resolve) => setImmediate(resolve));
+  const loadSkill = async (resources: string[]) => {
+    assert.ok(appServer.requestHandler);
+    return appServer.requestHandler({
+      id: "skill-1", method: "item/tool/call",
+      params: { threadId: "thread-1", turnId: "turn-1", callId: "skill-1", tool: "load_skill", arguments: { name: "roblox-test", resources } },
+    });
+  };
+  const resultText = (result: unknown) => (result as { contentItems: Array<{ text: string }> }).contentItems[0].text;
+
+  await loadSkill(["SKILL.md"]);
+  appServer.rejectSkillSteers = true;
+  // The model is told it has not read what this call loaded, rather than
+  // handed a pointer to it, and the user sees why. The entrypoint it already
+  // read is not part of that.
+  assert.deepEqual(await loadSkill(["SKILL.md", "references/b.md"]), {
+    success: false,
+    contentItems: [{
+      type: "inputText",
+      text: "Roqer could not hand you the roblox-test guidance (references/b.md), so you have not read it. Load it again before relying on it.",
+    }],
+  });
+  assert.deepEqual(statuses, [{
+    label: "Guidance not shown to ChatGPT",
+    detail: "Codex would not take the roblox-test guidance (references/b.md), so ChatGPT was told it has not read it.",
+  }]);
+
+  appServer.rejectSkillSteers = false;
+  const retry = await loadSkill(["SKILL.md", "references/b.md", "references/missing.md"]);
+  assert.equal(resultText(retry), "[Roqer attaches the roblox-test guidance this call loaded (references/b.md) right after this result, "
+    + "in a message of its own. Read it there before relying on it.]\n\n"
+    + "Not loaded in this call:\n- references/missing.md: Skill resource not found: roblox-test/references/missing.md");
+  // Sent, refused, and sent again.
+  const steered = steeredGuidance(appServer.requests);
+  assert.equal(steered.length, 3);
+  assert.match(steered[0], /# Test SKILL\.md/);
+  assert.match(steered[2], /SKILL\.md\) was already loaded earlier in this conversation/);
+  assert.match(steered[2], /# Test references\/b\.md/, "the refused guidance is sent in full again");
+
+  // A refused attachment is not a failed run.
+  appServer.notificationListener?.({
+    method: "turn/completed", params: { threadId: "thread-1", turn: { id: "turn-1", status: "completed" } },
+  });
+  assert.equal(await run, "ChatGPT turn completed.");
 });
 
 for (const compaction of ["notification", "item"] as const) {
@@ -950,7 +1047,11 @@ for (const compaction of ["notification", "item"] as const) {
 
     assert.equal(appServer.threadsStarted, 1, "compaction keeps the thread");
     assert.match(appServer.turnTexts[1], /Load `roblox-ui-design` before any Studio mutation/);
-    assert.match(appServer.skillTexts[1], /# Test skill/, "the guidance is delivered again in full");
+    assert.doesNotMatch(appServer.skillTexts[1], /already loaded/);
+    assert.deepEqual(
+      steeredGuidance(appServer.requests).map((text) => /# Test skill/.test(text)), [true, true],
+      "the guidance is delivered again in full",
+    );
   });
 }
 

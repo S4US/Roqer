@@ -10,7 +10,7 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 
 import { loadAgentRuntime } from "./agent-definition";
-import { createSkillToolRunner } from "./skill-tool";
+import { createSkillToolRunner, STEERED_BATCH_CHARACTERS } from "./skill-tool";
 
 const runtimeDirectory = path.dirname(fileURLToPath(import.meta.url));
 const agentRoot = path.resolve(runtimeDirectory, "../agent");
@@ -286,5 +286,27 @@ test("an effect's references arrive in at most two calls, the core pair together
     }
     assert.deepEqual(delivered[0].slice(0, 2), core, `${effect}: the core pair did not arrive together first`);
     assert.deepEqual(delivered.flat().sort(), [...route].sort(), `${effect} arrived incomplete`);
+  }
+});
+
+// A ChatGPT run asked for the first five together. Held to the inline cap, the
+// mesh-shapes reference was refused twice and never read; ChatGPT's guidance
+// travels as turn input, so each route arrives in one call.
+test("under ChatGPT, every effect's references arrive in one call", async () => {
+  const runtime = await loadAgentRuntime(agentRoot);
+  const core = ["references/vfx-design.md", "references/vfx-craft.md"];
+  const routes = {
+    barrage: [...core, "references/vfx-textures.md", "references/vfx-motion.md", "references/vfx-mesh-shapes.md"],
+    missile: [...core, "references/vfx-textures.md", "references/vfx-motion.md", "references/vfx-camera-world.md"],
+    slam: [...core, "references/vfx-textures.md", "references/vfx-mesh-shapes.md", "references/vfx-camera-world.md"],
+    reference: [...core, "references/vfx-reference.md", "references/vfx-textures.md", "references/vfx-camera-world.md"],
+    everything: [...core, "references/vfx-textures.md", "references/vfx-motion.md", "references/vfx-mesh-shapes.md",
+      "references/vfx-camera-world.md"],
+  };
+  for (const [effect, route] of Object.entries(routes)) {
+    const run = createSkillToolRunner(runtime.skillLibrary, { maxBatchCharacters: STEERED_BATCH_CHARACTERS });
+    const delivery = await run.deliver({ name: SKILL, resources: route });
+    assert.deepEqual(delivery.delivered, route, `${effect} did not arrive in one call`);
+    assert.deepEqual(delivery.notLoaded, []);
   }
 });
