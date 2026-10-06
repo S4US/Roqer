@@ -3,12 +3,31 @@ import Recording from "../Recording";
 import { sourceRevision } from "../SourceRevision";
 import { checkSyntax, ScriptSyntaxError } from "../ScriptSyntax";
 
-const { getInstancePath, getInstanceByPath, getInstanceReference, resolveInstance, readScriptSource, applyScriptSource, splitLines, joinLines } = Utils;
+const { getInstancePath, getInstanceByPath, getInstanceReference, hasUniquePath, resolveInstance, readScriptSource, applyScriptSource, splitLines, joinLines } = Utils;
 const { beginRecording, finishRecording } = Recording;
 
 const SOURCE_TRUNCATE_CHAR_BUDGET = 25000;
 const SOURCE_TRUNCATE_LINE_BUDGET = 400;
 const SOURCE_TRUNCATE_TO_LINES = 300;
+
+/**
+ * What an edit would make, for a host that saves it somewhere other than
+ * Studio (a Rojo source file): every check has run, nothing was applied or
+ * recorded, and the source is the one the edit would have written.
+ */
+function planned(instance: LuaSourceContainer, previousSource: string, newSource: string) {
+	return {
+		planned: true,
+		instancePath: getInstancePath(instance),
+		instanceRef: getInstanceReference(instance),
+		className: instance.ClassName,
+		uniquePath: hasUniquePath(instance),
+		previousRevision: sourceRevision(previousSource),
+		revision: sourceRevision(newSource),
+		source: newSource,
+		...checkSyntax(newSource),
+	};
+}
 
 function getTopServiceName(instance: Instance): string {
 	let topServiceInst: Instance = instance;
@@ -107,6 +126,7 @@ function setScriptSource(requestData: Record<string, unknown>) {
 	const instanceRef = requestData.instanceRef as string | undefined;
 	const newSource = requestData.source;
 	const expectedRevision = requestData.expectedRevision;
+	const planOnly = requestData.planOnly === true;
 
 	if (!instancePath || !typeIs(newSource, "string") || !typeIs(expectedRevision, "string")) {
 		return { error: "Instance path, source, and expectedRevision are required; call get_script_source before replacing source" };
@@ -136,6 +156,8 @@ function setScriptSource(requestData: Record<string, unknown>) {
 			instanceRef: getInstanceReference(instance),
 		};
 	}
+
+	if (planOnly) return planned(instance, observedSource, sourceToSet);
 
 	const recordingId = beginRecording(`Set script source: ${instance.Name}`);
 	const oldSourceLength = observedSource.size();
@@ -234,6 +256,7 @@ function editScriptLines(requestData: Record<string, unknown>) {
 	const oldString = requestData.old_string as string;
 	const newString = requestData.new_string as string;
 	const startLine = requestData.startLine as number | undefined;
+	const planOnly = requestData.planOnly === true;
 
 	if (!instancePath || oldString === undefined || newString === undefined) {
 		return { error: "Instance path, old_string, and new_string are required" };
@@ -245,7 +268,7 @@ function editScriptLines(requestData: Record<string, unknown>) {
 		return { error: `Instance is not a script-like object: ${instance.ClassName}` };
 	}
 
-	const recordingId = beginRecording(`Edit script: ${instance.Name}`);
+	const recordingId = planOnly ? undefined : beginRecording(`Edit script: ${instance.Name}`);
 
 	const [success, result] = pcall(() => {
 		const source = readScriptSource(instance);
@@ -254,6 +277,8 @@ function editScriptLines(requestData: Record<string, unknown>) {
 
 		// Byte-slice replacement avoids Lua pattern escaping (safe for multi-byte chars like em dashes).
 		const newSource = string.sub(source, 1, matchStart - 1) + newString + string.sub(source, matchStart + searchLen);
+
+		if (planOnly) return planned(instance, source, newSource);
 
 		const applyResult = applyScriptSource(instance, newSource, source);
 		if (!applyResult.success) error(applyResult.error);
@@ -270,10 +295,10 @@ function editScriptLines(requestData: Record<string, unknown>) {
 	});
 
 	if (success) {
-		finishRecording(recordingId, true);
+		if (recordingId !== undefined) finishRecording(recordingId, true);
 		return result;
 	}
-	finishRecording(recordingId, false);
+	if (recordingId !== undefined) finishRecording(recordingId, false);
 	return { error: `Failed to edit script: ${result}` };
 }
 
@@ -297,6 +322,7 @@ function editScriptBatch(requestData: Record<string, unknown>) {
 	const instanceRef = requestData.instanceRef as string | undefined;
 	const edits = requestData.edits as Array<Record<string, unknown>> | undefined;
 	const expectedRevision = requestData.expectedRevision;
+	const planOnly = requestData.planOnly === true;
 
 	if (!instancePath || edits === undefined || !typeIs(edits, "table")) {
 		return { error: "Instance path and a non-empty edits array are required" };
@@ -330,7 +356,7 @@ function editScriptBatch(requestData: Record<string, unknown>) {
 		};
 	}
 
-	const recordingId = beginRecording(`Edit script (${edits.size()} edits): ${instance.Name}`);
+	const recordingId = planOnly ? undefined : beginRecording(`Edit script (${edits.size()} edits): ${instance.Name}`);
 
 	const [success, result] = pcall(() => {
 		// Resolved against the one source every edit was written against, before
@@ -374,6 +400,8 @@ function editScriptBatch(requestData: Record<string, unknown>) {
 		pieces.push(string.sub(source, cursor));
 		const newSource = pieces.join("");
 
+		if (planOnly) return planned(instance, source, newSource);
+
 		const applyResult = applyScriptSource(instance, newSource, source);
 		if (!applyResult.success) error(applyResult.error);
 
@@ -391,10 +419,10 @@ function editScriptBatch(requestData: Record<string, unknown>) {
 	});
 
 	if (success) {
-		finishRecording(recordingId, true);
+		if (recordingId !== undefined) finishRecording(recordingId, true);
 		return result;
 	}
-	finishRecording(recordingId, false);
+	if (recordingId !== undefined) finishRecording(recordingId, false);
 	return { error: `Failed to edit script: ${result}` };
 }
 
@@ -427,6 +455,7 @@ function insertScriptLines(requestData: Record<string, unknown>) {
 	const instanceRef = requestData.instanceRef as string | undefined;
 	const afterLine = (requestData.afterLine as number) ?? 0;
 	const newContent = requestData.newContent as string;
+	const planOnly = requestData.planOnly === true;
 
 	if (!instancePath || !newContent) return { error: "Instance path and newContent are required" };
 
@@ -438,7 +467,7 @@ function insertScriptLines(requestData: Record<string, unknown>) {
 	const conflict = lineEditConflict(instance, requestData.expectedRevision);
 	if (conflict) return conflict;
 
-	const recordingId = beginRecording(`Insert script lines after line ${afterLine}: ${instance.Name}`);
+	const recordingId = planOnly ? undefined : beginRecording(`Insert script lines after line ${afterLine}: ${instance.Name}`);
 
 	const [success, result] = pcall(() => {
 		const source = readScriptSource(instance);
@@ -455,6 +484,9 @@ function insertScriptLines(requestData: Record<string, unknown>) {
 		for (let i = afterLine; i < totalLines; i++) resultLines.push(lines[i]);
 
 		const newSource = joinLines(resultLines, hadTrailingNewline);
+
+		if (planOnly) return planned(instance, source, newSource);
+
 		const applyResult = applyScriptSource(instance, newSource, source);
 		if (!applyResult.success) error(applyResult.error);
 
@@ -472,10 +504,10 @@ function insertScriptLines(requestData: Record<string, unknown>) {
 	});
 
 	if (success) {
-		finishRecording(recordingId, true);
+		if (recordingId !== undefined) finishRecording(recordingId, true);
 		return result;
 	}
-	finishRecording(recordingId, false);
+	if (recordingId !== undefined) finishRecording(recordingId, false);
 	return { error: `Failed to insert script lines: ${result}` };
 }
 
@@ -484,6 +516,7 @@ function deleteScriptLines(requestData: Record<string, unknown>) {
 	const instanceRef = requestData.instanceRef as string | undefined;
 	const startLine = requestData.startLine as number;
 	const endLine = requestData.endLine as number;
+	const planOnly = requestData.planOnly === true;
 
 	if (!instancePath || !startLine || !endLine) {
 		return { error: "Instance path, startLine, and endLine are required" };
@@ -497,7 +530,7 @@ function deleteScriptLines(requestData: Record<string, unknown>) {
 	const conflict = lineEditConflict(instance, requestData.expectedRevision);
 	if (conflict) return conflict;
 
-	const recordingId = beginRecording(`Delete script lines ${startLine}-${endLine}: ${instance.Name}`);
+	const recordingId = planOnly ? undefined : beginRecording(`Delete script lines ${startLine}-${endLine}: ${instance.Name}`);
 
 	const [success, result] = pcall(() => {
 		const source = readScriptSource(instance);
@@ -512,6 +545,9 @@ function deleteScriptLines(requestData: Record<string, unknown>) {
 		for (let i = endLine; i < totalLines; i++) resultLines.push(lines[i]);
 
 		const newSource = joinLines(resultLines, hadTrailingNewline);
+
+		if (planOnly) return planned(instance, source, newSource);
+
 		const applyResult = applyScriptSource(instance, newSource, source);
 		if (!applyResult.success) error(applyResult.error);
 
@@ -529,10 +565,10 @@ function deleteScriptLines(requestData: Record<string, unknown>) {
 	});
 
 	if (success) {
-		finishRecording(recordingId, true);
+		if (recordingId !== undefined) finishRecording(recordingId, true);
 		return result;
 	}
-	finishRecording(recordingId, false);
+	if (recordingId !== undefined) finishRecording(recordingId, false);
 	return { error: `Failed to delete script lines: ${result}` };
 }
 
