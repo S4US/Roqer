@@ -1,8 +1,9 @@
+import { execFileSync } from 'child_process';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { afterAll, beforeAll, describe, expect, test } from '@jest/globals';
-import { checkFile, locateScript, scriptFiles } from '../rojo/ownership.js';
+import { checkFile, gitIgnored, locateScript, scriptFiles } from '../rojo/ownership.js';
 import type { SourcemapNode } from '../rojo/sourcemap.js';
 
 const tree: SourcemapNode = { name: 'Game', className: 'DataModel', filePaths: ['default.project.json'], children: [
@@ -111,5 +112,43 @@ describe('checkFile', () => {
   });
   test('only .lua and .luau files are written', () => {
     expect(checkFile(root, 'src/server/notes.txt', none)).toMatchObject({ persistence: 'unsupported' });
+  });
+});
+
+describe('gitIgnored', () => {
+  let root: string;
+  beforeAll(() => {
+    root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'roqer ignore ')));
+    execFileSync('git', ['init', '-q'], { cwd: root });
+    fs.mkdirSync(path.join(root, 'out'), { recursive: true });
+    fs.mkdirSync(path.join(root, 'src'), { recursive: true });
+    fs.writeFileSync(path.join(root, '.gitignore'), 'out/\n');
+    fs.writeFileSync(path.join(root, 'out', 'Built.luau'), '-- compiled\n');
+    fs.writeFileSync(path.join(root, 'src', 'Main.luau'), 'print(1)\n');
+  });
+  afterAll(() => {
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+
+  test('reports exactly the files Git ignores', async () => {
+    const built = path.join(root, 'out', 'Built.luau');
+    const main = path.join(root, 'src', 'Main.luau');
+    const ignored = await gitIgnored(root, [built, main]);
+    expect(ignored).toEqual(new Set([built]));
+  });
+
+  test('an empty file list is answered without asking Git', async () => {
+    expect(await gitIgnored(root, [])).toEqual(new Set());
+  });
+
+  test('a directory that is not a Git repository ignores nothing', async () => {
+    const outside = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'roqer notrepo ')));
+    try {
+      const file = path.join(outside, 'Main.luau');
+      fs.writeFileSync(file, 'print(1)\n');
+      expect(await gitIgnored(outside, [file])).toEqual(new Set());
+    } finally {
+      fs.rmSync(outside, { recursive: true, force: true });
+    }
   });
 });
