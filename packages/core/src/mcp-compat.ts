@@ -91,6 +91,7 @@ An NPC or a creature is a Model the game moves, not a player's character, so its
 - Use edit_script_batch when one script needs several exact, non-overlapping edits; they apply as one transaction and produce one revision.
 - Use set_script_source only when replacing the whole script.
 - Use find_and_replace_in_scripts with dryRun first when a replacement may affect several scripts.
+- On a place linked to a Rojo project (manage_instance link_project), script edits are saved to the project's .lua/.luau file and Rojo delivers them; results say saved.sync (synced, pending or diverged). A rojo_conflict means the file and Studio differ: read both before retrying. Do not use execute_luau to get around a rojo_* refusal.
 
 ## Playtests and runtime Luau
 
