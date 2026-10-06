@@ -9,6 +9,9 @@ export type WriteOutcome = { ok: true } | { ok: false; actualRevision: string; a
  * Replaces a source file only if it still holds the revision the caller
  * compared against, through a temporary file in the same folder and a rename,
  * so the file is never left half-written and a newer edit is never replaced.
+ * Rejects with an Error when the file cannot be read, stat'ed, written or renamed
+ * (for example deleted meanwhile, or locked on Windows); in every case the target
+ * is left as it was and no temporary file remains.
  */
 export async function compareAndWrite(file: string, expectedRevision: string, content: string): Promise<WriteOutcome> {
   const refuse = (bytes: Buffer): WriteOutcome => ({ ok: false, actualRevision: sourceRevision(bytes), actual: bytes.toString('utf8') });

@@ -40,6 +40,11 @@ describe('compareAndWrite', () => {
     await compareAndWrite(file, sourceRevision('x'), 'y');
     expect(fs.statSync(file).mode & 0o777).toBe(0o640);
   });
+  test('rejects when the target is missing, and leaves no temporary file', async () => {
+    const file = path.join(dir, 'Missing.luau');
+    await expect(compareAndWrite(file, sourceRevision('x'), 'y')).rejects.toThrow();
+    expect(leftovers()).toEqual([]);
+  });
 });
 
 describe('waitForStudio', () => {
@@ -58,6 +63,15 @@ describe('waitForStudio', () => {
   test('a failed read counts as not yet synced', async () => {
     const reads: (string | undefined)[] = [undefined, 'new'];
     await expect(waitForStudio(async () => reads.shift(), 'old', 'new', clock())).resolves.toBe('synced');
+  });
+  test('readRevision that rejects once then resolves new becomes synced', async () => {
+    let callCount = 0;
+    const readRevision = async () => {
+      callCount++;
+      if (callCount === 1) throw new Error('read failed');
+      return 'new';
+    };
+    await expect(waitForStudio(readRevision, 'old', 'new', clock())).resolves.toBe('synced');
   });
 });
 
