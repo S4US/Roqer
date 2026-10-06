@@ -34,7 +34,10 @@ Ask the agent to link your project, or call `manage_instance` yourself:
 - `project`, `root` — the project file's name and its folder;
 - `rojoVersion` — the Rojo version Roqer found on PATH;
 - `scripts` — how many scripts the project maps as `file`, `studio_only`,
-  `generated`, or `unsupported` (see below);
+  `generated`, or `unsupported` (see below). `studio_only` is always 0 here:
+  the sourcemap only lists scripts the project owns, so it cannot count a
+  script you made by hand in Studio; those show up as `studio_only` when a
+  later call reads or edits them, not in this count;
 - `problems` — up to five reasons a script came back `unsupported`;
 - `rojoServer` — whether a Rojo server answers on the project's serve port
   (its `servePort`, or 34872 if it does not set one) and, if so, whether its
@@ -77,7 +80,12 @@ classified exactly like scripts in the top-level project.
 On a linked place, `get_script_source` adds:
 
 - `file` — the script's source file, relative to the project folder;
-- `persistence` — `file`, `studio_only`, `generated`, or `unsupported`;
+- `persistence` — `file`, `studio_only`, `generated`, `unsupported`, or
+  `unknown` when Rojo's sourcemap could not be read (for example `rojo`
+  disappeared from PATH after linking); a `rojoError` field then says why;
+- `persistenceNote` — why, when `persistence` is not `file` (for example why
+  a script is `studio_only` or `generated`); separate from the plugin's own
+  `note`, if the result also has one;
 - `fileMatchesStudio` — for a file-backed script, whether the file on disk
   currently matches what Studio holds.
 
@@ -96,7 +104,7 @@ file-backed script, a successful edit adds `saved: { file, sync }`, where
 Roqer never writes Studio directly to force a sync; it only waits briefly and
 reports what it saw. On a `studio_only` script, the edit writes Studio exactly
 as it always did, and the result adds `persistence: "studio_only"` and a
-`note` explaining why.
+`persistenceNote` explaining why.
 
 ## Conflicts and how to resolve them
 
@@ -106,7 +114,7 @@ An edit to a file-backed script can fail with nothing changed on either side:
   of them, maybe both, changed since the agent last read it — including an
   unsaved edit still open in Studio's own editor). The result carries `file`,
   `fileRevision` and `studioRevision`, and, when both sides are short enough
-  to compare, `differing` (the first line that differs, up to 80 lines from
+  to compare, `differing` (the first line that differs, up to 40 lines from
   each side, and whether it was truncated). Read both sides, decide which one
   to keep, and retry.
 - `rojo_write_failed` — the file could not be written at all, for example
@@ -144,10 +152,20 @@ after you linked still shows up):
   your project doesn't know about is `studio_only`, and stays that way until
   you add it to the project yourself.
 - Links are lost when the MCP server restarts; relink afterward.
+- Links belong to one MCP server process; the desktop app and another MCP
+  client connected to the same place do not share them, so link in whichever
+  one you're editing from.
 - A small window remains between Roqer's last check of a file and the rename
   that saves it, so a save that races an edit made in that instant can still
   lose.
 - One Rojo project can be linked to one place at a time.
+- Without Git, or outside a Git repository, build output such as roblox-ts's
+  `out/` is treated as source unless it's under a Wally `_Index` folder; only
+  a Git-ignored path is recognized as generated.
+- If the project keys a service under a name other than its class name (for
+  example `"SSS": {"$className": "ServerScriptService"}`), its sourcemap node
+  is named `SSS`, but a built-in service's name in Studio is always its class
+  name; the two cannot match, so scripts under it are reported `studio_only`.
 - Roqer writes a file's bytes exactly as computed, line endings included, but
   how Rojo and Studio carry CRLF line endings and non-UTF-8 text through to
   Studio has not yet been confirmed on a live run. If a CRLF file's edits
