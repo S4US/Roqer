@@ -82,7 +82,7 @@ export function checkFile(
     return { persistence: 'unsupported', reason: `${relativePath} is missing on disk; check the project file` };
   }
   const relative = path.relative(root, real);
-  if (relative === '' || relative.startsWith('..') || path.isAbsolute(relative)) {
+  if (relative === '' || relative === '..' || relative.startsWith('..' + path.sep) || path.isAbsolute(relative)) {
     return { persistence: 'unsupported', reason: `${relativePath} resolves outside the project folder` };
   }
   if (relative.split(path.sep).includes('_Index') || ignored(real)) {

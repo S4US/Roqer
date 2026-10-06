@@ -85,4 +85,13 @@ describe('differingLines', () => {
     expect(result.file).toHaveLength(40);
     expect(result.truncated).toBe(true);
   });
+  test('caps each line\'s length, with a mark that it was cut', () => {
+    const longLine = 'x'.repeat(250);
+    const result = differingLines(longLine, '');
+    expect(result.file[0]).toBe(`${'x'.repeat(200)}…`);
+    expect(result.file[0].length).toBe(201);
+  });
+  test('a short line is left exactly as it was', () => {
+    expect(differingLines('short', '').file[0]).toBe('short');
+  });
 });

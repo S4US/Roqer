@@ -110,6 +110,13 @@ describe('checkFile', () => {
     expect(checkFile(root, '../Evil.luau', none)).toMatchObject({ persistence: 'unsupported' });
     expect(checkFile(root, 'src/server/Gone.luau', none)).toMatchObject({ persistence: 'unsupported', reason: expect.stringMatching(/missing/) });
   });
+  test('a root-level file merely named with a leading ".." is not mistaken for an escape', () => {
+    fs.writeFileSync(path.join(root, '..odd.luau'), 'print(3)\n');
+    expect(checkFile(root, '..odd.luau', none)).toMatchObject({
+      persistence: 'file',
+      relativeFile: '..odd.luau',
+    });
+  });
   test('only .lua and .luau files are written', () => {
     expect(checkFile(root, 'src/server/notes.txt', none)).toMatchObject({ persistence: 'unsupported' });
   });

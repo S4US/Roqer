@@ -55,7 +55,7 @@ import type { Rig } from '../animation/rig.js';
 import { RIGS, rigFor } from '../animation/rigs.js';
 import { cachedRigMeshes, currentRigMeshes, modelRigMeshes, rigMeshCacheDirectory, storeRigMeshes, type BoxedMeshPart } from '../animation/rig-meshes.js';
 import { MAX_MESHES_PER_READ, meshesToRead, storeModelMesh } from '../animation/model-meshes.js';
-import { RojoError, RojoIntegration, type Ownership } from '../rojo/index.js';
+import { RojoError, RojoIntegration, type Ownership, type ProjectLink } from '../rojo/index.js';
 import { parseInstancePath } from '../rojo/instance-path.js';
 import { compareAndWrite } from '../rojo/file-write.js';
 import { waitForStudio } from '../rojo/sync-wait.js';
@@ -1073,6 +1073,26 @@ export class RobloxStudioTools {
   protected _resolveInstanceId(instance_id?: string): string | undefined {
     const resolved = this.bridge.resolveTarget({ instance_id, target: undefined });
     return resolved.ok && resolved.mode === 'single' ? resolved.targetInstanceId : undefined;
+  }
+
+  /**
+   * The Rojo link for a call's place, if any: tries the resolved instance id
+   * first, then each id it is equivalent to, so a place linked under an
+   * `anon:` id before publishing keeps its link once it is reached as
+   * `place:<id>` (or vice versa).
+   */
+  private _rojoLinkFor(instance_id?: string): ProjectLink | undefined {
+    if (!this.rojo.hasLinks()) return undefined;
+    const resolved = this._resolveInstanceId(instance_id);
+    if (resolved === undefined) return undefined;
+    const direct = this.rojo.linkFor(resolved);
+    if (direct) return direct;
+    for (const equivalent of this.bridge.getEquivalentInstanceIds(resolved)) {
+      if (equivalent === resolved) continue;
+      const link = this.rojo.linkFor(equivalent);
+      if (link) return link;
+    }
+    return undefined;
   }
 
   constructor(bridge: BridgeService) {
@@ -2577,14 +2597,14 @@ export class RobloxStudioTools {
 
   /** For a linked place: which file a script comes from, and whether that file still matches Studio. */
   private async _rojoReadNote(response: Record<string, unknown>, instance_id?: string): Promise<Record<string, unknown>> {
-    const link = this.rojo.hasLinks() ? this.rojo.linkFor(this._resolveInstanceId(instance_id)) : undefined;
+    const link = this._rojoLinkFor(instance_id);
     if (!link) return {};
     const segments = parseInstancePath(String(response.instancePath ?? ''));
     if (!segments) return { persistence: 'unsupported' };
     try {
       const owner = await this.rojo.resolve(link, segments, response.className as string | undefined, true, { fresh: false });
       if (owner.persistence !== 'file' || !owner.file) {
-        return { persistence: owner.persistence, ...(owner.relativeFile ? { file: owner.relativeFile } : {}), ...(owner.reason ? { note: owner.reason } : {}) };
+        return { persistence: owner.persistence, ...(owner.relativeFile ? { file: owner.relativeFile } : {}), ...(owner.reason ? { persistenceNote: owner.reason } : {}) };
       }
       const matches = sourceRevision(await fs.promises.readFile(owner.file)) === response.revision;
       return { file: owner.relativeFile, persistence: 'file', fileMatchesStudio: matches };
@@ -2622,7 +2642,7 @@ export class RobloxStudioTools {
    * saved to its file and delivered by Rojo, never written to Studio directly.
    */
   private async _scriptWrite(endpoint: string, payload: Record<string, unknown>, instance_id?: string): Promise<Record<string, unknown>> {
-    const link = this.rojo.hasLinks() ? this.rojo.linkFor(this._resolveInstanceId(instance_id)) : undefined;
+    const link = this._rojoLinkFor(instance_id);
     if (!link) return this._callSingle(endpoint, payload, undefined, instance_id);
 
     const plan = await this._callSingle(endpoint, { ...payload, planOnly: true }, undefined, instance_id);
@@ -2641,9 +2661,24 @@ export class RobloxStudioTools {
 
     if (owner.persistence === 'studio_only') {
       const applied = await this._callSingle(endpoint, payload, undefined, instance_id);
-      return applied?.error ? applied : { ...applied, persistence: 'studio_only', note: owner.reason };
+      return applied?.error ? applied : { ...applied, persistence: 'studio_only', persistenceNote: owner.reason };
     }
     if (owner.persistence !== 'file' || !owner.file) return this._rojoRefusal(owner);
+
+    // The plan's previousRevision is Studio's revision as of planOnly; re-read
+    // it once more right before writing, so an edit made in Studio during the
+    // resolve window above is caught as a conflict instead of silently lost.
+    const recheck = await this._callSingle('/api/get-script-source', { instancePath: plan.instancePath, instanceRef: plan.instanceRef, startLine: 1, endLine: 1 }, undefined, instance_id);
+    if (recheck?.revision !== plan.previousRevision) {
+      const fileRevision = await fs.promises.readFile(owner.file).then(sourceRevision).catch(() => undefined);
+      return {
+        error: `${owner.relativeFile} and the script in Studio differ, so neither was changed. Read both, decide which to keep, and retry.`,
+        errorCode: 'rojo_conflict',
+        file: owner.relativeFile,
+        ...(fileRevision !== undefined ? { fileRevision } : {}),
+        studioRevision: recheck?.revision,
+      };
+    }
 
     let written: Awaited<ReturnType<typeof compareAndWrite>>;
     try {
@@ -5727,17 +5762,22 @@ export class RobloxStudioTools {
     }
     const requestPayload = { pattern, replacement, ...options };
 
-    const link = this.rojo.hasLinks() ? this.rojo.linkFor(this._resolveInstanceId(instance_id)) : undefined;
+    const link = this._rojoLinkFor(instance_id);
     if (link && options?.dryRun !== true) {
       const preview = await this._callSingle('/api/find-and-replace-in-scripts', { ...requestPayload, dryRun: true }, undefined, instance_id);
       const owned: string[] = [];
-      for (const change of (preview?.changes ?? []) as { instancePath?: string; replacements?: number }[]) {
-        if (!change.replacements || !change.instancePath) continue;
-        const segments = parseInstancePath(change.instancePath);
-        const owner: Ownership = segments
-          ? await this.rojo.resolve(link, segments, undefined, true, { fresh: false })
-          : { persistence: 'unsupported' };
-        if (owner.persistence !== 'studio_only') owned.push(owner.relativeFile ?? change.instancePath);
+      try {
+        for (const change of (preview?.changes ?? []) as { instancePath?: string; replacements?: number }[]) {
+          if (!change.replacements || !change.instancePath) continue;
+          const segments = parseInstancePath(change.instancePath);
+          const owner: Ownership = segments
+            ? await this.rojo.resolve(link, segments, undefined, true, { fresh: false })
+            : { persistence: 'unsupported' };
+          if (owner.persistence !== 'studio_only') owned.push(owner.relativeFile ?? change.instancePath);
+        }
+      } catch (error) {
+        if (error instanceof RojoError) return this._textResult({ error: `${error.message} Nothing was changed.`, errorCode: error.code });
+        throw error;
       }
       if (owned.length > 0) {
         return this._textResult({

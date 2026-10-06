@@ -23,7 +23,7 @@ const sourcemap = { name: 'Game', className: 'DataModel', children: [
 const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true }); });
 
-async function setup(fileText: string, options: { studioText?: string; studioAfter?: string[]; link?: boolean } = {}) {
+async function setup(fileText: string, options: { studioText?: string; studioAfter?: string[]; link?: boolean; preWriteText?: string } = {}) {
   const root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'roqer edit ')));
   roots.push(root);
   fs.mkdirSync(path.join(root, 'src'));
@@ -31,6 +31,7 @@ async function setup(fileText: string, options: { studioText?: string; studioAft
   fs.writeFileSync(path.join(root, 'default.project.json'), '{"name":"Fixture","tree":{"$className":"DataModel"}}');
   fs.writeFileSync(path.join(root, 'src', 'Main.server.luau'), fileText);
   fs.writeFileSync(path.join(root, 'Packages', '_Index', 'x', 'init.lua'), 'return {}');
+  const file = path.join(root, 'src', 'Main.server.luau');
   const studioText = options.studioText ?? fileText;
   const after = [...(options.studioAfter ?? [])];
   const tools = new RobloxStudioTools(new BridgeService());
@@ -44,7 +45,15 @@ async function setup(fileText: string, options: { studioText?: string; studioAft
       return data.planOnly ? plan : { success: true, instancePath: plan.instancePath, previousRevision: plan.previousRevision, revision: plan.revision };
     },
     '/api/get-script-source': () => {
-      const text = after.length > 0 ? after.shift()! : studioText;
+      // Before the write lands on disk this answers the pre-write recheck
+      // (and, on a failed write, the post-failure conflict read) with
+      // preWriteText if given, else studioText unchanged. Once the file on
+      // disk differs from what it started as, the write has happened, so
+      // later calls (the sync-wait poll) draw from studioAfter instead.
+      const writeLanded = fs.readFileSync(file, 'utf8') !== fileText;
+      const text = writeLanded
+        ? (after.length > 0 ? after.shift()! : studioText)
+        : (options.preWriteText ?? studioText);
       return { instancePath: 'game.ServerScriptService.Main', className: 'Script', revision: sourceRevision(text), source: text, lineCount: 1 };
     },
     '/api/find-and-replace-in-scripts': (data) => ({ dryRun: data.dryRun, changes: [{ instancePath: 'game.ServerScriptService.Main', replacements: 1 }] }),
@@ -60,7 +69,7 @@ async function setup(fileText: string, options: { studioText?: string; studioAft
     probe: async () => ({ reachable: false }),
   });
   if (options.link !== false) await tools.manageInstance({ action: 'link_project', project: path.join(root, 'default.project.json') });
-  return { tools, calls, file: path.join(root, 'src', 'Main.server.luau') };
+  return { tools, calls, file };
 }
 
 const studioWrites = (calls: Call[]) => calls.filter((call) => call.endpoint === '/api/edit-script-lines' && call.data.planOnly !== true);
@@ -117,6 +126,7 @@ describe('script edits on a Rojo-linked place', () => {
     const { tools, calls } = await setup('local x = 1\n');
     const result = body(await tools.editScriptLines('game.ServerScriptService.Other', 'x = 1', 'x = 2'));
     expect(result).toMatchObject({ success: true, persistence: 'studio_only' });
+    expect(result.persistenceNote).toMatch(/studio only/i);
     expect(studioWrites(calls)).toHaveLength(1);
   });
 
@@ -126,11 +136,90 @@ describe('script edits on a Rojo-linked place', () => {
     expect(result).toMatchObject({ file: path.join('src', 'Main.server.luau'), persistence: 'file', fileMatchesStudio: true });
   });
 
+  test('get_script_source keeps the plugin\'s own note alongside Rojo\'s persistence note', async () => {
+    const { tools } = await setup('local x = 1\n');
+    (tools as unknown as { _callSingle: unknown })._callSingle = async () => ({
+      instancePath: 'game.ServerScriptService.Other',
+      className: 'Script',
+      revision: 'rev1',
+      source: 'x',
+      lineCount: 1,
+      note: 'truncated at 500 lines',
+    });
+    const result = body(await tools.getScriptSource('game.ServerScriptService.Other'));
+    expect(result.note).toBe('truncated at 500 lines');
+    expect(result.persistenceNote).toMatch(/studio only/i);
+  });
+
+  test('a Studio edit mid-resolve-window is caught before the write, not lost', async () => {
+    const { tools, calls, file } = await setup('local x = 1\n', { preWriteText: 'local x = 1 -- changed in studio\n' });
+    const result = body(await tools.editScriptLines('game.ServerScriptService.Main', 'x = 1', 'x = 2'));
+    expect(result).toMatchObject({ errorCode: 'rojo_conflict', file: path.join('src', 'Main.server.luau') });
+    expect(result.studioRevision).toBe(sourceRevision('local x = 1 -- changed in studio\n'));
+    expect(result.fileRevision).toBe(sourceRevision('local x = 1\n'));
+    expect(fs.readFileSync(file, 'utf8')).toBe('local x = 1\n');
+    expect(studioWrites(calls)).toEqual([]);
+  });
+
   test('find_and_replace touching a file-backed script is refused', async () => {
     const { tools, calls } = await setup('local x = 1\n');
     const result = body(await tools.findAndReplaceInScripts('x', 'y', {}));
     expect(result.errorCode).toBe('rojo_bulk_edit_refused');
     expect(calls.filter((call) => call.endpoint === '/api/find-and-replace-in-scripts').every((call) => call.data.dryRun === true)).toBe(true);
+  });
+
+  test('find_and_replace guard: a RojoError while resolving ownership is reported, not thrown', async () => {
+    const root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'roqer far ')));
+    roots.push(root);
+    fs.mkdirSync(path.join(root, 'src'));
+    fs.writeFileSync(path.join(root, 'default.project.json'), '{"name":"Fixture","tree":{"$className":"DataModel"}}');
+    fs.writeFileSync(path.join(root, 'src', 'Main.server.luau'), 'local x = 1\n');
+    const tools = new RobloxStudioTools(new BridgeService());
+    const calls: Call[] = [];
+    (tools as unknown as { _callSingle: unknown })._callSingle = async (endpoint: string, data: Record<string, unknown>) => {
+      calls.push({ endpoint, data });
+      if (endpoint === '/api/find-and-replace-in-scripts') {
+        return { dryRun: data.dryRun, changes: [{ instancePath: 'game.ServerScriptService.Main', replacements: 1 }] };
+      }
+      throw new Error(`unexpected call to ${endpoint}`);
+    };
+    (tools as unknown as { _resolveInstanceId: unknown })._resolveInstanceId = () => 'place:1';
+    let sourcemapCalls = 0;
+    let clock = 0;
+    tools.rojo = new RojoIntegration({
+      run: async (args) => {
+        if (args[0] === '--version') return 'Rojo 7.6.1';
+        sourcemapCalls += 1;
+        // Succeeds once, for link_project; the guard's later resolve forces a
+        // fresh read (via the clock below outrunning the read cache) and
+        // gets this rejection instead, as if the project vanished meanwhile.
+        if (sourcemapCalls === 1) return JSON.stringify(sourcemap);
+        throw new Error('rojo sourcemap failed: the project is gone');
+      },
+      ignored: async () => new Set(),
+      probe: async () => ({ reachable: false }),
+      now: () => (clock += 20_000),
+    });
+    await tools.manageInstance({ action: 'link_project', project: path.join(root, 'default.project.json') });
+
+    const result = body(await tools.findAndReplaceInScripts('x', 'y', {}));
+    expect(result.errorCode).toBe('rojo_link_invalid');
+    expect(result.error).toMatch(/Nothing was changed\.$/);
+    expect(calls.filter((call) => call.endpoint === '/api/find-and-replace-in-scripts').every((call) => call.data.dryRun === true)).toBe(true);
+  });
+
+  test('_rojoLinkFor finds the link by an id the place is equivalent to', () => {
+    const tools = new RobloxStudioTools(new BridgeService());
+    const link = { instanceId: 'place:1', projectFile: '/x/default.project.json', root: '/x', projectName: 'X', rojoVersion: '7.6.1', port: 34872 };
+    tools.rojo = {
+      hasLinks: () => true,
+      linkFor: (id?: string) => (id === 'place:1' ? link : undefined),
+    } as unknown as RojoIntegration;
+    (tools as unknown as { _resolveInstanceId: unknown })._resolveInstanceId = () => 'anon:xyz';
+    (tools as unknown as { bridge: unknown }).bridge = {
+      getEquivalentInstanceIds: (id: string) => (id === 'anon:xyz' ? ['anon:xyz', 'place:1'] : [id]),
+    };
+    expect((tools as unknown as { _rojoLinkFor: (id?: string) => unknown })._rojoLinkFor()).toBe(link);
   });
 
   test('link_project without project, and unlink_project', async () => {
@@ -140,7 +229,9 @@ describe('script edits on a Rojo-linked place', () => {
     expect(tools.rojo.hasLinks()).toBe(false);
   });
 
-  test('file write failure: the plan still runs, but the write errors and Studio is never applied', async () => {
+  // Root ignores permission bits, so a read-only directory would not make the
+  // write fail; skip there rather than report a false pass or a flaky one.
+  (process.getuid?.() === 0 ? test.skip : test)('file write failure: the plan still runs, but the write errors and Studio is never applied', async () => {
     const { tools, calls, file } = await setup('local x = 1\n');
     const dir = path.dirname(file);
     // Read-only directory: the existing file is still readable (so ownership
