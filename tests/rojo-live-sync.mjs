@@ -261,7 +261,9 @@ await runTest('Rojo-linked place saves script edits to its file', async ({ track
     const studioAfterD = await client.callTool('get_script_source', { instancePath: INSTANCE_PATH });
     assertContains(studioAfterD.source, 'probe-edited-b', 'Studio\'s source is unchanged 6s after a pending edit');
 
-    // (e) The compareAndWrite temp file never appeared as an instance.
+    // (e) The compareAndWrite temp file never appeared as an instance. This
+    // is best-effort 100ms polling, not a guarantee: a pass does not prove
+    // the temp file was never visible, only that this watcher never caught it.
     watching = false;
     await watchForTmpInstance;
     assert(tmpInstanceSeen === undefined, `no .roqer-*.tmp write-in-progress file was ever visible as an instance (saw ${tmpInstanceSeen})`);

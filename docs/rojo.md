@@ -148,6 +148,10 @@ after you linked still shows up):
   that saves it, so a save that races an edit made in that instant can still
   lose.
 - One Rojo project can be linked to one place at a time.
+- Roqer writes a file's bytes exactly as computed, line endings included, but
+  how Rojo and Studio carry CRLF line endings and non-UTF-8 text through to
+  Studio has not yet been confirmed on a live run. If a CRLF file's edits
+  keep coming back `diverged` or `rojo_conflict`, convert the file to LF.
 
 ## Using it from another MCP client
 
