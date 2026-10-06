@@ -54,9 +54,11 @@ function buildProbeProject(root, servePort) {
     servePort,
     tree: {
       $className: 'DataModel',
-      ServerScriptService: {
-        RoqerRojoProbe: { $path: PROBE_RELATIVE_FILE.split(path.sep).join('/') },
-      },
+      // Mapped to the containing folder, not the file itself, so Rojo
+      // watches the whole folder (as a real project does) and case (e)'s
+      // temp-file-visibility check actually exercises something: a $path
+      // straight to one file would never show a sibling temp file either way.
+      ServerScriptService: { $path: 'src' },
     },
   }, null, 2));
 }
@@ -185,7 +187,7 @@ await runTest('Rojo-linked place saves script edits to its file', async ({ track
 
     const initial = await client.callTool('get_script_source', { instancePath: INSTANCE_PATH });
     assert(initial.persistence === 'file', 'get_script_source reports the linked persistence');
-    assert(initial.file === PROBE_RELATIVE_FILE.split(path.sep).join('/'), 'get_script_source reports the backing file');
+    assert(initial.file === PROBE_RELATIVE_FILE, 'get_script_source reports the backing file');
     assert(initial.fileMatchesStudio === true, 'the fresh Rojo-delivered file matches Studio before any edit');
 
     // (a) An ordinary edit changes the file and syncs.
@@ -196,7 +198,7 @@ await runTest('Rojo-linked place saves script edits to its file', async ({ track
     });
     assert(editA.success === true, 'edit_script_lines succeeds on a file-backed script');
     assert(editA.saved?.sync === 'synced', `the edit reports sync: synced (got ${JSON.stringify(editA.saved)})`);
-    assert(editA.saved?.file === PROBE_RELATIVE_FILE.split(path.sep).join('/'), 'the result names the saved file');
+    assert(editA.saved?.file === PROBE_RELATIVE_FILE, 'the result names the saved file');
     const afterA = await client.callTool('get_script_source', { instancePath: INSTANCE_PATH });
     assertContains(afterA.source, 'probe-edited-a', 'Studio shows the edited text after a synced edit');
 
