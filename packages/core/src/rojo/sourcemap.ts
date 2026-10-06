@@ -28,6 +28,10 @@ export type RojoRunner = (args: string[], cwd: string) => Promise<string>;
 
 const MINIMUM_VERSION = [7, 3, 0] as const;
 
+function oneLine(text: string): string {
+  return text.replace(/\s+/g, ' ').trim();
+}
+
 export const execRojo: RojoRunner = (args, cwd) => new Promise((resolve, reject) => {
   // No shell, so a project path is never parsed as a command line.
   execFile('rojo', args, { cwd, timeout: 20_000, maxBuffer: 32 * 1024 * 1024, windowsHide: true }, (error, stdout, stderr) => {
@@ -41,8 +45,8 @@ function rethrow(error: unknown, doing: string): never {
   if ((error as { code?: unknown }).code === 'ENOENT') {
     throw new RojoError('rojo_not_found', 'rojo was not found on PATH; install Rojo 7.3 or newer (for example with rokit) and restart the server.');
   }
-  const stderr = String((error as { stderr?: unknown }).stderr ?? '').trim();
-  throw new RojoError('rojo_link_invalid', `rojo ${doing} failed: ${(stderr || String((error as Error).message)).slice(0, 300)}`);
+  const stderr = oneLine(String((error as { stderr?: unknown }).stderr ?? ''));
+  throw new RojoError('rojo_link_invalid', `rojo ${doing} failed: ${(stderr || oneLine(String((error as Error).message))).slice(0, 300)}`);
 }
 
 export async function rojoVersion(run: RojoRunner, cwd: string): Promise<string> {
@@ -53,7 +57,7 @@ export async function rojoVersion(run: RojoRunner, cwd: string): Promise<string>
     rethrow(error, '--version');
   }
   const match = /(\d+)\.(\d+)\.(\d+)/.exec(output);
-  if (!match) throw new RojoError('rojo_link_invalid', `Could not read the Rojo version from: ${output.trim().slice(0, 120)}`);
+  if (!match) throw new RojoError('rojo_link_invalid', `Could not read the Rojo version from: ${oneLine(output).slice(0, 120)}`);
   const parts = match.slice(1, 4).map(Number);
   for (let index = 0; index < 3; index += 1) {
     if (parts[index] > MINIMUM_VERSION[index]) break;
@@ -102,7 +106,7 @@ export async function loadSourcemap(projectFile: string, run: RojoRunner): Promi
   try {
     parsed = JSON.parse(output);
   } catch {
-    throw new RojoError('rojo_link_invalid', `rojo sourcemap did not print JSON: ${output.trim().slice(0, 200)}`);
+    throw new RojoError('rojo_link_invalid', `rojo sourcemap did not print JSON: ${oneLine(output).slice(0, 200)}`);
   }
   return validateSourcemap(parsed);
 }

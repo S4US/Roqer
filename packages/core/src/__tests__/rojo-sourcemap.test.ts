@@ -38,4 +38,10 @@ describe('rojo sourcemap', () => {
     const run: RojoRunner = async () => 'error: could not find project';
     await expect(loadSourcemap('/p/default.project.json', run)).rejects.toMatchObject({ code: 'rojo_link_invalid' });
   });
+  test('multi-line stderr is collapsed to single line', async () => {
+    const run: RojoRunner = async () => { throw Object.assign(new Error('spawn failed'), { stderr: 'error: bad project\n  --> default.project.json:3\n   ^' }); };
+    const error = await loadSourcemap('/p/default.project.json', run).catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(RojoError);
+    expect((error as RojoError).message).not.toMatch(/\n/);
+  });
 });
