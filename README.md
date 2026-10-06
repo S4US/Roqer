@@ -82,6 +82,7 @@ claude mcp add robloxstudio -- node C:\path\to\Roqer\packages\robloxstudio-mcp\d
 - [3D modeling with Blender](docs/blender.md)
 - [Character animation](docs/animation.md)
 - [The Studio MCP server](docs/mcp-server.md)
+- [Rojo projects](docs/rojo.md)
 - [Creator Store assets](docs/creator-store-assets.md)
 - [Removed tools and parameters](docs/deprecated-api.md)
 
@@ -89,7 +90,7 @@ claude mcp add robloxstudio -- node C:\path\to\Roqer\packages\robloxstudio-mcp\d
 
 What Roqer is working toward. Plans can change; [open an issue](https://github.com/S4US/Roqer/issues) to suggest something.
 
-- Rojo and version control. Work on places whose code lives in a Rojo project: edit the files on disk that Rojo syncs into Studio, instead of only the copy inside Studio, so every change can be reviewed and kept in Git like the rest of your project.
+- Rojo and version control. Link a Rojo-synced place and script edits save to the file Rojo syncs from, instead of only the copy inside Studio, so they show up in `git diff` and survive a rebuild. Still ahead: new scripts, deletions, renames, and models.
 - MacOS support
 
 ## Contributing

@@ -49,6 +49,7 @@ independent auto-install, lifecycle, and parallel-isolation suites.
 | Change area | Required live command |
 |---|---|
 | Ordinary feature | `npm run test:e2e` |
+| Rojo linking or file-backed script edits | Feature gate plus `npm run test:rojo` and `npm run test:studio:rojo` (needs `rojo` on PATH and someone to connect the Rojo plugin) |
 | Paths, properties, tools, runtime, simulation, or multiplayer | `npm run test:studio:runner` (replaces the smaller feature gate) |
 | Installer, package artifacts, variants, or version repair | Feature gate plus `npm run test:e2e:auto-install` |
 | Studio launch, takeover, or startup-log lifecycle | Feature gate plus `npm run test:e2e:lifecycle` |
