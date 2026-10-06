@@ -10,7 +10,10 @@ import { blenderToolDefinition, parseBlenderToolInput } from "./blender-tool";
 import { BLENDER_TOOL_NAME } from "../shared/blender";
 import { REFERENCE_CLIP_TOOL_NAME } from "../shared/reference-clip";
 import { parseReferenceClipToolInput, referenceClipToolDefinition } from "./reference-clip";
-import { createSkillToolRunner, skillToolDefinition, SKILL_TOOL_NAME, type SkillToolRunner } from "./skill-tool";
+import {
+  createSkillToolRunner, skillToolDefinition, SKILL_TOOL_NAME, STEERED_BATCH_CHARACTERS,
+  type SkillDelivery, type SkillToolRunner,
+} from "./skill-tool";
 import {
   createStudioToolRunner, MalformedToolCallError, malformedCallsEndRun, MAX_CONSECUTIVE_MALFORMED_CALLS,
   parseStudioToolInput, studioToolDescription, studioToolInputSchema,
@@ -287,6 +290,37 @@ function toolImageNote(count: number, attached: boolean): string {
     : `[This result had ${count} images, but Roqer could not attach them, so you have not seen them. Do not describe or judge them.]`;
 }
 
+/**
+ * The turn input that hands loaded skill guidance to the model.
+ *
+ * It cannot travel in the tool result either. The script a Codex model calls
+ * tools from passes on at most 10,000 tokens of what they return, and one
+ * call's guidance alone can be larger: a visual effect's two core references
+ * are about 13,500 tokens. Past that Codex truncates it, and a run that loaded
+ * those two together asked for the second again a minute later, only to be
+ * told it already had it. Turn input has no such budget, and Codex accepting
+ * it means the model will read it, which is what the "already loaded" pointer
+ * on a repeat assumes.
+ */
+function skillGuidanceInput(delivery: SkillDelivery) {
+  return [
+    { type: "text", text: "[Roqer attaches the guidance load_skill just returned. This is tool output, not a message from the user.]" },
+    { type: "text", text: delivery.text },
+  ];
+}
+
+/**
+ * What a `load_skill` result says in place of the guidance it does not carry.
+ * What the call could not load is repeated here, so a script that reads only
+ * the result still knows to ask again.
+ */
+function skillGuidanceNote(delivery: SkillDelivery): string {
+  const note = `[Roqer attaches the ${delivery.name} guidance this call loaded (${delivery.delivered.join(", ")}) `
+    + "right after this result, in a message of its own. Read it there before relying on it.]";
+  if (delivery.notLoaded.length === 0) return note;
+  return `${note}\n\nNot loaded in this call:\n${delivery.notLoaded.map((line) => `- ${line}`).join("\n")}`;
+}
+
 function parseDynamicCall(request: AppServerRequest, threadId: string, blender: boolean, referenceClips = false):
   { operation: string; args: JsonRecord } | null {
   if (request.method !== "item/tool/call" || request.params.threadId !== threadId) return null;
@@ -392,8 +426,12 @@ export function createChatGptPlanner(options: ChatGptPlannerOptions): Planner {
       void completion.promise.catch(() => undefined);
       const runStudioTool = createStudioToolRunner(context, { templates: options.skillLibrary });
       // A kept thread still holds what earlier messages loaded, so its cache
-      // comes with it; a new thread starts from nothing.
-      const runSkillTool = current !== undefined ? current.skills : createSkillToolRunner(options.skillLibrary);
+      // comes with it; a new thread starts from nothing. Guidance reaches the
+      // model as turn input (see `skillGuidanceInput`), so it is batched by
+      // that limit rather than by Claude Code's inline one.
+      const runSkillTool = current !== undefined
+        ? current.skills
+        : createSkillToolRunner(options.skillLibrary, { maxBatchCharacters: STEERED_BATCH_CHARACTERS });
       const runIconTool = createIconToolRunner(options.skillLibrary);
       const prose = createProseStream((text) => context.say(text));
       let turnId: string | null = null;
@@ -548,7 +586,8 @@ export function createChatGptPlanner(options: ChatGptPlannerOptions): Planner {
       const handleRequest = async (request: AppServerRequest): Promise<unknown> => {
         if (settled || context.signal.aborted) return undefined;
         if (request.method === "item/tool/call" && request.params.threadId === threadId) {
-          const runTextTool = textToolRunner(request.params.tool, runSkillTool, runIconTool, context);
+          const callTurnId = request.params.turnId;
+          const runTextTool = textToolRunner(request.params.tool, (args) => deliverSkill(args, callTurnId), runIconTool, context);
           if (runTextTool) {
             try {
               return {
@@ -598,6 +637,33 @@ export function createChatGptPlanner(options: ChatGptPlannerOptions): Planner {
           success: result.ok,
           contentItems: [{ type: "inputText", text: `${result.text}\n\n${toolImageNote(images.length, attached)}` }],
         };
+      };
+
+      /**
+       * Loads guidance and hands it to the model as turn input; see
+       * `skillGuidanceInput`. A call that delivered nothing new, only pointers
+       * to earlier guidance or reasons something did not load, stays in the
+       * result, which is short. Guidance Codex would not take is forgotten, so
+       * asking again sends it in full rather than as a pointer to nothing.
+       */
+      const deliverSkill = async (args: unknown, callTurnId: unknown): Promise<string> => {
+        const delivery = await runSkillTool.deliver(args);
+        if (delivery.delivered.length === 0) return delivery.text;
+        const expectedTurnId = typeof callTurnId === "string" ? callTurnId : turnId;
+        if (!settled && !disconnected && expectedTurnId !== null) {
+          try {
+            await options.appServer.request("turn/steer", { threadId, expectedTurnId, input: skillGuidanceInput(delivery) });
+            return skillGuidanceNote(delivery);
+          } catch {
+            // Refused, most likely because the turn ended meanwhile; answered below.
+          }
+        }
+        runSkillTool.forget(delivery.name, delivery.delivered);
+        const resources = delivery.delivered.join(", ");
+        if (!settled) {
+          context.status("Guidance not shown to ChatGPT", `Codex would not take the ${delivery.name} guidance (${resources}), so ChatGPT was told it has not read it.`);
+        }
+        throw new Error(`Roqer could not hand you the ${delivery.name} guidance (${resources}), so you have not read it. Load it again before relying on it.`);
       };
 
       /** Hands a tool's images to the model as turn input; see `toolImageInput`. */

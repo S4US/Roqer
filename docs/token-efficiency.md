@@ -109,3 +109,10 @@ these rules on top of the MCP response contract:
   instead of being asked to load it. The cache is cleared when the provider
   compacts the conversation, so a pointer never refers to guidance the model can
   no longer see.
+- **ChatGPT reads guidance as a message.** Codex's models call tools from a
+  script that passes on at most 10,000 tokens of their results, less than a
+  visual effect's two core references. So under ChatGPT, `load_skill` returns a
+  short note and Roqer sends the guidance right after it as a message of its
+  own. That also lets one call carry up to 128,000 characters instead of
+  Claude Code's 48,000. Guidance Codex refuses is forgotten, so asking again
+  sends it in full.

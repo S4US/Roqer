@@ -5,7 +5,9 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 
 import { openSkillLibrary, type SkillLibrary } from "./skill-library";
-import { createSkillToolRunner, MAX_BATCH_CHARACTERS, runSkillTool, skillToolDefinition } from "./skill-tool";
+import {
+  createSkillToolRunner, MAX_BATCH_CHARACTERS, runSkillTool, skillToolDefinition, STEERED_BATCH_CHARACTERS,
+} from "./skill-tool";
 
 const SKILLS_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../agent/skills");
 
@@ -207,6 +209,33 @@ test("a resource cut for size stays askable rather than being remembered as sent
   const retry = await run({ name: "roblox-test", resource: "references/b.md" });
   assert.match(retry, /resource="references\/b.md"/);
   assert.doesNotMatch(retry, /already loaded earlier in this conversation/);
+});
+
+test("a delivery names only what it sent in full, and forgotten guidance is sent in full again", async () => {
+  const run = createSkillToolRunner(library);
+  await run({ name: "roblox-test", resource: "references/a.md" });
+  const delivery = await run.deliver({ name: "roblox-test", resources: ["references/a.md", "references/b.md"] });
+  assert.equal(delivery.name, "roblox-test");
+  assert.deepEqual(delivery.delivered, ["references/b.md"], "a pointer to earlier guidance is not a delivery");
+  assert.match(delivery.text, /references\/a.md\) was already loaded earlier in this conversation/);
+  assert.match(delivery.text, /resource="references\/b.md"/);
+
+  run.forget("roblox-test", delivery.delivered);
+  assert.equal(run.isLoaded("roblox-test", "references/b.md"), false);
+  assert.equal(run.isLoaded("roblox-test", "references/a.md"), true, "only what that call sent is forgotten");
+  assert.deepEqual((await run.deliver({ name: "roblox-test", resource: "references/b.md" })).delivered, ["references/b.md"]);
+});
+
+test("a runner can be given a larger batch for guidance that does not travel inline", async () => {
+  const large: SkillLibrary = {
+    catalog: library.catalog,
+    load: async (name, resource = "SKILL.md") => ({ name, resource, content: "x".repeat(30_000) }),
+  };
+  const request = { name: "roblox-test", resources: ["references/a.md", "references/b.md", "references/c.md"] };
+  const inline = await createSkillToolRunner(large).deliver(request);
+  assert.deepEqual(inline.delivered, ["references/a.md"]);
+  const steered = await createSkillToolRunner(large, { maxBatchCharacters: STEERED_BATCH_CHARACTERS }).deliver(request);
+  assert.deepEqual(steered.delivered, request.resources);
 });
 
 test("a batch request is validated before anything is read", async () => {
