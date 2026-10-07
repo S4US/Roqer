@@ -1,5 +1,5 @@
 import { BLENDER_OPERATION } from "../shared/blender";
-import { AUDITED_AFTER_LABEL, UI_AUDIT_TITLE } from "../shared/completion";
+import { AUDITED_AFTER_LABEL, REVISION_AFTER_LABEL, UI_AUDIT_TITLE } from "../shared/completion";
 import { CAPTURE_MOMENTS_OPERATION, GATEWAY_TOOL_RISK, isGatewayOperation, UPLOAD_ASSETS_OPERATION } from "../shared/gateway-operations";
 import { isKnownTool, TOOL_RISK } from "../shared/mcp-tools";
 import {
@@ -2055,11 +2055,29 @@ export function createStudioToolRunner(context: PlannerContext, options: StudioT
     if (outcome.ok && target && SCRIPT_MUTATIONS.has(operation)) {
       const before = scriptReads.get(target);
       const afterRevision = stringField(outcome.data, "sourceRevision") ?? stringField(outcome.data, "revision");
+      // On a Rojo-linked place, the mutation's outcome names where the write
+      // landed: `saved` when it reached the project's file (with `sync` saying
+      // whether Studio has it yet), `persistence: "studio_only"` when the file
+      // could not own this instance and Studio took the write directly. Neither
+      // is present for an unlinked place, which keeps today's summary.
+      const saved = isRecord(outcome.data) ? outcome.data.saved : undefined;
+      const savedFile = stringField(saved, "file");
+      const sync = stringField(saved, "sync");
+      const persistence = stringField(outcome.data, "persistence");
+      const summary = savedFile !== undefined
+        ? sync === "pending"
+          ? `Saved to ${savedFile}; Rojo has not delivered it to Studio yet.`
+          : sync === "diverged"
+            ? `Saved to ${savedFile}; the script in Studio changed meanwhile.`
+            : `Saved to ${savedFile}; Studio has the change.`
+        : persistence === "studio_only"
+          ? "Edited the script in Studio only; it is not saved to the linked Rojo project."
+          : MUTATION_SUMMARY[operation] ?? "Updated the script in Studio.";
       context.recordChange({
         kind: "script-source",
         target,
         instanceId: context.instanceId ?? undefined,
-        summary: MUTATION_SUMMARY[operation] ?? "Updated the script in Studio.",
+        summary,
         ...changeArtifact(operation, args, before),
         revisionBefore: before?.revision,
         revisionAfter: afterRevision,
@@ -2080,8 +2098,32 @@ export function createStudioToolRunner(context: PlannerContext, options: StudioT
         scriptReads.delete(target);
       }
 
-      const readback = await readWholeScript(target);
-      modelNote = recordVerification(target, afterRevision, readback, true);
+      if (savedFile !== undefined && sync !== "synced") {
+        // Rojo has not delivered this write to Studio yet (pending), or Studio's
+        // copy changed to something else before it arrived (diverged). Studio's
+        // read-back has nothing to confirm in either case — it would wait out a
+        // script Studio has not updated, or compare against a script someone
+        // else changed — so what is recorded as verified here is the file write
+        // itself, which Roqer's own compare-and-set already confirmed, not a
+        // Studio read-back that cannot yet speak to it.
+        const detail = sync === "diverged"
+          ? "The file was saved, but the script in Studio changed to something else meanwhile."
+          : "The file was saved; Rojo has not delivered the change to Studio yet.";
+        context.recordEvidence({
+          kind: "verification",
+          changeKind: "script-source",
+          title: target,
+          passed: true,
+          detail,
+          metadata: afterRevision ? [{ label: REVISION_AFTER_LABEL, value: afterRevision }] : undefined,
+        });
+        modelNote = sync === "diverged"
+          ? `Saved to ${savedFile}; the script in Studio changed meanwhile. Read both the file and the script in Studio before editing again.`
+          : `Saved to ${savedFile}; Rojo has not delivered it to Studio yet. Do not retry or force it into Studio.`;
+      } else {
+        const readback = await readWholeScript(target);
+        modelNote = recordVerification(target, afterRevision, readback, true);
+      }
     }
 
     const refused = STRUCTURED_MUTATIONS.has(operation) && pluginRefused(outcome);
