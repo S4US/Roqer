@@ -228,28 +228,37 @@ await runTest('Rojo-linked place saves script edits to its file', async ({ track
     assert(rawAfterB.includes('\r\n'), 'the file keeps \\r\\n line endings after the edit');
     assert(!/(?<!\r)\n/.test(rawAfterB), 'no line ending was normalized to a lone \\n');
 
-    // (c) A file changed behind Roqer's back is a conflict; neither side changes.
-    const divergent = 'print("direct-write-should-not-apply")\r\nprint("line2")\r\n';
+    // (c) A file changed behind Roqer's back is a conflict; neither side
+    // changes. rojo serve is still running here, so it delivers this direct
+    // write into Studio on its own, racing whatever this test reads right
+    // after the conflict: asserting that Studio still shows the pre-conflict
+    // text would be racing that same delivery. What the feature actually
+    // guarantees, with no race, is that Roqer wrote nothing: the refused
+    // edit's own text was never written anywhere, so it can never show up
+    // either in the file or in Studio.
+    const divergentMarker = 'direct-write-should-not-apply';
+    const refusedMarker = 'probe-edited-c-should-not-apply';
+    const divergent = `print("${divergentMarker}")\r\nprint("line2")\r\n`;
     fs.writeFileSync(probeFile, divergent);
     const editC = await client.callTool('edit_script_lines', {
       instancePath: INSTANCE_PATH,
       old_string: 'print("probe-edited-b")',
-      new_string: 'print("probe-edited-c-should-not-apply")',
+      new_string: `print("${refusedMarker}")`,
     });
     assert(editC.error !== undefined, 'the conflicting edit fails');
     assert(editC.errorCode === 'rojo_conflict', `the conflicting edit reports rojo_conflict (got ${editC.errorCode})`);
     const fileRightAfterC = fs.readFileSync(probeFile, 'utf8');
-    assert(fileRightAfterC === divergent, 'the conflict leaves the file exactly as it was written behind Roqer\'s back');
+    assert(fileRightAfterC === divergent, 'the conflict leaves the file exactly as it was written behind Roqer\'s back, Roqer wrote nothing');
     const studioRightAfterC = await client.callTool('get_script_source', { instancePath: INSTANCE_PATH });
-    assertContains(studioRightAfterC.source, 'probe-edited-b', 'the conflict leaves Studio unchanged');
+    assert(!studioRightAfterC.source?.includes(refusedMarker), 'Studio never shows the refused edit\'s text');
 
-    // Converge file and Studio again before killing rojo serve, by reverting
-    // the file to the content Studio still holds.
-    const postB = 'print("probe-edited-b")\r\nprint("line2")\r\n';
-    fs.writeFileSync(probeFile, postB);
-    await waitUntil('the file and Studio to agree again after the conflict', 30_000, 500, async () => {
+    // (d) below needs the file and Studio to agree before it can edit from a
+    // known baseline. Rather than writing yet another variant to force that,
+    // wait for Rojo to deliver the direct write this test already made, and
+    // use its exact text as the next edit's baseline.
+    await waitUntil('Rojo to deliver the direct write into Studio', 30_000, 500, async () => {
       const result = await client.callTool('get_script_source', { instancePath: INSTANCE_PATH });
-      return result.fileMatchesStudio === true ? result : undefined;
+      return result.fileMatchesStudio === true && result.source?.includes(divergentMarker) ? result : undefined;
     });
 
     // (d) Killing rojo serve makes an edit "pending"; Studio is never written.
@@ -258,7 +267,7 @@ await runTest('Rojo-linked place saves script edits to its file', async ({ track
     serve = undefined;
     const editD = await client.callTool('edit_script_lines', {
       instancePath: INSTANCE_PATH,
-      old_string: 'print("probe-edited-b")',
+      old_string: `print("${divergentMarker}")`,
       new_string: 'print("probe-edited-d-pending")',
     });
     assert(editD.success === true, 'the edit still succeeds (the file write does not need rojo serve)');
@@ -268,7 +277,7 @@ await runTest('Rojo-linked place saves script edits to its file', async ({ track
     assert(fileAfterD.includes('probe-edited-d-pending'), 'the file itself was saved even though Rojo cannot deliver it');
     await delay(6000);
     const studioAfterD = await client.callTool('get_script_source', { instancePath: INSTANCE_PATH });
-    assertContains(studioAfterD.source, 'probe-edited-b', 'Studio\'s source is unchanged 6s after a pending edit');
+    assertContains(studioAfterD.source, divergentMarker, 'Studio\'s source is unchanged 6s after a pending edit');
 
     // (e) The compareAndWrite temp file never appeared as an instance. This
     // is best-effort 100ms polling, not a guarantee: a pass does not prove
