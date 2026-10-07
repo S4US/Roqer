@@ -506,6 +506,72 @@ test("retry() reuses an in-flight automatic relink instead of starting a second 
   });
 });
 
+test("retry() never hands back a stale in-flight failure: once that attempt settles failed, retry() makes a fresh bridge call", async () => {
+  await withStore(async (store) => {
+    await store.remember("place:1", "/projects/one/default.project.json");
+    const calls: Call[] = [];
+    const releases: (() => void)[] = [];
+    const connection = new RojoConnection({
+      store,
+      // The first (automatic) call reflects the broken state it was
+      // dispatched against (file missing); every call after it reflects the
+      // bridge having since been fixed, regardless of when each is released
+      // -- decided by call order, not by toggling a flag after the fact, the
+      // same way a real bridge's answer depends on when the call actually
+      // ran, not on test timing.
+      callTool: async (tool, args) => {
+        const index = calls.length;
+        calls.push({ tool, args });
+        await new Promise<void>((resolve) => { releases[index] = resolve; });
+        return index === 0
+          ? outcome({ ok: false, data: { error: "No project file", errorCode: "rojo_link_invalid" }, message: "No project file" })
+          : linkSuccess();
+      },
+      probe: async () => ({ answering: true }),
+      readServePort: neverReadsPort(),
+    });
+
+    const automatic = connection.relinkConnected(["place:1"]);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const retried = connection.retry("place:1");
+    assert.equal(calls.length, 1, "retry() awaited the attempt already in flight rather than racing a second one");
+
+    releases[0]?.(); // settles the automatic attempt as a failure
+    await automatic; // relinkConnected() resolves void, swallowing that per-instance failure itself
+
+    // retry() must not resolve to that stale failure -- it dispatches its
+    // own fresh attempt, a genuinely new bridge call.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.equal(calls.length, 2, "retry() made its own fresh bridge call instead of returning the stale failure");
+    releases[1]?.();
+    const retriedResult = await retried;
+
+    assert.equal(retriedResult.ok, true, "retry() resolves to its own fresh, successful attempt (2 bridge calls total)");
+    if (!retriedResult.ok) throw new Error("unreachable");
+    assert.equal(retriedResult.view.state, "linked-running");
+
+    const view = await connection.view("place:1", ["place:1"]);
+    assert.equal(view.state, "linked-running", "the view reflects the fresh success, not the stale failure");
+  });
+});
+
+test("retry() with nothing in flight still calls the bridge exactly once", async () => {
+  await withStore(async (store) => {
+    await store.remember("place:1", "/projects/one/default.project.json");
+    const calls: Call[] = [];
+    const connection = new RojoConnection({
+      store,
+      callTool: async (tool, args) => { calls.push({ tool, args }); return linkSuccess(); },
+      probe: async () => ({ answering: true }),
+      readServePort: neverReadsPort(),
+    });
+
+    const result = await connection.retry("place:1");
+    assert.equal(calls.length, 1);
+    assert.equal(result.ok, true);
+  });
+});
+
 test("bridgeRestarted() clears a linked anon place's memory, so its view is no longer linked", async () => {
   await withStore(async (store) => {
     const connection = new RojoConnection({

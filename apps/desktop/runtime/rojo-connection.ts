@@ -301,12 +301,34 @@ export class RojoConnection {
     }
   }
 
-  /** Re-attempts a remembered link regardless of whether an earlier automatic relink failed (the popover's Retry button). */
+  /**
+   * Re-attempts a remembered link regardless of whether an earlier automatic
+   * relink failed (the popover's Retry button).
+   *
+   * Retry must always reflect a fresh attempt, never the stale result of one
+   * dispatched before whatever was wrong got fixed. `relinkConnected`'s
+   * periodic poll can have its own `link()` call in flight for this instance
+   * right when the user clicks Retry -- started while the project file was
+   * still missing, say -- and `link()`'s normal in-flight dedup would hand
+   * that same shared promise straight to Retry, which resolves to the old
+   * failure even after the file has since been restored. So: if an attempt
+   * is already in flight, await it rather than racing a second bridge call
+   * against it; a success is Retry's own result, nothing more to do. A
+   * failure is stale by definition -- Retry dispatches a brand new attempt
+   * instead (the in-flight one's own `finally` has already cleared the slot
+   * by the time its result resolves, so `link()` below genuinely calls the
+   * bridge again, not another shared promise).
+   */
   async retry(instanceId: string): Promise<RojoResult> {
     const snapshot = await this.store.get();
     const stored = snapshot.links.find((link) => link.instanceId === instanceId);
     if (stored === undefined) {
       return { ok: false, message: "There is no remembered project to retry.", view: await this.viewFor(instanceId) };
+    }
+    const existing = this.inFlight.get(instanceId);
+    if (existing !== undefined) {
+      const result = await existing;
+      if (result.ok) return result;
     }
     return this.link(instanceId, stored.projectFile);
   }
