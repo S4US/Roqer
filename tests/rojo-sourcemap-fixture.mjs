@@ -8,6 +8,12 @@
 // No Studio is involved. Skips (exit 0) when rojo is not on PATH, so this is
 // safe to run anywhere. Run via `npm run test:rojo`, which builds
 // packages/core first so packages/core/dist/rojo/index.js exists.
+//
+// A Rokit-managed `rojo` with no `rokit.toml` in this script's cwd has
+// nothing to run here, since this fixture's temp project is not where the
+// Rokit shim looks. Set ROJO_BIN to an absolute path to a rojo executable
+// (for example rojo.exe installed globally) to bypass the shim; every rojo
+// invocation this script makes honors it.
 
 import { execFile } from 'node:child_process';
 import * as fs from 'node:fs';
@@ -21,12 +27,26 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, '..');
 const CORE_ROJO_INDEX = path.join(REPO_ROOT, 'packages', 'core', 'dist', 'rojo', 'index.js');
 
-async function rojoOnPath() {
+const ROJO_BIN = process.env.ROJO_BIN || 'rojo';
+// eslint-disable-next-line no-control-regex
+const ANSI_PATTERN = /\u001b\[[0-9;]*m/g;
+const ROKIT_SHIM_MESSAGE = /Failed to find tool ['"]rojo['"]/;
+
+/** A RojoRunner (packages/core/src/rojo/sourcemap.ts) that runs ROJO_BIN instead of the bare `rojo` execRojo uses. */
+function rojoBinRunner(args, cwd) {
+  return execFileAsync(ROJO_BIN, args, {
+    cwd, timeout: 20_000, maxBuffer: 32 * 1024 * 1024, windowsHide: true,
+  }).then((result) => result.stdout);
+}
+
+/** Checks ROJO_BIN runs at all, and whether a failure is a Rokit shim with no project manifest here. */
+async function checkRojo() {
   try {
-    await execFileAsync('rojo', ['--version'], { timeout: 10_000, windowsHide: true });
-    return true;
-  } catch {
-    return false;
+    await execFileAsync(ROJO_BIN, ['--version'], { timeout: 10_000, windowsHide: true });
+    return { ok: true };
+  } catch (error) {
+    const stderr = String(error?.stderr ?? '').replace(ANSI_PATTERN, '');
+    return { ok: false, rokitShim: ROKIT_SHIM_MESSAGE.test(stderr) };
   }
 }
 
@@ -83,8 +103,13 @@ function assert(condition, message) {
 }
 
 async function main() {
-  if (!(await rojoOnPath())) {
-    console.log('SKIP: rojo not on PATH');
+  const check = await checkRojo();
+  if (!check.ok) {
+    if (!process.env.ROJO_BIN && check.rokitShim) {
+      console.log('SKIP: rojo is a Rokit shim with no rokit.toml here; set ROJO_BIN to rojo.exe or install it globally with rokit add --global rojo-rbx/rojo');
+    } else {
+      console.log('SKIP: rojo not on PATH');
+    }
     process.exit(0);
     return;
   }
@@ -101,7 +126,7 @@ async function main() {
     await execFileAsync('git', ['init', '-q'], { cwd: root });
 
     const { RojoIntegration } = await import(pathToFileURL(CORE_ROJO_INDEX).href);
-    const rojo = new RojoIntegration();
+    const rojo = new RojoIntegration(process.env.ROJO_BIN ? { run: rojoBinRunner } : {});
     const instanceId = 'fixture:1';
     const summary = await rojo.link(instanceId, path.join(root, 'default.project.json'));
     console.log(`  rojo ${summary.rojoVersion}, scripts: ${JSON.stringify(summary.scripts)}`);

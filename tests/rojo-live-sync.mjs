@@ -13,6 +13,12 @@
 //
 // Never touches the user's own place: everything happens in a temp project
 // linked to a disposable baseplate.
+//
+// Set ROJO_BIN to an absolute path to a rojo executable to run a specific
+// one (for example a Rokit-managed rojo.exe installed globally, since a
+// Rokit shim with no rokit.toml in this script's temp project has nothing
+// to run here); both the version check and the `rojo serve` this script
+// spawns honor it.
 
 import { execFile, spawn } from 'node:child_process';
 import { once } from 'node:events';
@@ -26,6 +32,7 @@ import { promisify } from 'node:util';
 import { McpClient, assert, assertContains, runTest, waitForEditPeer } from './lib/mcp-client.mjs';
 
 const execFileAsync = promisify(execFile);
+const ROJO_BIN = process.env.ROJO_BIN || 'rojo';
 const INSTANCE_PATH = 'game.ServerScriptService.RoqerRojoProbe';
 const PROBE_RELATIVE_FILE = path.join('src', 'RoqerRojoProbe.server.luau');
 const TMP_INSTANCE_PATTERN = /\.roqer-[0-9a-f]+\.tmp/i;
@@ -115,7 +122,7 @@ function findTmpInstanceName(value) {
 
 async function rojoOnPath() {
   try {
-    await execFileAsync('rojo', ['--version'], { timeout: 10_000, windowsHide: true });
+    await execFileAsync(ROJO_BIN, ['--version'], { timeout: 10_000, windowsHide: true });
     return true;
   } catch {
     return false;
@@ -162,7 +169,7 @@ await runTest('Rojo-linked place saves script edits to its file', async ({ track
     const servePort = await getFreePort();
     buildProbeProject(root, servePort);
 
-    serve = spawn('rojo', ['serve', 'default.project.json', '--port', String(servePort)], {
+    serve = spawn(ROJO_BIN, ['serve', 'default.project.json', '--port', String(servePort)], {
       cwd: root,
       stdio: ['ignore', 'pipe', 'pipe'],
     });
