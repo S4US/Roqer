@@ -75,15 +75,15 @@ export function checkFile(
   },
 ): Ownership {
   if (!isScriptFile(relativePath)) {
-    return { persistence: 'unsupported', reason: `${relativePath} is not a .lua or .luau file` };
+    return { persistence: 'unsupported', reason: `${path.normalize(relativePath)} is not a .lua or .luau file` };
   }
   const real = realpath(path.resolve(root, relativePath));
   if (real === undefined) {
-    return { persistence: 'unsupported', reason: `${relativePath} is missing on disk; check the project file` };
+    return { persistence: 'unsupported', reason: `${path.normalize(relativePath)} is missing on disk; check the project file` };
   }
   const relative = path.relative(root, real);
   if (relative === '' || relative === '..' || relative.startsWith('..' + path.sep) || path.isAbsolute(relative)) {
-    return { persistence: 'unsupported', reason: `${relativePath} resolves outside the project folder` };
+    return { persistence: 'unsupported', reason: `${path.normalize(relativePath)} resolves outside the project folder` };
   }
   if (relative.split(path.sep).includes('_Index') || ignored(real)) {
     return { persistence: 'generated', file: real, relativeFile: relative, reason: `${relative} is a package or build output, not source` };

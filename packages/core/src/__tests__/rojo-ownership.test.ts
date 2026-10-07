@@ -120,6 +120,25 @@ describe('checkFile', () => {
   test('only .lua and .luau files are written', () => {
     expect(checkFile(root, 'src/server/notes.txt', none)).toMatchObject({ persistence: 'unsupported' });
   });
+  test('the outside-root reason shows a normalized, OS-native path', () => {
+    // A messy but equivalent path (a redundant leading "./") that still
+    // resolves to the real file outside root, to show the reason uses
+    // path.normalize rather than the input exactly as given.
+    const clean = path.join(path.relative(root, outside), 'Evil.luau');
+    const relativePath = `.${path.sep}${clean}`;
+    expect(checkFile(root, relativePath, none)).toMatchObject({
+      persistence: 'unsupported',
+      reason: `${path.normalize(relativePath)} resolves outside the project folder`,
+    });
+    expect(path.normalize(relativePath)).toBe(clean);
+  });
+  test('the missing-file reason shows a normalized, OS-native path', () => {
+    const relativePath = 'src/server/./Gone.luau';
+    expect(checkFile(root, relativePath, none)).toMatchObject({
+      persistence: 'unsupported',
+      reason: `${path.normalize(relativePath)} is missing on disk; check the project file`,
+    });
+  });
 });
 
 describe('gitIgnored', () => {

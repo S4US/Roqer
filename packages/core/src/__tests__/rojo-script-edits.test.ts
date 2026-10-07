@@ -113,6 +113,35 @@ describe('script edits on a Rojo-linked place', () => {
     expect(result.differing.firstLine).toBe(1);
     expect(fs.readFileSync(file, 'utf8')).toBe('local x = 1 -- edited on disk\n');
     expect(studioWrites(calls)).toEqual([]);
+    // A5: the conflict message gives the two real options and names neither a
+    // Rojo button nor command, since Rojo cannot copy Studio's text back.
+    expect(result.error).toBe(
+      `${path.join('src', 'Main.server.luau')} and the script in Studio differ, so neither was changed. ` +
+      'To keep the file, reconnect the Rojo plugin so Studio takes the file, then retry. ' +
+      "To keep Studio's version, copy its text into the file, then retry. " +
+      'Rojo cannot copy Studio\'s text back to the file.'
+    );
+  });
+
+  test('a CRLF file whose LF form matches Studio: write succeeds, stays CRLF, synced', async () => {
+    const { tools, calls, file } = await setup('local x = 1\r\n', { studioText: 'local x = 1\n', studioAfter: ['local x = 2\n'] });
+    const result = body(await tools.editScriptLines('game.ServerScriptService.Main', 'x = 1', 'x = 2'));
+    expect(fs.readFileSync(file, 'utf8')).toBe('local x = 2\r\n');
+    expect(result).toMatchObject({ success: true, saved: { file: path.join('src', 'Main.server.luau'), sync: 'synced' } });
+    expect(studioWrites(calls)).toEqual([]);
+  });
+
+  test('a CRLF file that genuinely differs from Studio is still a conflict', async () => {
+    const { tools, file } = await setup('local x = 1 -- disk\r\n', { studioText: 'local x = 1\n' });
+    const result = body(await tools.editScriptLines('game.ServerScriptService.Main', 'x = 1', 'x = 2'));
+    expect(result.errorCode).toBe('rojo_conflict');
+    expect(fs.readFileSync(file, 'utf8')).toBe('local x = 1 -- disk\r\n');
+  });
+
+  test('get_script_source: a CRLF file whose LF form matches Studio reports fileMatchesStudio true', async () => {
+    const { tools } = await setup('local x = 1\r\n', { studioText: 'local x = 1\n' });
+    const result = body(await tools.getScriptSource('game.ServerScriptService.Main'));
+    expect(result).toMatchObject({ file: path.join('src', 'Main.server.luau'), persistence: 'file', fileMatchesStudio: true });
   });
 
   test('generated file is refused', async () => {
@@ -120,6 +149,8 @@ describe('script edits on a Rojo-linked place', () => {
     const result = body(await tools.editScriptLines('game.ServerScriptService.Gen', 'x', 'y'));
     expect(result.errorCode).toBe('rojo_generated');
     expect(studioWrites(calls)).toEqual([]);
+    // A3: the reason ends in a period before "Nothing was changed." (no run-on).
+    expect(result.error).toBe(`${path.join('Packages', '_Index', 'x', 'init.lua')} is a package or build output, not source. Nothing was changed.`);
   });
 
   test('studio-only script writes Studio and says so', async () => {
@@ -159,6 +190,13 @@ describe('script edits on a Rojo-linked place', () => {
     expect(result.fileRevision).toBe(sourceRevision('local x = 1\n'));
     expect(fs.readFileSync(file, 'utf8')).toBe('local x = 1\n');
     expect(studioWrites(calls)).toEqual([]);
+    // A5: both conflict sites use the same message.
+    expect(result.error).toBe(
+      `${path.join('src', 'Main.server.luau')} and the script in Studio differ, so neither was changed. ` +
+      'To keep the file, reconnect the Rojo plugin so Studio takes the file, then retry. ' +
+      "To keep Studio's version, copy its text into the file, then retry. " +
+      'Rojo cannot copy Studio\'s text back to the file.'
+    );
   });
 
   test('find_and_replace touching a file-backed script is refused', async () => {
@@ -204,7 +242,8 @@ describe('script edits on a Rojo-linked place', () => {
 
     const result = body(await tools.findAndReplaceInScripts('x', 'y', {}));
     expect(result.errorCode).toBe('rojo_link_invalid');
-    expect(result.error).toMatch(/Nothing was changed\.$/);
+    // A3: the reason gets a period before "Nothing was changed." (no run-on).
+    expect(result.error).toBe('rojo sourcemap failed: rojo sourcemap failed: the project is gone. Nothing was changed.');
     expect(calls.filter((call) => call.endpoint === '/api/find-and-replace-in-scripts').every((call) => call.data.dryRun === true)).toBe(true);
   });
 

@@ -61,6 +61,7 @@ import { compareAndWrite } from '../rojo/file-write.js';
 import { waitForStudio } from '../rojo/sync-wait.js';
 import { differingLines } from '../rojo/conflict.js';
 import { sourceRevision } from '../rojo/source-revision.js';
+import { toStudioText } from '../rojo/text-format.js';
 import * as fs from 'fs';
 import * as path from 'path';
 
@@ -150,6 +151,23 @@ const CREATOR_STORE_SORT_CATEGORIES = new Set<string>([
   'UpdatedTime',
   'Ratings',
 ]);
+/** A Rojo refusal reason followed by "Nothing was changed.", with a period added first if the reason lacks one. */
+function rojoNothingChanged(reason: string): string {
+  return `${reason.endsWith('.') ? reason : `${reason}.`} Nothing was changed.`;
+}
+
+/**
+ * The file and Studio's copy disagree, so neither was written. Names the two
+ * real ways out; Rojo has no button or command that copies Studio's text
+ * back to the file, so the agent must not invent or search for one.
+ */
+function rojoConflictMessage(relativeFile: string): string {
+  return `${relativeFile} and the script in Studio differ, so neither was changed. `
+    + 'To keep the file, reconnect the Rojo plugin so Studio takes the file, then retry. '
+    + "To keep Studio's version, copy its text into the file, then retry. "
+    + 'Rojo cannot copy Studio\'s text back to the file.';
+}
+
 /**
  * A line-addressed edit's optional compare-and-set. Line numbers are only
  * meaningful against the source they were read from, so a caller that passes
@@ -2606,7 +2624,7 @@ export class RobloxStudioTools {
       if (owner.persistence !== 'file' || !owner.file) {
         return { persistence: owner.persistence, ...(owner.relativeFile ? { file: owner.relativeFile } : {}), ...(owner.reason ? { persistenceNote: owner.reason } : {}) };
       }
-      const matches = sourceRevision(await fs.promises.readFile(owner.file)) === response.revision;
+      const matches = sourceRevision(toStudioText(await fs.promises.readFile(owner.file))) === response.revision;
       return { file: owner.relativeFile, persistence: 'file', fileMatchesStudio: matches };
     } catch (error) {
       return { persistence: 'unknown', rojoError: error instanceof Error ? error.message : String(error) };
@@ -2630,7 +2648,7 @@ export class RobloxStudioTools {
 
   private _rojoRefusal(owner: Ownership): Record<string, unknown> {
     return {
-      error: `${owner.reason ?? 'This script cannot be saved to the Rojo project.'} Nothing was changed.`,
+      error: rojoNothingChanged(owner.reason ?? 'This script cannot be saved to the Rojo project.'),
       errorCode: owner.persistence === 'generated' ? 'rojo_generated' : 'rojo_unsupported',
       ...(owner.relativeFile ? { file: owner.relativeFile } : {}),
     };
@@ -2655,7 +2673,7 @@ export class RobloxStudioTools {
         ? await this.rojo.resolve(link, segments, plan.className, plan.uniquePath !== false, { fresh: true })
         : { persistence: 'unsupported', reason: `${plan.instancePath} could not be matched to the project` };
     } catch (error) {
-      if (error instanceof RojoError) return { error: `${error.message} Nothing was changed.`, errorCode: error.code };
+      if (error instanceof RojoError) return { error: rojoNothingChanged(error.message), errorCode: error.code };
       throw error;
     }
 
@@ -2670,9 +2688,9 @@ export class RobloxStudioTools {
     // resolve window above is caught as a conflict instead of silently lost.
     const recheck = await this._callSingle('/api/get-script-source', { instancePath: plan.instancePath, instanceRef: plan.instanceRef, startLine: 1, endLine: 1 }, undefined, instance_id);
     if (recheck?.revision !== plan.previousRevision) {
-      const fileRevision = await fs.promises.readFile(owner.file).then(sourceRevision).catch(() => undefined);
+      const fileRevision = await fs.promises.readFile(owner.file).then((bytes) => sourceRevision(toStudioText(bytes))).catch(() => undefined);
       return {
-        error: `${owner.relativeFile} and the script in Studio differ, so neither was changed. Read both, decide which to keep, and retry.`,
+        error: rojoConflictMessage(owner.relativeFile!),
         errorCode: 'rojo_conflict',
         file: owner.relativeFile,
         ...(fileRevision !== undefined ? { fileRevision } : {}),
@@ -2690,7 +2708,7 @@ export class RobloxStudioTools {
     if (!written.ok) {
       const studio = await this._callSingle('/api/get-script-source', { instancePath: plan.instancePath, instanceRef: plan.instanceRef }, undefined, instance_id).catch(() => undefined);
       return {
-        error: `${owner.relativeFile} and the script in Studio differ, so neither was changed. Read both, decide which to keep, and retry.`,
+        error: rojoConflictMessage(owner.relativeFile!),
         errorCode: 'rojo_conflict',
         file: owner.relativeFile,
         fileRevision: written.actualRevision,
@@ -5776,7 +5794,7 @@ export class RobloxStudioTools {
           if (owner.persistence !== 'studio_only') owned.push(owner.relativeFile ?? change.instancePath);
         }
       } catch (error) {
-        if (error instanceof RojoError) return this._textResult({ error: `${error.message} Nothing was changed.`, errorCode: error.code });
+        if (error instanceof RojoError) return this._textResult({ error: rojoNothingChanged(error.message), errorCode: error.code });
         throw error;
       }
       if (owned.length > 0) {
