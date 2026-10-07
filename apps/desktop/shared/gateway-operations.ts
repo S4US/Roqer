@@ -16,15 +16,21 @@ import type { ToolParameterSchema, ToolSchema } from "./mcp-tool-schemas";
 
 export const CAPTURE_MOMENTS_OPERATION = "capture_moments";
 export const UPLOAD_ASSETS_OPERATION = "upload_assets";
+export const LINK_ROJO_PROJECT_OPERATION = "link_rojo_project";
 
 /**
  * Captures run Luau the model wrote, in Studio or in a playtest client, so
  * they confirm exactly as `execute_luau` and `eval_client_runtime` do.
- * Uploads publish files to Roblox, as `upload_asset` does.
+ * Uploads publish files to Roblox, as `upload_asset` does. Linking a Rojo
+ * project is an ordinary, recoverable project edit -- the same reason
+ * `manage_instance` itself would be a `mutation` for it -- so it asks in Ask
+ * first like other writes, rather than needing the explicit confirmation an
+ * `irreversible` tool does.
  */
 export const GATEWAY_TOOL_RISK: Readonly<Record<string, ToolRisk>> = {
   [CAPTURE_MOMENTS_OPERATION]: "irreversible",
   [UPLOAD_ASSETS_OPERATION]: "irreversible",
+  [LINK_ROJO_PROJECT_OPERATION]: "mutation",
 };
 
 /** The most moments one call captures: each is an image the model reads. */
@@ -53,6 +59,12 @@ export const GATEWAY_SCHEMAS: Readonly<Record<string, ToolSchema>> = {
     description: "Use to upload several local files to Roblox in one call, as upload_asset does one: every texture of a finished set at once.",
     parameters: [
       { name: "uploads", type: "object[]", required: true, description: `1-${MAX_UPLOADS} files, each {filePath, assetType: 'Decal'|'Model'|'Audio'|'Animation'|'Video', displayName (at most 50 characters), description?}. Each file is uploaded on its own; the result lists every file with its assetId and, for a Decal, its imageId.` },
+    ],
+  },
+  [LINK_ROJO_PROJECT_OPERATION]: {
+    description: "Use to link the current place to a Rojo project, so script edits save to the project's files instead of staying only in Studio. Opens the same project-file picker as the Rojo pill: the user chooses the *.project.json file, or cancels. There is no path argument -- never ask the user to type one; point them to the Rojo pill in the header as the other way to link.",
+    parameters: [
+      { name: "instance_id", type: "string", required: false, description: "Connected place ID; required with multiple places." },
     ],
   },
 };

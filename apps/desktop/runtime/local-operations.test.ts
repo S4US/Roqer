@@ -3,10 +3,11 @@ import test from "node:test";
 
 import { BLENDER_OPERATION } from "../shared/blender";
 import { REFERENCE_CLIP_OPERATION } from "../shared/reference-clip";
-import { CAPTURE_MOMENTS_OPERATION, UPLOAD_ASSETS_OPERATION } from "../shared/gateway-operations";
+import { CAPTURE_MOMENTS_OPERATION, LINK_ROJO_PROJECT_OPERATION, UPLOAD_ASSETS_OPERATION } from "../shared/gateway-operations";
 import { isClassifiedTool, isKnownTool, riskForTool } from "../shared/mcp-tools";
 import { decideToolPolicy } from "../shared/policy";
 import { blenderToolDefinition, parseBlenderToolInput } from "./blender-tool";
+import { linkRojoProject } from "./link-rojo-project";
 import { withLocalOperations } from "./local-operations";
 import type { McpToolCaller, McpToolOutcome } from "./mcp-types";
 import { parseStudioToolInput, studioToolInputSchema } from "./studio-tools";
@@ -70,6 +71,32 @@ test("a batch upload publishes to Roblox, so it is classified and confirmed like
   const uploads = [{ filePath: "C:/a.png", assetType: "Decal", displayName: "a" }];
   assert.deepEqual(parseStudioToolInput({ operation: UPLOAD_ASSETS_OPERATION, arguments: { uploads: JSON.stringify(uploads) } }),
     { operation: UPLOAD_ASSETS_OPERATION, args: { uploads } }, "a list written as text is read back as the list");
+});
+
+test("linking a Rojo project is a mutation, classified inside roblox_studio, with no path argument reaching the model", () => {
+  assert.equal(riskForTool(LINK_ROJO_PROJECT_OPERATION), "mutation");
+  assert.equal(isClassifiedTool(LINK_ROJO_PROJECT_OPERATION), true);
+  assert.equal(isKnownTool(LINK_ROJO_PROJECT_OPERATION), false, "not part of the MCP surface or its drift tests");
+  const operations = ((studioToolInputSchema().properties as Record<string, { enum: string[] }>).operation).enum;
+  assert.equal(operations.includes(LINK_ROJO_PROJECT_OPERATION), true);
+  assert.deepEqual(parseStudioToolInput({ operation: LINK_ROJO_PROJECT_OPERATION, arguments: {} }),
+    { operation: LINK_ROJO_PROJECT_OPERATION, args: {} });
+});
+
+test("the agent's link operation opens the main process's own picker and reports a cancel as-is, never a path", async () => {
+  const bridgeCalls: Array<{ tool: string; args: Record<string, unknown> }> = [];
+  const bridge: McpToolCaller = {
+    async callTool(tool, args) {
+      bridgeCalls.push({ tool, args });
+      return outcome("from Studio");
+    },
+  };
+  const caller = withLocalOperations(bridge, new Map([[LINK_ROJO_PROJECT_OPERATION, () =>
+    linkRojoProject("place:1", async (instanceId) => { assert.equal(instanceId, "place:1"); return { cancelled: true }; })]]));
+  const result = await caller.callTool(LINK_ROJO_PROJECT_OPERATION, { instance_id: "place:1" });
+  assert.equal(result.ok, true);
+  assert.deepEqual(result.data, { cancelled: true });
+  assert.deepEqual(bridgeCalls, [], "the picker never goes through the Studio bridge caller");
 });
 
 test("a Blender job is irreversible: it asks outside Full auto, and Full auto may run it", () => {

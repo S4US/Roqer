@@ -25,8 +25,9 @@ import {
 import { readModelPreview, storeModelPreview } from "../runtime/model-preview";
 import { captureMoments } from "../runtime/capture-moments";
 import { uploadAssets } from "../runtime/upload-assets";
+import { linkRojoProject } from "../runtime/link-rojo-project";
 import { withLocalOperations, type LocalOperation } from "../runtime/local-operations";
-import { CAPTURE_MOMENTS_OPERATION, UPLOAD_ASSETS_OPERATION } from "../shared/gateway-operations";
+import { CAPTURE_MOMENTS_OPERATION, LINK_ROJO_PROJECT_OPERATION, UPLOAD_ASSETS_OPERATION } from "../shared/gateway-operations";
 import type { McpCallOptions, McpToolOutcome } from "../runtime/mcp-types";
 import { BLENDER_OPERATION, type BlenderSettingsResult, type BlenderSettingsView } from "../shared/blender";
 import type { RojoPickOutcome, RojoResult } from "../shared/rojo";
@@ -1790,6 +1791,13 @@ async function startRun(event: IpcMainInvokeEvent, payload: unknown): Promise<Ru
           args, options, studio, composeContactSheet, clips ? chatClips(request.chatId) : undefined,
         )],
         [UPLOAD_ASSETS_OPERATION, uploadAssets],
+        // Resolved the same way the run's Studio is: `resolvedRequest.instanceId`
+        // is the one instance every Studio call is routed to for this run, so
+        // the picker opens for exactly that place, never one the model names.
+        [LINK_ROJO_PROJECT_OPERATION, () => linkRojoProject(
+          resolvedRequest.instanceId,
+          (instanceId) => pickRojoProject(BrowserWindow.fromWebContents(sender), instanceId),
+        )],
         ...(blender ? [[BLENDER_OPERATION, (args, options) => runBlenderJob(args, options, request.chatId)] as [string, LocalOperation]] : []),
         ...(clips
           ? [[REFERENCE_CLIP_OPERATION, (args, options) => readReferenceClip(args, options, chatClips(request.chatId), composeClipSheet)] as [string, LocalOperation]]
