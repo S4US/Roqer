@@ -87,6 +87,16 @@ export class RojoConnection {
   private readonly memory = new Map<string, Memory>();
   /** Instances this bridge has already linked, so a Studio status refresh does not relink them again. */
   private readonly linkedThisBridge = new Set<string>();
+  /**
+   * Instances whose last automatic relink failed, so repeated Studio-status
+   * refreshes (every few seconds, from Task 3) do not re-run `rojo sourcemap`
+   * against a broken or moved project indefinitely. Cleared by
+   * `bridgeRestarted()`, by the instance dropping out of and back into the
+   * connected list, or bypassed outright by an explicit `retry()`.
+   */
+  private readonly failedThisBridge = new Set<string>();
+  /** The connected ids `relinkConnected` last saw, to detect a drop-then-reappear. */
+  private lastConnected = new Set<string>();
 
   constructor(options: RojoConnectionOptions) {
     this.store = options.store;
@@ -178,12 +188,14 @@ export class RojoConnection {
       const message = this.describeFailure(outcome);
       this.memory.set(instanceId, { kind: "error", message });
       this.linkedThisBridge.delete(instanceId);
+      this.failedThisBridge.add(instanceId);
       return { ok: false, message, view: await this.viewFor(instanceId) };
     }
     const parsed = parseLinkedData(outcome.data);
     if (parsed === undefined) {
       const message = "Rojo returned an unexpected response.";
       this.memory.set(instanceId, { kind: "error", message });
+      this.failedThisBridge.add(instanceId);
       return { ok: false, message, view: await this.viewFor(instanceId) };
     }
     this.memory.set(instanceId, {
@@ -191,6 +203,7 @@ export class RojoConnection {
       scripts: parsed.scripts, problems: parsed.problems, port: parsed.port,
     });
     this.linkedThisBridge.add(instanceId);
+    this.failedThisBridge.delete(instanceId);
     await this.store.remember(instanceId, projectFile);
     await this.store.touchRecent(projectFile);
     return { ok: true, view: await this.viewFor(instanceId) };
@@ -212,6 +225,7 @@ export class RojoConnection {
     }
     this.memory.delete(instanceId);
     this.linkedThisBridge.delete(instanceId);
+    this.failedThisBridge.delete(instanceId);
     await this.store.forget(instanceId);
     return { ok: true, view: await this.viewFor(instanceId) };
   }
@@ -225,23 +239,48 @@ export class RojoConnection {
     }
     this.memory.delete(instanceId);
     this.linkedThisBridge.delete(instanceId);
+    this.failedThisBridge.delete(instanceId);
     return { ok: true, view: await this.viewFor(instanceId) };
   }
 
-  /** Relinks every connected, remembered place not already linked on this bridge. Never throws for one instance's failure. */
+  /**
+   * Relinks every connected, remembered place not already settled (linked or
+   * failed) on this bridge. A failed relink is not retried on a later call --
+   * only `bridgeRestarted()`, the instance dropping out of and back into
+   * `instanceIds`, or an explicit `retry()` tries it again -- so a broken or
+   * moved project does not run `rojo sourcemap` on every Studio-status
+   * refresh indefinitely. Never throws for one instance's failure.
+   */
   async relinkConnected(instanceIds: readonly string[]): Promise<void> {
+    for (const instanceId of instanceIds) {
+      if (isPlaceInstanceId(instanceId) && !this.lastConnected.has(instanceId)) this.failedThisBridge.delete(instanceId);
+    }
+    this.lastConnected = new Set(instanceIds);
+
     const snapshot = await this.store.get();
     for (const instanceId of instanceIds) {
-      if (!isPlaceInstanceId(instanceId) || this.linkedThisBridge.has(instanceId)) continue;
+      if (!isPlaceInstanceId(instanceId)) continue;
+      if (this.linkedThisBridge.has(instanceId) || this.failedThisBridge.has(instanceId)) continue;
       const stored = snapshot.links.find((link) => link.instanceId === instanceId);
       if (stored === undefined) continue;
       await this.link(instanceId, stored.projectFile);
     }
   }
 
+  /** Re-attempts a remembered link regardless of whether an earlier automatic relink failed (the popover's Retry button). */
+  async retry(instanceId: string): Promise<RojoResult> {
+    const snapshot = await this.store.get();
+    const stored = snapshot.links.find((link) => link.instanceId === instanceId);
+    if (stored === undefined) {
+      return { ok: false, message: "There is no remembered project to retry.", view: await this.viewFor(instanceId) };
+    }
+    return this.link(instanceId, stored.projectFile);
+  }
+
   /** The bridge restarted or was adopted: every remembered place needs relinking again. */
   bridgeRestarted(): void {
     this.linkedThisBridge.clear();
+    this.failedThisBridge.clear();
   }
 
   /** The linked project's folder, for "Open folder" -- only while this instance is actually linked. */

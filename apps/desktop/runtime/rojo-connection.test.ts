@@ -254,6 +254,154 @@ test("relinkConnected remembers a failure per instance without throwing", async 
   });
 });
 
+test("a failed relink is not retried on later relinkConnected calls", async () => {
+  await withStore(async (store) => {
+    await store.remember("place:1", "/projects/missing/default.project.json");
+    const calls: Call[] = [];
+    const connection = new RojoConnection({
+      store,
+      callTool: async (tool, args) => {
+        calls.push({ tool, args });
+        return outcome({ ok: false, data: { error: "No project file", errorCode: "rojo_link_invalid" }, message: "No project file" });
+      },
+      probe: neverAnswers(),
+      readServePort: neverReadsPort(),
+    });
+
+    await connection.relinkConnected(["place:1"]);
+    assert.equal(calls.length, 1);
+    await connection.relinkConnected(["place:1"]);
+    await connection.relinkConnected(["place:1"]);
+    assert.equal(calls.length, 1, "still connected and still failed, so no repeat relink attempts");
+  });
+});
+
+test("a failed relink is retried after bridgeRestarted()", async () => {
+  await withStore(async (store) => {
+    await store.remember("place:1", "/projects/missing/default.project.json");
+    const calls: Call[] = [];
+    const connection = new RojoConnection({
+      store,
+      callTool: async (tool, args) => {
+        calls.push({ tool, args });
+        return outcome({ ok: false, data: { error: "No project file", errorCode: "rojo_link_invalid" }, message: "No project file" });
+      },
+      probe: neverAnswers(),
+      readServePort: neverReadsPort(),
+    });
+
+    await connection.relinkConnected(["place:1"]);
+    await connection.relinkConnected(["place:1"]);
+    assert.equal(calls.length, 1);
+
+    connection.bridgeRestarted();
+    await connection.relinkConnected(["place:1"]);
+    assert.equal(calls.length, 2, "bridgeRestarted() clears the remembered failure");
+  });
+});
+
+test("a failed relink is retried once the instance drops out of and back into the connected list", async () => {
+  await withStore(async (store) => {
+    await store.remember("place:1", "/projects/missing/default.project.json");
+    const calls: Call[] = [];
+    const connection = new RojoConnection({
+      store,
+      callTool: async (tool, args) => {
+        calls.push({ tool, args });
+        return outcome({ ok: false, data: { error: "No project file", errorCode: "rojo_link_invalid" }, message: "No project file" });
+      },
+      probe: neverAnswers(),
+      readServePort: neverReadsPort(),
+    });
+
+    await connection.relinkConnected(["place:1"]);
+    await connection.relinkConnected(["place:1"]);
+    assert.equal(calls.length, 1, "still present, so no repeat attempt yet");
+
+    await connection.relinkConnected([]); // place:1 drops out of the connected list
+    await connection.relinkConnected(["place:1"]); // and reappears
+    assert.equal(calls.length, 2, "reappearing after dropping out retries the failed relink");
+
+    await connection.relinkConnected(["place:1"]);
+    assert.equal(calls.length, 2, "but settles again once re-attempted, without a further drop/reappear");
+  });
+});
+
+test("retry() re-attempts a remembered link regardless of a settled failure, and returns the new view", async () => {
+  await withStore(async (store) => {
+    await store.remember("place:1", "/projects/one/default.project.json");
+    let attempts = 0;
+    const connection = new RojoConnection({
+      store,
+      callTool: async () => {
+        attempts += 1;
+        return attempts === 1
+          ? outcome({ ok: false, data: { error: "Rojo was not found on PATH", errorCode: "rojo_not_found" }, message: "Rojo was not found on PATH" })
+          : linkSuccess();
+      },
+      probe: async () => ({ answering: true }),
+      readServePort: neverReadsPort(),
+    });
+
+    await connection.relinkConnected(["place:1"]);
+    assert.equal(attempts, 1);
+    await connection.relinkConnected(["place:1"]);
+    assert.equal(attempts, 1, "settled after the first failure");
+
+    const retried = await connection.retry("place:1");
+    assert.equal(attempts, 2, "retry() bypasses the settled-failure gate");
+    assert.equal(retried.ok, true);
+    if (!retried.ok) throw new Error("unreachable");
+    assert.equal(retried.view.state, "linked-running", "a success clears the failure and reports the new view");
+
+    await connection.relinkConnected(["place:1"]);
+    assert.equal(attempts, 2, "now linked, so relinkConnected leaves it alone again");
+  });
+});
+
+test("retry() reports plainly when there is nothing remembered to retry", async () => {
+  await withStore(async (store) => {
+    const connection = new RojoConnection({
+      store,
+      callTool: async () => linkSuccess(),
+      probe: neverAnswers(),
+      readServePort: neverReadsPort(),
+    });
+    const result = await connection.retry("place:1");
+    assert.equal(result.ok, false);
+    assert.equal(result.message, "There is no remembered project to retry.");
+  });
+});
+
+test("a success through link() clears a previously settled failure for the same instance", async () => {
+  await withStore(async (store) => {
+    await store.remember("place:1", "/projects/one/default.project.json");
+    let attempts = 0;
+    const connection = new RojoConnection({
+      store,
+      callTool: async () => {
+        attempts += 1;
+        return attempts === 1
+          ? outcome({ ok: false, data: { error: "Rojo was not found on PATH", errorCode: "rojo_not_found" }, message: "Rojo was not found on PATH" })
+          : linkSuccess();
+      },
+      probe: async () => ({ answering: true }),
+      readServePort: neverReadsPort(),
+    });
+
+    await connection.relinkConnected(["place:1"]);
+    assert.equal(attempts, 1);
+
+    // The user picks a (working) project directly, rather than using Retry.
+    const linked = await connection.link("place:1", "/projects/one/default.project.json");
+    assert.equal(linked.ok, true);
+    assert.equal(attempts, 2);
+
+    await connection.relinkConnected(["place:1"]);
+    assert.equal(attempts, 2, "the earlier failure is gone; relinkConnected sees it as already linked");
+  });
+});
+
 test("view reports no-place when the instance is not in the connected list, and detected when a server answers but nothing is linked", async () => {
   await withStore(async (store) => {
     const connection = new RojoConnection({
