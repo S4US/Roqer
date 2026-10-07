@@ -102,6 +102,18 @@ function getScriptSource(requestData: Record<string, unknown>) {
 	}
 }
 
+/** Host-side Rojo writes validate the live editor without assigning Source or recording an undo step. */
+function checkScriptSource(requestData: Record<string, unknown>) {
+	const source = requestData.source;
+	if (!typeIs(source, "string")) return { error: "source must be a string" };
+	const instance = resolveInstance(requestData.instancePath as string, requestData.instanceRef as string | undefined);
+	if (!instance || !instance.IsA("LuaSourceContainer")) return { error: "Script identity is invalid or no longer live" };
+	const conflict = lineEditConflict(instance, requestData.expectedRevision);
+	if (conflict) return conflict;
+	if (!typeIs(requestData.expectedRevision, "string")) return { error: "expectedRevision is required for source validation" };
+	return { instancePath: getInstancePath(instance), instanceRef: getInstanceReference(instance), ...checkSyntax(source) };
+}
+
 function setScriptSource(requestData: Record<string, unknown>) {
 	const instancePath = requestData.instancePath as string;
 	const instanceRef = requestData.instanceRef as string | undefined;
@@ -244,6 +256,8 @@ function editScriptLines(requestData: Record<string, unknown>) {
 	if (!instance.IsA("LuaSourceContainer")) {
 		return { error: `Instance is not a script-like object: ${instance.ClassName}` };
 	}
+	const conflict = lineEditConflict(instance, requestData.expectedRevision);
+	if (conflict) return conflict;
 
 	const recordingId = beginRecording(`Edit script: ${instance.Name}`);
 
@@ -696,6 +710,7 @@ function findAndReplaceInScripts(requestData: Record<string, unknown>) {
 
 export = {
 	getScriptSource,
+	checkScriptSource,
 	setScriptSource,
 	editScriptLines,
 	editScriptBatch,

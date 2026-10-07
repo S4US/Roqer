@@ -223,6 +223,8 @@ describe('script source update safety', () => {
     type LineHandlers = {
       insertScriptLines: (request: Record<string, unknown>) => Record<string, unknown>;
       deleteScriptLines: (request: Record<string, unknown>) => Record<string, unknown>;
+      editScriptLines: (request: Record<string, unknown>) => Record<string, unknown>;
+      checkScriptSource: (request: Record<string, unknown>) => Record<string, unknown>;
     };
 
     async function loadLineHandlers(currentSource: string) {
@@ -282,6 +284,24 @@ describe('script source update safety', () => {
     // a line above it, so deleting line 2 now would remove their "new" line.
     const readSource = 'a\nb\nc';
     const changedSource = 'a\nnew\nb\nc';
+
+    test('the private source check validates revision and identity without recording or assigning Source', async () => {
+      const { handlers, applyScriptSource, beginRecording } = await loadLineHandlers(readSource);
+      const checked = handlers.checkScriptSource({ instancePath: 'game.ServerScriptService.Main', source: 'return 2', expectedRevision: `revision:${readSource}` });
+      expect(checked).toMatchObject({ instancePath: 'game.ServerScriptService.Main', instanceRef: 'instance:test:1', syntaxCheck: 'unavailable' });
+      const stale = handlers.checkScriptSource({ instancePath: 'game.ServerScriptService.Main', source: 'return 3', expectedRevision: 'revision:stale' });
+      expect(stale.errorCode).toBe('source_revision_conflict');
+      expect(applyScriptSource).not.toHaveBeenCalled();
+      expect(beginRecording).not.toHaveBeenCalled();
+    });
+
+    test('an exact edit supplied with a stale revision is refused before matching or writing', async () => {
+      const { handlers, applyScriptSource, beginRecording } = await loadLineHandlers(changedSource);
+      const result = handlers.editScriptLines({ instancePath: 'game.ServerScriptService.Main', old_string: 'b', new_string: 'edited', expectedRevision: `revision:${readSource}` });
+      expect(result.errorCode).toBe('source_revision_conflict');
+      expect(applyScriptSource).not.toHaveBeenCalled();
+      expect(beginRecording).not.toHaveBeenCalled();
+    });
 
     test('a stale delete is refused before anything is recorded or written', async () => {
       const { handlers, applyScriptSource, beginRecording } = await loadLineHandlers(changedSource);

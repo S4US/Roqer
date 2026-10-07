@@ -74,6 +74,7 @@ const routeMap: Record<string, Handler> = {
     "/api/animation-declare-rig": AnimationHandlers.animationDeclareRig,
 
 	"/api/get-script-source": ScriptHandlers.getScriptSource,
+	"/api/check-script-source": ScriptHandlers.checkScriptSource,
 	"/api/set-script-source": ScriptHandlers.setScriptSource,
 	"/api/edit-script-lines": ScriptHandlers.editScriptLines,
 	"/api/edit-script-batch": ScriptHandlers.editScriptBatch,

@@ -1,5 +1,5 @@
 import express from 'express';
-import type { Express } from 'express';
+import type { Express, Request, Response } from 'express';
 import http from 'http';
 import { toNodeHandler } from '@modelcontextprotocol/node';
 import { RobloxStudioTools } from './tools/index.js';
@@ -9,6 +9,7 @@ import type { ToolDefinition } from './tools/definitions.js';
 import { TOOL_CATALOG_DIGEST } from './tools/catalog-digest.js';
 import { createToolHttpHandler, normalizeToolResult, publicToolErrorBody } from './mcp-runtime.js';
 import { tokensMatch } from './auth.js';
+import { withToolCallSignal } from './tool-call-context.js';
 import { StudioLaunchPreDispatchError } from './studio-instance-manager.js';
 import type { PluginVariant } from './install-plugin-helpers.js';
 import {
@@ -45,6 +46,16 @@ interface StreamableHttpConfig {
 }
 
 export type ToolHandler = (tools: RobloxStudioTools, body: any) => Promise<any>;
+
+async function callForConnection<T>(req: Request, res: Response, invoke: () => Promise<T>): Promise<T> {
+  const cancellation = new AbortController();
+  const disconnected = () => cancellation.abort(new Error('Tool caller disconnected.'));
+  res.once('close', disconnected);
+  req.once('aborted', disconnected);
+  if (req.aborted || res.destroyed) disconnected();
+  try { return await withToolCallSignal(cancellation.signal, invoke); }
+  finally { res.off('close', disconnected); req.off('aborted', disconnected); }
+}
 
 type ParsedLineRange = {
   startLine?: number;
@@ -169,7 +180,7 @@ export const TOOL_HANDLERS: Record<string, ToolHandler> = {
     return tools.getScriptSource(body.instancePath, startLine, endLine, body.instance_id, body.instanceRef);
   },
   set_script_source: (tools, body) => tools.setScriptSource(body.instancePath, body.source, body.instance_id, body.expectedRevision, body.instanceRef),
-  edit_script_lines: (tools, body) => tools.editScriptLines(body.instancePath, body.old_string, body.new_string, optionalLineAnchor(body, 'edit_script_lines'), body.instance_id, body.instanceRef),
+  edit_script_lines: (tools, body) => tools.editScriptLines(body.instancePath, body.old_string, body.new_string, optionalLineAnchor(body, 'edit_script_lines'), body.instance_id, body.instanceRef, body.expectedRevision),
   edit_script_batch: (tools, body) => tools.editScriptBatch(body.instancePath, batchEdits(body, 'edit_script_batch'), body.instance_id, body.expectedRevision, body.instanceRef),
   insert_script_lines: (tools, body) => tools.insertScriptLines(body.instancePath, body.afterLine, body.newContent, body.instance_id, body.instanceRef, body.expectedRevision),
   delete_script_lines: (tools, body) => {
@@ -682,6 +693,7 @@ export function createHttpServer(tools: RobloxStudioTools, bridge: BridgeService
     res.json({
       instances,
       serverVersion: serverConfig?.version,
+      ...(tools.hasRojoProject?.() ? { sourceBackend: 'rojo' } : {}),
     });
   });
 
@@ -814,7 +826,7 @@ export function createHttpServer(tools: RobloxStudioTools, bridge: BridgeService
     }
 
     try {
-      const response = await bridge.sendRequest(endpoint, data, targetInstanceId, targetRole, timeoutMs);
+      const response = await callForConnection(req, res, () => tools.forwardProxyRequest(endpoint, data, targetInstanceId, targetRole, timeoutMs));
       res.json({ response });
     } catch (err: any) {
       res.status(500).json({ error: err.message || 'Proxy request failed' });
@@ -858,7 +870,7 @@ export function createHttpServer(tools: RobloxStudioTools, bridge: BridgeService
       try {
         // Roqer's desktop is the only caller of this surface, so it also gets
         // the files meant for its own viewer, which MCP clients never see.
-        const result = normalizeToolResult(await handler(tools, req.body), 'modern', { keepHostOnly: true });
+        const result = normalizeToolResult(await callForConnection(req, res, () => handler(tools, req.body)), 'modern', { keepHostOnly: true });
         // The bare object carries no isError, so a failure keeps its envelope:
         // unwrapped, an upload Roblox refused read as a successful call.
         if (result.structuredContent && result.content.length === 0 && !result.isError) {

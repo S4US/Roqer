@@ -22,6 +22,8 @@ export class ProxyBridgeService extends BridgeService {
   private readonly initialRefresh: Promise<void>;
   private refreshTimer?: ReturnType<typeof setInterval>;
   private static REFRESH_INTERVAL_MS = 1000;
+  private sawPrimaryMetadata = false;
+  private primaryOwnsRojo = false;
 
   /** Which edition this server is, so the primary can refuse to forward for another. */
   private readonly pluginVariant?: string;
@@ -47,6 +49,9 @@ export class ProxyBridgeService extends BridgeService {
     return this.initialRefresh;
   }
 
+  /** A follower cannot silently replace a configured file owner with a Studio-only server. */
+  canPromoteToPrimary(): boolean { return this.sawPrimaryMetadata && !this.primaryOwnsRojo; }
+
   private authHeaders(extra?: Record<string, string>): Record<string, string> {
     const headers: Record<string, string> = { ...extra };
     if (this.authToken) headers['X-MCP-Auth'] = this.authToken;
@@ -59,8 +64,10 @@ export class ProxyBridgeService extends BridgeService {
         headers: this.authHeaders(),
       });
       if (!res.ok) return;
-      const body = (await res.json()) as { instances?: PluginInstance[] };
+      const body = (await res.json()) as { instances?: PluginInstance[]; sourceBackend?: string };
       if (Array.isArray(body.instances)) {
+        this.sawPrimaryMetadata = true;
+        if (body.sourceBackend === 'rojo') this.primaryOwnsRojo = true;
         const previousKeys = new Set(this.cachedInstances.map((instance) =>
           `${instance.pluginSessionId}\0${instance.instanceId}\0${instance.role}\0${instance.connectedAt}`,
         ));

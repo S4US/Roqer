@@ -226,8 +226,9 @@ describe('HTTP Server', () => {
         line_range: '42',
         instance_id: 'place:test',
         instanceRef: 'iref:test:1',
+        expectedRevision: 'rev-read',
       });
-      expect(editScriptLines).toHaveBeenLastCalledWith('game.ServerScriptService.Main', 'old', 'new', 42, 'place:test', 'iref:test:1');
+      expect(editScriptLines).toHaveBeenLastCalledWith('game.ServerScriptService.Main', 'old', 'new', 42, 'place:test', 'iref:test:1', 'rev-read');
 
       // A closed range is accepted when it covers exactly the lines old_string
       // spans, so the parameter means the same thing it does on the other line
@@ -239,7 +240,7 @@ describe('HTTP Server', () => {
         line_range: '42-44',
         instance_id: 'place:test',
       });
-      expect(editScriptLines).toHaveBeenLastCalledWith('game.ServerScriptService.Main', 'first\nsecond\nthird', 'replacement', 42, 'place:test', undefined);
+      expect(editScriptLines).toHaveBeenLastCalledWith('game.ServerScriptService.Main', 'first\nsecond\nthird', 'replacement', 42, 'place:test', undefined, undefined);
 
       // Text ending in a newline is covered by either reading of its last line.
       for (const range of ['42-43', '42-44']) {
@@ -250,7 +251,7 @@ describe('HTTP Server', () => {
           line_range: range,
           instance_id: 'place:test',
         });
-        expect(editScriptLines).toHaveBeenLastCalledWith('game.ServerScriptService.Main', 'first\nsecond\n', '', 42, 'place:test', undefined);
+        expect(editScriptLines).toHaveBeenLastCalledWith('game.ServerScriptService.Main', 'first\nsecond\n', '', 42, 'place:test', undefined, undefined);
       }
 
       await TOOL_HANDLERS.delete_script_lines(fakeTools, {
@@ -276,7 +277,7 @@ describe('HTTP Server', () => {
         startLine: 99,
         instance_id: 'place:test',
       });
-      expect(editScriptLines).toHaveBeenLastCalledWith('game.ServerScriptService.Main', 'old', 'new', undefined, 'place:test', undefined);
+      expect(editScriptLines).toHaveBeenLastCalledWith('game.ServerScriptService.Main', 'old', 'new', undefined, 'place:test', undefined, undefined);
     });
 
     test('edit_script_batch anchors every edit with the same rule a single edit uses', async () => {

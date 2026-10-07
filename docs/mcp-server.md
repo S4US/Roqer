@@ -15,6 +15,8 @@ install, and connect them; this page says what they can do.
   localized edits. Each script write is compiled without being run, and one
   whose source will not compile still lands but reports `syntaxError` with the
   line.
+- Read and edit existing Lua/Luau source files in an explicitly bound
+  [Rojo project](rojo.md), leaving synchronization to its existing Rojo connection.
 - Run custom Luau in edit mode when a structured operation is not sufficient.
 - Route every call to an explicit `instance_id` when multiple places are
   connected; see [Multiple connected places](configuration.md#multiple-connected-places).

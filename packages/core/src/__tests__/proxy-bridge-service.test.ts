@@ -20,6 +20,26 @@ function publicInstance(instance: PluginInstance): PublicPluginInstance {
 }
 
 describe('ProxyBridgeService', () => {
+  test('a follower that observed Rojo ownership never promotes to a Studio-only primary', async () => {
+    let body: { instances: PluginInstance[]; sourceBackend?: string } = { instances: [] };
+    const fetchMock = jest.spyOn(globalThis, 'fetch').mockImplementation(async () => ({ ok: true, json: async () => body }) as Response);
+    const proxy = new ProxyBridgeService('http://primary');
+    try {
+      await proxy.waitForInitialRefresh();
+      expect(proxy.canPromoteToPrimary()).toBe(true);
+      body = { instances: [], sourceBackend: 'rojo' };
+      const refresh = () => (proxy as unknown as { refreshInstances(): Promise<void> }).refreshInstances();
+      await refresh();
+      expect(proxy.canPromoteToPrimary()).toBe(false);
+      fetchMock.mockRejectedValueOnce(new Error('Primary went away'));
+      await refresh();
+      expect(proxy.canPromoteToPrimary()).toBe(false);
+      body = { instances: [] };
+      await refresh();
+      expect(proxy.canPromoteToPrimary()).toBe(false);
+    } finally { proxy.stop(); fetchMock.mockRestore(); }
+  });
+
   test('replays cached peers and reports peers discovered after subscription', async () => {
     const now = Date.now();
     const instances: PluginInstance[] = [

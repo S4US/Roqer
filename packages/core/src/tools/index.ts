@@ -1,4 +1,6 @@
 import { StudioHttpClient } from './studio-client.js';
+import { RojoScriptProject } from '../rojo-project.js';
+import { toolCallSignal } from '../tool-call-context.js';
 import { BridgeService, MAX_REQUEST_TIMEOUT_MS, RoutingFailure, type PublicPluginInstance } from '../bridge-service.js';
 import {
   OpenCloudClient,
@@ -1064,7 +1066,7 @@ export class RobloxStudioTools {
   private instanceManager: StudioInstanceManager;
   private managedConnectionAssociations: Promise<void> = Promise.resolve();
 
-  constructor(bridge: BridgeService) {
+  constructor(bridge: BridgeService, private readonly rojo?: RojoScriptProject) {
     this.client = new StudioHttpClient(bridge);
     this.bridge = bridge;
     this.openCloudClient = new OpenCloudClient();
@@ -1091,6 +1093,22 @@ export class RobloxStudioTools {
    */
   settled(): Promise<void> {
     return this.managedConnectionAssociations;
+  }
+
+  hasRojoProject(): boolean { return this.rojo !== undefined; }
+
+  /** Raw proxy calls still cross the primary's source ownership boundary. */
+  async forwardProxyRequest(endpoint: string, data: Record<string, unknown>, instanceId: string, role: string, timeoutMs?: number): Promise<unknown> {
+    if (this.rojo !== undefined) {
+      const blocked = await this.rojo.checkPlaytestStart(endpoint, instanceId, role, (name, payload) =>
+        this.client.request(name, payload, instanceId, role, 5000), toolCallSignal());
+      if (blocked) return blocked;
+    }
+    if (this.rojo?.handles(endpoint, instanceId)) {
+      return this.rojo.handle(endpoint, data, role, (name, payload) =>
+        this.client.request(name, payload, instanceId, role, 5000), toolCallSignal());
+    }
+    return this.bridge.sendRequest(endpoint, data, instanceId, role, timeoutMs);
   }
 
   getStudioLifecycleCapabilities() {
@@ -1208,6 +1226,10 @@ export class RobloxStudioTools {
           count: this.bridge.getInstances().length,
         },
       });
+    }
+    if (this.rojo?.handles(endpoint, r.targetInstanceId)) {
+      return this.rojo.handle(endpoint, data, r.targetRole, (name, payload) =>
+        this.client.request(name, payload, r.targetInstanceId, r.targetRole, 5000), toolCallSignal());
     }
     return this.client.request(endpoint, data, r.targetInstanceId, r.targetRole, timeoutMs);
   }
@@ -2564,7 +2586,7 @@ export class RobloxStudioTools {
     const response = await this._callSingle('/api/get-script-source', { instancePath, instanceRef, startLine, endLine }, undefined, instance_id);
 
     if (response.error) {
-      return this._textResult({ error: response.error });
+      return this._textResult({ error: response.error, ...(response.errorCode ? { errorCode: response.errorCode } : {}) });
     }
     const pathStr = (response.instancePath as string) || instancePath;
     const showRange = Boolean(response.isPartial || response.truncated)
@@ -2576,6 +2598,9 @@ export class RobloxStudioTools {
       className: response.className,
       revision: response.revision,
       lineCount: response.lineCount,
+      ...(response.sourceOrigin === 'rojo' ? {
+        sourceOrigin: response.sourceOrigin, filePath: response.filePath, syncStatus: response.syncStatus,
+      } : {}),
       ...(showRange ? { startLine: response.startLine, endLine: response.endLine } : {}),
       ...(response.enabled === false ? { enabled: false } : {}),
       ...(response.truncated ? { truncated: true } : {}),
@@ -2600,11 +2625,11 @@ export class RobloxStudioTools {
   }
 
 
-  async editScriptLines(instancePath: string, oldString: string, newString: string, startLine?: number, instance_id?: string, instanceRef?: string) {
+  async editScriptLines(instancePath: string, oldString: string, newString: string, startLine?: number, instance_id?: string, instanceRef?: string, expectedRevision?: unknown) {
     if (!instancePath || typeof oldString !== 'string' || typeof newString !== 'string') {
       throw new Error('Instance path, old_string, and new_string are required for edit_script_lines');
     }
-    const payload: Record<string, unknown> = { instancePath, instanceRef, old_string: oldString, new_string: newString };
+    const payload: Record<string, unknown> = { instancePath, instanceRef, old_string: oldString, new_string: newString, ...optionalRevision(expectedRevision, 'edit_script_lines') };
     if (startLine !== undefined) payload.startLine = startLine;
     const response = await this._callSingle('/api/edit-script-lines', payload, undefined, instance_id);
     return {
@@ -4162,6 +4187,7 @@ export class RobloxStudioTools {
         success: false,
         action,
         error: body.error ?? 'start_failed',
+        errorCode: body.errorCode,
         message: body.success === true
           ? `Playtest did not become ready before timeout.${diagnosis}`
           : body.message ?? 'Playtest did not start.',
@@ -4227,6 +4253,11 @@ export class RobloxStudioTools {
           }),
         }],
       };
+    }
+    if (this.rojo !== undefined) {
+      const blocked = await this.rojo.checkPlaytestStart('/api/start-playtest', resolved.targetInstanceId, resolved.targetRole, (name, payload) =>
+        this.client.request(name, payload, resolved.targetInstanceId, 'edit', 5000), toolCallSignal());
+      if (blocked) return this._textResult(blocked);
     }
     const response = await this.client.request(
       '/api/start-playtest',
@@ -4502,6 +4533,7 @@ export class RobloxStudioTools {
         success: false,
         action,
         error: body.error ?? body.wait?.error ?? 'multiplayer_start_not_detected',
+        errorCode: body.errorCode,
         message: body.success === true
           ? 'Multiplayer playtest start was requested, but MCP did not detect the required server/client peers before timeout.'
           : body.message ?? 'Multiplayer playtest did not start.',
@@ -4587,6 +4619,11 @@ export class RobloxStudioTools {
     }
 
     const startedAt = Date.now();
+    if (this.rojo !== undefined) {
+      const blocked = await this.rojo.checkPlaytestStart('/api/multiplayer-test-start', editTarget.instanceId, editTarget.role, (name, payload) =>
+        this.client.request(name, payload, editTarget.instanceId, 'edit', 5000), toolCallSignal());
+      if (blocked) return this._textResult(blocked);
+    }
     const response = await this.client.request(
       '/api/multiplayer-test-start',
       { numPlayers, testArgs: testArgs ?? {} },

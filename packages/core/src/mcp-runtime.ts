@@ -11,6 +11,7 @@ import { RoutingFailure } from './bridge-service.js';
 import { registerResourceHandlers } from './mcp-compat.js';
 import { StudioLaunchPreDispatchError } from './studio-instance-manager.js';
 import type { RobloxStudioTools } from './tools/index.js';
+import { withToolCallSignal } from './tool-call-context.js';
 import type { ToolDefinition } from './tools/definitions.js';
 
 export type ProtocolEra = McpRequestContext['era'];
@@ -337,9 +338,9 @@ export function createToolServer(options: McpRuntimeOptions): McpServer {
           : {}),
         annotations: publicDefinition.annotations,
       },
-      async (args) => {
+      async (args, context) => {
         try {
-          const raw = await options.invoke(options.getTools(), definition.name, args as Record<string, unknown>);
+          const raw = await withToolCallSignal(context.mcpReq.signal, () => options.invoke(options.getTools(), definition.name, args as Record<string, unknown>));
           return normalizeToolResult(raw, options.era);
         } catch (error) {
           return normalizeToolResult({

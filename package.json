@@ -69,6 +69,7 @@
     "test:spike:skinned": "npm run build:plugin:artifact && npm run build && node tests/run-with-test-port.mjs tests/run-all.mjs --managed --only=skinned-spike.mjs",
     "test:calibrate:animation": "npm run build:plugin:artifact && npm run build && node tests/run-with-test-port.mjs tests/run-all.mjs --managed --only=animation-calibration.mjs",
     "test:watch": "npm run test:watch -w packages/core",
+    "test:rojo": "npm run build && node tests/rojo-project.mjs && node --import tsx tests/rojo-runtime-chain.mjs",
     "test:coverage": "npm run test:coverage -w packages/core",
     "publish:all": "node scripts/publish.mjs",
     "test:scripts": "node --test scripts/fetch-libmp.test.mjs"

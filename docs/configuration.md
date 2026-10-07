@@ -60,6 +60,9 @@ Studio to load the matching bundled plugin.
 | `ROBLOX_STUDIO_EXE` | Auto-discovered | Path to `RobloxStudioBeta.exe` for `manage_instance` when discovery under the Roblox `Versions` folder fails, or on a platform without discovery. It is the only way to choose the executable: tool callers cannot. |
 | `ROBLOX_STUDIO_REQUIRE_PRIMARY` | Unset | Set to `1` to refuse proxy mode when the primary port is taken, instead of starting a follower that promotes itself when the port frees. |
 | `ROBLOX_STUDIO_PROXY_PROMOTION_INTERVAL_MS` | `5000` | How often a follower checks whether it can take the primary port. |
+| `ROBLOX_STUDIO_ROJO_PROJECT` | Unset | Absolute `.project.json` path for existing source file editing; requires the explicit instance binding below. See [Rojo projects](rojo.md). |
+| `ROBLOX_STUDIO_ROJO_INSTANCE_ID` | Unset | Exact connected edit-mode place ID bound to that Rojo project; never inferred. |
+| `ROBLOX_STUDIO_ROJO_EXECUTABLE` | `rojo` on PATH | Optional host-selected Rojo executable used only for source mapping. |
 
 Creator Store audio preview requires `asset:read` permission. See
 [Creator Store assets](creator-store-assets.md) for its download and validation

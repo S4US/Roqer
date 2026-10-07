@@ -108,7 +108,10 @@ const MAX_EVIDENCE_LINE_CHARS = 1_000;
 const MAX_VERIFICATION_REASON_CHARS = 500;
 const MAX_OBSERVATION_DETAIL_CHARS = 1_000;
 
-type ScriptSnapshot = { source?: string; revision?: string; startLine?: number; complete?: boolean };
+type ScriptSnapshot = {
+  source?: string; revision?: string; startLine?: number; complete?: boolean;
+  sourceOrigin?: 'rojo'; filePath?: string; syncStatus?: string;
+};
 
 const isRecord = (value: unknown): value is JsonRecord =>
   typeof value === "object" && value !== null && !Array.isArray(value);
@@ -198,6 +201,7 @@ export function studioToolGuide(): string {
     "Always read a script and its sourceRevision before changing it, except one that is still empty, such as a script build_instances just created: omit expectedRevision and Roqer checks it is empty and supplies the revision. Roqer automatically reads back every successful script mutation and tells you whether its reported revision was verified; that is the check, so do not read a script again only to confirm a write.",
     `To write a skill's Lua template unchanged, pass template (its skill path, e.g. ${TEMPLATE_EXAMPLE}) instead of source: Roqer writes the file itself, so do not load a template you are not changing, and never retype one. A script that already holds it exactly is left alone.`,
     "A script write whose source will not compile still lands, and its result carries syntaxError {line, message}: fix that line before playtesting. syntaxCheck: 'unavailable' means the source was not checked. Only syntax is judged, not types or member names.",
+    "When a script read reports sourceOrigin:'rojo', filePath is its source on disk and its revision is a file revision. The same script editors write that file with expectedRevision; do not edit a copy in Studio or use a native file tool. syncStatus:'pending' means Studio differs from disk: connect/sync Rojo and read again before playtesting. Roqer verifies both the disk revision and Studio synchronization.",
     "When one script needs several exact edits, send them as one edit_script_batch rather than several edit_script_lines calls: each separate write costs its own approval, revision, and read-back, and every write after the first is resolved against source you can no longer describe.",
     "Never write a script's source inside execute_luau; that call is refused before it runs. Create the instance there when nothing structured can, then write its body with set_script_source: only the structured script operations produce the diff the user reviews and the read-back that verifies the write.",
     "Build geometry and other instances with build_instances rather than execute_luau. For edits to existing physical 3D build geometry, prefer a bounded build_instances set under the smallest containing build root; reserve set_properties for non-build properties or cases the build operation cannot express. Each step is {op: 'create'|'clone'|'set'|'remove', id?, className?, source?, parent?, target?, name?, properties?, position?: [x, y, z], rotation?: [x, y, z] degrees, transforms?: [{position?, rotation?, scale?}], tags?, attributes?}. create needs className; clone needs source and makes one copy per transform; set and remove need target. Refer to an earlier step's instance as \"$id\". A transform's rotation sets the clone's pivot orientation outright; a Model build_instances creates gets an upright pivot, but a template from elsewhere keeps its own, so read its pivot before turning clones of it. Color3 is [r, g, b] from 0 to 1. A CFrame is {position, rotation?} in those forms. Every parent and target stays inside path, the whole batch applies or none of it does, and it is one Studio undo step. path may be a service itself (game.ReplicatedStorage, game.Lighting) for a batch that only adds: create, clone, and set on what it made. To delete a whole build root, such as a preview marker's, send {op: 'remove', target: <its path>} as the batch's only step.",
@@ -804,6 +808,11 @@ function snapshotFromOutcome(outcome: McpToolOutcome): ScriptSnapshot {
       ? outcome.data.sourceRevision
       : typeof outcome.data.revision === "string" ? outcome.data.revision : undefined,
     startLine,
+    ...(outcome.data.sourceOrigin === "rojo" ? {
+      sourceOrigin: "rojo" as const,
+      filePath: typeof outcome.data.filePath === "string" ? outcome.data.filePath : undefined,
+      syncStatus: typeof outcome.data.syncStatus === "string" ? outcome.data.syncStatus : undefined,
+    } : {}),
     // Whether a read is the whole script is a question about coverage, so it is
     // answered with the range the read came back with rather than with the flag
     // saying a range was asked for: a read that reached the last line is the
@@ -1768,7 +1777,10 @@ type PreparedWrite = { args: JsonRecord; note?: string } | { result: StudioToolR
  */
 export function createStudioToolRunner(context: PlannerContext, options: StudioToolRunnerOptions = {}): StudioToolRunner {
   const scriptReads = new Map<string, ScriptSnapshot>();
+  // Internal diff/read-back reads must not authorize a write the model has not read.
+  const modelScriptReads = new Map<string, ScriptSnapshot>();
   const changedScripts = new Map<string, string | undefined>();
+  const scriptBackups = new Map<string, string>();
   const recordedAssetIds = new Set<string>();
   const blenderLineage = new BlenderLineage();
   // Whether a playtest this runner started is still running. Only this run's
@@ -1831,7 +1843,17 @@ export function createStudioToolRunner(context: PlannerContext, options: StudioT
     const matched = expectedRevision !== undefined &&
       readRevision !== undefined &&
       expectedRevision === readRevision;
-    const detail = expectedRevision === undefined
+    const rojo = snapshot.sourceOrigin === "rojo" || expectedRevision?.startsWith("rojo:") === true;
+    const verified = matched && (!rojo || snapshot.syncStatus === "synced");
+    const detail = rojo
+      ? !matched
+        ? "The file was read back from disk at a different or missing revision. The write could not be verified."
+        : snapshot.syncStatus === "synced"
+          ? "Read back from disk at the written revision; the source in Studio matches the Rojo file."
+          : snapshot.syncStatus === "pending"
+            ? "The file revision was verified on disk, but Studio has not synchronized it. Connect/sync Rojo and read the script again before playtesting."
+            : "The file revision was read back, but the bridge did not report Studio synchronization. Use matching bridge builds and read again before playtesting."
+      : expectedRevision === undefined
       ? "The script was read back from Studio, but the mutation did not report a source revision, so Roqer could not verify the write."
       : readRevision === undefined
         ? "The script was read back from Studio, but the read did not report a source revision, so Roqer could not verify the write."
@@ -1842,13 +1864,15 @@ export function createStudioToolRunner(context: PlannerContext, options: StudioT
       kind: "verification",
       changeKind: "script-source",
       title: target,
-      passed: matched,
+      passed: verified,
       detail,
       lines: evidenceLines(snapshot.source, snapshot.startLine),
       format: "code",
       metadata: [
         ...(expectedRevision ? [{ label: "Revision after write", value: expectedRevision }] : []),
         ...(readRevision ? [{ label: "Revision read back", value: readRevision }] : []),
+        ...(rojo && snapshot.filePath ? [{ label: "Rojo source file", value: snapshot.filePath }] : []),
+        ...(scriptBackups.has(target) ? [{ label: "Before-write recovery file", value: scriptBackups.get(target)! }] : []),
       ],
     });
     // The read is the check, and it has now happened. Leaving the write pending
@@ -1856,11 +1880,12 @@ export function createStudioToolRunner(context: PlannerContext, options: StudioT
     // read of the same script and file the identical failure a second time,
     // which is how one unverifiable write became two failed checks and a
     // warning that counted itself twice. A read that never arrived is the one
-    // case still worth retrying, so that one stays pending.
-    changedScripts.delete(target);
+    // case still worth retrying for Studio writes. A Rojo write also remains
+    // pending until both its file revision and Studio synchronization are proved.
+    if (!rojo || verified) changedScripts.delete(target);
 
-    return matched
-      ? `Roqer ${automatic ? "automatically " : ""}read the script back and verified revision ${readRevision}.`
+    return verified
+      ? `Roqer ${automatic ? "automatically " : ""}read the script back and verified revision ${readRevision}.${rojo ? " The file on disk and the source in Studio match." : ""}`
       : `The mutation succeeded, but ${automatic ? "automatic read-back" : "the read-back"} did not verify it. ${detail} Do not describe this change as verified.`;
   };
 
@@ -2002,6 +2027,13 @@ export function createStudioToolRunner(context: PlannerContext, options: StudioT
     // malformed call: the answer is already known, and sending it again only
     // spends another timeout and another model call finding that out.
     const playtestStart = PLAYTEST_OPERATIONS.has(operation) && args.action === "start";
+    if (playtestStart) {
+      for (const [script, revision] of changedScripts) {
+        if (!revision?.startsWith("rojo:")) continue;
+        const note = recordVerification(script, revision, await readWholeScript(script), true);
+        if (changedScripts.has(script)) return { ok: false, text: `The playtest was not started because a Rojo file write is not verified in Studio. ${note}` };
+      }
+    }
     if (playtestStart && startTimeouts >= MAX_PLAYTEST_START_TIMEOUTS) {
       if (context.decisions().length <= decisionsAtLimit) {
         return {
@@ -2013,7 +2045,12 @@ export function createStudioToolRunner(context: PlannerContext, options: StudioT
     }
 
     const target = typeof args.instancePath === "string" ? args.instancePath : undefined;
+    const originalRead = target === undefined ? undefined : modelScriptReads.get(target);
     if (target && SCRIPT_MUTATIONS.has(operation)) await widenSourceContext(target);
+    if (SCRIPT_MUTATIONS.has(operation) && args.expectedRevision === undefined && originalRead?.revision !== undefined && (originalRead.sourceOrigin === "rojo" || originalRead.revision.startsWith("rojo:"))) {
+      // Use the revision the model saw, never a fresher read made only to widen the diff context.
+      args = { ...args, expectedRevision: originalRead.revision };
+    }
 
     // No status line here: the activity layer already shows the call itself,
     // and a second entry saying the same thing is noise, not progress.
@@ -2060,6 +2097,7 @@ export function createStudioToolRunner(context: PlannerContext, options: StudioT
     if (outcome.ok && operation === "get_script_source" && target) {
       const snapshot = snapshotFromOutcome(outcome);
       scriptReads.set(target, snapshot);
+      modelScriptReads.set(target, snapshot);
       if (changedScripts.has(target)) {
         const expectedRevision = changedScripts.get(target);
         modelNote = recordVerification(target, expectedRevision, outcome, false);
@@ -2069,11 +2107,15 @@ export function createStudioToolRunner(context: PlannerContext, options: StudioT
     if (outcome.ok && target && SCRIPT_MUTATIONS.has(operation)) {
       const before = scriptReads.get(target);
       const afterRevision = stringField(outcome.data, "sourceRevision") ?? stringField(outcome.data, "revision");
+      const backupPath = stringField(outcome.data, "backupPath");
+      if (backupPath !== undefined) scriptBackups.set(target, backupPath);
       context.recordChange({
         kind: "script-source",
         target,
         instanceId: context.instanceId ?? undefined,
-        summary: MUTATION_SUMMARY[operation] ?? "Updated the script in Studio.",
+        summary: stringField(outcome.data, "sourceOrigin") === "rojo"
+          ? boundedVerificationReason(`Updated ${stringField(outcome.data, "filePath") ?? "the Rojo source file"} on disk.`)
+          : MUTATION_SUMMARY[operation] ?? "Updated the script in Studio.",
         ...changeArtifact(operation, args, before),
         revisionBefore: before?.revision,
         revisionAfter: afterRevision,
@@ -2087,11 +2129,14 @@ export function createStudioToolRunner(context: PlannerContext, options: StudioT
       // the stale read is dropped and the next write falls back to describing
       // itself until the agent reads the script again.
       if (operation === "set_script_source" && typeof args.source === "string") {
-        scriptReads.set(target, {
+        const snapshot: ScriptSnapshot = {
           source: normalizeNewlines(args.source), revision: afterRevision, startLine: 1, complete: true,
-        });
+        };
+        scriptReads.set(target, snapshot);
+        modelScriptReads.set(target, snapshot);
       } else {
         scriptReads.delete(target);
+        modelScriptReads.delete(target);
       }
 
       const readback = await readWholeScript(target);

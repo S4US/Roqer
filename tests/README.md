@@ -73,15 +73,19 @@ all edit, playtest, runtime, proxy, simulation, and multiplayer tests, use:
 npm run test:studio:runner
 ```
 
-Independent worktree workers receive distinct leased ports instead of
-accidentally proxying through each other's servers. Roblox Studio processes and
-the installed plugin folder are global to the OS user, so destructive live
-suites also take a cross-platform, heartbeating worktree lease. Multiple
-worktrees may start the commands together; one waits while the other owns that
-global mutation boundary, preventing plugin backup/restore and close-all races.
-The lease keeps durable copies of the installed plugins and lifecycle fixture,
-so a successor restores them before proceeding even if the prior test process
-was killed.
+Independent worktree workers receive distinct leased ports. Those leases do
+not isolate Studio settings or the user's plugin storage. The helper in
+`tests/lib/studio-test-lease.mjs` supports a shared, heartbeating lease and plugin
+backups, but the managed functional runner does not acquire it. Do not rely on
+that helper's existence as proof that a live command protects shared settings.
+Confirm isolation from the actual entry point and use a dedicated Studio OS
+profile for tests alongside a user's sessions.
+
+`--managed` clears inherited `MCP_INSTANCE_ID`,
+`RSMCP_STUDIO_WORKING_DIRECTORY`, and `RSMCP_STUDIO_DIRECTORY_ISOLATED` before
+creating its own session. A supplied worktree, port or working directory alone
+therefore does not make `npm run test:studio:runner` safe for shared Studio
+settings.
 
 ### What the managed suites leave behind in Studio's settings
 
@@ -108,6 +112,14 @@ npm run test:codex-wrapper
 
 Each test prints `✅ PASSED` or `❌ FAILED` plus the failing assertion. On
 failure the test's MCP subprocess stderr tail is dumped for context.
+
+## Rojo CLI filesystem integration
+
+`npm run test:rojo` uses the installed Rojo CLI and an independent temporary
+project to test the existing-script file backend. It does not launch Studio or
+connect to the existing Rojo server; its Studio peer is simulated. See
+[Rojo projects](../docs/rojo.md#checks) for coverage and the remaining live
+synchronization gate.
 
 ## Creator Store sanitizer unit test
 

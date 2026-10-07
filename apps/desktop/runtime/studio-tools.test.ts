@@ -71,6 +71,97 @@ function contextWith(outcomes: McpToolOutcome[]) {
   return { context, changes, evidence, calls };
 }
 
+test("Rojo writes carry the revision the model read and show the file diff", async () => {
+  const { context, changes, evidence, calls } = contextWith([
+    ok({ source: "1: return 1", revision: "rojo:before", sourceOrigin: "rojo", filePath: "/project/src/Main.luau", syncStatus: "synced" }),
+    ok({ revision: "rojo:after", sourceOrigin: "rojo", filePath: "/project/src/Main.luau" }),
+    ok({ source: "1: return 2", revision: "rojo:after", sourceOrigin: "rojo", filePath: "/project/src/Main.luau", syncStatus: "synced" }),
+  ]);
+  const run = createStudioToolRunner(context);
+  await run("get_script_source", { instancePath: "game.ServerScriptService.Main" });
+  const result = await run("edit_script_lines", { instancePath: "game.ServerScriptService.Main", old_string: "return 1", new_string: "return 2" });
+  assert.equal(calls[1].args.expectedRevision, "rojo:before");
+  assert.match(String(changes[0].summary), /Main\.luau.*on disk/);
+  assert.match(String(changes[0].diff), /-return 1\n\+return 2/);
+  assert.equal(evidence.at(-1)?.passed, true);
+  assert.match(result.text, /file on disk and the source in Studio match/);
+});
+
+test("a pending Rojo sync is unverified until a later read proves Studio matches", async () => {
+  const { context, evidence } = contextWith([
+    ok({ source: "1: return 1", revision: "rojo:before", sourceOrigin: "rojo", syncStatus: "synced" }),
+    ok({ revision: "rojo:after", sourceOrigin: "rojo", filePath: "/project/Main.luau" }),
+    ok({ source: "1: return 2", revision: "rojo:after", sourceOrigin: "rojo", syncStatus: "pending" }),
+    ok({ source: "1: return 2", revision: "rojo:after", sourceOrigin: "rojo", syncStatus: "synced" }),
+  ]);
+  const run = createStudioToolRunner(context);
+  await run("get_script_source", { instancePath: "game.ServerScriptService.Main" });
+  const write = await run("edit_script_lines", { instancePath: "game.ServerScriptService.Main", old_string: "return 1", new_string: "return 2" });
+  assert.equal(evidence.at(-1)?.passed, false);
+  assert.match(write.text, /Studio has not synchronized/);
+  await run("get_script_source", { instancePath: "game.ServerScriptService.Main" });
+  assert.equal(evidence.at(-1)?.passed, true);
+});
+
+test("an older proxy dropping Rojo sync metadata cannot turn a file revision into a verified Studio write", async () => {
+  const { context, evidence } = contextWith([
+    ok({ source: "1: return 1", revision: "rojo:before" }),
+    ok({ revision: "rojo:after", sourceOrigin: "rojo" }),
+    ok({ source: "1: return 2", revision: "rojo:after" }),
+  ]);
+  const run = createStudioToolRunner(context);
+  await run("get_script_source", { instancePath: "game.ServerScriptService.Main" });
+  const result = await run("edit_script_lines", { instancePath: "game.ServerScriptService.Main", old_string: "return 1", new_string: "return 2" });
+  assert.equal(evidence.at(-1)?.passed, false);
+  assert.match(result.text, /bridge did not report Studio synchronization/);
+});
+
+test("widening a partial Rojo read cannot silently promote its revision before the write", async () => {
+  const { context, calls } = contextWith([
+    ok({ source: "2: return 1", startLine: 2, endLine: 2, lineCount: 2, revision: "rojo:old", sourceOrigin: "rojo" }),
+    ok({ source: "1: -- edited externally\n2: return 1", revision: "rojo:new", sourceOrigin: "rojo" }),
+    { ...ok({}), ok: false, errorCode: "source_revision_conflict" },
+  ]);
+  const run = createStudioToolRunner(context);
+  await run("get_script_source", { instancePath: "game.ServerScriptService.Main", line_range: "2" });
+  await run("edit_script_lines", { instancePath: "game.ServerScriptService.Main", old_string: "return 1", new_string: "return 2" });
+  assert.equal(calls.at(-1)?.args.expectedRevision, "rojo:old");
+});
+
+test("conflict retries keep the model's Rojo revision until an explicit new read", async () => {
+  const conflict = { ...ok({}), ok: false, errorCode: "source_revision_conflict" };
+  const current = ok({ source: "1: -- external insertion\n2: return 1", lineCount: 2, revision: "rojo:new", sourceOrigin: "rojo" });
+  const { context, calls } = contextWith([
+    ok({ source: "2: return 1", startLine: 2, endLine: 2, lineCount: 3, revision: "rojo:old", sourceOrigin: "rojo" }),
+    current, conflict, conflict, current, conflict,
+  ]);
+  const run = createStudioToolRunner(context);
+  await run("get_script_source", { instancePath: "game.ServerScriptService.Main", line_range: "2" });
+  const args = { instancePath: "game.ServerScriptService.Main", line_range: "2" };
+  await run("delete_script_lines", args);
+  await run("delete_script_lines", args);
+  assert.deepEqual(calls.filter((call) => call.tool === "delete_script_lines").map((call) => call.args.expectedRevision), ["rojo:old", "rojo:old"]);
+  await run("get_script_source", { instancePath: args.instancePath });
+  await run("delete_script_lines", args);
+  assert.equal(calls.at(-1)?.args.expectedRevision, "rojo:new");
+});
+
+test("a playtest start is held until a Rojo write's disk revision and Studio sync are verified", async () => {
+  const read = (syncStatus: string) => ok({ source: "1: return 2", revision: "rojo:after", sourceOrigin: "rojo", syncStatus });
+  const { context, calls } = contextWith([
+    ok({ source: "1: return 1", revision: "rojo:before", sourceOrigin: "rojo" }),
+    ok({ revision: "rojo:after", sourceOrigin: "rojo" }), read("pending"), read("pending"), read("synced"), ok({ running: true }),
+  ]);
+  const run = createStudioToolRunner(context);
+  await run("get_script_source", { instancePath: "game.ServerScriptService.Main" });
+  await run("edit_script_lines", { instancePath: "game.ServerScriptService.Main", old_string: "return 1", new_string: "return 2" });
+  const refused = await run("solo_playtest", { action: "start", mode: "play" });
+  assert.equal(refused.ok, false);
+  assert.equal(calls.filter((call) => call.tool === "solo_playtest").length, 0);
+  assert.equal((await run("solo_playtest", { action: "start", mode: "play" })).ok, true);
+  assert.equal(calls.filter((call) => call.tool === "solo_playtest").length, 1);
+});
+
 test("localized edits carry their real file line coordinates", async () => {
   const { context, changes } = contextWith([
     ok({ source: "line 40\nline 41\nold value\nline 43", startLine: 40, sourceRevision: "before" }),

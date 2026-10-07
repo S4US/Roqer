@@ -44,10 +44,10 @@ export type ToolSchema = {
 };
 
 /** sha256 of `packages/core/src/tools/definitions.ts` with LF newlines. */
-export const TOOL_DEFINITIONS_DIGEST = "1b7723891ea5f399fddb2468365473ecbd73f66e9118c82b86bf6bbf5c00a3bb";
+export const TOOL_DEFINITIONS_DIGEST = "7bd643d008be9342f3054c631687c3b0c09900f0a6257d3861848cefdd548ca0";
 
 /** What a bridge built from these definitions reports as `toolCatalogDigest` on `/health`. */
-export const TOOL_CATALOG_DIGEST = "81a46fb69d9bd5cf7357ae30bf8019fa46a6190b4b7213df292dd802e2e0563f";
+export const TOOL_CATALOG_DIGEST = "6f6d43c04b81ce76972acafaa1e1da656cb3cdf08ab7003c9e1f98e905ef50ae";
 
 export const TOOL_SCHEMAS: Readonly<Record<string, ToolSchema>> = {
   animation: {
@@ -189,6 +189,7 @@ export const TOOL_SCHEMAS: Readonly<Record<string, ToolSchema>> = {
       { name: "instancePath", type: "string", required: true, description: "Canonical path of the script." },
       { name: "old_string", type: "string", required: true, description: "Exact text; must be unique unless line_range is set." },
       { name: "new_string", type: "string", required: true, description: "Replacement source text." },
+      { name: "expectedRevision", type: "string", required: false, description: "Source revision; required for Rojo files." },
       { name: "line_range", type: "string", required: false, description: "Line where old_string starts, or \"N-M\" covering it." },
       { name: "instance_id", type: "string", required: false, description: "Connected place ID; required with multiple places." },
     ],

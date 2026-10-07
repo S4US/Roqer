@@ -9,6 +9,7 @@ import { ProxyBridgeService } from './proxy-bridge-service.js';
 import type { ToolDefinition } from './tools/definitions.js';
 import type { PluginVariant } from './install-plugin-helpers.js';
 import { createToolServer } from './mcp-runtime.js';
+import { RojoScriptProject, rojoProjectConfig } from './rojo-project.js';
 
 export interface ServerConfig {
   name: string;
@@ -28,13 +29,16 @@ export class RobloxStudioMCPServer {
   private bridge: BridgeService;
   private allowedToolNames: Set<string>;
   private config: ServerConfig;
+  private readonly rojo?: RojoScriptProject;
 
   constructor(config: ServerConfig) {
     this.config = config;
     this.allowedToolNames = new Set(config.tools.map(t => t.name));
 
+    const rojo = rojoProjectConfig(process.env);
+    this.rojo = rojo === undefined ? undefined : new RojoScriptProject(rojo);
     this.bridge = new BridgeService();
-    this.tools = new RobloxStudioTools(this.bridge);
+    this.tools = new RobloxStudioTools(this.bridge, this.rojo);
   }
 
   async run() {
@@ -91,9 +95,9 @@ export class RobloxStudioMCPServer {
       console.error(`Streamable HTTP MCP endpoint: http://localhost:${boundPort}/mcp`);
     } catch (error) {
       await primaryApp?.cleanup().catch(() => {});
-      if (process.env.ROBLOX_STUDIO_REQUIRE_PRIMARY === '1') {
+      if (process.env.ROBLOX_STUDIO_REQUIRE_PRIMARY === '1' || this.rojo !== undefined) {
         console.error(
-          `Port ${basePort} is unavailable and ROBLOX_STUDIO_REQUIRE_PRIMARY=1; refusing proxy mode`,
+          `Port ${basePort} is unavailable and primary ownership is required${this.rojo ? ' for the Rojo project binding' : ' by ROBLOX_STUDIO_REQUIRE_PRIMARY=1'}; refusing proxy mode`,
         );
         throw error;
       }
@@ -104,7 +108,7 @@ export class RobloxStudioMCPServer {
       const proxyBridge = new ProxyBridgeService(`http://localhost:${basePort}`, auth.token, this.config.pluginVariant);
       await proxyBridge.waitForInitialRefresh();
       this.bridge = proxyBridge;
-      this.tools = new RobloxStudioTools(this.bridge);
+      this.tools = new RobloxStudioTools(this.bridge, this.rojo);
       console.error(`Port ${basePort} in use - entering proxy mode (forwarding to localhost:${basePort})`);
 
       // Periodically try to promote to primary if the port frees up.
@@ -120,8 +124,9 @@ export class RobloxStudioMCPServer {
       // timeout).
       const promotionIntervalMs = parseInt(process.env.ROBLOX_STUDIO_PROXY_PROMOTION_INTERVAL_MS || '5000');
       promotionInterval = setInterval(async () => {
+        if (!proxyBridge.canPromoteToPrimary()) return;
         const candidateBridge = new BridgeService();
-        const candidateTools = new RobloxStudioTools(candidateBridge);
+        const candidateTools = new RobloxStudioTools(candidateBridge, this.rojo);
         const candidateApp = createHttpServer(candidateTools, candidateBridge, this.allowedToolNames, this.config, security);
         try {
           const result = await listenWithRetry(candidateApp, host, basePort, 1);

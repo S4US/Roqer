@@ -518,6 +518,10 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
           type: 'string',
           description: 'Replacement source text.'
         },
+        expectedRevision: {
+          type: 'string',
+          description: 'Source revision; required for Rojo files.'
+        },
         line_range: {
           type: 'string',
           description: 'Line where old_string starts, or "N-M" covering it.'
