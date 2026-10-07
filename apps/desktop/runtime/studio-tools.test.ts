@@ -2057,7 +2057,7 @@ test("a timed-out playtest start comes back with Studio's status, and after two 
   assert.equal(first.ok, false);
   assert.match(first.text, /status afterwards: it is not running \(peers: edit\)\. A start that timed out may be tried once more/);
   const second = await run("solo_playtest", { action: "start", mode: "play" });
-  assert.match(second.text, /second start in a row that timed out, so Roqer will not send another\. Ask the user to press Play and then Stop/);
+  assert.match(second.text, /second start in a row that failed \(this one timed out\), so Roqer will not send another\. Ask the user to press Play and then Stop/);
   const third = await run("solo_playtest", { action: "start", mode: "play" });
   assert.equal(third.ok, false);
   assert.match(third.text, /solo_playtest was not started: 2 starts in a row timed out/);
@@ -2085,6 +2085,28 @@ test("a start that became ready late is reported as running, and a success clear
   // One timeout since the last success is a first timeout again, not a second.
   assert.match((await run("solo_playtest", { action: "start", mode: "play" })).text, /may be tried once more/);
   assert.equal(calls.length, 5);
+});
+
+test("a start Studio refused counts toward the same limit as one that timed out", async () => {
+  const refused: McpToolOutcome = {
+    ok: false,
+    data: { success: false, action: "start", error: "Studio did not start the playtest: a previous one is still in progress", message: "Playtest did not start." },
+    text: "",
+    message: "Playtest did not start.",
+    httpStatus: 200,
+    durationMs: 5,
+  };
+  const { context, calls } = contextWith([
+    refused, ok({ success: true, action: "status", running: false, roles: ["edit"] }),
+    startTimedOut(), ok({ success: true, action: "status", running: false, roles: ["edit"] }),
+  ]);
+  const run = createStudioToolRunner(context);
+
+  assert.match((await run("solo_playtest", { action: "start", mode: "play" })).text, /A start that was refused may be tried once more/);
+  assert.match((await run("solo_playtest", { action: "start", mode: "play" })).text, /second start in a row that failed \(this one timed out\)/);
+  const third = await run("solo_playtest", { action: "start", mode: "play" });
+  assert.match(third.text, /2 starts in a row timed out or were refused/);
+  assert.equal(calls.length, 4, "the third start never reached Studio");
 });
 
 test("a start that failed for another reason is not counted as a timeout", async () => {

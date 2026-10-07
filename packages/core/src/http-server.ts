@@ -296,7 +296,17 @@ export function createHttpServer(tools: RobloxStudioTools, bridge: BridgeService
   let lastMCPActivity = 0;
   let mcpServerStartTime = 0;
   const proxyInstances = new Set<string>();
-  const rejectedVersionSessions = new Set<string>();
+  // One log line per plugin session for each answer /ready gives it, so the
+  // log shows whether a Studio peer ever reached the bridge and what it was
+  // told: a playtest's runtime peers have no panel of their own to say so.
+  const loggedReadyOutcomes = new Set<string>();
+  const logReadyOutcomeOnce = (pluginSessionId: string, outcome: string, line: string) => {
+    const key = `${pluginSessionId}|${outcome}`;
+    if (loggedReadyOutcomes.has(key)) return;
+    if (loggedReadyOutcomes.size >= 256) loggedReadyOutcomes.clear();
+    loggedReadyOutcomes.add(key);
+    console.error(line);
+  };
   const eventTransport = new SseStudioTransport(bridge);
   const eventStreamHandles = new Set<EventStreamHandle>();
 
@@ -494,14 +504,12 @@ export function createHttpServer(tools: RobloxStudioTools, bridge: BridgeService
       return;
     }
     if (pluginVersion !== serverVersion) {
-      if (!rejectedVersionSessions.has(pluginSessionId)) {
-        if (rejectedVersionSessions.size >= 256) rejectedVersionSessions.clear();
-        rejectedVersionSessions.add(pluginSessionId);
-        console.error(
-          `[plugin-version-rejected] Studio plugin v${pluginVersion} (${pluginVariant}) ` +
-          `does not match MCP server v${serverVersion} for ${instanceId}/${role}`,
-        );
-      }
+      logReadyOutcomeOnce(
+        pluginSessionId,
+        'plugin_version_mismatch',
+        `[plugin-version-rejected] Studio plugin v${pluginVersion} (${pluginVariant}) ` +
+        `does not match MCP server v${serverVersion} for ${instanceId}/${role}`,
+      );
       res.status(426).json({
         success: false,
         error: 'plugin_version_mismatch',
@@ -517,8 +525,14 @@ export function createHttpServer(tools: RobloxStudioTools, bridge: BridgeService
     // full server, would let one edition act through the other's promise: the
     // inspector plugin says "read-only" in Studio, and only the server decides
     // what it is sent.
+    const logRefusal = (code: string) => logReadyOutcomeOnce(
+      pluginSessionId,
+      code,
+      `[studio-peer-rejected] ${instanceId}/${role} (plugin v${pluginVersion}, ${pluginVariant}): ${code}`,
+    );
     const expectedVariant = serverConfig?.pluginVariant;
     if (expectedVariant !== undefined && pluginVariant !== expectedVariant) {
+      logRefusal('plugin_variant_mismatch');
       res.status(409).json({
         success: false,
         error: 'plugin_variant_mismatch',
@@ -538,6 +552,7 @@ export function createHttpServer(tools: RobloxStudioTools, bridge: BridgeService
       (!isLogicalSession && isClientRole) ||
       (!isClientRole && role !== 'edit' && role !== 'server')
     ) {
+      logRefusal('invalid_session_topology');
       res.status(400).json({
         success: false,
         error: 'invalid_session_topology',
@@ -559,6 +574,7 @@ export function createHttpServer(tools: RobloxStudioTools, bridge: BridgeService
         physicalOwner.role !== 'server' ||
         physicalOwner.instanceId !== requestedInstanceId
       ) {
+        logRefusal('physical_session_unavailable');
         res.status(409).json({
           success: false,
           error: 'physical_session_unavailable',
@@ -570,6 +586,7 @@ export function createHttpServer(tools: RobloxStudioTools, bridge: BridgeService
     }
 
 
+    const alreadyRegistered = bridge.getInstanceBySessionId(pluginSessionId) !== undefined;
     let result: RegisterInstanceResult;
     try {
       result = bridge.registerInstance({
@@ -586,6 +603,7 @@ export function createHttpServer(tools: RobloxStudioTools, bridge: BridgeService
         serverVersion,
       });
     } catch (err) {
+      logRefusal('ready_registration_exception');
       res.status(500).json({
         success: false,
         error: 'ready_registration_exception',
@@ -596,6 +614,7 @@ export function createHttpServer(tools: RobloxStudioTools, bridge: BridgeService
     }
 
     if (!result.ok) {
+      logRefusal(result.error.code);
       res.status(409).json({
         success: false,
         error: result.error.code,
@@ -604,6 +623,9 @@ export function createHttpServer(tools: RobloxStudioTools, bridge: BridgeService
         existing: result.error.existing,
       });
       return;
+    }
+    if (!alreadyRegistered) {
+      console.error(`[studio-peer] ${result.instanceId}/${result.assignedRole} registered (plugin v${pluginVersion}, ${pluginVariant})`);
     }
     eventTransport.refreshStatus(physicalSessionId);
 

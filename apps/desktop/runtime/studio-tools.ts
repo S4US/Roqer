@@ -1715,7 +1715,15 @@ const PLAYTEST_OPERATIONS = new Set(["solo_playtest", "multiplayer_playtest"]);
 const PLAYTEST_START_TIMEOUT = /before timeout|did not answer within/i;
 
 /**
- * Start timeouts in a row after which a run sends no more starts.
+ * A playtest start Studio refused outright, matched on the result's `error`.
+ * The plugin now says so at once, with Studio's reason, where the start used
+ * to be answered as begun and left to time out; it is the same wedge, so it
+ * counts toward the same limit.
+ */
+const PLAYTEST_START_REFUSED = /did not start the playtest/i;
+
+/**
+ * Start timeouts or refusals in a row after which a run sends no more starts.
  *
  * Once Studio refuses a start, it refuses every start after it, each one
  * waiting out its timeout: one missile run sent five, about eight minutes and
@@ -1767,14 +1775,15 @@ export function createStudioToolRunner(context: PlannerContext, options: StudioT
   // own start and stop calls move it, so a playtest someone else started is
   // never claimed.
   let playtestRunning = false;
-  // Playtest starts in a row that timed out, and how many questions the user
-  // had answered when they reached the limit: an answer since then is how
-  // the user says they cleared it, so a start is allowed again.
+  // Playtest starts in a row that timed out or that Studio refused, and how
+  // many questions the user had answered when they reached the limit: an
+  // answer since then is how the user says they cleared it, so a start is
+  // allowed again.
   let startTimeouts = 0;
   let decisionsAtLimit = 0;
 
-  /** What a timed-out start is answered with: Studio's own status, read for the model, and what to do next. */
-  const afterStartTimeout = async (operation: string): Promise<string> => {
+  /** What a timed-out or refused start is answered with: Studio's own status, read for the model, and what to do next. */
+  const afterStartTimeout = async (operation: string, failed: "timed out" | "was refused"): Promise<string> => {
     const status = await context.call(operation, { action: "status" }).catch(() => undefined);
     const data = status?.ok === true && isRecord(status.data) ? status.data : undefined;
     const roles = Array.isArray(data?.roles) ? data.roles.filter((role): role is string => typeof role === "string") : [];
@@ -1784,9 +1793,9 @@ export function createStudioToolRunner(context: PlannerContext, options: StudioT
         ? `Roqer read the playtest's status afterwards: it is running now (${roles.join(", ")}), so use it rather than starting another.`
         : `Roqer read the playtest's status afterwards: it is not running${roles.length > 0 ? ` (peers: ${roles.join(", ")})` : ""}.`;
     if (startTimeouts < MAX_PLAYTEST_START_TIMEOUTS) {
-      return `${seen} A start that timed out may be tried once more; if that one times out too, Roqer sends no more starts in this run.`;
+      return `${seen} A start that ${failed} may be tried once more; if that one fails too, Roqer sends no more starts in this run.`;
     }
-    return `${seen} That is the second start in a row that timed out, so Roqer will not send another. ${PLAYTEST_RECOVERY}`;
+    return `${seen} That is the second start in a row that failed (this one ${failed}), so Roqer will not send another. ${PLAYTEST_RECOVERY}`;
   };
 
   const recordVerification = (
@@ -1997,7 +2006,7 @@ export function createStudioToolRunner(context: PlannerContext, options: StudioT
       if (context.decisions().length <= decisionsAtLimit) {
         return {
           ok: false,
-          text: `${operation} was not started: ${startTimeouts} starts in a row timed out in this run, and another would only wait out the timeout again. ${PLAYTEST_RECOVERY} If you ask the user with ask_user and they say it is cleared, a start is allowed again.`,
+          text: `${operation} was not started: ${startTimeouts} starts in a row timed out or were refused in this run, and another would only fail the same way. ${PLAYTEST_RECOVERY} If you ask the user with ask_user and they say it is cleared, a start is allowed again.`,
         };
       }
       startTimeouts = 0;
@@ -2017,12 +2026,17 @@ export function createStudioToolRunner(context: PlannerContext, options: StudioT
     }
     if (playtestStart) {
       const reason = outcome.message || stringField(outcome.data, "message") || outcome.text;
+      const failed = outcome.ok
+        ? undefined
+        : PLAYTEST_START_TIMEOUT.test(reason)
+          ? "timed out"
+          : PLAYTEST_START_REFUSED.test(stringField(outcome.data, "error") ?? "") ? "was refused" : undefined;
       if (outcome.ok) {
         startTimeouts = 0;
-      } else if (PLAYTEST_START_TIMEOUT.test(reason)) {
+      } else if (failed !== undefined) {
         startTimeouts += 1;
         if (startTimeouts >= MAX_PLAYTEST_START_TIMEOUTS) decisionsAtLimit = context.decisions().length;
-        modelNote = await afterStartTimeout(operation);
+        modelNote = await afterStartTimeout(operation, failed);
       }
     }
     const observed = observationEvidence(operation, args, outcome, playtestRunning);

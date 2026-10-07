@@ -15,6 +15,7 @@ import PluginSession from "./PluginSession";
 import UIInspectionHandlers from "./handlers/UIInspectionHandlers";
 import UIInteractionHandlers from "./handlers/UIInteractionHandlers";
 import AnimationHandlers from "./handlers/AnimationHandlers";
+import State from "./State";
 
 interface StudioTestServiceMultiplayer extends StudioTestService {
 	CanLeaveTest(): boolean;
@@ -32,7 +33,10 @@ const StudioTestService = game.GetService("StudioTestService") as StudioTestServ
 // in ReplicatedStorage; each player gets a logical proxy registration on the
 // MCP side, multiplexed over the play-server peer's physical event stream.
 
-const DEFAULT_MCP_URL = "http://localhost:58741";
+// The address the edit panel defaults to: `localhost` can hang where the
+// bridge listens on IPv4 loopback only (see State.DEFAULT_HOST), and this is
+// what a play server falls back to when it finds no remembered address.
+const DEFAULT_MCP_URL = State.defaultServerUrl(State.BASE_PORT);
 let mcpUrl = DEFAULT_MCP_URL;
 const BROKER_NAME = "__MCPClientBroker";
 const BROKER_OWNER_ATTRIBUTE = "__MCPBrokerOwner";

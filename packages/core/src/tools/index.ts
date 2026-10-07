@@ -23,6 +23,7 @@ import { rgbaToJpeg } from '../jpeg-encoder.js';
 import { rgbaToPng } from '../png-encoder.js';
 import { createUISnapshot, normalizeUIInspection } from '../ui-semantics.js';
 import { auditUI } from '../ui-audit.js';
+import { diagnoseRuntimePeers, type RuntimePeerDiagnosis } from '../runtime-peer-diagnosis.js';
 import {
   ANIMATE_SLOTS,
   MAX_GROUND_SPEED,
@@ -236,6 +237,9 @@ function sleep(ms: number): Promise<void> {
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
+
+/** How long a timed-out playtest start waits for the edit plugin to say why. */
+const RUNTIME_PEER_REPORT_TIMEOUT_MS = 5000;
 
 /** What a pose description's file is named, and the most it may hold: Roqer's Blender worker writes them. */
 const ANIMATION_FILE_SUFFIX = '.animation.json';
@@ -1638,6 +1642,28 @@ export class RobloxStudioTools {
       roles: equivalentInstances ? this._rolesForEquivalentInstances(instanceId) : this._rolesForInstance(instanceId),
       timedOut: true,
     };
+  }
+
+  /**
+   * Why `requiredRoles` did not register after a playtest start. The bridge
+   * never hears from a play server that cannot reach it, so the reason comes
+   * from the plugin peer that started the playtest, which reads what the play
+   * server's plugin recorded.
+   */
+  private async _diagnoseRuntimePeers(
+    instanceId: string,
+    startRole: string,
+    roles: string[],
+    requiredRoles: string[],
+    waitedSeconds: number,
+  ): Promise<RuntimePeerDiagnosis> {
+    let response: unknown;
+    try {
+      response = await this.client.request('/api/runtime-peer-report', {}, instanceId, startRole, RUNTIME_PEER_REPORT_TIMEOUT_MS);
+    } catch (error) {
+      response = { error: errorMessage(error) };
+    }
+    return diagnoseRuntimePeers(response, roles, requiredRoles, waitedSeconds);
   }
 
 
@@ -4131,14 +4157,16 @@ export class RobloxStudioTools {
           roles: Array.isArray(body.roles) ? body.roles : undefined,
         });
       }
+      const diagnosis = typeof body.diagnosis === 'string' ? ` ${body.diagnosis}` : '';
       return this._textResult({
         success: false,
         action,
         error: body.error ?? 'start_failed',
         message: body.success === true
-          ? 'Playtest did not become ready before timeout.'
+          ? `Playtest did not become ready before timeout.${diagnosis}`
           : body.message ?? 'Playtest did not start.',
         roles: Array.isArray(body.roles) ? body.roles : undefined,
+        runtimePeer: body.runtimePeer && typeof body.runtimePeer === 'object' ? body.runtimePeer : undefined,
       });
     }
 
@@ -4207,9 +4235,13 @@ export class RobloxStudioTools {
       resolved.targetRole,
     );
     let wait: { ok: boolean; roles: string[]; timedOut: boolean } | undefined;
+    let diagnosis: RuntimePeerDiagnosis | undefined;
     if (response?.success === true) {
       const requiredRoles = mode === 'play' ? ['server', 'client-1'] : ['server'];
       wait = await this._waitForRuntimeRolesFresh(resolved.targetInstanceId, startedAt, requiredRoles, timeout, true);
+      if (!wait.ok) {
+        diagnosis = await this._diagnoseRuntimePeers(resolved.targetInstanceId, resolved.targetRole, wait.roles, requiredRoles, timeout);
+      }
     }
     const body = wait
       ? {
@@ -4217,6 +4249,7 @@ export class RobloxStudioTools {
         runtimeReady: wait.ok,
         timedOut: wait.timedOut,
         roles: wait.roles,
+        ...diagnosis,
       }
       : response;
     return {
@@ -4473,6 +4506,7 @@ export class RobloxStudioTools {
           ? 'Multiplayer playtest start was requested, but MCP did not detect the required server/client peers before timeout.'
           : body.message ?? 'Multiplayer playtest did not start.',
         roles: Array.isArray(body.roles) ? body.roles : undefined,
+        runtimePeer: body.runtimePeer && typeof body.runtimePeer === 'object' ? body.runtimePeer : undefined,
       });
     }
 
@@ -4563,8 +4597,18 @@ export class RobloxStudioTools {
       return { content: [{ type: 'text', text: JSON.stringify(response) }] };
     }
 
-    const wait = await this._waitForMultiplayerStart(editTarget.instanceId, numPlayers, timeout ?? 60, startedAt);
+    const waitSeconds = timeout ?? 60;
+    const wait = await this._waitForMultiplayerStart(editTarget.instanceId, numPlayers, waitSeconds, startedAt);
     const launched = wait.ok;
+    const diagnosis = wait.timedOut
+      ? await this._diagnoseRuntimePeers(
+        editTarget.instanceId,
+        editTarget.role,
+        wait.roles,
+        ['server', ...Array.from({ length: numPlayers }, (_, index) => `client-${index + 1}`)],
+        waitSeconds,
+      )
+      : undefined;
     const state = await this._buildMultiplayerState(editTarget.instanceId);
     const success = response.success === true && wait.ok;
     return {
@@ -4580,10 +4624,12 @@ export class RobloxStudioTools {
           wait,
           roles: wait.roles,
           state,
+          ...diagnosis,
           error: success ? undefined : wait.error ?? 'multiplayer_start_not_detected',
           message: success
             ? 'Multiplayer Studio test started and runtime peers detected.'
-            : 'Multiplayer Studio test start was requested, but MCP did not detect the required server/client peers before timeout.',
+            : 'Multiplayer Studio test start was requested, but MCP did not detect the required server/client peers before timeout.'
+              + (diagnosis ? ` ${diagnosis.diagnosis}` : ''),
           startedAt,
         }),
       }],

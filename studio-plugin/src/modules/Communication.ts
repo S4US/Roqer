@@ -26,6 +26,7 @@ import UIInteractionHandlers from "./handlers/UIInteractionHandlers";
 import ClientBroker from "./ClientBroker";
 import ServerUrlSettings from "./ServerUrlSettings";
 import PluginSession from "./PluginSession";
+import RuntimePeerReport from "./RuntimePeerReport";
 import StudioEventStream from "./StudioEventStream";
 import {
 	RequestPayload,
@@ -94,6 +95,7 @@ const routeMap: Record<string, Handler> = {
 	"/api/multiplayer-test-add-players": TestHandlers.multiplayerTestAddPlayers,
 	"/api/multiplayer-test-leave-client": TestHandlers.multiplayerTestLeaveClient,
 	"/api/multiplayer-test-end": TestHandlers.multiplayerTestEnd,
+	"/api/runtime-peer-report": TestHandlers.runtimePeerReport,
 
     "/api/insert-asset": AssetHandlers.insertAsset,
 	"/api/preview-asset": AssetHandlers.previewAsset,
@@ -215,6 +217,7 @@ function handleReady(response: ReadyResponse): void {
 	lastReadyInstanceId = response.instanceId;
 	ServerUrlSettings.rememberServerUrl(conn.serverUrl);
 	ClientBroker.refreshAllLogicalRegistrations();
+	RuntimePeerReport.record("registered", { url: conn.serverUrl, role: response.assignedRole });
 }
 
 function handleStatus(status: StudioStatusEvent): void {
@@ -243,6 +246,12 @@ function handleHeartbeat(_timestamp: number): void {
 function handleTransportUpdate(update: TransportUpdate): void {
 	const conn = State.getActiveConnection();
 	if (!conn.isActive) return;
+
+	if (update.state === "connecting") {
+		RuntimePeerReport.record("connecting", { url: conn.serverUrl });
+	} else if (update.state !== "open") {
+		RuntimePeerReport.record("retrying", { url: conn.serverUrl, detail: update.detail });
+	}
 
 	if (update.state === "open") {
 		conn.lastHttpOk = true;

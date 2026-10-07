@@ -45,6 +45,25 @@ function claimQueuedRequest(bridge: BridgeService, physicalSessionId: string) {
   };
 }
 
+/** Plays the plugin until `endpoint` is asked for, answering anything else on the way with nothing. */
+async function answerQueuedRequest(
+  bridge: BridgeService,
+  physicalSessionId: string,
+  endpoint: string,
+  response: unknown,
+) {
+  const deadline = Date.now() + 3000;
+  while (Date.now() < deadline) {
+    const pending = claimQueuedRequest(bridge, physicalSessionId);
+    if (pending) {
+      bridge.resolveRequest(pending.requestId, pending.request.endpoint === endpoint ? response : {});
+      if (pending.request.endpoint === endpoint) return pending;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error(`${endpoint} was never requested`);
+}
+
 const READY = {
   pluginSessionId: 'session-1',
   physicalSessionId: 'session-1',
@@ -3137,6 +3156,58 @@ describe('Smoke', () => {
     });
   });
 
+  test('solo_playtest start that times out says why, from the play server plugin report', async () => {
+    const bridge = new BridgeService();
+    const tools = trackedTools(bridge);
+    bridge.registerInstance(READY);
+
+    const resultPromise = tools.soloPlaytest('start', 'play', 0.2);
+    const pending = claimQueuedRequest(bridge, 'session-1');
+    expect(pending?.request.endpoint).toBe('/api/start-playtest');
+    bridge.resolveRequest(pending!.requestId, { success: true, message: 'started' });
+
+    const detail = 'RequestAsync threw for http://127.0.0.1:58741/ready: HttpError: ConnectFail';
+    const report = await answerQueuedRequest(bridge, 'session-1', '/api/runtime-peer-report', {
+      success: true,
+      playStartRequested: true,
+      playtestRunning: true,
+      report: { stage: 'retrying', at: 12.5, url: 'http://127.0.0.1:58741', detail },
+    });
+    expect(report.request.data).toEqual({});
+
+    const body = JSON.parse((await resultPromise).content[0].text);
+    expect(body).toEqual({
+      success: false,
+      action: 'start',
+      error: 'start_failed',
+      message: 'Playtest did not become ready before timeout. '
+        + `The MCP plugin in the play server could not register with the bridge at http://127.0.0.1:58741: ${detail}`,
+      roles: ['edit'],
+      runtimePeer: { stage: 'retrying', playtestRunning: true, url: 'http://127.0.0.1:58741', detail },
+    });
+  });
+
+  test('solo_playtest start that Studio refuses says so without waiting for peers', async () => {
+    const bridge = new BridgeService();
+    const tools = trackedTools(bridge);
+    bridge.registerInstance(READY);
+
+    const resultPromise = tools.soloPlaytest('start', 'play', 30);
+    const pending = claimQueuedRequest(bridge, 'session-1');
+    bridge.resolveRequest(pending!.requestId, {
+      error: 'Studio did not start the playtest: a previous one is still in progress',
+    });
+
+    const body = JSON.parse((await resultPromise).content[0].text);
+    expect(body).toEqual({
+      success: false,
+      action: 'start',
+      error: 'Studio did not start the playtest: a previous one is still in progress',
+      message: 'Playtest did not start.',
+    });
+    expect(claimQueuedRequest(bridge, 'session-1')).toBeNull();
+  });
+
   test('solo_playtest stop returns a brief stopped response', async () => {
     const bridge = new BridgeService();
     const tools = trackedTools(bridge);
@@ -3258,6 +3329,11 @@ describe('Smoke', () => {
       success: true,
       message: 'Multiplayer Studio test starting with 1 player(s).',
     });
+    await answerQueuedRequest(bridge, 'session-1', '/api/runtime-peer-report', {
+      success: true,
+      playStartRequested: true,
+      playtestRunning: true,
+    });
 
     const result = await resultPromise;
     const body = JSON.parse(result.content[0].text);
@@ -3265,8 +3341,10 @@ describe('Smoke', () => {
       success: false,
       action: 'start',
       error: 'multiplayer_start_not_detected',
-      message: 'Multiplayer Studio test start was requested, but MCP did not detect the required server/client peers before timeout.',
+      message: 'Multiplayer Studio test start was requested, but MCP did not detect the required server/client peers before timeout. '
+        + 'Studio is running the playtest, but after 0.1 s the MCP plugin had not reported from the play server: it had not started there.',
       roles: ['edit'],
+      runtimePeer: { stage: 'none', playtestRunning: true },
     });
   });
 

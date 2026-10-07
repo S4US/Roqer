@@ -125,6 +125,19 @@ disables this setting by default.
   connection that keeps going quiet without closing is usually an antivirus
   web shield holding the stream; exclude Roqer and its bridge from it.
 
+### Playtest starts, but its server and client never connect
+
+A playtest's runtime peers are registered by the plugin running inside the
+play server: itself as `server`, and a `client-N` for each player that joins.
+When that plugin cannot reach the bridge, Studio plays normally while the
+playtest start times out. The failed start now says why, from what the play
+server's plugin recorded: that it never started there, that it is still
+waiting for the bridge to answer, or the error it got. The same plugin writes
+`Play server could not reach the MCP bridge: …` to Studio's Output once, and
+the bridge log has a `[studio-peer]` line for every peer that registers and a
+`[studio-peer-rejected]` line for every one it refuses. Quote those lines when
+reporting a problem.
+
 ## Security and configuration
 
 The bridge binds to `127.0.0.1:58741` by default. The full plugin can modify the
