@@ -29,7 +29,8 @@ export type RojoRunner = (args: string[], cwd: string) => Promise<string>;
 const MINIMUM_VERSION = [7, 3, 0] as const;
 
 function oneLine(text: string): string {
-  return text.replace(/\s+/g, ' ').trim();
+  // eslint-disable-next-line no-control-regex
+  return text.replace(/\u001b\[[0-9;]*m/g, '').replace(/\s+/g, ' ').trim();
 }
 
 export const execRojo: RojoRunner = (args, cwd) => new Promise((resolve, reject) => {
@@ -40,13 +41,19 @@ export const execRojo: RojoRunner = (args, cwd) => new Promise((resolve, reject)
   });
 });
 
+const ROKIT_SHIM_MESSAGE = /Failed to find tool ['"]rojo['"]/;
+
 function rethrow(error: unknown, doing: string): never {
   if (error instanceof RojoError) throw error;
   if ((error as { code?: unknown }).code === 'ENOENT') {
     throw new RojoError('rojo_not_found', 'rojo was not found on PATH; install Rojo 7.3 or newer (for example with rokit) and restart the server.');
   }
   const stderr = oneLine(String((error as { stderr?: unknown }).stderr ?? ''));
-  throw new RojoError('rojo_link_invalid', `rojo ${doing} failed: ${(stderr || oneLine(String((error as Error).message))).slice(0, 300)}`);
+  const combined = stderr || oneLine(String((error as Error).message));
+  if (ROKIT_SHIM_MESSAGE.test(combined)) {
+    throw new RojoError('rojo_not_found', "rojo is installed through Rokit but this project does not list it; run `rokit add rojo-rbx/rojo` in the project folder (or install it globally with `rokit add --global rojo-rbx/rojo`).");
+  }
+  throw new RojoError('rojo_link_invalid', `rojo ${doing} failed: ${combined.slice(0, 300)}`);
 }
 
 export async function rojoVersion(run: RojoRunner, cwd: string): Promise<string> {

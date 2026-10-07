@@ -44,4 +44,22 @@ describe('rojo sourcemap', () => {
     expect(error).toBeInstanceOf(RojoError);
     expect((error as RojoError).message).not.toMatch(/\n/);
   });
+  test('ANSI escape sequences are stripped from the error message', async () => {
+    const run: RojoRunner = async () => { throw Object.assign(new Error('spawn failed'), { stderr: '\u001b[31mERROR\u001b[0m: bad project' }); };
+    const error = await loadSourcemap('/p/default.project.json', run).catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(RojoError);
+    // eslint-disable-next-line no-control-regex
+    expect((error as RojoError).message).not.toMatch(/\u001b/);
+    expect((error as RojoError).message).toContain('ERROR: bad project');
+  });
+  test('a Rokit shim with no rojo in the project manifest is rojo_not_found with a fix', async () => {
+    const run: RojoRunner = async () => {
+      throw Object.assign(new Error('rojo --version failed'), { stderr: "\u001b[31mERROR\u001b[0m Failed to find tool 'rojo' in any project manifest file." });
+    };
+    const error = await rojoVersion(run, '/p').catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(RojoError);
+    expect((error as RojoError).code).toBe('rojo_not_found');
+    expect((error as RojoError).message).toMatch(/rokit add rojo-rbx\/rojo/);
+    expect((error as RojoError).message).toMatch(/rokit add --global rojo-rbx\/rojo/);
+  });
 });
