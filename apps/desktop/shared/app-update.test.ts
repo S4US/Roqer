@@ -3,11 +3,36 @@ import test from "node:test";
 
 import {
   appUpdateMessage,
+  appVersionDetail,
   canInstallUpdate,
   isAppUpdateState,
+  isAppVersion,
   updateInProgress,
   type AppUpdateState,
 } from "./app-update";
+
+test("the version line claims up to date only when a check said so", () => {
+  // Idle is also the state before the first check, so it adds nothing.
+  assert.equal(appVersionDetail("0.1.11", { kind: "idle" }), "Roqer 0.1.11");
+  assert.equal(appVersionDetail("0.1.11", { kind: "checking" }), "Roqer 0.1.11 · Checking for updates…");
+  assert.equal(appVersionDetail("0.1.11", { kind: "ready", version: "0.1.12" }), "Roqer 0.1.11 · Roqer 0.1.12 is ready to install.");
+  assert.equal(
+    appVersionDetail("0.1.11", { kind: "failed", message: "Roqer could not check for updates." }),
+    "Roqer 0.1.11 · Roqer could not check for updates.",
+  );
+  assert.equal(
+    appVersionDetail("0.1.11", { kind: "unsupported", message: "Development builds do not update themselves." }),
+    "Roqer 0.1.11 · Development builds do not update themselves.",
+  );
+  assert.equal(appVersionDetail(null, { kind: "unsupported", message: "Updates need the desktop app." }), "Roqer · Updates need the desktop app.");
+});
+
+test("a reported version is a short non-empty string", () => {
+  assert.equal(isAppVersion("0.1.11"), true);
+  assert.equal(isAppVersion(""), false);
+  assert.equal(isAppVersion("x".repeat(101)), false);
+  assert.equal(isAppVersion(11), false);
+});
 
 test("only a downloaded update may be installed", () => {
   assert.equal(canInstallUpdate({ kind: "ready", version: "1.2.0" }), true);

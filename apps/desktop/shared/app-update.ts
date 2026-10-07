@@ -68,6 +68,24 @@ export function appUpdateMessage(state: AppUpdateState): string {
   }
 }
 
+/** A version the main process reported for the running build, checked before it is shown. */
+export function isAppVersion(value: unknown): value is string {
+  return isVersion(value);
+}
+
+/**
+ * The running version, as Settings shows it, with what the updater has to say
+ * about it.
+ *
+ * `idle` adds nothing: it is both "no check has run yet" and "the last check
+ * found nothing", and only the second would let the line say the app is up to
+ * date. A null version is a renderer with no desktop app behind it.
+ */
+export function appVersionDetail(version: string | null, update: AppUpdateState): string {
+  const running = version === null ? "Roqer" : `Roqer ${version}`;
+  return update.kind === "idle" ? running : `${running} · ${appUpdateMessage(update)}`;
+}
+
 /**
  * Whether the interface should offer a restart.
  *

@@ -427,6 +427,11 @@ export async function getUpdateState(): Promise<AppUpdateState> {
   return window.workbenchDesktop.updates.state();
 }
 
+/** The running build's version; null in a browser, which has no app behind it. */
+export async function getAppVersion(): Promise<string | null> {
+  return window.workbenchDesktop?.app.version() ?? null;
+}
+
 /** Restart into a downloaded update. Resolves false when none is staged. */
 export async function installUpdate(): Promise<boolean> {
   return window.workbenchDesktop?.updates.install() ?? false;

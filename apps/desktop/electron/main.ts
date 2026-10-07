@@ -2119,6 +2119,10 @@ function runSmokeTest(window: BrowserWindow): void {
           return { ok: false, reason: "studio-open-script" };
         }
 
+        // Settings shows the running version, asked of this process.
+        const version = await bridge.app?.version?.();
+        if (typeof version !== "string" || version === "") return { ok: false, reason: "app-version" };
+
         const events = [];
         const finished = new Promise((resolve) => {
           const stop = bridge.runs.subscribe((event) => {
@@ -2275,6 +2279,10 @@ app.whenReady().then(async () => {
   ipcMain.handle("app:data-path", (event) => {
     if (!isTrusted(event.sender)) throw new Error("This window may not read the data folder's location.");
     return app.getPath("userData");
+  });
+  ipcMain.handle("app:version", (event) => {
+    if (!isTrusted(event.sender)) throw new Error("This window may not read the app version.");
+    return app.getVersion();
   });
   ipcMain.handle("app:copy-diagnostics", copyDiagnostics);
   ipcMain.handle("app:show-bridge-log", showBridgeLog);

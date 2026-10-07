@@ -1,6 +1,7 @@
 import { ChevronLeft, ChevronRight, Plus, X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
+import { appVersionDetail, type AppUpdateState } from "../shared/app-update";
 import type { CustomConnectionView } from "../shared/custom-providers";
 import { ENABLED_PROVIDER_IDS, providerLabel, type ProviderId, type ProviderStatus } from "../shared/provider";
 import { NO_LIMITS, type ProviderLimits } from "../shared/provider-limits";
@@ -12,7 +13,7 @@ import { DiagnosticsActions } from "./diagnostics-actions";
 import { EndpointPage, endpointDetail, useCustomConnections } from "./custom-connections";
 import { OpenCloudSettings } from "./open-cloud-settings";
 import {
-  cancelProviderLogin, getProviderLimits, getProviderStatus, installProviderClient, loginProvider, openProviderLogin, submitProviderCode,
+  cancelProviderLogin, getAppVersion, getProviderLimits, getProviderStatus, installProviderClient, loginProvider, openProviderLogin, submitProviderCode,
   waitForProviderLogin,
 } from "./platform";
 import { planUsageView } from "./plan-usage";
@@ -67,9 +68,10 @@ type EndpointView = { key: string; id?: string };
 
 let nextEndpointVisit = 0;
 
-export function SettingsPage({ preferences, studioStatus, notice, onPreferences, onStudioRefresh, onProviderChanged, onExport, onClose }: {
+export function SettingsPage({ preferences, studioStatus, updateState, notice, onPreferences, onStudioRefresh, onProviderChanged, onExport, onClose }: {
   preferences: WorkspaceState["preferences"];
   studioStatus: StudioStatus;
+  updateState: AppUpdateState;
   /** Why Settings opened, when something other than the person opened it. Shown on Models. */
   notice?: string;
   onPreferences: (changes: Partial<WorkspaceState["preferences"]>) => void;
@@ -85,6 +87,14 @@ export function SettingsPage({ preferences, studioStatus, notice, onPreferences,
   const [pendingLeave, setPendingLeave] = useState<(() => void) | null>(null);
   const endpoints = useCustomConnections();
   const mainRef = useRef<HTMLElement>(null);
+  /** Asked of the running app rather than built in, so it is the version actually running. */
+  const [appVersion, setAppVersion] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    void getAppVersion().then((version) => { if (!cancelled) setAppVersion(version); }, () => undefined);
+    return () => { cancelled = true; };
+  }, []);
 
   /** Leave the endpoint page, asking first when it holds unsaved changes. */
   const guarded = useCallback((leave: () => void) => {
@@ -212,6 +222,7 @@ export function SettingsPage({ preferences, studioStatus, notice, onPreferences,
             </SettingsRow>
           </SettingsGroup>
           <SettingsGroup title="About">
+            <SettingsRow title="Version" detail={appVersionDetail(appVersion, updateState)} />
             <SettingsRow title="License" detail="Roqer is free software: you may share and change it under the GNU Affero General Public License, version 3 or later. It comes with no warranty.">
               <a className="small-button" href={LICENSE_URL} target="_blank" rel="noreferrer">View license</a>
             </SettingsRow>
