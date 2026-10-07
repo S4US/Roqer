@@ -16,7 +16,7 @@ import { EMPTY_ROJO_VIEW, rojoLinkedNote, rojoPillLinked, rojoPillVisual, viewFr
  * renderer never names a project file, it only tells the main process which
  * remembered one to use, or asks it to open its own dialog.
  */
-export function RojoPill({ instanceId, refreshSignal }: { instanceId: string | null; refreshSignal: unknown }) {
+export function RojoPill({ instanceId, placeName, refreshSignal }: { instanceId: string | null; placeName?: string; refreshSignal: unknown }) {
   const desktop = hasDesktopRuntime();
   const [view, setView] = useState<RojoView>(EMPTY_ROJO_VIEW);
   const [open, setOpen] = useState(false);
@@ -88,7 +88,7 @@ export function RojoPill({ instanceId, refreshSignal }: { instanceId: string | n
         </dl>
         {view.project.problems !== undefined && view.project.problems.length > 0 &&
           <p className="popover-problem" role="alert">{view.project.problems.join("; ")}</p>}
-        <p className="popover-note">Linked to this place · {rojoLinkedNote(view.published)}</p>
+        <p className="popover-note">{rojoLinkedNote(view.published, placeName)}</p>
         {id !== null && <>
           <button className="popover-action" disabled={busy} onClick={() => void apply(() => openRojoFolder(id))}><Folder size={15} /> Open folder</button>
           <button className="popover-action" disabled={busy} onClick={() => void apply(() => chooseRojoProject(id))}><FolderPlus size={15} /> Change project…</button>

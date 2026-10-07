@@ -63,11 +63,19 @@ export function rojoPillLinked(state: RojoPillStateKind): boolean {
   return state === "linked-running" || state === "linked-stopped";
 }
 
-/** The popover's note once linked: a published place relinks after a restart, an unpublished one only lasts the Studio session. */
-export function rojoLinkedNote(published: boolean): string {
+/**
+ * The popover's note once linked, naming the place the way the approved
+ * mockup does ("Linked to Creator Empire · relinks automatically"): a
+ * published place relinks after a restart, an unpublished one only lasts the
+ * Studio session. `placeName` is display-only and comes from the renderer's
+ * own Studio connection state (`RojoView` carries no place name), so a
+ * missing one falls back to "this place" rather than leaving a blank.
+ */
+export function rojoLinkedNote(published: boolean, placeName?: string): string {
+  const place = placeName ?? "this place";
   return published
-    ? "Relinks automatically after a restart."
-    : "Linked until this Studio session closes.";
+    ? `Linked to ${place} · relinks automatically after a restart.`
+    : `Linked to ${place} · until this Studio session closes.`;
 }
 
 /**

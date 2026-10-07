@@ -51,6 +51,13 @@ test("the linked note names the published/unpublished lifetime the spec describe
   assert.match(rojoLinkedNote(false), /Studio session/);
 });
 
+test("the linked note names the place, as the approved mockup shows, and falls back without one", () => {
+  assert.equal(rojoLinkedNote(true, "Creator Empire"), "Linked to Creator Empire · relinks automatically after a restart.");
+  assert.equal(rojoLinkedNote(false, "Creator Empire"), "Linked to Creator Empire · until this Studio session closes.");
+  assert.equal(rojoLinkedNote(true), "Linked to this place · relinks automatically after a restart.");
+  assert.equal(rojoLinkedNote(true, undefined), "Linked to this place · relinks automatically after a restart.");
+});
+
 test("viewFromResult reads the attached view on both success and failure", () => {
   const view: RojoView = { ...base, state: "linked-running" };
   assert.equal(viewFromResult({ ok: true, view }, "place:1"), view);
