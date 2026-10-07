@@ -142,8 +142,13 @@ export class RojoLinksStore {
       if (!isPlaceInstanceId(instanceId) || !isProjectFilePath(projectFile)) return;
       const current = await this.read();
       const linkedAt = new Date().toISOString();
-      const links = [...current.links.filter((link) => link.instanceId !== instanceId), { instanceId, projectFile, linkedAt }]
-        .slice(-MAX_LINKS);
+      // Core refuses to link one project to two places, so an earlier entry
+      // for this project under a *different* instance is already stale --
+      // drop it too, or the store would claim two places hold the same link.
+      const links = [
+        ...current.links.filter((link) => link.instanceId !== instanceId && link.projectFile !== projectFile),
+        { instanceId, projectFile, linkedAt },
+      ].slice(-MAX_LINKS);
       await this.write({ version: 1, links, recent: current.recent });
     });
   }

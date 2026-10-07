@@ -55,6 +55,18 @@ test("remembering an instance id again replaces its earlier link", async () => {
   });
 });
 
+test("remembering a project under a new instance drops that project's entry under its old instance", async () => {
+  await withFile(async (file) => {
+    const store = new RojoLinksStore({ file });
+    await store.remember("place:1", "/projects/one/default.project.json");
+    await store.remember("place:2", "/projects/one/default.project.json");
+    const saved = await store.get();
+    assert.equal(saved.links.length, 1, "one project cannot be stored as linked to two places");
+    assert.equal(saved.links[0].instanceId, "place:2");
+    assert.equal(saved.links[0].projectFile, "/projects/one/default.project.json");
+  });
+});
+
 test("at most 200 links and 5 recent projects are kept, newest kept over oldest", async () => {
   await withFile(async (file) => {
     const store = new RojoLinksStore({ file });

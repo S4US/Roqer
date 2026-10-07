@@ -450,6 +450,112 @@ test("projectFolderFor returns the linked project's folder only while linked", a
   });
 });
 
+test("two overlapping relinkConnected calls against a slow bridge make exactly one link_project call", async () => {
+  await withStore(async (store) => {
+    await store.remember("place:1", "/projects/one/default.project.json");
+    const calls: Call[] = [];
+    let release: (() => void) | undefined;
+    const connection = new RojoConnection({
+      store,
+      callTool: async (tool, args) => {
+        calls.push({ tool, args });
+        await new Promise<void>((resolve) => { release = resolve; });
+        return linkSuccess();
+      },
+      probe: async () => ({ answering: true }),
+      readServePort: neverReadsPort(),
+    });
+
+    const first = connection.relinkConnected(["place:1"]);
+    // Give the first call's `link_project` a chance to start (and register as
+    // in-flight) before the second poll fires, the same as a real ~5 s gap.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const second = connection.relinkConnected(["place:1"]);
+
+    assert.equal(calls.length, 1, "the second poll reused the first attempt instead of starting a concurrent one");
+    release?.();
+    await Promise.all([first, second]);
+    assert.equal(calls.length, 1, "still exactly one call once both polls have settled");
+  });
+});
+
+test("retry() reuses an in-flight automatic relink instead of starting a second attempt", async () => {
+  await withStore(async (store) => {
+    await store.remember("place:1", "/projects/one/default.project.json");
+    const calls: Call[] = [];
+    let release: (() => void) | undefined;
+    const connection = new RojoConnection({
+      store,
+      callTool: async (tool, args) => {
+        calls.push({ tool, args });
+        await new Promise<void>((resolve) => { release = resolve; });
+        return linkSuccess();
+      },
+      probe: async () => ({ answering: true }),
+      readServePort: neverReadsPort(),
+    });
+
+    const automatic = connection.relinkConnected(["place:1"]);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const retried = connection.retry("place:1");
+
+    assert.equal(calls.length, 1, "retry() awaited the attempt already running rather than starting another");
+    release?.();
+    const [, retriedResult] = await Promise.all([automatic, retried]);
+    assert.equal(retriedResult.ok, true);
+  });
+});
+
+test("bridgeRestarted() clears a linked anon place's memory, so its view is no longer linked", async () => {
+  await withStore(async (store) => {
+    const connection = new RojoConnection({
+      store,
+      callTool: async () => linkSuccess({ instance_id: "anon:abc" }),
+      probe: async () => ({ answering: true }),
+      readServePort: neverReadsPort(),
+    });
+
+    await connection.link("anon:abc", "/projects/one/default.project.json");
+    const linked = await connection.view("anon:abc", ["anon:abc"]);
+    assert.equal(linked.state, "linked-running");
+
+    connection.bridgeRestarted();
+    const afterRestart = await connection.view("anon:abc", ["anon:abc"]);
+    assert.notEqual(afterRestart.state, "linked-running", "an unpublished place's link does not survive a bridge restart");
+  });
+});
+
+test("a failed 'Change project...' on a currently-linked instance keeps the working link instead of marking it broken", async () => {
+  await withStore(async (store) => {
+    let attempts = 0;
+    const connection = new RojoConnection({
+      store,
+      callTool: async () => {
+        attempts += 1;
+        return attempts === 1
+          ? linkSuccess({ project: "default.project.json", root: "/projects/one" })
+          : outcome({ ok: false, data: { error: "Already linked to another place", errorCode: "rojo_link_invalid" }, message: "Already linked to another place" });
+      },
+      probe: async () => ({ answering: true }),
+      readServePort: neverReadsPort(),
+    });
+
+    const linked = await connection.link("place:1", "/projects/one/default.project.json");
+    assert.equal(linked.ok, true);
+
+    const failed = await connection.link("place:1", "/projects/two/default.project.json");
+    assert.equal(failed.ok, false);
+    assert.equal(failed.message, "Already linked to another place");
+    if (failed.ok) throw new Error("unreachable");
+    assert.equal(failed.view?.state, "linked-running", "the view still shows the working link, not an error");
+    assert.equal(failed.view?.project?.fileName, "default.project.json");
+
+    const view = await connection.view("place:1", ["place:1"]);
+    assert.equal(view.state, "linked-running", "a later view also still shows the old, working link");
+    assert.equal(view.project?.fileName, "default.project.json");
+  });
+});
+
 test("a success payload Rojo did not actually send is refused rather than fabricated", async () => {
   await withStore(async (store) => {
     const connection = new RojoConnection({

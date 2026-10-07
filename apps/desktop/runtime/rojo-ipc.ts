@@ -108,6 +108,19 @@ export function rojoLinkRecent(
   return connection.linkRecent(instanceId, index);
 }
 
+/**
+ * Whether a reachable Studio-status poll should feed its instance ids to
+ * `relinkConnected` -- only the default endpoint is a bridge whose Rojo
+ * links this process remembers. Called with the full instance list even when
+ * it is empty: `relinkConnected([])` is what lets a later reappearance after
+ * a drop-out be recognized as one, so a bridge answering with zero instances
+ * still needs to go through, not be skipped the way a `length > 0` check
+ * used to skip it.
+ */
+export function shouldRelinkRojo(endpoint: string, defaultEndpoint: string): boolean {
+  return endpoint === defaultEndpoint;
+}
+
 export function isRojoProjectFile(filePath: string): boolean {
   return filePath.endsWith(".project.json");
 }

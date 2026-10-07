@@ -7,7 +7,7 @@ import test from "node:test";
 import type { McpToolOutcome } from "./mcp-types";
 import {
   isKnownInstance, isRojoProjectFile, resolvePickedProject,
-  rojoForget, rojoGet, rojoLinkRecent, rojoOpenFolder, rojoRetry, rojoUnlink,
+  rojoForget, rojoGet, rojoLinkRecent, rojoOpenFolder, rojoRetry, rojoUnlink, shouldRelinkRojo,
 } from "./rojo-ipc";
 import { RojoConnection } from "./rojo-connection";
 import { RojoLinksStore } from "./rojo-links";
@@ -212,4 +212,10 @@ test("resolvePickedProject links a valid pick through the connection", async () 
       args: { action: "link_project", project: "/projects/one/default.project.json", instance_id: "place:1" },
     });
   });
+});
+
+test("shouldRelinkRojo only says yes for the default endpoint, regardless of whether any instance is connected", () => {
+  const defaultEndpoint = "http://127.0.0.1:58741";
+  assert.equal(shouldRelinkRojo(defaultEndpoint, defaultEndpoint), true, "the main process must call relinkConnected even with zero instances, so a drop to none is recorded");
+  assert.equal(shouldRelinkRojo("http://127.0.0.1:9999", defaultEndpoint), false, "a custom endpoint's bridge owns no Rojo links this process remembers");
 });

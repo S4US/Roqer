@@ -20,7 +20,7 @@ import { RojoConnection } from "../runtime/rojo-connection";
 import { RojoLinksStore } from "../runtime/rojo-links";
 import {
   isKnownInstance, resolvePickedProject,
-  rojoForget, rojoGet, rojoLinkRecent, rojoOpenFolder, rojoRetry, rojoUnlink,
+  rojoForget, rojoGet, rojoLinkRecent, rojoOpenFolder, rojoRetry, rojoUnlink, shouldRelinkRojo,
 } from "../runtime/rojo-ipc";
 import { readModelPreview, storeModelPreview } from "../runtime/model-preview";
 import { captureMoments } from "../runtime/capture-moments";
@@ -1556,8 +1556,11 @@ async function getStudioStatus(_event: IpcMainInvokeEvent, endpointValue: unknow
 
   // Only the default endpoint is a bridge whose Rojo links this process
   // remembers (see `rojoConnection`'s doc comment); not awaited, so a Studio
-  // status poll never waits on a relink attempt to answer the renderer.
-  if (endpoint === DEFAULT_MCP_ENDPOINT && health.instances.length > 0) {
+  // status poll never waits on a relink attempt to answer the renderer. Called
+  // even when `health.instances` is empty -- `relinkConnected` needs that
+  // empty call to notice a drop-out, so a later reappearance is recognized as
+  // one and its failed relink is retried (see its own doc comment).
+  if (shouldRelinkRojo(endpoint, DEFAULT_MCP_ENDPOINT)) {
     void rojoConnection().relinkConnected(health.instances.map((instance) => instance.instanceId)).catch(() => undefined);
   }
 

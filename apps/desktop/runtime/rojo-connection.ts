@@ -97,6 +97,16 @@ export class RojoConnection {
   private readonly failedThisBridge = new Set<string>();
   /** The connected ids `relinkConnected` last saw, to detect a drop-then-reappear. */
   private lastConnected = new Set<string>();
+  /**
+   * One `link_project` attempt per instance at a time. A status poll's
+   * `relinkConnected` is fired every few seconds and never awaited, and a
+   * link can take rojo up to 20 s, so without this a slow instance would get
+   * a new concurrent `link_project` call on every poll until the first one
+   * finally resolves. `link()` (and so `retry()`, `linkRecent()`) checks this
+   * first and hands back the attempt already running instead of starting
+   * another.
+   */
+  private readonly inFlight = new Map<string, Promise<RojoResult>>();
 
   constructor(options: RojoConnectionOptions) {
     this.store = options.store;
@@ -182,20 +192,31 @@ export class RojoConnection {
     };
   }
 
-  async link(instanceId: string, projectFile: string): Promise<RojoResult> {
+  /** Runs one real `link_project` attempt; only ever called through `link()`'s in-flight guard. */
+  private async performLink(instanceId: string, projectFile: string): Promise<RojoResult> {
+    // Core refuses to replace an existing link with a failed one (the same
+    // "one project per place" rule `link_project` itself enforces), so a
+    // working link survives a failed "Change project..." attempt: only
+    // overwrite memory with the error when this instance was not already
+    // linked to something else.
+    const wasLinked = this.memory.get(instanceId)?.kind === "linked";
     const outcome = await this.callTool("manage_instance", { action: "link_project", project: projectFile, instance_id: instanceId });
     if (!outcome.ok) {
       const message = this.describeFailure(outcome);
-      this.memory.set(instanceId, { kind: "error", message });
-      this.linkedThisBridge.delete(instanceId);
-      this.failedThisBridge.add(instanceId);
+      if (!wasLinked) {
+        this.memory.set(instanceId, { kind: "error", message });
+        this.linkedThisBridge.delete(instanceId);
+        this.failedThisBridge.add(instanceId);
+      }
       return { ok: false, message, view: await this.viewFor(instanceId) };
     }
     const parsed = parseLinkedData(outcome.data);
     if (parsed === undefined) {
       const message = "Rojo returned an unexpected response.";
-      this.memory.set(instanceId, { kind: "error", message });
-      this.failedThisBridge.add(instanceId);
+      if (!wasLinked) {
+        this.memory.set(instanceId, { kind: "error", message });
+        this.failedThisBridge.add(instanceId);
+      }
       return { ok: false, message, view: await this.viewFor(instanceId) };
     }
     this.memory.set(instanceId, {
@@ -207,6 +228,19 @@ export class RojoConnection {
     await this.store.remember(instanceId, projectFile);
     await this.store.touchRecent(projectFile);
     return { ok: true, view: await this.viewFor(instanceId) };
+  }
+
+  /** `link_project` for one instance, de-duplicated against any attempt already running for it (see `inFlight`'s doc comment). */
+  async link(instanceId: string, projectFile: string): Promise<RojoResult> {
+    const existing = this.inFlight.get(instanceId);
+    if (existing !== undefined) return existing;
+    const attempt = this.performLink(instanceId, projectFile);
+    this.inFlight.set(instanceId, attempt);
+    try {
+      return await attempt;
+    } finally {
+      if (this.inFlight.get(instanceId) === attempt) this.inFlight.delete(instanceId);
+    }
   }
 
   async linkRecent(instanceId: string, index: number): Promise<RojoResult> {
@@ -277,8 +311,17 @@ export class RojoConnection {
     return this.link(instanceId, stored.projectFile);
   }
 
-  /** The bridge restarted or was adopted: every remembered place needs relinking again. */
+  /**
+   * The bridge restarted or was adopted: every remembered place needs
+   * relinking again. `memory` is cleared too, not just the two sets -- a new
+   * bridge process has linked nothing yet, so an unpublished place's old
+   * "linked" memory would otherwise keep showing green with no link behind
+   * it. A published place's memory is refilled by the relink `relinkConnected`
+   * runs next; an unpublished one has no stored link to replay, so it goes
+   * back to "not linked" until the user links it again this session.
+   */
   bridgeRestarted(): void {
+    this.memory.clear();
     this.linkedThisBridge.clear();
     this.failedThisBridge.clear();
   }
