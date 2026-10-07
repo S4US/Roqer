@@ -3,8 +3,8 @@ import test from "node:test";
 
 import type { RojoView } from "../shared/rojo";
 import {
-  EMPTY_ROJO_VIEW, errorViewFromRejection, rojoLinkedNote, rojoPillActionable, rojoPillLinked, rojoPillVisual,
-  shortRojoMessage, viewFromResult,
+  EMPTY_ROJO_VIEW, errorViewFromRejection, RojoPillSequence, rojoLinkedNote, rojoPillActionable, rojoPillLinked,
+  rojoPillVisual, shortRojoMessage, viewFromResult,
 } from "./rojo-pill-model";
 
 const base: RojoView = { instanceId: "place:1", published: true, state: "no-place", recent: [] };
@@ -95,4 +95,103 @@ test("errorViewFromRejection falls back to a plain message for a non-Error rejec
 test("EMPTY_ROJO_VIEW is the quiet no-place pill, for before anything has loaded", () => {
   assert.equal(EMPTY_ROJO_VIEW.state, "no-place");
   assert.equal(EMPTY_ROJO_VIEW.instanceId, null);
+});
+
+/**
+ * Reproduces the real bug: the pill has two independent sources for its
+ * view -- the periodic background refresh (`refreshSignal` ticking, see
+ * `App.tsx`'s 5s interval) and an explicit action (Retry, Choose a
+ * project..., Unlink, ...) -- and nothing orders their `setView` calls
+ * against each other. A background refresh issued right before the user
+ * clicks Retry is still in flight when Retry's own result comes back, and
+ * can resolve afterwards: the pill then shows the stale, pre-retry view
+ * (the error Retry was supposed to clear) right after the fresh one.
+ *
+ * `RojoPillSequence` is the fix: a ticket an action bumps past (on start and
+ * on resolve) so a background refresh issued before or during it is
+ * recognised as stale and discarded once it finally resolves.
+ */
+function viewOf(state: RojoView["state"], message?: string): RojoView {
+  return { instanceId: "place:1", published: true, state, recent: [], ...(message !== undefined ? { message } : {}) };
+}
+
+test(
+  "without RojoPillSequence, a background refresh that resolves after Retry's own success clobbers it with the stale error",
+  () => {
+    const views: RojoView[] = [];
+    const set = (view: RojoView) => views.push(view);
+
+    // The background refresh was issued while the pill still showed the
+    // error (before Retry was clicked), so its own result -- fetched then,
+    // delivered later -- still carries that error.
+    const refreshResult = viewOf("error", "No project file at C:\\Rojo Fixture\\default.project.json");
+    const retrySuccess = viewOf("linked-running");
+
+    // Retry resolves first (fast bridge call)...
+    set(retrySuccess);
+    // ...but the slower background refresh, already in flight when Retry was
+    // clicked, resolves after it and wins with no guard against it.
+    set(refreshResult);
+
+    assert.deepEqual(views.at(-1), refreshResult, "demonstrates the bug: the stale error ends up on screen last");
+  },
+);
+
+test("RojoPillSequence discards a background refresh issued before an action that resolves after it", () => {
+  const sequence = new RojoPillSequence();
+  const views: RojoView[] = [];
+  const apply = (view: RojoView, ticket?: number) => {
+    if (ticket === undefined || sequence.isCurrent(ticket)) views.push(view);
+  };
+
+  // The background refresh starts first (still showing the error)...
+  const refreshTicket = sequence.startRefresh();
+  // ...then the user clicks Retry: this must supersede that refresh even
+  // though the refresh hasn't resolved yet.
+  sequence.bump();
+
+  // Retry resolves and applies unconditionally -- it is always authoritative.
+  sequence.bump();
+  apply(viewOf("linked-running"));
+
+  // The background refresh finally resolves, carrying what it saw before
+  // Retry ran (still the error) -- it must be discarded, not applied.
+  apply(viewOf("error", "No project file at C:\\Rojo Fixture\\default.project.json"), refreshTicket);
+
+  assert.deepEqual(views, [viewOf("linked-running")], "the stale refresh never reaches the view");
+});
+
+test("RojoPillSequence discards a background refresh issued during an action, once the action resolves", () => {
+  const sequence = new RojoPillSequence();
+  const views: RojoView[] = [];
+  const apply = (view: RojoView, ticket?: number) => {
+    if (ticket === undefined || sequence.isCurrent(ticket)) views.push(view);
+  };
+
+  // Retry starts (bumps past any earlier refresh)...
+  sequence.bump();
+  // ...and while it is still in flight, a background refresh starts too,
+  // capturing a ticket that is current *right now*.
+  const refreshTicket = sequence.startRefresh();
+
+  // Retry resolves: it supersedes that refresh (which read stale,
+  // pre-success state) and applies its own result unconditionally.
+  sequence.bump();
+  apply(viewOf("linked-running"));
+
+  // The refresh resolves after Retry, but its ticket is now stale.
+  apply(viewOf("error", "No project file at C:\\Rojo Fixture\\default.project.json"), refreshTicket);
+
+  assert.deepEqual(views, [viewOf("linked-running")], "a refresh started mid-action is still discarded once the action wins");
+});
+
+test("RojoPillSequence applies a background refresh normally when nothing else is happening", () => {
+  const sequence = new RojoPillSequence();
+  const views: RojoView[] = [];
+  const apply = (view: RojoView, ticket: number) => { if (sequence.isCurrent(ticket)) views.push(view); };
+
+  const ticket = sequence.startRefresh();
+  apply(viewOf("linked-running"), ticket);
+
+  assert.deepEqual(views, [viewOf("linked-running")]);
 });

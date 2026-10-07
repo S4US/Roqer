@@ -27,6 +27,9 @@ header; you never have to type a path there.
 - **"Link Rojo project"** (dashed, accent-colored) means a Rojo server is
   already answering for the connected place — click it to open the popover,
   which shows the detected project (or Recent) with a **Link** button.
+  Detection only checks Rojo's default port (34872) and the serve port of
+  each project in **Recent**; a server on any other port shows up only after
+  you link that project once, with **Choose a project file…**.
 - **"Rojo · not linked"** (muted) means the place isn't linked and no server
   was found; open the pill for **Recent** projects (up to five, each with its
   own **Link** button) or **Choose a project file…**.

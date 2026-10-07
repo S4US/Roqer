@@ -6,7 +6,10 @@ import {
   chooseRojoProject, forgetRojoProject, getRojoView, hasDesktopRuntime, linkRecentRojoProject,
   openRojoFolder, retryRojoProject, unlinkRojoProject,
 } from "./platform";
-import { EMPTY_ROJO_VIEW, errorViewFromRejection, rojoLinkedNote, rojoPillLinked, rojoPillVisual, viewFromResult } from "./rojo-pill-model";
+import {
+  EMPTY_ROJO_VIEW, errorViewFromRejection, RojoPillSequence, rojoLinkedNote, rojoPillLinked, rojoPillVisual,
+  viewFromResult,
+} from "./rojo-pill-model";
 
 /**
  * The Rojo pill: always next to the Studio connection pill, per the approved
@@ -22,6 +25,11 @@ export function RojoPill({ instanceId, placeName, refreshSignal }: { instanceId:
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const wrapRef = useRef<HTMLDivElement>(null);
+  // Orders this background refresh against `apply`'s explicit actions (see
+  // `RojoPillSequence`'s doc comment): without it, a refresh issued just
+  // before the user clicks Retry can resolve after Retry's own fresh result
+  // and clobber it with the stale, pre-retry view.
+  const sequence = useRef(new RojoPillSequence()).current;
 
   // Reloaded whenever the place changes and whenever the caller's own
   // refresh signal changes identity -- the same cadence the Studio connection
@@ -29,9 +37,12 @@ export function RojoPill({ instanceId, placeName, refreshSignal }: { instanceId:
   useEffect(() => {
     if (!desktop) { setView(EMPTY_ROJO_VIEW); return; }
     let cancelled = false;
-    void getRojoView(instanceId).then((result) => { if (!cancelled) setView(viewFromResult(result, instanceId)); });
+    const ticket = sequence.startRefresh();
+    void getRojoView(instanceId).then((result) => {
+      if (!cancelled && sequence.isCurrent(ticket)) setView(viewFromResult(result, instanceId));
+    });
     return () => { cancelled = true; };
-  }, [desktop, instanceId, refreshSignal]);
+  }, [desktop, instanceId, refreshSignal, sequence]);
 
   // Dismissed the same way the Studio connection popover is: a press anywhere
   // outside, or Escape.
@@ -50,14 +61,20 @@ export function RojoPill({ instanceId, placeName, refreshSignal }: { instanceId:
   }, [open]);
 
   const apply = async (request: () => Promise<RojoResult>) => {
+    // Supersede any background refresh already in flight -- it read state
+    // from before this action, so it must not be allowed to overwrite this
+    // action's own (later) result. See `RojoPillSequence`'s doc comment.
+    sequence.bump();
     setBusy(true);
     try {
       const result = await request();
+      sequence.bump(); // also supersede a refresh that started during this action
       setView(viewFromResult(result, instanceId));
     } catch (error) {
       // A rejected IPC call (not a normal `{ ok: false }` result) must still
       // clear `busy` and leave something to look at, or the buttons stay
       // disabled forever with no explanation.
+      sequence.bump();
       setView(errorViewFromRejection(error, instanceId));
     } finally {
       setBusy(false);

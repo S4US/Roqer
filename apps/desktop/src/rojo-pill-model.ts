@@ -114,3 +114,43 @@ export function errorViewFromRejection(error: unknown, instanceId: string | null
   const message = error instanceof Error ? error.message : "Rojo could not complete that request.";
   return { instanceId, published: false, state: "error", recent: [], message };
 }
+
+/**
+ * Orders the pill's two update sources against each other: the periodic
+ * background refresh (`refreshSignal` ticking every few seconds, in
+ * `App.tsx`) and an explicit action (Retry, Choose a project..., Unlink,
+ * ...). Both are plain async IPC calls with no ordering guarantee between
+ * them, so a background refresh issued just before the user clicks Retry can
+ * still be in flight when Retry's own result comes back, and resolve
+ * afterwards -- showing the stale, pre-retry view (often the very error
+ * Retry just cleared) right after the fresh one. This is why Retry could
+ * look stuck on a real bridge where "Choose a project..." with the same
+ * path worked immediately: the native file dialog's own delay lets any
+ * in-flight refresh settle first, while Retry has no such delay.
+ *
+ * A refresh takes a ticket when it starts (`startRefresh`) and only applies
+ * its result if the ticket is still current (`isCurrent`) once it resolves.
+ * An action bumps the ticket both when it starts -- so a refresh already in
+ * flight is superseded even if it resolves after the action does -- and
+ * again when it resolves, so a refresh that started during the action is
+ * superseded too. An action's own result is always applied unconditionally;
+ * only a refresh needs to check.
+ */
+export class RojoPillSequence {
+  private ticket = 0;
+
+  /** Call right before starting a background refresh fetch; pass the result to `isCurrent` once it resolves. */
+  startRefresh(): number {
+    return this.ticket;
+  }
+
+  /** Whether a background refresh issued at `ticket` is still the latest thing asked for. */
+  isCurrent(ticket: number): boolean {
+    return ticket === this.ticket;
+  }
+
+  /** Call right before starting an explicit action, and again right after it resolves or rejects. */
+  bump(): void {
+    this.ticket += 1;
+  }
+}

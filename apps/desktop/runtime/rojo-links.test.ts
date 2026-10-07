@@ -31,8 +31,13 @@ test("a remembered link and recent project round-trip through a reopened store",
     const reopened = new RojoLinksStore({ file });
     assert.deepEqual(await reopened.get(), saved);
 
-    const stat = await fs.stat(file);
-    assert.equal(stat.mode & 0o777, 0o600, "the links file is written mode 0o600");
+    // Windows reports every file as 0o666 regardless of the mode passed to
+    // `writeFile`, the same reason `packages/core`'s own file-write test
+    // skips this assertion on win32.
+    if (process.platform !== "win32") {
+      const stat = await fs.stat(file);
+      assert.equal(stat.mode & 0o777, 0o600, "the links file is written mode 0o600");
+    }
   });
 });
 
