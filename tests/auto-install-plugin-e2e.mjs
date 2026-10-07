@@ -287,9 +287,9 @@ function installedPluginMatchesArtifact(
   const installedText = installed.toString('utf8');
   return version !== undefined
     && installedText.includes(`local CURRENT_VERSION = "${version}"`)
-    && installedText.includes(`http://localhost:${configuredPort}`)
+    && installedText.includes(`BASE_PORT = ${configuredPort}`)
     && installedText.includes(`MCP_LAST_SUCCESSFUL_SERVER_URL_GLOBAL_V1_PORT_${configuredPort}`)
-    && !installedText.includes('http://localhost:58741');
+    && !installedText.includes('BASE_PORT = 58741');
 }
 
 

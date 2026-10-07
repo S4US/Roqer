@@ -8,6 +8,12 @@ import RuntimeLogBuffer from "../modules/RuntimeLogBuffer";
 import StopPlayMonitor from "../modules/StopPlayMonitor";
 import BreakpointHandlers from "../modules/handlers/BreakpointHandlers";
 import * as RenderMonitor from "../modules/RenderMonitor";
+import RuntimePeerReport from "../modules/RuntimePeerReport";
+
+// First, so that in a play server the edit plugin can tell a plugin that never
+// started there from one that started and could not reach the bridge.
+RuntimePeerReport.init(plugin);
+RuntimePeerReport.record("loaded");
 
 // Track render-loop liveness so input/screenshot tools can report "window
 // minimized / not rendering" instead of silently no-op'ing. No-op in the
@@ -105,7 +111,7 @@ task.delay(2, () => {
 		}
 	}
 	if (role === "edit" || role === "server") {
-		pcall(() => {
+		const [activated, activationError] = pcall(() => {
 			const conn = State.getActiveConnection();
 			if (!conn.isActive) {
 				if (role === "server") {
@@ -125,6 +131,10 @@ task.delay(2, () => {
 				Communication.activatePlugin();
 			}
 		});
+		if (!activated) {
+			warn(`[robloxstudio-mcp] Could not start the bridge connection: ${tostring(activationError)}`);
+			RuntimePeerReport.record("failed", { detail: tostring(activationError) });
+		}
 	}
 	if (role === "server") {
 		ClientBroker.setupServerBroker();

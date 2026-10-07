@@ -27,8 +27,9 @@ const SERVER_URL_SETTING_KEY_PATTERN =
 
 /**
  * The bundled plugin is XML, so a custom bridge port can be embedded without
- * rebuilding it. Port-specific setting keys prevent a remembered default URL
- * from overriding the custom URL when Studio starts.
+ * rebuilding it. The plugin derives every default address from `BASE_PORT`,
+ * so that is the one number to change. Port-specific setting keys prevent a
+ * remembered default URL from overriding the custom URL when Studio starts.
  */
 export function configurePluginAssetForPort(
   source: Buffer,
@@ -47,15 +48,13 @@ export function configurePluginAssetForPort(
 
   const defaultPort = String(DEFAULT_PLUGIN_PORT);
   const configuredPort = String(port);
-  const defaultUrl = `http://localhost:${defaultPort}`;
   const defaultBasePort = `BASE_PORT = ${defaultPort}`;
   const original = source.toString('utf8');
-  if (!original.includes(defaultUrl) || !original.includes(defaultBasePort)) {
+  if (!original.includes(defaultBasePort)) {
     throw new Error(`Bundled Studio plugin does not contain the expected default port ${defaultPort}`);
   }
 
   const configured = original
-    .replaceAll(defaultUrl, `http://localhost:${configuredPort}`)
     .replaceAll(defaultBasePort, `BASE_PORT = ${configuredPort}`)
     .replace(
       SERVER_URL_SETTING_KEY_PATTERN,

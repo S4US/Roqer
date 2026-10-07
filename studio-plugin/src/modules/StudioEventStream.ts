@@ -526,13 +526,20 @@ function connect(expectedGeneration: number): void {
 		if (!active || generation !== expectedGeneration || options !== currentOptions) return;
 
 		const readyLogKey = `${currentOptions.serverUrl}|${instanceId}|${physicalRole}`;
+		const unreachableLogKey = `unreachable|${readyLogKey}`;
 		// Nothing answering is the ordinary state whenever Roqer or its bridge is
-		// closed or restarting, so it is not written to Studio's Output: the panel
-		// already shows it as Reconnecting, and after repeated failures names the
-		// reason and the raw error. Output is kept for a bridge that answered and
-		// refused this Studio, which the user has to act on.
+		// closed or restarting, so in edit it is not written to Studio's Output:
+		// the panel already shows it as Reconnecting, and after repeated failures
+		// names the reason and the raw error. A play server has no panel, and a
+		// playtest's runtime peers never register while it cannot connect, so
+		// there it is written once. Output is also kept for a bridge that answered
+		// and refused this Studio, which the user has to act on.
 		if (!readyOk) {
 			const detail = HttpDiagnostics.formatRequestFailure(readyUrl, false, readyResult);
+			if (physicalRole === "server" && !readyFailureLogKeys.has(unreachableLogKey)) {
+				readyFailureLogKeys.add(unreachableLogKey);
+				warn(`[robloxstudio-mcp] Play server could not reach the MCP bridge: ${detail}`);
+			}
 			scheduleReconnect(expectedGeneration, detail);
 			return;
 		}
@@ -557,6 +564,7 @@ function connect(expectedGeneration: number): void {
 		// Connected again: a later refusal is worth reporting once more. The
 		// reconnection itself is shown in the panel, not in Output.
 		readyFailureLogKeys.delete(readyLogKey);
+		readyFailureLogKeys.delete(unreachableLogKey);
 		invokeCallback(
 			"event stream ready",
 			() => currentOptions.onReady(readyData),

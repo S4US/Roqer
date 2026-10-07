@@ -3,7 +3,7 @@
 // mode, and still work for MCP-managed and manually-started playtests.
 
 import { setTimeout as delay } from 'node:timers/promises';
-import { McpClient, runTest, assert, startPlaytestAndWait, safeStopPlaytest } from './lib/mcp-client.mjs';
+import { McpClient, runTest, assert, assertContains, startPlaytestAndWait, safeStopPlaytest } from './lib/mcp-client.mjs';
 
 function routedRoles(connected) {
   const instanceId = process.env.MCP_INSTANCE_ID;
@@ -127,6 +127,29 @@ return { ok = ok, err = ok and nil or tostring(err) }
   await waitForNoRuntime(client);
 }
 
+// A start whose runtime peers do not register in time says why, from what the
+// play server's plugin recorded. That plugin waits two seconds before it
+// connects, so a 0.2 s wait is the deterministic case: Studio is running the
+// playtest, and the play server's plugin has not registered yet.
+async function assertShortStartIsDiagnosed(client) {
+  let result;
+  try {
+    result = await client.callTool('solo_playtest', { action: 'start', mode: 'play', timeout: 0.2 });
+  } catch (error) {
+    const text = String(error?.message ?? '').split('returned isError: ')[1];
+    if (!text) throw error;
+    result = JSON.parse(text);
+  }
+  assert(result.success === false, 'a 0.2 s playtest start does not report ready');
+  assertContains(result.message, 'before timeout', 'the short start keeps the timeout wording Roqer counts');
+  assert(
+    ['none', 'loaded', 'connecting'].includes(result.runtimePeer?.stage),
+    `the short start says what the play server's plugin had done (${JSON.stringify(result.runtimePeer)})`,
+  );
+  assert(result.runtimePeer?.playtestRunning === true, 'the edit plugin reports the playtest as running');
+  await waitForRoles(client, ['server', 'client-1']);
+}
+
 await runTest('runtime eval bridges stay out of edit mode', async ({ track }) => {
   const client = track(new McpClient('runtime-bridge'));
   await client.start();
@@ -134,6 +157,13 @@ await runTest('runtime eval bridges stay out of edit mode', async ({ track }) =>
   await waitForRoles(client, ['edit'], { timeoutSec: 120 });
 
   await assertEditBridgesAbsent(client, 'initial state');
+
+  try {
+    await assertShortStartIsDiagnosed(client);
+  } finally {
+    await safeStopPlaytest(client);
+    await waitForNoRuntime(client).catch(() => {});
+  }
 
   await startPlaytestAndWait(client);
   try {

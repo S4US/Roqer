@@ -117,6 +117,7 @@ export = {
 	init,
 	normalizeServerUrl,
 	extractPort,
+	computeInstanceIds,
 	rememberServerUrl,
 	readServerUrl,
 };

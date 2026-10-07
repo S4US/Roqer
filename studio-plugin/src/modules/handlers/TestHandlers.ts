@@ -1,4 +1,5 @@
 import { HttpService, Players, RunService } from "@rbxts/services";
+import RuntimePeerReport from "../RuntimePeerReport";
 import StopPlayMonitor from "../StopPlayMonitor";
 
 interface StudioTestServiceMultiplayer extends StudioTestService {
@@ -12,6 +13,23 @@ interface StudioTestServiceMultiplayer extends StudioTestService {
 const StudioTestService = game.GetService("StudioTestService") as StudioTestServiceMultiplayer;
 
 let testRunning = false;
+
+// The last playtest this edit DataModel asked Studio for: when, and the error
+// Studio ended it with, if it did. A runtime peer report is read against it.
+let playStartSerial = 0;
+let lastPlayStartAt: number | undefined;
+let lastPlayModeError: string | undefined;
+
+function beginPlayStart(): number {
+	playStartSerial += 1;
+	lastPlayStartAt = tick();
+	lastPlayModeError = undefined;
+	return playStartSerial;
+}
+
+function notePlayModeError(serial: number, err: unknown): void {
+	if (serial === playStartSerial) lastPlayModeError = tostring(err);
+}
 
 type MultiplayerPhase = "idle" | "starting" | "running" | "completed" | "failed";
 
@@ -93,6 +111,7 @@ function startPlaytest(requestData: Record<string, unknown>) {
 	}
 
 	testRunning = true;
+	const serial = beginPlayStart();
 
 	task.spawn(() => {
 		const [ok, result] = pcall(() => {
@@ -104,10 +123,18 @@ function startPlaytest(requestData: Record<string, unknown>) {
 
 		if (!ok) {
 			warn(`[robloxstudio-mcp] Playtest ended with error: ${result}`);
+			notePlayModeError(serial, result);
 		}
 
 		testRunning = false;
 	});
+
+	// task.spawn runs the call until it first yields, so a start Studio refuses
+	// outright has already failed by now. Said here, rather than answered with
+	// success and left for the caller to wait out its timeout.
+	if (serial === playStartSerial && lastPlayModeError !== undefined) {
+		return { error: `Studio did not start the playtest: ${lastPlayModeError}` };
+	}
 
 	const response: Record<string, unknown> = {
 		success: true,
@@ -195,6 +222,7 @@ function multiplayerTestStart(requestData: Record<string, unknown>) {
 
 	const testArgs = requestData.testArgs !== undefined ? requestData.testArgs : {};
 	const testId = HttpService.GenerateGUID(false);
+	const serial = beginPlayStart();
 
 	multiplayerState = {
 		phase: "starting",
@@ -220,6 +248,7 @@ function multiplayerTestStart(requestData: Record<string, unknown>) {
 			multiplayerState.phase = "failed";
 			multiplayerState.result = undefined;
 			multiplayerState.error = tostring(result);
+			notePlayModeError(serial, result);
 		}
 	});
 
@@ -339,6 +368,29 @@ function multiplayerTestEnd(requestData: Record<string, unknown>) {
 	};
 }
 
+/**
+ * How the last playtest this edit DataModel started is getting on: whether
+ * Studio is still running it, the error Studio ended it with, and the newest
+ * report the play server's plugin has left since the start. No report means
+ * that plugin never reported. Read by the bridge when a start's runtime peers
+ * do not register.
+ */
+function runtimePeerReport(_requestData: Record<string, unknown>) {
+	if (RunService.IsRunning()) {
+		return { error: "runtime_peer_report must be called on the edit DataModel. Route with target=edit." };
+	}
+	if (lastPlayStartAt === undefined) {
+		return { success: true, playStartRequested: false };
+	}
+	return {
+		success: true,
+		playStartRequested: true,
+		playtestRunning: testRunning || multiplayerState.phase === "starting" || multiplayerState.phase === "running",
+		playModeError: lastPlayModeError,
+		report: RuntimePeerReport.readSince(lastPlayStartAt),
+	};
+}
+
 export = {
 	startPlaytest,
 	stopPlaytest,
@@ -347,4 +399,5 @@ export = {
 	multiplayerTestAddPlayers,
 	multiplayerTestLeaveClient,
 	multiplayerTestEnd,
+	runtimePeerReport,
 };
