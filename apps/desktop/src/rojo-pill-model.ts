@@ -18,8 +18,6 @@ export type RojoPillDot = "none" | "accent" | "green" | "amber" | "red";
 export type RojoPillVisual = Readonly<{
   label: string;
   dot: RojoPillDot;
-  /** Only the `detected` row is dashed, inviting a click the way an empty state does. */
-  dashed: boolean;
   /** `no-place` and `not-linked` read as quiet background facts, not something asking for attention. */
   muted: boolean;
 }>;
@@ -39,17 +37,17 @@ const PROJECT_FILE_FALLBACK = "a project";
 export function rojoPillVisual(view: RojoView): RojoPillVisual {
   switch (view.state) {
     case "no-place":
-      return { label: "Rojo · no place", dot: "none", dashed: false, muted: true };
+      return { label: "Rojo · no place", dot: "none", muted: true };
     case "not-linked":
-      return { label: "Rojo · not linked", dot: "none", dashed: false, muted: true };
+      return { label: "Rojo · not linked", dot: "none", muted: true };
     case "detected":
-      return { label: "Link Rojo project", dot: "accent", dashed: true, muted: false };
+      return { label: "Link Rojo project", dot: "accent", muted: false };
     case "linked-running":
-      return { label: `Rojo · ${view.project?.fileName ?? PROJECT_FILE_FALLBACK}`, dot: "green", dashed: false, muted: false };
+      return { label: `Rojo · ${view.project?.fileName ?? PROJECT_FILE_FALLBACK}`, dot: "green", muted: false };
     case "linked-stopped":
-      return { label: "Rojo not running", dot: "amber", dashed: false, muted: false };
+      return { label: "Rojo not running", dot: "amber", muted: false };
     case "error":
-      return { label: `Rojo · ${shortRojoMessage(view.message)}`, dot: "red", dashed: false, muted: false };
+      return { label: `Rojo · ${shortRojoMessage(view.message)}`, dot: "red", muted: false };
   }
 }
 

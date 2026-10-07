@@ -7,8 +7,8 @@ import {
   openRojoFolder, retryRojoProject, unlinkRojoProject,
 } from "./platform";
 import {
-  EMPTY_ROJO_VIEW, errorViewFromRejection, RojoPillSequence, rojoPillLinked, rojoPillTone, rojoPillVisual,
-  rojoPopoverHeadline, viewFromResult,
+  EMPTY_ROJO_VIEW, errorViewFromRejection, RojoPillSequence, rojoLinkedNote, rojoPillLinked, rojoPillTone,
+  rojoPillVisual, rojoPopoverHeadline, viewFromResult,
 } from "./rojo-pill-model";
 
 /**
@@ -122,6 +122,9 @@ export function RojoPill({ instanceId, placeName, refreshSignal }: { instanceId:
         </dl>
         {view.project.problems !== undefined && view.project.problems.length > 0 &&
           <p className="popover-problem" role="alert">{view.project.problems.join("; ")}</p>}
+        {/* Spec §4.1's caveat: a published place relinks automatically after a
+            restart, an unpublished one only lasts this Studio session. */}
+        <p className="rojo-popover-subline">{rojoLinkedNote(view.published, placeName)}</p>
         {id !== null && <div className="rojo-popover-actions">
           <button className="link-button" disabled={busy} onClick={() => void apply(() => openRojoFolder(id))}>Open folder</button>
           <button className="link-button" disabled={busy} onClick={() => void apply(() => chooseRojoProject(id))}>Change…</button>

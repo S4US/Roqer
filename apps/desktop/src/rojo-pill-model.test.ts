@@ -10,15 +10,15 @@ import {
 const base: RojoView = { instanceId: "place:1", published: true, state: "no-place", recent: [] };
 
 test("every pill state renders the design spec's §4.1 label, colour and emphasis", () => {
-  assert.deepEqual(rojoPillVisual({ ...base, state: "no-place" }), { label: "Rojo · no place", dot: "none", dashed: false, muted: true });
-  assert.deepEqual(rojoPillVisual({ ...base, state: "not-linked" }), { label: "Rojo · not linked", dot: "none", dashed: false, muted: true });
-  assert.deepEqual(rojoPillVisual({ ...base, state: "detected" }), { label: "Link Rojo project", dot: "accent", dashed: true, muted: false });
+  assert.deepEqual(rojoPillVisual({ ...base, state: "no-place" }), { label: "Rojo · no place", dot: "none", muted: true });
+  assert.deepEqual(rojoPillVisual({ ...base, state: "not-linked" }), { label: "Rojo · not linked", dot: "none", muted: true });
+  assert.deepEqual(rojoPillVisual({ ...base, state: "detected" }), { label: "Link Rojo project", dot: "accent", muted: false });
   assert.deepEqual(
     rojoPillVisual({ ...base, state: "linked-running", project: { fileName: "default.project.json", folder: "/x" } }),
-    { label: "Rojo · default.project.json", dot: "green", dashed: false, muted: false },
+    { label: "Rojo · default.project.json", dot: "green", muted: false },
   );
-  assert.deepEqual(rojoPillVisual({ ...base, state: "linked-stopped" }), { label: "Rojo not running", dot: "amber", dashed: false, muted: false });
-  assert.deepEqual(rojoPillVisual({ ...base, state: "error", message: "rojo not found" }), { label: "Rojo · rojo not found", dot: "red", dashed: false, muted: false });
+  assert.deepEqual(rojoPillVisual({ ...base, state: "linked-stopped" }), { label: "Rojo not running", dot: "amber", muted: false });
+  assert.deepEqual(rojoPillVisual({ ...base, state: "error", message: "rojo not found" }), { label: "Rojo · rojo not found", dot: "red", muted: false });
 });
 
 test("a linked pill with no project field yet still has a label, never blank", () => {
