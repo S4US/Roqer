@@ -115,8 +115,10 @@ An edit to a file-backed script can fail with nothing changed on either side:
   unsaved edit still open in Studio's own editor). The result carries `file`,
   `fileRevision` and `studioRevision`, and, when both sides are short enough
   to compare, `differing` (the first line that differs, up to 40 lines from
-  each side, and whether it was truncated). Read both sides, decide which one
-  to keep, and retry.
+  each side, and whether it was truncated). To keep the file, reconnect the
+  Rojo plugin so Studio takes the file, then retry. To keep Studio's version,
+  copy its text into the file, then retry. Rojo cannot copy Studio's text back
+  to the file for you.
 - `rojo_write_failed` — the file could not be written at all, for example
   because it was deleted or is locked by another program. Nothing changed in
   Studio either.
@@ -151,7 +153,8 @@ after you linked still shows up):
 - New scripts, deletions, renames, and models are not persisted. A script
   your project doesn't know about is `studio_only`, and stays that way until
   you add it to the project yourself.
-- Links are lost when the MCP server restarts; relink afterward.
+- Links are lost when the MCP server restarts; relink afterward. Saving links
+  across restarts is a planned follow-up.
 - Links belong to one MCP server process; the desktop app and another MCP
   client connected to the same place do not share them, so link in whichever
   one you're editing from.
@@ -166,10 +169,23 @@ after you linked still shows up):
   example `"SSS": {"$className": "ServerScriptService"}`), its sourcemap node
   is named `SSS`, but a built-in service's name in Studio is always its class
   name; the two cannot match, so scripts under it are reported `studio_only`.
-- Roqer writes a file's bytes exactly as computed, line endings included, but
-  how Rojo and Studio carry CRLF line endings and non-UTF-8 text through to
-  Studio has not yet been confirmed on a live run. If a CRLF file's edits
-  keep coming back `diverged` or `rojo_conflict`, convert the file to LF.
+- Rojo delivers LF to Studio, with no BOM, whatever line endings or BOM the
+  file on disk has. Roqer compares the file and Studio ignoring line endings
+  and a BOM, and writes a saved file back in its own style (CRLF stays CRLF,
+  a BOM stays), changing only the lines the edit actually changed.
+
+## Troubleshooting
+
+- **`rojo --version` fails with "Failed to find tool 'rojo' in any project
+  manifest file"**: a Rokit-managed `rojo` with no `rokit.toml` in the
+  project folder has nothing to run. Roqer reports this as `rojo_not_found`;
+  run `rokit add rojo-rbx/rojo` in the project folder, or install it globally
+  with `rokit add --global rojo-rbx/rojo`.
+- **The Rojo Studio plugin can't parse the sourcemap**: its version has to
+  match the `rojo` CLI's. Update whichever one is behind.
+- **`manage_instance` rejects `link_project` as an unknown action**: the
+  running bridge predates this feature. Close other Roqer or Codex bridges
+  and restart Roqer; this is not a Studio plugin problem.
 
 ## Using it from another MCP client
 
