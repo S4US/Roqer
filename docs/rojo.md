@@ -42,7 +42,8 @@ Ask the agent to link your project, or call `manage_instance` yourself:
 - `rojoServer` — whether a Rojo server answers on the project's serve port
   (its `servePort`, or 34872 if it does not set one) and, if so, whether its
   project name matches. This is a diagnostic only, never proof that a given
-  edit has synced.
+  edit has synced. With Rojo 7.7+, the server's reply is not JSON, so
+  `matches` may be absent even though a server does answer.
 
 Linking the same project to two different places is refused, since an edit
 would then have two places to come from. `manage_instance` with `{ "action":
@@ -186,7 +187,10 @@ after you linked still shows up):
   run `rokit add rojo-rbx/rojo` in the project folder, or install it globally
   with `rokit add --global rojo-rbx/rojo`.
 - **The Rojo Studio plugin can't parse the sourcemap**: its version has to
-  match the `rojo` CLI's. Update whichever one is behind.
+  match the `rojo` CLI you serve with. Update whichever one is behind. The
+  Creator Store plugin currently needs Rojo 7.7: against a 7.6.1 server it
+  fails with "attempt to index number with 'protocolVersion'", and a 7.6.1
+  plugin against a 7.7 server shows "Can't parse JSON".
 - **`manage_instance` rejects `link_project` as an unknown action**: the
   running bridge predates this feature. Close other Roqer or Codex bridges
   and restart Roqer; this is not a Studio plugin problem.
