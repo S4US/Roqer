@@ -17,7 +17,8 @@ import {
   ANIMATION_DESCRIBED_BY_BAKE, ANIMATION_DESCRIBED_BY_LABEL, MODEL_STATE_WIRED, modelStateLabel,
   ANIMATION_BOXES_LABEL, ANIMATION_NAME_LABEL, ANIMATION_PLAYED_FROM_LABEL, ANIMATION_PLAYED_PUBLISHED, ANIMATION_PREVIEW_TITLE, ANIMATION_RIG_LABEL, animationSlotLabel, RIG_RANGE_SHEET_TITLE,
   BLENDER_MODEL_LABEL, BLENDER_PREVIEW_TITLE, MAX_EVIDENCE_SUBJECT_CHARS, MODEL_MOVED_BY_GAME, MODEL_MOVED_BY_LABEL,
-  MODEL_MOVED_BY_VERIFY, MODEL_WHILE_MOVING_LABEL, MODEL_WHILE_STANDING_LABEL, SCREENSHOT_VIEW_LABEL, SCREENSHOT_VIEW_PLAYTEST,
+  MODEL_MOVED_BY_VERIFY, MODEL_WHILE_MOVING_LABEL, MODEL_WHILE_STANDING_LABEL, ROJO_SAVE_DIVERGED_SUFFIX, ROJO_SAVE_PENDING_SUFFIX,
+  SCREENSHOT_VIEW_LABEL, SCREENSHOT_VIEW_PLAYTEST,
   type RunChange, type RunEvidence, type RunMetadata,
 } from "../shared/run-events";
 import {
@@ -2066,9 +2067,9 @@ export function createStudioToolRunner(context: PlannerContext, options: StudioT
       const persistence = stringField(outcome.data, "persistence");
       const summary = savedFile !== undefined
         ? sync === "pending"
-          ? `Saved to ${savedFile}; Rojo has not delivered it to Studio yet.`
+          ? `Saved to ${savedFile}${ROJO_SAVE_PENDING_SUFFIX}`
           : sync === "diverged"
-            ? `Saved to ${savedFile}; the script in Studio changed meanwhile.`
+            ? `Saved to ${savedFile}${ROJO_SAVE_DIVERGED_SUFFIX}`
             : `Saved to ${savedFile}; Studio has the change.`
         : persistence === "studio_only"
           ? "Edited the script in Studio only; it is not saved to the linked Rojo project."

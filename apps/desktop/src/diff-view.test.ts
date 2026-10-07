@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import type { RunChange } from "../shared/run-events";
+import { ROJO_SAVE_DIVERGED_SUFFIX, ROJO_SAVE_PENDING_SUFFIX, type RunChange } from "../shared/run-events";
 import {
   canOpenInStudio, groupChangesByTarget, highlightRows, parseDiffRows, sourceRows, splitChangeGroup,
   tokenizeCodeLine, type SyntaxToken,
@@ -161,11 +161,13 @@ test("a Rojo save still pending or diverged offers no Open in Studio", () => {
   const scriptChange = (summary: string): RunChange => ({
     id: "c1", kind: "script-source", target: "game.ServerScriptService.Main", summary,
   });
+  // studio-tools.ts builds its summary as `Saved to ${file}${SUFFIX}`; built
+  // from the same shared constants diff-view.ts checks against, rather than a
+  // copy of its wording, so the two cannot silently drift apart.
+  const savedSummary = (suffix: string) => `Saved to src/Main.server.luau${suffix}`;
 
-  // The exact summaries studio-tools.ts writes for a linked file write whose
-  // saved.sync is "pending" or "diverged": Studio never actually received it.
-  assert.equal(canOpenInStudio(scriptChange("Saved to src/Main.server.luau; Rojo has not delivered it to Studio yet.")), false);
-  assert.equal(canOpenInStudio(scriptChange("Saved to src/Main.server.luau; the script in Studio changed meanwhile.")), false);
+  assert.equal(canOpenInStudio(scriptChange(savedSummary(ROJO_SAVE_PENDING_SUFFIX))), false);
+  assert.equal(canOpenInStudio(scriptChange(savedSummary(ROJO_SAVE_DIVERGED_SUFFIX))), false);
 
   // A synced file write, an unlinked edit, and a studio_only edit all really
   // landed in Studio.

@@ -2322,7 +2322,7 @@ function ArtifactCard({ group, expanded, onExpandedChange, onOpenInStudio }: {
     ...(revisionAfter ? [{ label: "Revision after", value: revisionAfter }] : []),
   ];
   const openScript = async () => {
-    if (!scriptChange || !openableInStudio || openState.kind === "opening") return;
+    if (!openableInStudio || openState.kind === "opening") return;
     setOpenState({ kind: "opening" });
     const result = await onOpenInStudio(group.target, scriptChange.instanceId);
     setOpenState({ kind: result.ok ? "opened" : "error", message: result.message });
