@@ -27,11 +27,29 @@ describe('compareAndWrite', () => {
     expect(fs.readFileSync(file, 'utf8')).toBe('user edit\n');
     expect(leftovers()).toEqual([]);
   });
-  test('keeps CRLF bytes exactly', async () => {
+  test('a CRLF file is compared and written as Studio sees it, but stays CRLF on disk', async () => {
     const file = path.join(dir, 'Crlf.luau');
     fs.writeFileSync(file, 'a\r\nb\r\n');
-    await compareAndWrite(file, sourceRevision('a\r\nb\r\n'), 'a\r\nB\r\n');
+    // expectedRevision and content are LF, as the plugin computes and plans them.
+    await expect(compareAndWrite(file, sourceRevision('a\nb\n'), 'a\nB\n')).resolves.toEqual({ ok: true });
     expect(fs.readFileSync(file)).toEqual(Buffer.from('a\r\nB\r\n'));
+  });
+  test('a BOM is kept on rewrite', async () => {
+    const file = path.join(dir, 'Bom.luau');
+    const bom = Buffer.from([0xef, 0xbb, 0xbf]);
+    fs.writeFileSync(file, Buffer.concat([bom, Buffer.from('a\n')]));
+    await expect(compareAndWrite(file, sourceRevision('a\n'), 'b\n')).resolves.toEqual({ ok: true });
+    expect(fs.readFileSync(file)).toEqual(Buffer.concat([bom, Buffer.from('b\n')]));
+  });
+  test('a CRLF file that genuinely differs from Studio is refused, reported as Studio would see it', async () => {
+    const file = path.join(dir, 'Crlf.luau');
+    fs.writeFileSync(file, 'a\r\nuser edit\r\n');
+    await expect(compareAndWrite(file, sourceRevision('a\nb\n'), 'a\nB\n')).resolves.toMatchObject({
+      ok: false,
+      actualRevision: sourceRevision('a\nuser edit\n'),
+      actual: 'a\nuser edit\n',
+    });
+    expect(fs.readFileSync(file)).toEqual(Buffer.from('a\r\nuser edit\r\n'));
   });
   (process.platform === 'win32' ? test.skip : test)('keeps the file mode', async () => {
     const file = path.join(dir, 'Mode.luau');
@@ -93,5 +111,17 @@ describe('differingLines', () => {
   });
   test('a short line is left exactly as it was', () => {
     expect(differingLines('short', '').file[0]).toBe('short');
+  });
+  test('a real difference at line 4 of a 6-line file is reported as line 4', () => {
+    const file = 'a\nb\nc\nfile-four\ne\nf\n';
+    const studio = 'a\nb\nc\nstudio-four\ne\nf\n';
+    expect(differingLines(file, studio).firstLine).toBe(4);
+  });
+  test('texts that are identical line-by-line do not report a line past the end', () => {
+    // Observed on Windows before line-ending normalization: a CRLF file whose
+    // content matched Studio line-for-line still reported firstLine one past
+    // the last line, with empty file/studio arrays.
+    const result = differingLines('a\nb\nc\n', 'a\nb\nc\n');
+    expect(result.firstLine).toBeLessThanOrEqual(3);
   });
 });
