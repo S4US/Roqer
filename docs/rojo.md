@@ -118,7 +118,7 @@ An edit to a file-backed script can fail with nothing changed on either side:
   each side, and whether it was truncated). To keep the file, reconnect the
   Rojo plugin so Studio takes the file, then retry. To keep Studio's version,
   copy its text into the file, then retry. Rojo cannot copy Studio's text back
-  to the file for you.
+  to the file.
 - `rojo_write_failed` — the file could not be written at all, for example
   because it was deleted or is locked by another program. Nothing changed in
   Studio either.
@@ -171,8 +171,12 @@ after you linked still shows up):
   name; the two cannot match, so scripts under it are reported `studio_only`.
 - Rojo delivers LF to Studio, with no BOM, whatever line endings or BOM the
   file on disk has. Roqer compares the file and Studio ignoring line endings
-  and a BOM, and writes a saved file back in its own style (CRLF stays CRLF,
-  a BOM stays), changing only the lines the edit actually changed.
+  and a BOM, and writes a saved file back in its own style: CRLF stays CRLF,
+  LF stays LF, and a BOM stays, across the whole file, not just the lines the
+  edit changed.
+- A file with mixed line endings is written back entirely in whichever style
+  (CRLF or LF) already has the most line breaks in it; a line in the other
+  style, even one the edit never touched, comes back changed.
 
 ## Troubleshooting
 
