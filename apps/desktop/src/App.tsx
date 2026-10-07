@@ -13,7 +13,7 @@ import { VIDEO_EXTENSIONS, type ClipSelection } from "../shared/reference-clip";
 import {
   appendMessage, createChat, createId, createInitialWorkspace, createProject,
   deleteChat, deleteProject, modelPreference, normalizeWorkspace, renameChat,
-  renameProject, selectedModelId, setChatStudioInstance, chatStudioTarget,
+  renameProject, selectedModelId, setChatStudioInstance, chatStudioTarget, withdrawMessage,
   type AssetAttachment, type ChatMessage, type WorkspaceState,
 } from "./model";
 import {
@@ -276,6 +276,9 @@ function App() {
   const pendingStartId = useRef<string | null>(null);
   const latestWorkspace = useRef(workspace);
   latestWorkspace.current = workspace;
+  /** Whether the box holds nothing typed or pasted, as of the latest render. */
+  const composerEmpty = useRef(true);
+  composerEmpty.current = composer === "" && pastedBlocks.length === 0;
 
   const selectedProject = useMemo(
     () => workspace.projects.find((project) => project.id === workspace.selectedProjectId) ?? workspace.projects[0],
@@ -702,14 +705,17 @@ function App() {
         ...(role === "user" && pictures + files > 0 ? { attachments: { pictures, files } } : {}),
       };
     }));
+    const messageId = createId("message");
     next = appendMessage(next, projectId, chatId, {
-      id: createId("message"), role: "user", text: prompt, createdAt: new Date().toISOString(),
+      id: messageId, role: "user", text: prompt, createdAt: new Date().toISOString(),
       attachments: attachments.length > 0 ? attachments : undefined,
     });
     setWorkspace(next);
     setExpandedProjects((current) => new Set(current).add(projectId));
     clearComposer();
     setAttachments([]);
+    // Whatever the box was warning about has been answered by sending.
+    setAttachmentError(null);
 
     const request: RunStartRequest = {
       projectId, chatId, prompt, conversation,
@@ -751,6 +757,32 @@ function App() {
       return;
     }
 
+    /**
+     * A run that never started gives its prompt back: the message comes out of
+     * the chat and its words go back in the box, with the reason above them,
+     * so trying again is one Send. That is only done while the chat is still
+     * open and the box still empty. Otherwise the transcript keeps the words
+     * and says why they went nowhere, as it always did, rather than dropping
+     * them or overwriting what was typed since. Files were released with the
+     * failed start, so they have to be attached again.
+     */
+    const startFailed = (reason: string) => {
+      runTarget.current = null;
+      const current = latestWorkspace.current;
+      if (!composerEmpty.current || current.selectedProjectId !== projectId || current.selectedChatId !== chatId) {
+        setWorkspace((state) => appendMessage(state, projectId, chatId, {
+          id: createId("message"), role: "assistant",
+          text: `I couldn't start this run: ${reason}`,
+          createdAt: new Date().toISOString(),
+        }));
+        return;
+      }
+      setWorkspace((state) => withdrawMessage(state, projectId, chatId, messageId));
+      setComposer(prompt);
+      setAttachmentError(`The run didn't start: ${reason}${attachments.length > 0 ? " Attach your files again before sending." : ""}`);
+      composerRef.current?.focus();
+    };
+
     let started: Awaited<ReturnType<typeof startRun>>;
     try {
       started = await startRun(request);
@@ -758,13 +790,7 @@ function App() {
       if (runAttempt.current !== attempt) return;
       pendingStartAttempt.current = null;
       setRunStarting(false);
-      runTarget.current = null;
-      const message = error instanceof Error ? error.message : String(error);
-      setWorkspace((current) => appendMessage(current, projectId, chatId, {
-        id: createId("message"), role: "assistant",
-        text: `I couldn't start this run: ${message}`,
-        createdAt: new Date().toISOString(),
-      }));
+      startFailed(error instanceof Error ? error.message : String(error));
       return;
     }
     if (runAttempt.current !== attempt) {
@@ -775,12 +801,7 @@ function App() {
     pendingStartAttempt.current = null;
     setRunStarting(false);
     if (!started.ok) {
-      runTarget.current = null;
-      setWorkspace((current) => appendMessage(current, projectId, chatId, {
-        id: createId("message"), role: "assistant",
-        text: `I couldn't start this run: ${started.message}`,
-        createdAt: new Date().toISOString(),
-      }));
+      startFailed(started.message);
       return;
     }
 
@@ -1499,7 +1520,7 @@ function App() {
               <button onClick={stopRun}>Stop</button>
             </div>}
             {draggingImage && <div className="composer-drop-hint">Drop an image or a video to attach it</div>}
-            {attachmentError && <div className="attachment-notice" role="alert">{attachmentError}<button onClick={() => setAttachmentError(null)} aria-label="Dismiss attachment error"><X size={14} /></button></div>}
+            {attachmentError && <div className="attachment-notice" role="alert">{attachmentError}<button onClick={() => setAttachmentError(null)} aria-label="Dismiss"><X size={14} /></button></div>}
             {attachments.length > 0 && <div className="attachment-row">{attachments.map((attachment) => <div className={`attachment-chip${attachment.clip === undefined ? "" : " clip"}`} key={attachment.id}>
               {attachment.thumbnailDataUrl ? <img className="attachment-thumbnail" src={attachment.thumbnailDataUrl} alt="" /> : attachment.clip === undefined ? <FileBox size={16} /> : <Film size={16} />}
               <div><strong>{attachment.name}</strong><span>{readingClips.has(attachment.id) && <Loader2 size={11} className="attachment-reading" />}{formatBytes(attachment.size)} · {attachmentDetail(attachment, imagesReachModel, readingClips.has(attachment.id))}</span></div>

@@ -14,6 +14,7 @@ import {
   renameChat,
   renameProject,
   setChatStudioInstance,
+  withdrawMessage,
 } from "./model";
 
 test("a new workspace contains no invented projects, chats, or messages", () => {
@@ -317,6 +318,35 @@ test("a title the user typed survives the first message", () => {
 
   const chat = updated.projects.find((project) => project.id === "default")?.chats[0];
   assert.equal(chat?.title, "Checkpoint work");
+});
+
+test("a withdrawn first message takes its title with it, unless the user named the chat", () => {
+  const withChat = createChat(createInitialWorkspace(), "default");
+  const chatId = withChat.selectedChatId!;
+  const message = { id: "message-test", role: "user" as const, text: "Build a checkpoint system", createdAt: new Date().toISOString() };
+
+  const withdrawn = withdrawMessage(appendMessage(withChat, "default", chatId, message), "default", chatId, "message-test");
+  const chat = withdrawn.projects.find((project) => project.id === "default")?.chats[0];
+  assert.equal(chat?.title, "Untitled chat");
+  assert.equal(chat?.messages.length, 0);
+
+  const named = renameChat(withChat, "default", chatId, "Checkpoints");
+  const kept = withdrawMessage(appendMessage(named, "default", chatId, message), "default", chatId, "message-test");
+  assert.equal(kept.projects.find((project) => project.id === "default")?.chats[0].title, "Checkpoints");
+});
+
+test("withdrawing a later message leaves the rest of the chat and its title alone", () => {
+  const withChat = createChat(createInitialWorkspace(), "default");
+  const chatId = withChat.selectedChatId!;
+  const createdAt = new Date().toISOString();
+  const first = appendMessage(withChat, "default", chatId, { id: "first", role: "user", text: "Build a checkpoint system", createdAt });
+  const second = appendMessage(first, "default", chatId, { id: "second", role: "user", text: "Now add effects", createdAt });
+
+  const chat = withdrawMessage(second, "default", chatId, "second").projects.find((project) => project.id === "default")?.chats[0];
+  assert.deepEqual(chat?.messages.map((message) => message.id), ["first"]);
+  assert.equal(chat?.title, "Build a checkpoint system");
+  const untouched = withdrawMessage(second, "default", chatId, "missing").projects.find((project) => project.id === "default")?.chats[0];
+  assert.equal(untouched, second.projects.find((project) => project.id === "default")?.chats[0]);
 });
 
 test("renaming ignores a blank name rather than saving an unreadable row", () => {

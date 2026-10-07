@@ -374,11 +374,13 @@ export function createProject(state: WorkspaceState, name: string): WorkspaceSta
   return { ...state, projects: [...state.projects, project], selectedProjectId: project.id, selectedChatId: null };
 }
 
+const UNTITLED_CHAT = "Untitled chat";
+
 export function createChat(state: WorkspaceState, projectId = state.selectedProjectId): WorkspaceState {
   const now = new Date().toISOString();
   const chat: Chat = {
     id: createId("chat"),
-    title: "Untitled chat",
+    title: UNTITLED_CHAT,
     createdAt: now,
     updatedAt: now,
     messages: [],
@@ -585,6 +587,26 @@ export function appendMessage(state: WorkspaceState, projectId: string, chatId: 
           return { ...chat, title, updatedAt: message.createdAt, messages: [...chat.messages, message] };
         }),
       };
+    }),
+  };
+}
+
+/**
+ * Take back a message that never went anywhere: a prompt whose run could not
+ * start. A chat left empty gets back the title it had before, since that title
+ * came from the message; one the user named keeps its name.
+ */
+export function withdrawMessage(state: WorkspaceState, projectId: string, chatId: string, messageId: string): WorkspaceState {
+  return {
+    ...state,
+    projects: state.projects.map((project) => project.id !== projectId ? project : {
+      ...project,
+      chats: project.chats.map((chat) => {
+        if (chat.id !== chatId || !chat.messages.some((message) => message.id === messageId)) return chat;
+        const messages = chat.messages.filter((message) => message.id !== messageId);
+        const title = messages.length === 0 && chat.titleSetByUser !== true ? UNTITLED_CHAT : chat.title;
+        return { ...chat, title, messages };
+      }),
     }),
   };
 }
