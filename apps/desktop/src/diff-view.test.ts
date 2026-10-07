@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { RunChange } from "../shared/run-events";
 import {
-  groupChangesByTarget, highlightRows, parseDiffRows, sourceRows, splitChangeGroup,
+  canOpenInStudio, groupChangesByTarget, highlightRows, parseDiffRows, sourceRows, splitChangeGroup,
   tokenizeCodeLine, type SyntaxToken,
 } from "./diff-view";
 
@@ -155,4 +155,21 @@ test("repeated edits to one path produce one editor panel", () => {
   assert.deepEqual(main.earlier.map((item) => item.id), ["c1"]);
   assert.equal(shared.latest?.id, "c3");
   assert.deepEqual(shared.earlier, []);
+});
+
+test("a Rojo save still pending or diverged offers no Open in Studio", () => {
+  const scriptChange = (summary: string): RunChange => ({
+    id: "c1", kind: "script-source", target: "game.ServerScriptService.Main", summary,
+  });
+
+  // The exact summaries studio-tools.ts writes for a linked file write whose
+  // saved.sync is "pending" or "diverged": Studio never actually received it.
+  assert.equal(canOpenInStudio(scriptChange("Saved to src/Main.server.luau; Rojo has not delivered it to Studio yet.")), false);
+  assert.equal(canOpenInStudio(scriptChange("Saved to src/Main.server.luau; the script in Studio changed meanwhile.")), false);
+
+  // A synced file write, an unlinked edit, and a studio_only edit all really
+  // landed in Studio.
+  assert.equal(canOpenInStudio(scriptChange("Saved to src/Main.server.luau; Studio has the change.")), true);
+  assert.equal(canOpenInStudio(scriptChange("Updated the script in Studio.")), true);
+  assert.equal(canOpenInStudio(scriptChange("Edited the script in Studio only; it is not saved to the linked Rojo project.")), true);
 });

@@ -391,6 +391,24 @@ export function splitChangeGroup(group: ChangeGroup): { latest?: RunChange; earl
   };
 }
 
+// studio-tools.ts writes exactly these two caveats into a script change's
+// summary for a linked file write whose saved.sync is "pending" or
+// "diverged": Rojo has not delivered the save to Studio, or Studio moved on
+// to something else before it arrived. The summary carries no other
+// structured field saying so.
+const ROJO_SAVE_PENDING = /; Rojo has not delivered it to Studio yet\.$/;
+const ROJO_SAVE_DIVERGED = /; the script in Studio changed meanwhile\.$/;
+
+/**
+ * Whether a script change actually reached Studio, so "Open in Studio" never
+ * points at an edit Studio has not seen. A save still pending delivery, or one
+ * Studio diverged from before it arrived, changed only the project's file;
+ * opening Studio there would show the old script and imply the edit landed.
+ */
+export function canOpenInStudio(change: RunChange): boolean {
+  return !ROJO_SAVE_PENDING.test(change.summary) && !ROJO_SAVE_DIVERGED.test(change.summary);
+}
+
 /** Preserve event order while giving every changed path one card. */
 export function groupChangesByTarget(changes: readonly RunChange[]): ChangeGroup[] {
   const groups = new Map<string, ChangeGroup>();
