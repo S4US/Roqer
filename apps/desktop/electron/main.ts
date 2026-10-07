@@ -1797,6 +1797,10 @@ async function startRun(event: IpcMainInvokeEvent, payload: unknown): Promise<Ru
         // Resolved the same way the run's Studio is: `resolvedRequest.instanceId`
         // is the one instance every Studio call is routed to for this run, so
         // the picker opens for exactly that place, never one the model names.
+        // `dialog.showOpenDialog` is native and modal, so cancelling the run
+        // cannot close it early; the file the user picks (or their dismissal)
+        // is itself their consent to link, which is why this needs no separate
+        // confirmation beyond the Ask-first a `mutation` risk already gets.
         [LINK_ROJO_PROJECT_OPERATION, () => linkRojoProject(
           resolvedRequest.instanceId,
           (instanceId) => pickRojoProject(BrowserWindow.fromWebContents(sender), instanceId),

@@ -21,6 +21,9 @@ const GROUP_VARIABLE = "ROBLOX_CREATOR_GROUP_ID";
  */
 export function bridgeEnvironment(base: NodeJS.ProcessEnv, settings: OpenCloudResolved | undefined): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = { ...base };
+  // The app links Rojo projects itself (the Rojo pill); an inherited
+  // ROQER_ROJO_PROJECT would let core link one lazily behind the pill's back.
+  delete env.ROQER_ROJO_PROJECT;
   if (settings?.apiKey) env[KEY_VARIABLE] = settings.apiKey;
   if (settings?.creator) {
     // Exactly one creator: the bridge prefers a group, so an inherited group ID
