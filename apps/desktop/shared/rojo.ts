@@ -47,6 +47,15 @@ export type RojoResult =
   | Readonly<{ ok: true; view: RojoView }>
   | Readonly<{ ok: false; message: string; view?: RojoView }>;
 
+/**
+ * What the main process's own project-file dialog produced, before a caller
+ * decides how to show a cancel: the `rojo:choose` IPC handler folds it into
+ * the current view, so the renderer never sees a bare cancellation; the
+ * agent's link operation (a later task) reports `{ cancelled: true }` to the
+ * model as-is. Never crosses IPC in its `cancelled` shape.
+ */
+export type RojoPickOutcome = Readonly<{ cancelled: true }> | RojoResult;
+
 /** What `rojoPillState` needs to pick one row of the design spec's table. */
 export type RojoPillStateInputs = Readonly<{
   /** Whether `instanceId` is one the current Studio status lists. */

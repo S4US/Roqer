@@ -16,6 +16,12 @@ import { CustomProviderStore } from "../runtime/custom-provider-store";
 import { bridgeEnvironment, checkOpenCloudKey } from "../runtime/open-cloud";
 import { BlenderSettings } from "../runtime/blender-settings";
 import { BlenderWorker } from "../runtime/blender-worker";
+import { RojoConnection } from "../runtime/rojo-connection";
+import { RojoLinksStore } from "../runtime/rojo-links";
+import {
+  isKnownInstance, resolvePickedProject,
+  rojoForget, rojoGet, rojoLinkRecent, rojoOpenFolder, rojoRetry, rojoUnlink,
+} from "../runtime/rojo-ipc";
 import { readModelPreview, storeModelPreview } from "../runtime/model-preview";
 import { captureMoments } from "../runtime/capture-moments";
 import { uploadAssets } from "../runtime/upload-assets";
@@ -23,6 +29,7 @@ import { withLocalOperations, type LocalOperation } from "../runtime/local-opera
 import { CAPTURE_MOMENTS_OPERATION, UPLOAD_ASSETS_OPERATION } from "../shared/gateway-operations";
 import type { McpCallOptions, McpToolOutcome } from "../runtime/mcp-types";
 import { BLENDER_OPERATION, type BlenderSettingsResult, type BlenderSettingsView } from "../shared/blender";
+import type { RojoPickOutcome, RojoResult } from "../shared/rojo";
 import type { ModelPreviewResult } from "../shared/model-preview";
 import type { EvidencePictureResult } from "../shared/evidence-picture";
 import { OpenCloudStore, type OpenCloudResolved } from "../runtime/open-cloud-store";
@@ -568,6 +575,11 @@ function mcpServerProcess(): McpServerProcess | undefined {
     onState: (state) => {
       mcpServerState = state;
       if (state.kind === "failed") console.error("Roqer could not run the Studio bridge:", state.message);
+      // A remembered Rojo link belongs to a bridge process; a fresh one (ours,
+      // just started) or an adopted one (someone else's, just found) has
+      // linked nothing yet, so every remembered, connected place needs
+      // relinking again once Studio status next reports its instances.
+      if (state.kind === "running" || state.kind === "adopted") rojoConnection().bridgeRestarted();
       for (const window of BrowserWindow.getAllWindows()) {
         if (!window.webContents.isDestroyed()) window.webContents.send("mcp:state", state);
       }
@@ -727,6 +739,125 @@ async function chooseBlender(event: IpcMainInvokeEvent): Promise<BlenderSettings
 function redetectBlender(event: IpcMainInvokeEvent): Promise<BlenderSettingsResult> {
   if (!isTrusted(event.sender)) return Promise.resolve({ ok: false, message: "This window may not look for Blender." });
   return blenderResult(() => blenderSettings().redetect());
+}
+
+// -- Rojo --------------------------------------------------------------------
+
+/** How long the probe below waits for a Rojo server to answer. */
+const ROJO_PROBE_TIMEOUT_MS = 1_000;
+
+let rojoLinksStore: RojoLinksStore | null = null;
+
+function rojoLinks(): RojoLinksStore {
+  rojoLinksStore ??= new RojoLinksStore({ file: path.join(app.getPath("userData"), "rojo-links.json") });
+  return rojoLinksStore;
+}
+
+let rojoConnectionInstance: RojoConnection | null = null;
+
+/**
+ * Remembered Rojo links and live detection for the Rojo pill, wired to the
+ * same bridge `getStudioStatus`/`openStudioScript` already call. `callTool`
+ * always addresses the default endpoint: only the bridge Roqer supervises
+ * (see `bridgeRecoveryFor`) is one whose Rojo links this process can
+ * meaningfully remember and relink.
+ */
+function rojoConnection(): RojoConnection {
+  rojoConnectionInstance ??= new RojoConnection({
+    store: rojoLinks(),
+    callTool: (tool, args) => clientFor(DEFAULT_MCP_ENDPOINT).callTool(tool, args),
+    probe: probeRojoServer,
+    readServePort: readRojoServePort,
+  });
+  return rojoConnectionInstance;
+}
+
+/** The instance ids the latest Studio status actually lists, for validating every Rojo IPC call. */
+async function knownRojoInstanceIds(): Promise<readonly string[]> {
+  const health = await clientFor(DEFAULT_MCP_ENDPOINT).health();
+  return health.reachable ? health.instances.map((instance) => instance.instanceId) : [];
+}
+
+/** Probes a Rojo server's `/api/rojo`: any OK reply means it is answering; `projectName` is read only from a JSON reply, and never fabricated when the body is not one. */
+async function probeRojoServer(port: number): Promise<{ answering: boolean; projectName?: string }> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), ROJO_PROBE_TIMEOUT_MS);
+  try {
+    const response = await fetch(`http://127.0.0.1:${port}/api/rojo`, { signal: controller.signal });
+    if (!response.ok) return { answering: false };
+    if (!(response.headers.get("content-type") ?? "").includes("json")) return { answering: true };
+    const body: unknown = await response.json().catch(() => undefined);
+    const projectName = isRecord(body) && typeof body.projectName === "string" ? body.projectName : undefined;
+    return { answering: true, projectName };
+  } catch {
+    return { answering: false };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/** `servePort` from a `*.project.json` file; any failure (missing file, bad JSON, wrong shape) yields `undefined`, never a fabricated port. */
+async function readRojoServePort(projectFile: string): Promise<number | undefined> {
+  try {
+    const parsed: unknown = JSON.parse(await fs.promises.readFile(projectFile, "utf8"));
+    return isRecord(parsed) && typeof parsed.servePort === "number" ? parsed.servePort : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Opens the main process's own project-file dialog and resolves what it
+ * returned -- the one function both the `rojo:choose` IPC handler and, in a
+ * later task, the agent's `link_rojo_project` gateway operation call, so a
+ * path never originates anywhere but here. Neither the renderer nor the
+ * model ever supplies `instanceId`'s matching project path; the caller is
+ * responsible for having already checked that `instanceId` is one the
+ * latest Studio status lists.
+ */
+async function pickRojoProject(window: BrowserWindow | null, instanceId: string): Promise<RojoPickOutcome> {
+  const options = {
+    title: "Choose a Rojo project",
+    properties: ["openFile" as const],
+    filters: [{ name: "Rojo project", extensions: ["json"] }],
+  };
+  const picked = window ? await dialog.showOpenDialog(window, options) : await dialog.showOpenDialog(options);
+  return resolvePickedProject(picked, instanceId, rojoConnection());
+}
+
+async function getRojo(event: IpcMainInvokeEvent, instanceIdValue: unknown): Promise<RojoResult> {
+  return rojoGet(isTrusted(event.sender), instanceIdValue, await knownRojoInstanceIds(), rojoConnection());
+}
+
+async function chooseRojo(event: IpcMainInvokeEvent, instanceIdValue: unknown): Promise<RojoResult> {
+  if (!isTrusted(event.sender)) return { ok: false, message: "This window may not link a Rojo project." };
+  const connectedIds = await knownRojoInstanceIds();
+  if (typeof instanceIdValue !== "string" || !isKnownInstance(instanceIdValue, connectedIds)) {
+    return { ok: false, message: "That place is not connected." };
+  }
+  const outcome = await pickRojoProject(BrowserWindow.fromWebContents(event.sender), instanceIdValue);
+  if ("cancelled" in outcome) return { ok: true, view: await rojoConnection().view(instanceIdValue, connectedIds) };
+  return outcome;
+}
+
+async function linkRecentRojo(event: IpcMainInvokeEvent, payload: unknown): Promise<RojoResult> {
+  return rojoLinkRecent(isTrusted(event.sender), payload, await knownRojoInstanceIds(), rojoConnection());
+}
+
+async function unlinkRojo(event: IpcMainInvokeEvent, instanceIdValue: unknown): Promise<RojoResult> {
+  return rojoUnlink(isTrusted(event.sender), instanceIdValue, await knownRojoInstanceIds(), rojoConnection());
+}
+
+async function forgetRojo(event: IpcMainInvokeEvent, instanceIdValue: unknown): Promise<RojoResult> {
+  return rojoForget(isTrusted(event.sender), instanceIdValue, await knownRojoInstanceIds(), rojoConnection());
+}
+
+async function retryRojo(event: IpcMainInvokeEvent, instanceIdValue: unknown): Promise<RojoResult> {
+  return rojoRetry(isTrusted(event.sender), instanceIdValue, await knownRojoInstanceIds(), rojoConnection());
+}
+
+async function openRojoFolder(event: IpcMainInvokeEvent, instanceIdValue: unknown): Promise<RojoResult> {
+  return rojoOpenFolder(isTrusted(event.sender), instanceIdValue, await knownRojoInstanceIds(), rojoConnection(), shell.openPath);
 }
 
 // -- Roblox Open Cloud -----------------------------------------------------
@@ -1420,6 +1551,13 @@ async function getStudioStatus(_event: IpcMainInvokeEvent, endpointValue: unknow
   const health = await client.health();
   if (!health.reachable) {
     return { kind: "offline", endpoint: client.endpoint, message: health.message };
+  }
+
+  // Only the default endpoint is a bridge whose Rojo links this process
+  // remembers (see `rojoConnection`'s doc comment); not awaited, so a Studio
+  // status poll never waits on a relink attempt to answer the renderer.
+  if (endpoint === DEFAULT_MCP_ENDPOINT && health.instances.length > 0) {
+    void rojoConnection().relinkConnected(health.instances.map((instance) => instance.instanceId)).catch(() => undefined);
   }
 
   const first = health.instances[0];
@@ -2150,6 +2288,13 @@ app.whenReady().then(async () => {
   ipcMain.handle("blender:set-enabled", setBlenderEnabled);
   ipcMain.handle("blender:choose", chooseBlender);
   ipcMain.handle("blender:redetect", redetectBlender);
+  ipcMain.handle("rojo:get", getRojo);
+  ipcMain.handle("rojo:choose", chooseRojo);
+  ipcMain.handle("rojo:link-recent", linkRecentRojo);
+  ipcMain.handle("rojo:unlink", unlinkRojo);
+  ipcMain.handle("rojo:forget", forgetRojo);
+  ipcMain.handle("rojo:retry", retryRojo);
+  ipcMain.handle("rojo:open-folder", openRojoFolder);
   ipcMain.handle("previews:model", loadModelPreview);
   ipcMain.handle("previews:picture", loadEvidencePicture);
   ipcMain.handle("run:start", startRun);

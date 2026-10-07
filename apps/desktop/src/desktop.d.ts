@@ -11,6 +11,7 @@ import type {
 } from "../shared/custom-providers";
 import type { OpenCloudCheckResult, OpenCloudSave, OpenCloudSettingsResult } from "../shared/open-cloud";
 import type { BlenderSettingsResult } from "../shared/blender";
+import type { RojoResult } from "../shared/rojo";
 import type { ModelPreviewResult } from "../shared/model-preview";
 import type { EvidencePictureResult } from "../shared/evidence-picture";
 import type { ClipSelection } from "../shared/reference-clip";
@@ -87,6 +88,15 @@ declare global {
         setEnabled(enabled: boolean): Promise<BlenderSettingsResult>;
         choose(): Promise<BlenderSettingsResult>;
         redetect(): Promise<BlenderSettingsResult>;
+      };
+      rojo: {
+        get(instanceId: string | null): Promise<RojoResult>;
+        choose(instanceId: string): Promise<RojoResult>;
+        linkRecent(instanceId: string, index: number): Promise<RojoResult>;
+        unlink(instanceId: string): Promise<RojoResult>;
+        forget(instanceId: string): Promise<RojoResult>;
+        retry(instanceId: string): Promise<RojoResult>;
+        openFolder(instanceId: string): Promise<RojoResult>;
       };
       runs: {
         start(request: RunStartRequest): Promise<{ ok: true; runId: string } | { ok: false; message: string }>;
