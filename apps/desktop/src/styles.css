@@ -786,6 +786,9 @@ details.task-list[open] .task-list-caret { transform: rotate(90deg); }
 .settings-list { overflow: hidden; background: var(--surface); border-radius: 12px; }
 .settings-list > * + * { border-top: 1px solid var(--border-subtle); }
 .settings-footnote { margin: 0; padding-left: 2px; color: var(--faint); font-size: var(--type-meta); line-height: 1.5; }
+/* Why Settings opened in place of sending. One of the few outlined things on
+   the page, so it is read before the rows. */
+.settings-notice { margin: 0; padding: 11px 14px; color: var(--ink); background: var(--surface); border: 1px solid var(--border-strong); border-radius: 10px; font-size: var(--type-label); line-height: 1.5; }
 .settings-row { display: flex; align-items: center; gap: 16px; width: 100%; min-height: 56px; padding: 11px 16px; box-sizing: border-box; color: inherit; text-align: left; background: none; }
 .settings-row-text { display: flex; flex: 1; flex-direction: column; gap: 2px; min-width: 0; }
 .settings-row-text > strong { color: var(--ink); font-size: var(--type-label); font-weight: var(--weight-medium); }
@@ -1448,6 +1451,13 @@ a.small-button:focus-visible { outline: 2px solid var(--accent); outline-offset:
 }
 .popover-problem { margin: 8px 0 0; color: var(--danger, #b42318); font-size: var(--type-meta); }
 .popover-note { margin: 8px 0 0; color: var(--muted); font-size: var(--type-meta); }
+.popover-detail { margin: 8px 0 0; font-size: var(--type-meta); }
+.popover-detail summary { color: var(--muted); cursor: pointer; }
+.popover-detail pre { max-height: 160px; overflow: auto; margin: 6px 0 0; padding: 8px 10px; color: var(--ink); background: var(--surface-sunken); border: 1px solid var(--border-subtle); border-radius: 8px; font-family: "Geist Mono Variable", monospace; font-size: 11px; line-height: 1.45; white-space: pre-wrap; overflow-wrap: anywhere; }
+/* Quieter than the actions above them: these are for a report, not a fix. */
+.popover-tools { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border); }
+.popover-tool { height: 28px; padding: 0 6px; color: var(--muted); background: none; border: 1px solid var(--border); border-radius: 7px; font-size: var(--type-meta); font-weight: var(--weight-medium); white-space: nowrap; }
+.popover-tool:hover { color: var(--ink); border-color: var(--border-strong); }
 
 .settings-button.update-ready { color: var(--ink); font-weight: var(--weight-medium); }
 /* An update on its way. Not a button -- there is nothing to press yet -- so it

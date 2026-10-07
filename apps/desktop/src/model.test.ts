@@ -5,6 +5,7 @@ import {
   appendMessage,
   chatStudioInstanceId,
   chatStudioTarget,
+  chatsByActivity,
   createChat,
   createInitialWorkspace,
   createProject,
@@ -14,6 +15,7 @@ import {
   renameChat,
   renameProject,
   setChatStudioInstance,
+  withdrawMessage,
 } from "./model";
 
 test("a new workspace contains no invented projects, chats, or messages", () => {
@@ -319,6 +321,35 @@ test("a title the user typed survives the first message", () => {
   assert.equal(chat?.title, "Checkpoint work");
 });
 
+test("a withdrawn first message takes its title with it, unless the user named the chat", () => {
+  const withChat = createChat(createInitialWorkspace(), "default");
+  const chatId = withChat.selectedChatId!;
+  const message = { id: "message-test", role: "user" as const, text: "Build a checkpoint system", createdAt: new Date().toISOString() };
+
+  const withdrawn = withdrawMessage(appendMessage(withChat, "default", chatId, message), "default", chatId, "message-test");
+  const chat = withdrawn.projects.find((project) => project.id === "default")?.chats[0];
+  assert.equal(chat?.title, "Untitled chat");
+  assert.equal(chat?.messages.length, 0);
+
+  const named = renameChat(withChat, "default", chatId, "Checkpoints");
+  const kept = withdrawMessage(appendMessage(named, "default", chatId, message), "default", chatId, "message-test");
+  assert.equal(kept.projects.find((project) => project.id === "default")?.chats[0].title, "Checkpoints");
+});
+
+test("withdrawing a later message leaves the rest of the chat and its title alone", () => {
+  const withChat = createChat(createInitialWorkspace(), "default");
+  const chatId = withChat.selectedChatId!;
+  const createdAt = new Date().toISOString();
+  const first = appendMessage(withChat, "default", chatId, { id: "first", role: "user", text: "Build a checkpoint system", createdAt });
+  const second = appendMessage(first, "default", chatId, { id: "second", role: "user", text: "Now add effects", createdAt });
+
+  const chat = withdrawMessage(second, "default", chatId, "second").projects.find((project) => project.id === "default")?.chats[0];
+  assert.deepEqual(chat?.messages.map((message) => message.id), ["first"]);
+  assert.equal(chat?.title, "Build a checkpoint system");
+  const untouched = withdrawMessage(second, "default", chatId, "missing").projects.find((project) => project.id === "default")?.chats[0];
+  assert.equal(untouched, second.projects.find((project) => project.id === "default")?.chats[0]);
+});
+
 test("renaming ignores a blank name rather than saving an unreadable row", () => {
   const state = createProject(createInitialWorkspace(), "Obby");
   const projectId = state.selectedProjectId;
@@ -337,6 +368,31 @@ test("deleting the open chat selects another one in the same project", () => {
   const deleted = deleteChat(second, "default", openChatId);
   assert.deepEqual(deleted.projects[0].chats.map((chat) => chat.id), [remainingId]);
   assert.equal(deleted.selectedChatId, remainingId);
+});
+
+test("chats are listed by when they were last worked in, and a tie keeps the stored order", () => {
+  const chat = (id: string, updatedAt: string) => ({ id, updatedAt });
+  const listed = chatsByActivity([
+    chat("made-last", "2026-10-01T10:00:00.000Z"),
+    chat("worked-in-today", "2026-10-07T09:00:00.000Z"),
+    chat("tied-first", "2026-09-01T10:00:00.000Z"),
+    chat("tied-second", "2026-09-01T10:00:00.000Z"),
+    chat("unreadable", "not a date"),
+  ]);
+  assert.deepEqual(listed.map((entry) => entry.id), ["worked-in-today", "made-last", "tied-first", "tied-second", "unreadable"]);
+});
+
+test("deleting the open chat selects the one worked in most recently", () => {
+  const first = createChat(createInitialWorkspace(), "default");
+  const olderId = first.selectedChatId!;
+  const second = createChat(first, "default");
+  const third = createChat(second, "default");
+  const openChatId = third.selectedChatId!;
+  const worked = appendMessage(third, "default", olderId, {
+    id: "message-test", role: "user", text: "Add a sword", createdAt: "2099-01-01T00:00:00.000Z",
+  });
+
+  assert.equal(deleteChat(worked, "default", openChatId).selectedChatId, olderId);
 });
 
 test("deleting the last chat in a project leaves nothing selected", () => {

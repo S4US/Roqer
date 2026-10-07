@@ -136,7 +136,10 @@ waiting for the bridge to answer, or the error it got. The same plugin writes
 `Play server could not reach the MCP bridge: …` to Studio's Output once, and
 the bridge log has a `[studio-peer]` line for every peer that registers and a
 `[studio-peer-rejected]` line for every one it refuses. Quote those lines when
-reporting a problem.
+reporting a problem. In Roqer, **Copy diagnostics** (under Roblox Studio at the
+top right, or in Settings → App) copies the end of that log with Roqer's
+version and the bridge's state, ready to paste into a report, and **Show bridge
+log** opens the file.
 
 ## Security and configuration
 

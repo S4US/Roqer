@@ -427,6 +427,11 @@ export async function getUpdateState(): Promise<AppUpdateState> {
   return window.workbenchDesktop.updates.state();
 }
 
+/** The running build's version; null in a browser, which has no app behind it. */
+export async function getAppVersion(): Promise<string | null> {
+  return window.workbenchDesktop?.app.version() ?? null;
+}
+
 /** Restart into a downloaded update. Resolves false when none is staged. */
 export async function installUpdate(): Promise<boolean> {
   return window.workbenchDesktop?.updates.install() ?? false;
@@ -460,6 +465,20 @@ export async function restartBridge(): Promise<McpServerState> {
 /** Subscribe to bridge state changes. Returns an unsubscribe function. */
 export function subscribeToBridge(listener: (state: McpServerState) => void): () => void {
   return window.workbenchDesktop?.bridge.subscribe(listener) ?? (() => undefined);
+}
+
+/**
+ * Copy a report of the Studio connection for a bug report. False when nothing
+ * was copied, which is always the case without the desktop app: there is no
+ * bridge or log to report on.
+ */
+export async function copyDiagnostics(endpoint: string): Promise<boolean> {
+  return window.workbenchDesktop?.app.copyDiagnostics(endpoint) ?? false;
+}
+
+/** Show the bridge's log file in the file manager. False without the desktop app. */
+export async function showBridgeLog(): Promise<boolean> {
+  return window.workbenchDesktop?.app.showBridgeLog() ?? false;
 }
 
 export async function getStudioStatus(endpoint: string): Promise<StudioStatus> {

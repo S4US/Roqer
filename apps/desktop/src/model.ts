@@ -374,11 +374,13 @@ export function createProject(state: WorkspaceState, name: string): WorkspaceSta
   return { ...state, projects: [...state.projects, project], selectedProjectId: project.id, selectedChatId: null };
 }
 
+const UNTITLED_CHAT = "Untitled chat";
+
 export function createChat(state: WorkspaceState, projectId = state.selectedProjectId): WorkspaceState {
   const now = new Date().toISOString();
   const chat: Chat = {
     id: createId("chat"),
-    title: "Untitled chat",
+    title: UNTITLED_CHAT,
     createdAt: now,
     updatedAt: now,
     messages: [],
@@ -394,12 +396,30 @@ export function createChat(state: WorkspaceState, projectId = state.selectedProj
 }
 
 /**
+ * A project's chats as the sidebar lists them: the one worked in most recently
+ * first, as each row's time already implied. They are kept on disk in the
+ * order they were made, newest first, and sorted only when shown, so nothing
+ * saved changes shape. Renaming leaves `updatedAt` alone, so it does not move
+ * a chat.
+ */
+export function chatsByActivity<T extends Pick<Chat, "updatedAt">>(chats: readonly T[]): T[] {
+  const time = (value: string) => {
+    const parsed = Date.parse(value);
+    return Number.isNaN(parsed) ? 0 : parsed;
+  };
+  return chats
+    .map((chat, index) => ({ chat, index, at: time(chat.updatedAt) }))
+    .sort((left, right) => right.at - left.at || left.index - right.index)
+    .map(({ chat }) => chat);
+}
+
+/**
  * A selection that still points at something that exists.
  *
  * Deleting what is open has to leave the user somewhere, so the selection falls
- * back to the first chat of the selected project, and to the first project when
- * the selected one is gone. Keeping the repair in one place means no delete can
- * leave the workspace pointing at a chat that is no longer there.
+ * back to the chat at the top of the selected project's list, and to the first
+ * project when the selected one is gone. Keeping the repair in one place means
+ * no delete can leave the workspace pointing at a chat that is no longer there.
  */
 function repairSelection(state: WorkspaceState): WorkspaceState {
   const project = state.projects.find((candidate) => candidate.id === state.selectedProjectId)
@@ -407,7 +427,7 @@ function repairSelection(state: WorkspaceState): WorkspaceState {
   if (!project) return state;
   const selectedChatId = project.chats.some((chat) => chat.id === state.selectedChatId)
     ? state.selectedChatId
-    : project.chats[0]?.id ?? null;
+    : chatsByActivity(project.chats)[0]?.id ?? null;
   return { ...state, selectedProjectId: project.id, selectedChatId };
 }
 
@@ -585,6 +605,26 @@ export function appendMessage(state: WorkspaceState, projectId: string, chatId: 
           return { ...chat, title, updatedAt: message.createdAt, messages: [...chat.messages, message] };
         }),
       };
+    }),
+  };
+}
+
+/**
+ * Take back a message that never went anywhere: a prompt whose run could not
+ * start. A chat left empty gets back the title it had before, since that title
+ * came from the message; one the user named keeps its name.
+ */
+export function withdrawMessage(state: WorkspaceState, projectId: string, chatId: string, messageId: string): WorkspaceState {
+  return {
+    ...state,
+    projects: state.projects.map((project) => project.id !== projectId ? project : {
+      ...project,
+      chats: project.chats.map((chat) => {
+        if (chat.id !== chatId || !chat.messages.some((message) => message.id === messageId)) return chat;
+        const messages = chat.messages.filter((message) => message.id !== messageId);
+        const title = messages.length === 0 && chat.titleSetByUser !== true ? UNTITLED_CHAT : chat.title;
+        return { ...chat, title, messages };
+      }),
     }),
   };
 }

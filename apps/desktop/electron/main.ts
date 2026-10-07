@@ -1,11 +1,12 @@
 import {
-  app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme, Notification, protocol, shell,
+  app, BrowserWindow, clipboard, dialog, ipcMain, Menu, nativeTheme, Notification, protocol, shell,
   type IpcMainEvent, type IpcMainInvokeEvent, type MessageBoxOptions, type WebContents,
 } from "electron";
 import { autoUpdater } from "electron-updater";
 import { spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 
 import { loadAgentRuntime, type AgentRuntime } from "../runtime/agent-definition";
@@ -71,6 +72,7 @@ import { adoptPreviousUserData, PREVIOUS_USER_DATA_SEGMENTS } from "../runtime/u
 import { RunJournal } from "../runtime/run-journal";
 import { RunAttention, type AttentionSurface } from "../runtime/run-attention";
 import { BridgeLog } from "../runtime/bridge-log";
+import { composeDiagnostics } from "../runtime/diagnostics";
 import { AttachmentRegistry, MAX_IMAGE_SOURCE_BYTES } from "../runtime/attachment-context";
 import {
   clipAnalysisFrame, clipThumbnail, composeClipSheet, composeContactSheet, encodeAttachmentImage, previewToolImage,
@@ -181,9 +183,13 @@ function store(): WorkspaceStore {
  * hour and then died, whose reason is otherwise lost with the process.
  */
 function bridgeLog(): BridgeLog {
-  return bridgeLogFile ??= new BridgeLog(path.join(app.getPath("userData"), "bridge.log"), {
+  return bridgeLogFile ??= new BridgeLog(bridgeLogPath(), {
     onError: (error) => console.error("Roqer could not write the bridge log", error),
   });
+}
+
+function bridgeLogPath(): string {
+  return path.join(app.getPath("userData"), "bridge.log");
 }
 
 function runJournal(): RunJournal {
@@ -262,6 +268,35 @@ if (process.env.WORKBENCH_USER_DATA) {
   const current = app.getPath("userData");
   const chosen = adoptPreviousUserData(current, path.join(app.getPath("appData"), ...PREVIOUS_USER_DATA_SEGMENTS));
   if (chosen !== current) app.setPath("userData", chosen);
+}
+
+/**
+ * One Roqer per data folder. A second copy opened the same chats and run
+ * journal behind a save queue of its own, so the two overwrote each other's
+ * files, and it adopted the first copy's bridge besides. Now a second launch
+ * brings the first window forward and leaves before it has touched anything.
+ *
+ * Asked for after the data folder is settled, because the lock is held on that
+ * folder: the smoke test, which runs in a folder of its own, does not collide
+ * with a Roqer that is open.
+ */
+const primaryInstance = app.requestSingleInstanceLock();
+if (!primaryInstance) {
+  // Said for a launch from a terminal, which would otherwise end in silence:
+  // a build from source shares the installed app's folder.
+  console.error(`Roqer is already open with this data folder (${app.getPath("userData")}); bringing that window forward.`);
+  // Nothing has started yet, so there is nothing to shut down.
+  app.exit(0);
+} else {
+  app.on("second-instance", () => {
+    const window = BrowserWindow.getAllWindows()
+      .find((candidate) => !candidate.isDestroyed() && trustedSenders.has(candidate.webContents.id));
+    // Before the first window exists, startup is about to show it anyway.
+    if (!window) return;
+    if (window.isMinimized()) window.restore();
+    window.show();
+    window.focus();
+  });
 }
 
 // Windows shows an app's notifications only under an identity a Start menu
@@ -1402,11 +1437,19 @@ function plannerFor(
   });
 }
 
-async function getStudioStatus(_event: IpcMainInvokeEvent, endpointValue: unknown): Promise<StudioStatus> {
-  const endpoint = typeof endpointValue === "string" && endpointValue !== ""
-    ? endpointValue
-    : DEFAULT_MCP_ENDPOINT;
+function requestedEndpoint(value: unknown): string {
+  return typeof value === "string" && value !== "" ? value : DEFAULT_MCP_ENDPOINT;
+}
 
+async function getStudioStatus(event: IpcMainInvokeEvent, endpointValue: unknown): Promise<StudioStatus> {
+  const endpoint = requestedEndpoint(endpointValue);
+  // Answered rather than thrown: the window polls this every few seconds, and
+  // a status is what it is built to show.
+  if (!isTrusted(event.sender)) return { kind: "offline", endpoint, message: "This window may not read Studio's status." };
+  return studioStatusAt(endpoint);
+}
+
+async function studioStatusAt(endpoint: string): Promise<StudioStatus> {
   let client: McpClient;
   try {
     client = clientFor(endpoint);
@@ -1438,6 +1481,43 @@ async function getStudioStatus(_event: IpcMainInvokeEvent, endpointValue: unknow
       isRunning: instance.isRunning,
     })),
   };
+}
+
+/**
+ * Put a report of the Studio connection on the clipboard, for an issue or a
+ * support conversation: see runtime/diagnostics.ts for what is in it and what
+ * is kept out. Written here rather than handed to the window, which has no
+ * reason to hold the log.
+ */
+async function copyDiagnostics(event: IpcMainInvokeEvent, endpointValue: unknown): Promise<boolean> {
+  if (!isTrusted(event.sender)) throw new Error("This window may not copy diagnostics.");
+  const [studio, log] = await Promise.all([studioStatusAt(requestedEndpoint(endpointValue)), bridgeLog().text()]);
+  clipboard.writeText(composeDiagnostics({
+    generatedAt: new Date(),
+    appVersion: app.getVersion(),
+    packaged: app.isPackaged,
+    system: `${process.platform} ${os.release()} ${process.arch}`,
+    versions: { electron: process.versions.electron, chrome: process.versions.chrome, node: process.versions.node },
+    bridge: mcpServerState,
+    studio,
+    bridgeLog: log,
+    home: os.homedir(),
+  }));
+  return true;
+}
+
+/**
+ * Show `bridge.log` in the file manager, or the data folder when nothing has
+ * been logged yet. The window never names the file: it can only ask for this one.
+ */
+async function showBridgeLog(event: IpcMainInvokeEvent): Promise<boolean> {
+  if (!isTrusted(event.sender)) throw new Error("This window may not open the data folder.");
+  const file = bridgeLogPath();
+  if (fs.existsSync(file)) {
+    shell.showItemInFolder(file);
+    return true;
+  }
+  return (await shell.openPath(app.getPath("userData"))) === "";
 }
 
 function parseOpenScriptRequest(value: unknown): OpenStudioScriptRequest | null {
@@ -1874,6 +1954,36 @@ function createWindow(): void {
     return { action: "deny" };
   });
 
+  /**
+   * Closing the window stops the run that is going, so a stray click on the X
+   * no longer ends one without a word: Roqer asks first. Quitting -- to install
+   * an update, or from the menu on macOS -- sets `shuttingDown` before any
+   * window closes, and the system ending the session says so first, so neither
+   * is held up here. Nor is the smoke test, which closes on a run it left going
+   * on purpose.
+   */
+  let closeConfirmed = false;
+  window.on("query-session-end", () => { closeConfirmed = true; });
+  window.on("close", (event) => {
+    if (closeConfirmed || shuttingDown || smokeTest || runSessions.size === 0) return;
+    event.preventDefault();
+    const options: MessageBoxOptions = {
+      type: "question",
+      buttons: ["Keep working", "Stop and close"],
+      defaultId: 0,
+      cancelId: 0,
+      noLink: true,
+      title: "Roqer is still working",
+      message: "Stop the run and close Roqer?",
+      detail: "Closing stops the run that is going. What it has already changed in Studio stays changed.",
+    };
+    void dialog.showMessageBox(window, options).then(({ response }) => {
+      if (response !== 1 || window.isDestroyed()) return;
+      closeConfirmed = true;
+      window.close();
+    });
+  });
+
   window.once("ready-to-show", () => {
     if (!smokeTest) window.show();
     // The window is on screen: startup is over, and an update found now is
@@ -2009,6 +2119,10 @@ function runSmokeTest(window: BrowserWindow): void {
           return { ok: false, reason: "studio-open-script" };
         }
 
+        // Settings shows the running version, asked of this process.
+        const version = await bridge.app?.version?.();
+        if (typeof version !== "string" || version === "") return { ok: false, reason: "app-version" };
+
         const events = [];
         const finished = new Promise((resolve) => {
           const stop = bridge.runs.subscribe((event) => {
@@ -2079,6 +2193,8 @@ function runSmokeTest(window: BrowserWindow): void {
 }
 
 app.whenReady().then(async () => {
+  // A second copy is on its way out; it must not start a bridge or open the chats.
+  if (!primaryInstance) return;
   ipcMain.handle("workspace:load", (event) => {
     if (!isTrusted(event.sender)) throw new Error("This window may not load the workspace.");
     return loadState();
@@ -2160,7 +2276,16 @@ app.whenReady().then(async () => {
   ipcMain.handle("run:cancel-start", (event, id: unknown) => {
     if (isTrusted(event.sender) && typeof id === "string") pendingRuns.cancel(event.sender.id, id);
   });
-  ipcMain.handle("app:data-path", () => app.getPath("userData"));
+  ipcMain.handle("app:data-path", (event) => {
+    if (!isTrusted(event.sender)) throw new Error("This window may not read the data folder's location.");
+    return app.getPath("userData");
+  });
+  ipcMain.handle("app:version", (event) => {
+    if (!isTrusted(event.sender)) throw new Error("This window may not read the app version.");
+    return app.getVersion();
+  });
+  ipcMain.handle("app:copy-diagnostics", copyDiagnostics);
+  ipcMain.handle("app:show-bridge-log", showBridgeLog);
 
   // Windows and Linux draw Electron's default File/Edit/View/Window menu inside
   // the window frame. Roqer has no use for it, so it is removed outright

@@ -13,7 +13,7 @@ import { VIDEO_EXTENSIONS, type ClipSelection } from "../shared/reference-clip";
 import {
   appendMessage, createChat, createId, createInitialWorkspace, createProject,
   deleteChat, deleteProject, modelPreference, normalizeWorkspace, renameChat,
-  renameProject, selectedModelId, setChatStudioInstance, chatStudioTarget,
+  renameProject, selectedModelId, setChatStudioInstance, chatStudioTarget, chatsByActivity, withdrawMessage,
   type AssetAttachment, type ChatMessage, type WorkspaceState,
 } from "./model";
 import {
@@ -38,13 +38,15 @@ import { QUESTION_ESCAPE_OPTION, type RunQuestion } from "../shared/question";
 import { summarizeTasks, type RunTask, type RunTaskStatus } from "../shared/tasks";
 import { Markdown } from "./markdown-view";
 import { SettingsPage } from "./settings-page";
+import { DiagnosticsActions } from "./diagnostics-actions";
+import { sendBlockedNotice } from "./send-blocked";
 import { ResultsCard, type FileExpansion } from "./results-card";
 import { ModelMenu, RunMenu } from "./composer-menus";
 import { ContextMeter } from "./context-meter";
 import { contextMeterView, nextContextReading, type ContextReading } from "./context-usage";
 import { blockPreview, characterCount, composedMessage, isLongPaste, lineCount, textSize, type PastedBlock } from "./composer-text";
 
-/** The key that sends with Enter, named the way this computer's keyboard names it. */
+/** The key that sends with Enter and makes a new chat with N, named the way this computer's keyboard names it. */
 const SEND_MODIFIER = typeof navigator !== "undefined" && /Mac/.test(navigator.userAgent) ? "⌘" : "Ctrl";
 
 import { providerCard } from "./provider-card";
@@ -246,6 +248,8 @@ function App() {
   const [showConnection, setShowConnection] = useState(false);
   const connectionRef = useRef<HTMLDivElement>(null);
   const [showSettings, setShowSettings] = useState(false);
+  /** Why Send opened Settings, shown at the top of it; null when it was opened by hand. */
+  const [settingsNotice, setSettingsNotice] = useState<string | null>(null);
   const [dialog, setDialog] = useState<Dialog | null>(null);
   // One flag for both layouts, since "is the sidebar there" is one question
   // however it is answered visually. Only the starting answer differs, and the
@@ -275,6 +279,9 @@ function App() {
   const pendingStartId = useRef<string | null>(null);
   const latestWorkspace = useRef(workspace);
   latestWorkspace.current = workspace;
+  /** Whether the box holds nothing typed or pasted, as of the latest render. */
+  const composerEmpty = useRef(true);
+  composerEmpty.current = composer === "" && pastedBlocks.length === 0;
 
   const selectedProject = useMemo(
     () => workspace.projects.find((project) => project.id === workspace.selectedProjectId) ?? workspace.projects[0],
@@ -668,13 +675,10 @@ function App() {
         : `Choose the part of “${unread.name}” to send first.`);
       return;
     }
-    if (hasDesktopRuntime() && providerStatus.kind !== "signed-in") {
-      setShowSettings(true);
-      return;
-    }
     const chosenModelId = selectedModelId(workspace.preferences, provider);
     const availableModel = modelCatalog.models.find((model) => model.id === chosenModelId);
-    if (hasDesktopRuntime() && !availableModel) {
+    if (hasDesktopRuntime() && (providerStatus.kind !== "signed-in" || !availableModel)) {
+      setSettingsNotice(sendBlockedNotice(provider, providerStatus, modelCatalog.message));
       setShowSettings(true);
       return;
     }
@@ -701,14 +705,17 @@ function App() {
         ...(role === "user" && pictures + files > 0 ? { attachments: { pictures, files } } : {}),
       };
     }));
+    const messageId = createId("message");
     next = appendMessage(next, projectId, chatId, {
-      id: createId("message"), role: "user", text: prompt, createdAt: new Date().toISOString(),
+      id: messageId, role: "user", text: prompt, createdAt: new Date().toISOString(),
       attachments: attachments.length > 0 ? attachments : undefined,
     });
     setWorkspace(next);
     setExpandedProjects((current) => new Set(current).add(projectId));
     clearComposer();
     setAttachments([]);
+    // Whatever the box was warning about has been answered by sending.
+    setAttachmentError(null);
 
     const request: RunStartRequest = {
       projectId, chatId, prompt, conversation,
@@ -750,6 +757,32 @@ function App() {
       return;
     }
 
+    /**
+     * A run that never started gives its prompt back: the message comes out of
+     * the chat and its words go back in the box, with the reason above them,
+     * so trying again is one Send. That is only done while the chat is still
+     * open and the box still empty. Otherwise the transcript keeps the words
+     * and says why they went nowhere, as it always did, rather than dropping
+     * them or overwriting what was typed since. Files were released with the
+     * failed start, so they have to be attached again.
+     */
+    const startFailed = (reason: string) => {
+      runTarget.current = null;
+      const current = latestWorkspace.current;
+      if (!composerEmpty.current || current.selectedProjectId !== projectId || current.selectedChatId !== chatId) {
+        setWorkspace((state) => appendMessage(state, projectId, chatId, {
+          id: createId("message"), role: "assistant",
+          text: `I couldn't start this run: ${reason}`,
+          createdAt: new Date().toISOString(),
+        }));
+        return;
+      }
+      setWorkspace((state) => withdrawMessage(state, projectId, chatId, messageId));
+      setComposer(prompt);
+      setAttachmentError(`The run didn't start: ${reason}${attachments.length > 0 ? " Attach your files again before sending." : ""}`);
+      composerRef.current?.focus();
+    };
+
     let started: Awaited<ReturnType<typeof startRun>>;
     try {
       started = await startRun(request);
@@ -757,13 +790,7 @@ function App() {
       if (runAttempt.current !== attempt) return;
       pendingStartAttempt.current = null;
       setRunStarting(false);
-      runTarget.current = null;
-      const message = error instanceof Error ? error.message : String(error);
-      setWorkspace((current) => appendMessage(current, projectId, chatId, {
-        id: createId("message"), role: "assistant",
-        text: `I couldn't start this run: ${message}`,
-        createdAt: new Date().toISOString(),
-      }));
+      startFailed(error instanceof Error ? error.message : String(error));
       return;
     }
     if (runAttempt.current !== attempt) {
@@ -774,12 +801,7 @@ function App() {
     pendingStartAttempt.current = null;
     setRunStarting(false);
     if (!started.ok) {
-      runTarget.current = null;
-      setWorkspace((current) => appendMessage(current, projectId, chatId, {
-        id: createId("message"), role: "assistant",
-        text: `I couldn't start this run: ${started.message}`,
-        createdAt: new Date().toISOString(),
-      }));
+      startFailed(started.message);
       return;
     }
 
@@ -882,14 +904,20 @@ function App() {
   };
 
   const selectProject = (projectId: string) => {
-    const project = workspace.projects.find((candidate) => candidate.id === projectId);
-    setWorkspace((current) => ({ ...current, selectedProjectId: projectId, selectedChatId: project?.chats[0]?.id ?? null }));
-    void releaseAttachments(attachments.map((asset) => asset.id)); setAttachments([]);
     setExpandedProjects((current) => {
       const next = new Set(current);
       if (next.has(projectId)) next.delete(projectId); else next.add(projectId);
       return next;
     });
+    // Folding the open project away is tidying the sidebar: the chat stays
+    // open, with what was being written in it.
+    if (projectId === workspace.selectedProjectId) return;
+    // Another project opens on another chat, so the draft goes the way it does
+    // when a chat is picked, rather than following into a chat it was not for.
+    const project = workspace.projects.find((candidate) => candidate.id === projectId);
+    setWorkspace((current) => ({ ...current, selectedProjectId: projectId, selectedChatId: project === undefined ? null : chatsByActivity(project.chats)[0]?.id ?? null }));
+    clearComposer();
+    void releaseAttachments(attachments.map((asset) => asset.id)); setAttachments([]);
   };
 
   const updatePreferences = (changes: Partial<WorkspaceState["preferences"]>) => {
@@ -1126,12 +1154,15 @@ function App() {
     const handleShortcut = (event: KeyboardEvent) => {
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "n") {
         event.preventDefault();
+        // Not underneath Settings or a dialog: the new chat would open out of
+        // sight and take the draft with it.
+        if (showSettings || dialog !== null || trimmingClip !== null) return;
         newChat();
       }
     };
     window.addEventListener("keydown", handleShortcut);
     return () => window.removeEventListener("keydown", handleShortcut);
-  }, [newChat]);
+  }, [newChat, showSettings, dialog, trimmingClip]);
 
   const theme = workspace.preferences.theme;
   const approvalMode = workspace.preferences.approvalMode;
@@ -1289,7 +1320,7 @@ function App() {
           <span>Projects</span>
           <button className="icon-button dark" title="Create project" onClick={() => setDialog({ kind: "create-project" })}><FolderPlus size={17} /></button>
         </div>
-        <button className="new-chat-button" onClick={newChat}><Plus size={18} /> New chat <span className="shortcut">Ctrl N</span></button>
+        <button className="new-chat-button" onClick={newChat}><Plus size={18} /> New chat <span className="shortcut">{SEND_MODIFIER} N</span></button>
         <nav className="folder-list" aria-label="Project folders">
           {workspace.projects.map((project) => {
             const expanded = expandedProjects.has(project.id);
@@ -1305,7 +1336,7 @@ function App() {
                 </div>
                 {expanded && <div className="chat-list">
                   {project.chats.length === 0 && <p className="empty-folder">No chats yet</p>}
-                  {project.chats.map((chat) => {
+                  {chatsByActivity(project.chats).map((chat) => {
                     const runHere = isRunning && runLocation?.chatId === chat.id;
                     const runState = runHere ? (runNeedsInput ? "chat-needs-input" : "chat-running") : "";
                     return <div className={`chat-row ${workspace.selectedChatId === chat.id ? "chat-selected" : ""} ${runState}`} key={chat.id}>
@@ -1391,6 +1422,10 @@ function App() {
                   ? <p className="popover-note">This chat already changed a place that is not open, so Roqer will not work in another one. Open that place in Studio, or pick one above to move the chat there.</p>
                   : <p className="popover-note">The place you chose is not open. Roqer is using the one above until it is.</p>)}
                 {bridgeState.kind === "failed" && <p className="popover-problem" role="alert">{bridgeState.message}</p>}
+                {/* The message says what failed; these lines are usually why,
+                    such as a port in use. They were kept and never shown. */}
+                {bridgeState.kind === "failed" && bridgeState.detail !== undefined && bridgeState.detail.trim() !== "" &&
+                  <details className="popover-detail"><summary>What the bridge said</summary><pre>{bridgeState.detail.trimEnd()}</pre></details>}
                 {/* Without this, a plugin that was never installed looks
                     exactly like Studio simply not being open. */}
                 {(bridgeState.kind === "running" || bridgeState.kind === "adopted") && bridgeState.pluginProblem !== undefined &&
@@ -1405,6 +1440,9 @@ function App() {
                 </p>}
                 <button className="popover-action" onClick={() => void refreshStudioStatus()}><RotateCw size={15} /> Check again</button>
                 {bridgeState.kind === "failed" && hasDesktopRuntime() && <button className="popover-action" disabled={bridgeBusy} onClick={() => void restartStudioBridge()}><RotateCw size={15} /> {bridgeBusy ? "Starting…" : "Restart the bridge"}</button>}
+                {hasDesktopRuntime() && <div className="popover-tools">
+                  <DiagnosticsActions endpoint={workspace.preferences.mcpEndpoint} buttonClassName="popover-tool" />
+                </div>}
               </div>}
             </div>
             <RowMenu label="Chat options" iconSize={20} disabled={!selectedChat} items={CHAT_MENU_ITEMS} onSelect={(action) => { if (selectedChat) void chatAction(workspace.selectedProjectId, selectedChat.id, action); }} />
@@ -1491,7 +1529,7 @@ function App() {
               <button onClick={stopRun}>Stop</button>
             </div>}
             {draggingImage && <div className="composer-drop-hint">Drop an image or a video to attach it</div>}
-            {attachmentError && <div className="attachment-notice" role="alert">{attachmentError}<button onClick={() => setAttachmentError(null)} aria-label="Dismiss attachment error"><X size={14} /></button></div>}
+            {attachmentError && <div className="attachment-notice" role="alert">{attachmentError}<button onClick={() => setAttachmentError(null)} aria-label="Dismiss"><X size={14} /></button></div>}
             {attachments.length > 0 && <div className="attachment-row">{attachments.map((attachment) => <div className={`attachment-chip${attachment.clip === undefined ? "" : " clip"}`} key={attachment.id}>
               {attachment.thumbnailDataUrl ? <img className="attachment-thumbnail" src={attachment.thumbnailDataUrl} alt="" /> : attachment.clip === undefined ? <FileBox size={16} /> : <Film size={16} />}
               <div><strong>{attachment.name}</strong><span>{readingClips.has(attachment.id) && <Loader2 size={11} className="attachment-reading" />}{formatBytes(attachment.size)} · {attachmentDetail(attachment, imagesReachModel, readingClips.has(attachment.id))}</span></div>
@@ -1572,7 +1610,7 @@ function App() {
         </div>
       </main>
 
-      {showSettings && <SettingsPage preferences={workspace.preferences} studioStatus={studioStatus} onPreferences={updatePreferences} onStudioRefresh={() => void refreshStudioStatus()} onProviderChanged={() => { void refreshProviderStatus(); void refreshProviderModels(); }} onExport={() => void exportChats(storageRecovery.required ? undefined : workspace)} onClose={() => setShowSettings(false)} />}
+      {showSettings && <SettingsPage preferences={workspace.preferences} studioStatus={studioStatus} updateState={updateState} onPreferences={updatePreferences} onStudioRefresh={() => void refreshStudioStatus()} onProviderChanged={() => { void refreshProviderStatus(); void refreshProviderModels(); }} onExport={() => void exportChats(storageRecovery.required ? undefined : workspace)} notice={settingsNotice ?? undefined} onClose={() => { setShowSettings(false); setSettingsNotice(null); }} />}
       {renderDialog()}
       {!hydrated && <div className="loading-overlay"><div><span /><strong>Opening your workspace…</strong></div></div>}
     </div>

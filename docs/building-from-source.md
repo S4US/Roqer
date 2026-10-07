@@ -38,6 +38,12 @@ and `npm run start:desktop` builds the app and starts it. For renderer
 development with hot reload, use `npm run dev:desktop`. A plain browser runs
 the renderer in a clearly labelled demo mode with no real agent.
 
+Only one Roqer runs per data folder, and a build from source uses the same
+folder as an installed Roqer. While the installed app is open, starting one
+from source brings that window forward and exits. To run both, point the one
+from source at a folder of its own with `WORKBENCH_USER_DATA` (see
+[Configuration](configuration.md)).
+
 `npm run package:desktop` goes further: it builds the plugin artifact, the MCP
 server, and the renderer, stages the bridge Roqer ships, and produces the
 Windows NSIS installer under `apps/desktop/release`.

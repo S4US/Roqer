@@ -12,7 +12,7 @@ import {
   type ProviderStatus,
 } from "../shared/provider";
 import { isProviderLimits, NO_LIMITS, type ProviderLimits } from "../shared/provider-limits";
-import { isAppUpdateState, type AppUpdateState } from "../shared/app-update";
+import { isAppUpdateState, isAppVersion, type AppUpdateState } from "../shared/app-update";
 import { isMcpServerState, type McpServerState } from "../shared/mcp-server";
 import { isEvidencePictureRef, isRunEvent, type RunEvent, type RunStartRequest } from "../shared/run-events";
 import {
@@ -329,5 +329,19 @@ contextBridge.exposeInMainWorld("workbenchDesktop", {
   },
   app: {
     getDataPath: () => ipcRenderer.invoke("app:data-path"),
+    /** The running build's version, or null when the answer was not one. */
+    version: async (): Promise<string | null> => {
+      const value: unknown = await ipcRenderer.invoke("app:version");
+      return isAppVersion(value) ? value : null;
+    },
+    /**
+     * Put a report of the Studio connection on the clipboard. The main process
+     * writes it; the window never receives the log it is made from.
+     */
+    copyDiagnostics: async (endpoint: string): Promise<boolean> =>
+      (await ipcRenderer.invoke("app:copy-diagnostics", endpoint)) === true,
+    /** Show the bridge's log in the file manager. No path crosses this bridge. */
+    showBridgeLog: async (): Promise<boolean> =>
+      (await ipcRenderer.invoke("app:show-bridge-log")) === true,
   },
 });
