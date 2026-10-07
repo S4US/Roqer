@@ -25,7 +25,8 @@ The desktop app shows a Rojo pill next to the Studio connection pill in the
 header; you never have to type a path there.
 
 - **"Link Rojo project"** (dashed, accent-colored) means a Rojo server is
-  already answering for the connected place — one click links it.
+  already answering for the connected place — click it to open the popover,
+  which shows the detected project (or Recent) with a **Link** button.
 - **"Rojo · not linked"** (muted) means the place isn't linked and no server
   was found; open the pill for **Recent** projects (up to five, each with its
   own **Link** button) or **Choose a project file…**.
@@ -254,7 +255,7 @@ the first time a script read or write would otherwise need a link, so you
 never have to send `link_project` by hand:
 
 ```sh
-claude mcp add robloxstudio-mcp -- npx -y robloxstudio-mcp --rojo-project "C:\Games\Foo\default.project.json"
+claude mcp add robloxstudio -- node "C:\path\to\Roqer\packages\robloxstudio-mcp\dist\index.js" --rojo-project "C:\path\to\default.project.json"
 ```
 
 This only applies once per server process: once it has linked successfully,
@@ -263,3 +264,8 @@ process — unlink and restart the server to retry. If another connected place
 already holds that project, the flag has no effect for this one; link it by
 hand once that place is unlinked. The inspector edition ignores the flag; it
 has no `manage_instance` writes to link through.
+
+With several places connected at once, this only links whichever place the
+first script call's own `instance_id` names — core refuses to guess among
+several connected places — so pass `instance_id` on that call, or keep only
+one place open, for the lazy link to take effect at all.
