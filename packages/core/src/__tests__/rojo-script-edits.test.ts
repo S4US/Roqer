@@ -270,20 +270,33 @@ describe('script edits on a Rojo-linked place', () => {
 
   // Root ignores permission bits, so a read-only directory would not make the
   // write fail; skip there rather than report a false pass or a flaky one.
-  (process.getuid?.() === 0 ? test.skip : test)('file write failure: the plan still runs, but the write errors and Studio is never applied', async () => {
+  // On Windows there is no such root, but a read-only directory does not stop
+  // a rename either, so there the FILE itself is made read-only instead: the
+  // Windows run saw rename-over-readonly fail with EPERM.
+  (process.platform !== 'win32' && process.getuid?.() === 0 ? test.skip : test)('file write failure: the plan still runs, but the write errors and Studio is never applied', async () => {
     const { tools, calls, file } = await setup('local x = 1\n');
     const dir = path.dirname(file);
-    // Read-only directory: the existing file is still readable (so ownership
-    // still resolves to 'file'), but compareAndWrite cannot create its temp
-    // file there, so the write itself rejects.
-    fs.chmodSync(dir, 0o500);
+    const restore = process.platform === 'win32'
+      ? () => fs.chmodSync(file, 0o666)
+      : () => fs.chmodSync(dir, 0o755);
+    if (process.platform === 'win32') {
+      // Read-only file (the NTFS read-only attribute): the file is still
+      // readable, so ownership still resolves to 'file', but rename-over it
+      // fails with EPERM.
+      fs.chmodSync(file, 0o444);
+    } else {
+      // Read-only directory: the existing file is still readable (so
+      // ownership still resolves to 'file'), but compareAndWrite cannot
+      // create its temp file there, so the write itself rejects.
+      fs.chmodSync(dir, 0o500);
+    }
     try {
       const result = body(await tools.editScriptLines('game.ServerScriptService.Main', 'x = 1', 'x = 2'));
       expect(result.errorCode).toBe('rojo_write_failed');
       expect(result.file).toBe(path.join('src', 'Main.server.luau'));
       expect(studioWrites(calls)).toEqual([]);
     } finally {
-      fs.chmodSync(dir, 0o755);
+      restore();
     }
   });
 });
