@@ -1,7 +1,7 @@
 import type { RunEvent } from "../shared/run-events";
 
 /**
- * Getting the person back when a run stops to wait for them.
+ * Getting the person back when a run stops to wait for them, or stops for good.
  *
  * A question or an approval pauses the run until it is answered, and the
  * person is usually somewhere else by then: in Studio, looking at what the run
@@ -10,6 +10,12 @@ import type { RunEvent } from "../shared/run-events";
  * flashes and a system notification says what is being asked. Clicking the
  * notification only brings the window forward: the answer is still given there,
  * on the card, through the same checks as ever.
+ *
+ * A run that ends while the window is away is announced the same way, once:
+ * a long build is exactly what someone leaves running and goes to Studio for,
+ * and without this they found out it had finished, or failed, only by coming
+ * back to look. The notice goes when they come back. A run the person stopped
+ * is not announced; they know.
  *
  * Free of Electron so it can be tested; the window and the notifications are
  * handed in.
@@ -36,9 +42,13 @@ export const MAX_NOTICE_BODY_CHARS = 200;
 const QUESTION_TITLE = "Roqer needs a decision";
 const APPROVAL_TITLE = "Roqer needs your approval";
 
+type RunCompleted = Extract<RunEvent, { type: "run-completed" }>;
+
 export class RunAttention {
   /** What each run is waiting on, by run and call, with the notification shown for it. */
   private readonly waiting = new Map<string, { runId: string; notice: ShownNotice | null }>();
+  /** The latest run that ended while the window was away, until the person comes back. */
+  private ended: { notice: ShownNotice | null } | null = null;
   private flashing = false;
 
   constructor(private readonly surface: AttentionSurface) {}
@@ -58,6 +68,7 @@ export class RunAttention {
         return;
       case "run-completed":
         this.endRun(event.runId);
+        this.announceEnd(event);
         return;
       default:
     }
@@ -65,9 +76,12 @@ export class RunAttention {
 
   /**
    * The window came to the front. The card is in view now, so the taskbar
-   * stops asking; the notification stays listed until the decision is made.
+   * stops asking; the notification of a decision stays listed until the
+   * decision is made. A run's end has nothing left to decide, so its
+   * notification goes now.
    */
   focused(): void {
+    this.dismissEnded();
     this.setFlash(false);
   }
 
@@ -84,7 +98,22 @@ export class RunAttention {
 
   /** Forget every run, as when the window closes. */
   clear(): void {
+    this.dismissEnded();
     for (const key of [...this.waiting.keys()]) this.settle(key);
+    this.setFlash(false);
+  }
+
+  private announceEnd(event: RunCompleted): void {
+    if (event.outcome === "cancelled" || this.surface.isFocused()) return;
+    // Only the latest end is worth a notice; an older one is out of date.
+    this.dismissEnded();
+    this.ended = { notice: this.surface.notify(boundedNotice(endNotice(event)), () => this.surface.bringForward()) };
+    this.setFlash(true);
+  }
+
+  private dismissEnded(): void {
+    this.ended?.notice?.close();
+    this.ended = null;
   }
 
   private wait(runId: string, callId: string, notice: AttentionNotice): void {
@@ -102,7 +131,8 @@ export class RunAttention {
     if (entry === undefined) return;
     this.waiting.delete(key);
     entry.notice?.close();
-    if (this.waiting.size === 0) this.setFlash(false);
+    // An end not yet seen keeps the taskbar asking.
+    if (this.waiting.size === 0 && this.ended === null) this.setFlash(false);
   }
 
   private setFlash(on: boolean): void {
@@ -114,6 +144,24 @@ export class RunAttention {
 
 function waitKey(runId: string, callId: string): string {
   return `${runId}\u0000${callId}`;
+}
+
+/**
+ * What an ended run's notice says. "Finished" is claimed only as far as the
+ * host's own check of the run allows: a run whose check found something says
+ * so in the title, since the title may be all that is read.
+ */
+function endNotice(event: RunCompleted): AttentionNotice {
+  const title = event.outcome === "completed"
+    ? event.verification.verified ? "Roqer finished" : "Roqer finished, with something to check"
+    : event.outcome === "refused" ? "Roqer stopped" : "Roqer could not finish";
+  return { title, body: firstLine(event.summary) || "Open Roqer to see what it did." };
+}
+
+/** The summary's first line without its Markdown, which a notification shows as typed. */
+function firstLine(markdown: string): string {
+  const line = markdown.split(/\r?\n/).map((entry) => entry.trim()).find((entry) => entry !== "") ?? "";
+  return line.replace(/^(#{1,6}|[-*+]|\d+[.)])\s+/, "").replace(/\*\*|__|`/g, "").trim();
 }
 
 function boundedNotice(notice: AttentionNotice): AttentionNotice {

@@ -46,6 +46,8 @@ const approvalResolved = (runId: string, callId: string): RunEvent =>
   event(runId, { type: "approval-resolved", callId, decision: "approved", automatic: false, reason: "mutation-requires-approval" });
 const completed = (runId: string): RunEvent =>
   event(runId, { type: "run-completed", outcome: "cancelled", summary: "Stopped.", verification: { verified: true, issues: [] } });
+const ended = (runId: string, outcome: "completed" | "failed" | "refused", summary: string, verified = true): RunEvent =>
+  event(runId, { type: "run-completed", outcome, summary, verification: { verified, issues: [] } });
 
 test("a question asked while the window is away flashes the taskbar and says what is being asked", () => {
   const surface = new FakeSurface();
@@ -179,6 +181,73 @@ test("closing the window takes down every notification and the flashing", () => 
   attention.observe(approvalAsked("run-2", "a-1"));
   attention.clear();
 
+  assert.ok(surface.notices.every((entry) => entry.closed));
+  assert.deepEqual(surface.flashes, [true, false]);
+});
+
+test("a run that ends while the window is away is announced once, by the first line of its summary", () => {
+  const surface = new FakeSurface();
+  const attention = new RunAttention(surface);
+
+  attention.observe(ended("run-1", "completed", "## Built the **checkpoint** system\n\nThree `Checkpoint` parts, and a script."));
+  assert.deepEqual(surface.notices.map((entry) => entry.notice), [{ title: "Roqer finished", body: "Built the checkpoint system" }]);
+  assert.deepEqual(surface.flashes, [true]);
+
+  // The session's own clean-up ends the run again, which neither repeats the
+  // notice nor takes it down.
+  attention.endRun("run-1");
+  assert.equal(surface.notices.length, 1);
+  assert.equal(surface.notices[0].closed, false);
+  assert.ok(surface.flashing);
+
+  surface.notices[0].onClick();
+  assert.equal(surface.broughtForward, 1);
+
+  // Coming back is having seen it: the notice and the flashing both go.
+  attention.focused();
+  assert.equal(surface.notices[0].closed, true);
+  assert.deepEqual(surface.flashes, [true, false]);
+});
+
+test("an ended run's notice claims no more than the host's check of the run allows", () => {
+  const surface = new FakeSurface();
+  const attention = new RunAttention(surface);
+
+  attention.observe(ended("run-1", "completed", "Added the sword.", false));
+  attention.observe(ended("run-2", "failed", "The model stopped answering."));
+  attention.observe(ended("run-3", "refused", ""));
+
+  assert.deepEqual(surface.notices.map((entry) => entry.notice), [
+    { title: "Roqer finished, with something to check", body: "Added the sword." },
+    { title: "Roqer could not finish", body: "The model stopped answering." },
+    { title: "Roqer stopped", body: "Open Roqer to see what it did." },
+  ]);
+  // Only the latest end is listed; the older ones are out of date.
+  assert.deepEqual(surface.notices.map((entry) => entry.closed), [true, true, false]);
+});
+
+test("a run the person stopped, or one ending in front of them, is not announced", () => {
+  const surface = new FakeSurface();
+  const attention = new RunAttention(surface);
+
+  attention.observe(completed("run-1"));
+  surface.focusedNow = true;
+  attention.observe(ended("run-2", "completed", "Done."));
+
+  assert.equal(surface.notices.length, 0);
+  assert.deepEqual(surface.flashes, []);
+});
+
+test("an unseen end keeps the taskbar flashing after another run's decision is made", () => {
+  const surface = new FakeSurface();
+  const attention = new RunAttention(surface);
+
+  attention.observe(asked("run-2", "q-1"));
+  attention.observe(ended("run-1", "completed", "Done."));
+  attention.observe(answered("run-2", "q-1"));
+  assert.ok(surface.flashing);
+
+  attention.clear();
   assert.ok(surface.notices.every((entry) => entry.closed));
   assert.deepEqual(surface.flashes, [true, false]);
 });
