@@ -814,7 +814,8 @@ test("a file-backed edit still pending delivery to Studio is saved, not a failed
   assert.equal(changes.length, 1);
   assert.equal(changes[0].summary, "Saved to src/server/Main.server.luau; Rojo has not delivered it to Studio yet.");
   assert.equal(evidence.length, 1, "no failed Studio read-back is recorded");
-  assert.equal(evidence[0].passed, true);
+  assert.equal(evidence[0].passed, undefined, "neither a Studio-confirmed pass nor a failure; just not yet known");
+  assert.match(evidence[0].detail ?? "", /Rojo has not delivered the change to Studio yet/);
   assert.equal(
     calls.filter((call) => call.tool === "get_script_source").length,
     1,
@@ -849,7 +850,8 @@ test("a file-backed edit that diverged from Studio is saved without a failed Stu
   assert.equal(result.ok, true);
   assert.equal(changes[0].summary, "Saved to src/server/Main.server.luau; the script in Studio changed meanwhile.");
   assert.equal(evidence.length, 1, "no failed Studio read-back is recorded");
-  assert.equal(evidence[0].passed, true);
+  assert.equal(evidence[0].passed, undefined, "neither a Studio-confirmed pass nor a failure; just not yet known");
+  assert.match(evidence[0].detail ?? "", /the script in Studio changed to something else meanwhile/);
   assert.equal(
     calls.filter((call) => call.tool === "get_script_source").length,
     1,

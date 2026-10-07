@@ -2103,9 +2103,19 @@ export function createStudioToolRunner(context: PlannerContext, options: StudioT
         // copy changed to something else before it arrived (diverged). Studio's
         // read-back has nothing to confirm in either case — it would wait out a
         // script Studio has not updated, or compare against a script someone
-        // else changed — so what is recorded as verified here is the file write
-        // itself, which Roqer's own compare-and-set already confirmed, not a
-        // Studio read-back that cannot yet speak to it.
+        // else changed — so none is attempted, and this evidence records the
+        // honest, inconclusive state rather than a pass or a fail: `passed` is
+        // left unset, never true (Studio has not actually confirmed anything)
+        // and never false (nothing failed; the file write itself already
+        // succeeded). The completion gate reads this item's own `detail` in
+        // place of its generic "not read back" complaint, so the run shows
+        // this exact caveat instead of a false "verified" badge or an
+        // unrelated-sounding failure.
+        //
+        // `changedScripts` is deliberately left set to this revision (not
+        // cleared, unlike a verified write below): if the agent reads this
+        // script again later, that read's own cross-check can still confirm
+        // Studio caught up, rather than the chance being closed off here.
         const detail = sync === "diverged"
           ? "The file was saved, but the script in Studio changed to something else meanwhile."
           : "The file was saved; Rojo has not delivered the change to Studio yet.";
@@ -2113,7 +2123,6 @@ export function createStudioToolRunner(context: PlannerContext, options: StudioT
           kind: "verification",
           changeKind: "script-source",
           title: target,
-          passed: true,
           detail,
           metadata: afterRevision ? [{ label: REVISION_AFTER_LABEL, value: afterRevision }] : undefined,
         });
