@@ -46,7 +46,7 @@ import { ContextMeter } from "./context-meter";
 import { contextMeterView, nextContextReading, type ContextReading } from "./context-usage";
 import { blockPreview, characterCount, composedMessage, isLongPaste, lineCount, textSize, type PastedBlock } from "./composer-text";
 
-/** The key that sends with Enter, named the way this computer's keyboard names it. */
+/** The key that sends with Enter and makes a new chat with N, named the way this computer's keyboard names it. */
 const SEND_MODIFIER = typeof navigator !== "undefined" && /Mac/.test(navigator.userAgent) ? "⌘" : "Ctrl";
 
 import { providerCard } from "./provider-card";
@@ -904,14 +904,20 @@ function App() {
   };
 
   const selectProject = (projectId: string) => {
-    const project = workspace.projects.find((candidate) => candidate.id === projectId);
-    setWorkspace((current) => ({ ...current, selectedProjectId: projectId, selectedChatId: project === undefined ? null : chatsByActivity(project.chats)[0]?.id ?? null }));
-    void releaseAttachments(attachments.map((asset) => asset.id)); setAttachments([]);
     setExpandedProjects((current) => {
       const next = new Set(current);
       if (next.has(projectId)) next.delete(projectId); else next.add(projectId);
       return next;
     });
+    // Folding the open project away is tidying the sidebar: the chat stays
+    // open, with what was being written in it.
+    if (projectId === workspace.selectedProjectId) return;
+    // Another project opens on another chat, so the draft goes the way it does
+    // when a chat is picked, rather than following into a chat it was not for.
+    const project = workspace.projects.find((candidate) => candidate.id === projectId);
+    setWorkspace((current) => ({ ...current, selectedProjectId: projectId, selectedChatId: project === undefined ? null : chatsByActivity(project.chats)[0]?.id ?? null }));
+    clearComposer();
+    void releaseAttachments(attachments.map((asset) => asset.id)); setAttachments([]);
   };
 
   const updatePreferences = (changes: Partial<WorkspaceState["preferences"]>) => {
@@ -1148,12 +1154,15 @@ function App() {
     const handleShortcut = (event: KeyboardEvent) => {
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "n") {
         event.preventDefault();
+        // Not underneath Settings or a dialog: the new chat would open out of
+        // sight and take the draft with it.
+        if (showSettings || dialog !== null || trimmingClip !== null) return;
         newChat();
       }
     };
     window.addEventListener("keydown", handleShortcut);
     return () => window.removeEventListener("keydown", handleShortcut);
-  }, [newChat]);
+  }, [newChat, showSettings, dialog, trimmingClip]);
 
   const theme = workspace.preferences.theme;
   const approvalMode = workspace.preferences.approvalMode;
@@ -1311,7 +1320,7 @@ function App() {
           <span>Projects</span>
           <button className="icon-button dark" title="Create project" onClick={() => setDialog({ kind: "create-project" })}><FolderPlus size={17} /></button>
         </div>
-        <button className="new-chat-button" onClick={newChat}><Plus size={18} /> New chat <span className="shortcut">Ctrl N</span></button>
+        <button className="new-chat-button" onClick={newChat}><Plus size={18} /> New chat <span className="shortcut">{SEND_MODIFIER} N</span></button>
         <nav className="folder-list" aria-label="Project folders">
           {workspace.projects.map((project) => {
             const expanded = expandedProjects.has(project.id);
