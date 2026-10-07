@@ -205,3 +205,23 @@ editing work the same way from Claude Code, Codex, Cursor, or any other MCP
 client connected to [the Studio MCP server](mcp-server.md). The read-only
 inspector edition does not expose `manage_instance`, so a place connected
 through it cannot be linked.
+
+## Linking automatically from an MCP client
+
+A client that has no way to call `manage_instance` itself — or whose agent
+you'd rather not teach to type a path — can start the server with
+`--rojo-project <path>` (or the `ROQER_ROJO_PROJECT` environment variable) to
+name a project up front. Core then links the connected place to it lazily,
+the first time a script read or write would otherwise need a link, so you
+never have to send `link_project` by hand:
+
+```sh
+claude mcp add robloxstudio-mcp -- npx -y robloxstudio-mcp --rojo-project "C:\Games\Foo\default.project.json"
+```
+
+This only applies once per server process: once it has linked successfully,
+or failed and reported why, it is not tried again for the life of that
+process — unlink and restart the server to retry. If another connected place
+already holds that project, the flag has no effect for this one; link it by
+hand once that place is unlinked. The inspector edition ignores the flag; it
+has no `manage_instance` writes to link through.

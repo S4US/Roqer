@@ -67,6 +67,10 @@ The plugin and server must come from the same build. `--auto-install-plugin`
 checks and installs the matching worktree artifact whenever the MCP client
 starts the server.
 
+Add `--rojo-project <path>` (or set `ROQER_ROJO_PROJECT`) to link the
+connected place to a Rojo project automatically — see [Linking automatically
+from an MCP client](../docs/rojo.md#linking-automatically-from-an-mcp-client).
+
 [The Studio MCP server](../docs/mcp-server.md) lists what the tools can do and
 describes the read-only
 [inspector edition](../docs/mcp-server.md#inspector-edition), which installs

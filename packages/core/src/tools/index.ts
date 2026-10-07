@@ -1084,6 +1084,11 @@ export class RobloxStudioTools {
   private instanceManager: StudioInstanceManager;
   private managedConnectionAssociations: Promise<void> = Promise.resolve();
 
+  /** `--rojo-project`/ROQER_ROJO_PROJECT: links the resolved place to this project lazily, on first use. */
+  private readonly rojoDefaultProject: string | undefined;
+  /** Whether the default-project link has been attempted (succeeded, failed, or skipped because another instance held the project) — at most once per server process. */
+  private rojoDefaultLinkAttempted = false;
+
   /** Rojo projects linked to connected places; script writes to their files go through it. */
   rojo = new RojoIntegration();
 
@@ -1113,12 +1118,56 @@ export class RobloxStudioTools {
     return undefined;
   }
 
-  constructor(bridge: BridgeService) {
+  /**
+   * Whether `_ensureRojoLink` might still have a default project to try —
+   * callers check this first so a server started without `--rojo-project`
+   * (or one past its one attempt) never pays an `await` to find that out,
+   * same as `_rojoLinkFor` always has been.
+   */
+  private get _rojoDefaultPending(): boolean {
+    return this.rojoDefaultProject !== undefined && !this.rojoDefaultLinkAttempted;
+  }
+
+  /**
+   * `_rojoLinkFor`, but when no link exists yet it tries the default project
+   * from `--rojo-project`/ROQER_ROJO_PROJECT once per server process: only
+   * when one is configured, the place resolves, and no other instance
+   * already holds that project (the same conflict `rojo.link` itself
+   * refuses). A failure is returned as this call's `{error, errorCode}`
+   * once; after that, and when skipped for another instance holding the
+   * project, the place is left to behave exactly as if unlinked.
+   */
+  private async _ensureRojoLink(instance_id?: string): Promise<ProjectLink | { error: string; errorCode: string } | undefined> {
+    const existing = this._rojoLinkFor(instance_id);
+    if (existing) return existing;
+    if (!this._rojoDefaultPending) return undefined;
+    const resolved = this._resolveInstanceId(instance_id);
+    if (resolved === undefined) return undefined;
+    this.rojoDefaultLinkAttempted = true;
+    try {
+      // _rojoDefaultPending just confirmed this is set.
+      await this.rojo.link(resolved, this.rojoDefaultProject!);
+    } catch (error) {
+      if (error instanceof RojoError) {
+        // RojoIntegration#link throws this same rojo_link_invalid code, with
+        // a message ending this way, when another instance already holds
+        // the project — that's not a failure to report, just a reason the
+        // default does not apply to this place.
+        if (/; unlink it there first$/.test(error.message)) return undefined;
+        return { error: error.message, errorCode: error.code };
+      }
+      throw error;
+    }
+    return this._rojoLinkFor(instance_id);
+  }
+
+  constructor(bridge: BridgeService, options: { rojoProject?: string } = {}) {
     this.client = new StudioHttpClient(bridge);
     this.bridge = bridge;
     this.openCloudClient = new OpenCloudClient();
     this.cookieClient = new RobloxCookieClient();
     this.instanceManager = new StudioInstanceManager();
+    this.rojoDefaultProject = options.rojoProject;
     this.bridge.onInstanceRegistered((instance) => {
       const instanceManager = this.instanceManager;
       const association = this.managedConnectionAssociations.then(() =>
@@ -2615,8 +2664,9 @@ export class RobloxStudioTools {
 
   /** For a linked place: which file a script comes from, and whether that file still matches Studio. */
   private async _rojoReadNote(response: Record<string, unknown>, instance_id?: string): Promise<Record<string, unknown>> {
-    const link = this._rojoLinkFor(instance_id);
+    const link = this._rojoDefaultPending ? await this._ensureRojoLink(instance_id) : this._rojoLinkFor(instance_id);
     if (!link) return {};
+    if ('error' in link) return { error: link.error, errorCode: link.errorCode };
     const segments = parseInstancePath(String(response.instancePath ?? ''));
     if (!segments) return { persistence: 'unsupported' };
     try {
@@ -2660,8 +2710,9 @@ export class RobloxStudioTools {
    * saved to its file and delivered by Rojo, never written to Studio directly.
    */
   private async _scriptWrite(endpoint: string, payload: Record<string, unknown>, instance_id?: string): Promise<Record<string, unknown>> {
-    const link = this._rojoLinkFor(instance_id);
+    const link = this._rojoDefaultPending ? await this._ensureRojoLink(instance_id) : this._rojoLinkFor(instance_id);
     if (!link) return this._callSingle(endpoint, payload, undefined, instance_id);
+    if ('error' in link) return link;
 
     const plan = await this._callSingle(endpoint, { ...payload, planOnly: true }, undefined, instance_id);
     if (!plan || plan.planned !== true) return plan;
@@ -5780,7 +5831,8 @@ export class RobloxStudioTools {
     }
     const requestPayload = { pattern, replacement, ...options };
 
-    const link = this._rojoLinkFor(instance_id);
+    const link = this._rojoDefaultPending ? await this._ensureRojoLink(instance_id) : this._rojoLinkFor(instance_id);
+    if (link && 'error' in link) return this._textResult(link);
     if (link && options?.dryRun !== true) {
       const preview = await this._callSingle('/api/find-and-replace-in-scripts', { ...requestPayload, dryRun: true }, undefined, instance_id);
       const owned: string[] = [];
