@@ -282,6 +282,9 @@ if (process.env.WORKBENCH_USER_DATA) {
  */
 const primaryInstance = app.requestSingleInstanceLock();
 if (!primaryInstance) {
+  // Said for a launch from a terminal, which would otherwise end in silence:
+  // a build from source shares the installed app's folder.
+  console.error(`Roqer is already open with this data folder (${app.getPath("userData")}); bringing that window forward.`);
   // Nothing has started yet, so there is nothing to shut down.
   app.exit(0);
 } else {
