@@ -299,6 +299,24 @@ button:focus-visible, textarea:focus-visible, select:focus-visible, input:focus-
    sideways; the popover below it shows the whole name. */
 .connection-label { max-width: 200px; overflow: hidden; font-weight: var(--weight-medium); text-overflow: ellipsis; white-space: nowrap; }
 .connection-detail { flex-shrink: 0; color: var(--muted); }
+
+/* The Rojo pill, right beside the Studio one: always present, even with
+   nothing Rojo-related to say, so the button to link stays findable. Its own
+   popover reuses .connection-popover's look, so the two read as one family. */
+.rojo-wrap { position: relative; }
+.rojo-pill { display: flex; align-items: center; gap: 7px; height: 37px; padding: 0 11px; color: var(--ink-secondary); background: var(--surface); border: 1px solid var(--border-subtle); border-radius: 10px; font-size: var(--type-label); }
+.rojo-pill:hover { background: var(--surface-raised); border-color: var(--border); }
+.rojo-pill.muted { color: var(--muted); }
+.rojo-pill.dashed { color: var(--accent); background: transparent; border-style: dashed; border-color: var(--accent-border); }
+.rojo-dot { width: 8px; height: 8px; background: var(--faint); border-radius: 50%; }
+.rojo-dot.dot-accent { background: transparent; border: 1px solid var(--accent); }
+.rojo-dot.dot-green { background: var(--success); }
+.rojo-dot.dot-amber { background: var(--warning); }
+.rojo-dot.dot-red { background: var(--danger); }
+.rojo-recent-list { display: grid; gap: 6px; margin: 0 0 11px; padding: 0; list-style: none; }
+.rojo-recent-row { display: flex; align-items: center; gap: 8px; padding: 8px 10px; background: var(--surface-sunken); border: 1px solid var(--border); border-radius: 8px; }
+.rojo-recent-name { flex: 1; min-width: 0; overflow: hidden; color: var(--ink); font-size: var(--type-meta); font-weight: var(--weight-medium); text-overflow: ellipsis; white-space: nowrap; }
+
 .connection-popover { position: absolute; top: 46px; right: 0; z-index: 50; width: 280px; padding: 15px; background: var(--surface-raised); border: 1px solid var(--border-subtle); border-radius: 14px; box-shadow: var(--shadow-lg); }
 .popover-title { display: flex; align-items: center; gap: 10px; padding-bottom: 13px; border-bottom: 1px solid var(--border); }
 .popover-title > div:nth-child(2) { display: flex; flex-direction: column; }

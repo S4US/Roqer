@@ -43,6 +43,7 @@ import { ModelMenu, RunMenu } from "./composer-menus";
 import { ContextMeter } from "./context-meter";
 import { contextMeterView, nextContextReading, type ContextReading } from "./context-usage";
 import { blockPreview, characterCount, composedMessage, isLongPaste, lineCount, textSize, type PastedBlock } from "./composer-text";
+import { RojoPill } from "./rojo-pill";
 
 /** The key that sends with Enter, named the way this computer's keyboard names it. */
 const SEND_MODIFIER = typeof navigator !== "undefined" && /Mac/.test(navigator.userAgent) ? "⌘" : "Ctrl";
@@ -1407,6 +1408,7 @@ function App() {
                 {bridgeState.kind === "failed" && hasDesktopRuntime() && <button className="popover-action" disabled={bridgeBusy} onClick={() => void restartStudioBridge()}><RotateCw size={15} /> {bridgeBusy ? "Starting…" : "Restart the bridge"}</button>}
               </div>}
             </div>
+            <RojoPill instanceId={targetStudio?.instanceId ?? null} refreshSignal={studioStatus} />
             <RowMenu label="Chat options" iconSize={20} disabled={!selectedChat} items={CHAT_MENU_ITEMS} onSelect={(action) => { if (selectedChat) void chatAction(workspace.selectedProjectId, selectedChat.id, action); }} />
           </div>
         </header>
