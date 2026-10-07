@@ -67,9 +67,11 @@ type EndpointView = { key: string; id?: string };
 
 let nextEndpointVisit = 0;
 
-export function SettingsPage({ preferences, studioStatus, onPreferences, onStudioRefresh, onProviderChanged, onExport, onClose }: {
+export function SettingsPage({ preferences, studioStatus, notice, onPreferences, onStudioRefresh, onProviderChanged, onExport, onClose }: {
   preferences: WorkspaceState["preferences"];
   studioStatus: StudioStatus;
+  /** Why Settings opened, when something other than the person opened it. Shown on Models. */
+  notice?: string;
   onPreferences: (changes: Partial<WorkspaceState["preferences"]>) => void;
   onStudioRefresh: () => void;
   /** An account signed in, or an endpoint was added, edited or removed. */
@@ -149,6 +151,7 @@ export function SettingsPage({ preferences, studioStatus, onPreferences, onStudi
           />
           : <>
             <PageHead title="Models" lede="The accounts and endpoints Roqer can use. You choose the model for each chat in the composer." />
+            {notice !== undefined && <p className="settings-notice" role="status">{notice}</p>}
             {ACCOUNT_PROVIDERS.length > 0 && <SettingsGroup title="Accounts">
               {ACCOUNT_PROVIDERS.map((provider) => <AccountRow key={provider} provider={provider} onChanged={onProviderChanged} />)}
             </SettingsGroup>}

@@ -39,6 +39,7 @@ import { summarizeTasks, type RunTask, type RunTaskStatus } from "../shared/task
 import { Markdown } from "./markdown-view";
 import { SettingsPage } from "./settings-page";
 import { DiagnosticsActions } from "./diagnostics-actions";
+import { sendBlockedNotice } from "./send-blocked";
 import { ResultsCard, type FileExpansion } from "./results-card";
 import { ModelMenu, RunMenu } from "./composer-menus";
 import { ContextMeter } from "./context-meter";
@@ -247,6 +248,8 @@ function App() {
   const [showConnection, setShowConnection] = useState(false);
   const connectionRef = useRef<HTMLDivElement>(null);
   const [showSettings, setShowSettings] = useState(false);
+  /** Why Send opened Settings, shown at the top of it; null when it was opened by hand. */
+  const [settingsNotice, setSettingsNotice] = useState<string | null>(null);
   const [dialog, setDialog] = useState<Dialog | null>(null);
   // One flag for both layouts, since "is the sidebar there" is one question
   // however it is answered visually. Only the starting answer differs, and the
@@ -672,13 +675,10 @@ function App() {
         : `Choose the part of “${unread.name}” to send first.`);
       return;
     }
-    if (hasDesktopRuntime() && providerStatus.kind !== "signed-in") {
-      setShowSettings(true);
-      return;
-    }
     const chosenModelId = selectedModelId(workspace.preferences, provider);
     const availableModel = modelCatalog.models.find((model) => model.id === chosenModelId);
-    if (hasDesktopRuntime() && !availableModel) {
+    if (hasDesktopRuntime() && (providerStatus.kind !== "signed-in" || !availableModel)) {
+      setSettingsNotice(sendBlockedNotice(provider, providerStatus, modelCatalog.message));
       setShowSettings(true);
       return;
     }
@@ -1601,7 +1601,7 @@ function App() {
         </div>
       </main>
 
-      {showSettings && <SettingsPage preferences={workspace.preferences} studioStatus={studioStatus} onPreferences={updatePreferences} onStudioRefresh={() => void refreshStudioStatus()} onProviderChanged={() => { void refreshProviderStatus(); void refreshProviderModels(); }} onExport={() => void exportChats(storageRecovery.required ? undefined : workspace)} onClose={() => setShowSettings(false)} />}
+      {showSettings && <SettingsPage preferences={workspace.preferences} studioStatus={studioStatus} onPreferences={updatePreferences} onStudioRefresh={() => void refreshStudioStatus()} onProviderChanged={() => { void refreshProviderStatus(); void refreshProviderModels(); }} onExport={() => void exportChats(storageRecovery.required ? undefined : workspace)} notice={settingsNotice ?? undefined} onClose={() => { setShowSettings(false); setSettingsNotice(null); }} />}
       {renderDialog()}
       {!hydrated && <div className="loading-overlay"><div><span /><strong>Opening your workspace…</strong></div></div>}
     </div>
