@@ -270,6 +270,32 @@ if (process.env.WORKBENCH_USER_DATA) {
   if (chosen !== current) app.setPath("userData", chosen);
 }
 
+/**
+ * One Roqer per data folder. A second copy opened the same chats and run
+ * journal behind a save queue of its own, so the two overwrote each other's
+ * files, and it adopted the first copy's bridge besides. Now a second launch
+ * brings the first window forward and leaves before it has touched anything.
+ *
+ * Asked for after the data folder is settled, because the lock is held on that
+ * folder: the smoke test, which runs in a folder of its own, does not collide
+ * with a Roqer that is open.
+ */
+const primaryInstance = app.requestSingleInstanceLock();
+if (!primaryInstance) {
+  // Nothing has started yet, so there is nothing to shut down.
+  app.exit(0);
+} else {
+  app.on("second-instance", () => {
+    const window = BrowserWindow.getAllWindows()
+      .find((candidate) => !candidate.isDestroyed() && trustedSenders.has(candidate.webContents.id));
+    // Before the first window exists, startup is about to show it anyway.
+    if (!window) return;
+    if (window.isMinimized()) window.restore();
+    window.show();
+    window.focus();
+  });
+}
+
 // Windows shows an app's notifications only under an identity a Start menu
 // shortcut has registered. The installer registers `appId` from
 // electron-builder.yml, so the installed app runs under that identity too;
@@ -2130,6 +2156,8 @@ function runSmokeTest(window: BrowserWindow): void {
 }
 
 app.whenReady().then(async () => {
+  // A second copy is on its way out; it must not start a bridge or open the chats.
+  if (!primaryInstance) return;
   ipcMain.handle("workspace:load", (event) => {
     if (!isTrusted(event.sender)) throw new Error("This window may not load the workspace.");
     return loadState();
