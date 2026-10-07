@@ -1951,6 +1951,36 @@ function createWindow(): void {
     return { action: "deny" };
   });
 
+  /**
+   * Closing the window stops the run that is going, so a stray click on the X
+   * no longer ends one without a word: Roqer asks first. Quitting -- to install
+   * an update, or from the menu on macOS -- sets `shuttingDown` before any
+   * window closes, and the system ending the session says so first, so neither
+   * is held up here. Nor is the smoke test, which closes on a run it left going
+   * on purpose.
+   */
+  let closeConfirmed = false;
+  window.on("query-session-end", () => { closeConfirmed = true; });
+  window.on("close", (event) => {
+    if (closeConfirmed || shuttingDown || smokeTest || runSessions.size === 0) return;
+    event.preventDefault();
+    const options: MessageBoxOptions = {
+      type: "question",
+      buttons: ["Keep working", "Stop and close"],
+      defaultId: 0,
+      cancelId: 0,
+      noLink: true,
+      title: "Roqer is still working",
+      message: "Stop the run and close Roqer?",
+      detail: "Closing stops the run that is going. What it has already changed in Studio stays changed.",
+    };
+    void dialog.showMessageBox(window, options).then(({ response }) => {
+      if (response !== 1 || window.isDestroyed()) return;
+      closeConfirmed = true;
+      window.close();
+    });
+  });
+
   window.once("ready-to-show", () => {
     if (!smokeTest) window.show();
     // The window is on screen: startup is over, and an update found now is
