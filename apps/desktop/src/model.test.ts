@@ -5,6 +5,7 @@ import {
   appendMessage,
   chatStudioInstanceId,
   chatStudioTarget,
+  chatsByActivity,
   createChat,
   createInitialWorkspace,
   createProject,
@@ -367,6 +368,31 @@ test("deleting the open chat selects another one in the same project", () => {
   const deleted = deleteChat(second, "default", openChatId);
   assert.deepEqual(deleted.projects[0].chats.map((chat) => chat.id), [remainingId]);
   assert.equal(deleted.selectedChatId, remainingId);
+});
+
+test("chats are listed by when they were last worked in, and a tie keeps the stored order", () => {
+  const chat = (id: string, updatedAt: string) => ({ id, updatedAt });
+  const listed = chatsByActivity([
+    chat("made-last", "2026-10-01T10:00:00.000Z"),
+    chat("worked-in-today", "2026-10-07T09:00:00.000Z"),
+    chat("tied-first", "2026-09-01T10:00:00.000Z"),
+    chat("tied-second", "2026-09-01T10:00:00.000Z"),
+    chat("unreadable", "not a date"),
+  ]);
+  assert.deepEqual(listed.map((entry) => entry.id), ["worked-in-today", "made-last", "tied-first", "tied-second", "unreadable"]);
+});
+
+test("deleting the open chat selects the one worked in most recently", () => {
+  const first = createChat(createInitialWorkspace(), "default");
+  const olderId = first.selectedChatId!;
+  const second = createChat(first, "default");
+  const third = createChat(second, "default");
+  const openChatId = third.selectedChatId!;
+  const worked = appendMessage(third, "default", olderId, {
+    id: "message-test", role: "user", text: "Add a sword", createdAt: "2099-01-01T00:00:00.000Z",
+  });
+
+  assert.equal(deleteChat(worked, "default", openChatId).selectedChatId, olderId);
 });
 
 test("deleting the last chat in a project leaves nothing selected", () => {

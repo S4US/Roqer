@@ -396,12 +396,30 @@ export function createChat(state: WorkspaceState, projectId = state.selectedProj
 }
 
 /**
+ * A project's chats as the sidebar lists them: the one worked in most recently
+ * first, as each row's time already implied. They are kept on disk in the
+ * order they were made, newest first, and sorted only when shown, so nothing
+ * saved changes shape. Renaming leaves `updatedAt` alone, so it does not move
+ * a chat.
+ */
+export function chatsByActivity<T extends Pick<Chat, "updatedAt">>(chats: readonly T[]): T[] {
+  const time = (value: string) => {
+    const parsed = Date.parse(value);
+    return Number.isNaN(parsed) ? 0 : parsed;
+  };
+  return chats
+    .map((chat, index) => ({ chat, index, at: time(chat.updatedAt) }))
+    .sort((left, right) => right.at - left.at || left.index - right.index)
+    .map(({ chat }) => chat);
+}
+
+/**
  * A selection that still points at something that exists.
  *
  * Deleting what is open has to leave the user somewhere, so the selection falls
- * back to the first chat of the selected project, and to the first project when
- * the selected one is gone. Keeping the repair in one place means no delete can
- * leave the workspace pointing at a chat that is no longer there.
+ * back to the chat at the top of the selected project's list, and to the first
+ * project when the selected one is gone. Keeping the repair in one place means
+ * no delete can leave the workspace pointing at a chat that is no longer there.
  */
 function repairSelection(state: WorkspaceState): WorkspaceState {
   const project = state.projects.find((candidate) => candidate.id === state.selectedProjectId)
@@ -409,7 +427,7 @@ function repairSelection(state: WorkspaceState): WorkspaceState {
   if (!project) return state;
   const selectedChatId = project.chats.some((chat) => chat.id === state.selectedChatId)
     ? state.selectedChatId
-    : project.chats[0]?.id ?? null;
+    : chatsByActivity(project.chats)[0]?.id ?? null;
   return { ...state, selectedProjectId: project.id, selectedChatId };
 }
 

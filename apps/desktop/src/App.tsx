@@ -13,7 +13,7 @@ import { VIDEO_EXTENSIONS, type ClipSelection } from "../shared/reference-clip";
 import {
   appendMessage, createChat, createId, createInitialWorkspace, createProject,
   deleteChat, deleteProject, modelPreference, normalizeWorkspace, renameChat,
-  renameProject, selectedModelId, setChatStudioInstance, chatStudioTarget, withdrawMessage,
+  renameProject, selectedModelId, setChatStudioInstance, chatStudioTarget, chatsByActivity, withdrawMessage,
   type AssetAttachment, type ChatMessage, type WorkspaceState,
 } from "./model";
 import {
@@ -905,7 +905,7 @@ function App() {
 
   const selectProject = (projectId: string) => {
     const project = workspace.projects.find((candidate) => candidate.id === projectId);
-    setWorkspace((current) => ({ ...current, selectedProjectId: projectId, selectedChatId: project?.chats[0]?.id ?? null }));
+    setWorkspace((current) => ({ ...current, selectedProjectId: projectId, selectedChatId: project === undefined ? null : chatsByActivity(project.chats)[0]?.id ?? null }));
     void releaseAttachments(attachments.map((asset) => asset.id)); setAttachments([]);
     setExpandedProjects((current) => {
       const next = new Set(current);
@@ -1327,7 +1327,7 @@ function App() {
                 </div>
                 {expanded && <div className="chat-list">
                   {project.chats.length === 0 && <p className="empty-folder">No chats yet</p>}
-                  {project.chats.map((chat) => {
+                  {chatsByActivity(project.chats).map((chat) => {
                     const runHere = isRunning && runLocation?.chatId === chat.id;
                     const runState = runHere ? (runNeedsInput ? "chat-needs-input" : "chat-running") : "";
                     return <div className={`chat-row ${workspace.selectedChatId === chat.id ? "chat-selected" : ""} ${runState}`} key={chat.id}>
