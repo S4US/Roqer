@@ -6,7 +6,7 @@ import {
   chooseRojoProject, forgetRojoProject, getRojoView, hasDesktopRuntime, linkRecentRojoProject,
   openRojoFolder, retryRojoProject, unlinkRojoProject,
 } from "./platform";
-import { EMPTY_ROJO_VIEW, rojoLinkedNote, rojoPillLinked, rojoPillVisual, viewFromResult } from "./rojo-pill-model";
+import { EMPTY_ROJO_VIEW, errorViewFromRejection, rojoLinkedNote, rojoPillLinked, rojoPillVisual, viewFromResult } from "./rojo-pill-model";
 
 /**
  * The Rojo pill: always next to the Studio connection pill, per the approved
@@ -51,9 +51,17 @@ export function RojoPill({ instanceId, placeName, refreshSignal }: { instanceId:
 
   const apply = async (request: () => Promise<RojoResult>) => {
     setBusy(true);
-    const result = await request();
-    setBusy(false);
-    setView(viewFromResult(result, instanceId));
+    try {
+      const result = await request();
+      setView(viewFromResult(result, instanceId));
+    } catch (error) {
+      // A rejected IPC call (not a normal `{ ok: false }` result) must still
+      // clear `busy` and leave something to look at, or the buttons stay
+      // disabled forever with no explanation.
+      setView(errorViewFromRejection(error, instanceId));
+    } finally {
+      setBusy(false);
+    }
   };
 
   if (!desktop) {
@@ -78,13 +86,24 @@ export function RojoPill({ instanceId, placeName, refreshSignal }: { instanceId:
         <div><strong>Rojo</strong><span>{popoverSubtitle(view)}</span></div>
       </div>
 
+      {/* A failure's message is still shown on a kept, non-error view (e.g. a
+          failed "Change project..." that left the old link in place) -- the
+          `error` state's own block below already shows its message, so this
+          one is skipped there to avoid saying it twice. */}
+      {view.message !== undefined && view.state !== "error" &&
+        <p className="popover-problem" role="alert">{view.message}</p>}
+
       {rojoPillLinked(view.state) && view.project !== undefined && <>
         <dl>
           <div><dt>Project</dt><dd title={view.project.folder}>{view.project.fileName}</dd></div>
+          <div><dt>Folder</dt><dd>{view.project.folder}</dd></div>
           {view.project.rojoVersion !== undefined && <div><dt>Rojo</dt><dd>{view.project.rojoVersion}</dd></div>}
           <div><dt>Server</dt><dd>{view.server?.answering ? `Answering, port ${view.server.port}` : "Not running"}</dd></div>
           {view.project.scripts !== undefined &&
-            <div><dt>Scripts</dt><dd>{view.project.scripts.file} file · {view.project.scripts.generated} generated</dd></div>}
+            <div><dt>Scripts</dt><dd>
+              {view.project.scripts.file} file · {view.project.scripts.generated} generated
+              {view.project.problems !== undefined && view.project.problems.length > 0 && ` · ${view.project.problems.length} problems`}
+            </dd></div>}
         </dl>
         {view.project.problems !== undefined && view.project.problems.length > 0 &&
           <p className="popover-problem" role="alert">{view.project.problems.join("; ")}</p>}
@@ -101,7 +120,7 @@ export function RojoPill({ instanceId, placeName, refreshSignal }: { instanceId:
           <p className="popover-note">Rojo is serving {view.server.projectName ?? "a project"} on port {view.server.port}.</p>}
         {view.recent.length > 0 && <ul className="rojo-recent-list">
           {view.recent.slice(0, 5).map((entry) => <li key={entry.index} className="rojo-recent-row">
-            <span className="rojo-recent-name" title={`${entry.folder}\\${entry.fileName}`}>{entry.fileName}</span>
+            <span className="rojo-recent-name" title={entry.folder}>{entry.fileName}</span>
             {id !== null &&
               <button className="small-button" disabled={busy} onClick={() => void apply(() => linkRecentRojoProject(id, entry.index))}>Link</button>}
           </li>)}

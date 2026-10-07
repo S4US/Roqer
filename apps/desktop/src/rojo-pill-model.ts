@@ -88,12 +88,29 @@ export const EMPTY_ROJO_VIEW: RojoView = { instanceId: null, published: false, s
 /**
  * The view to render from a `RojoResult`. Every call the pill makes resolves
  * a view on success, and `RojoConnection` attaches one to most failures too
- * (the failed action's own view, state `error`); a result with neither is a
+ * (e.g. a failed "Change project..." keeps the still-working link's own
+ * view, per item 3 -- not an `error` state); a result with neither is a
  * refusal that never reached a real instance (an untrusted sender, a stale
  * id), which the normal UI flow should not produce, so it falls back to an
  * `error` view carrying that message rather than silently keeping the old one.
+ *
+ * A failure's own message is never dropped just because a view came with
+ * it: it is laid onto the kept view, so the popover can still say what went
+ * wrong even while it keeps showing the link that is still actually working.
  */
 export function viewFromResult(result: RojoResult, instanceId: string | null): RojoView {
-  if (result.view !== undefined) return result.view;
+  if (result.view !== undefined) return result.ok ? result.view : { ...result.view, message: result.message };
   return { instanceId, published: false, state: "error", recent: [], message: result.ok ? undefined : result.message };
+}
+
+/**
+ * The view `rojo-pill.tsx`'s `apply` falls back to when the IPC call itself
+ * rejects -- not a normal `{ ok: false }` result, but a thrown error (a
+ * dropped renderer/main channel, for instance). Kept here, pure, so the
+ * fallback is tested without rendering anything, the same reason the rest of
+ * this module exists.
+ */
+export function errorViewFromRejection(error: unknown, instanceId: string | null): RojoView {
+  const message = error instanceof Error ? error.message : "Rojo could not complete that request.";
+  return { instanceId, published: false, state: "error", recent: [], message };
 }

@@ -3,7 +3,8 @@ import test from "node:test";
 
 import type { RojoView } from "../shared/rojo";
 import {
-  EMPTY_ROJO_VIEW, rojoLinkedNote, rojoPillActionable, rojoPillLinked, rojoPillVisual, shortRojoMessage, viewFromResult,
+  EMPTY_ROJO_VIEW, errorViewFromRejection, rojoLinkedNote, rojoPillActionable, rojoPillLinked, rojoPillVisual,
+  shortRojoMessage, viewFromResult,
 } from "./rojo-pill-model";
 
 const base: RojoView = { instanceId: "place:1", published: true, state: "no-place", recent: [] };
@@ -58,10 +59,15 @@ test("the linked note names the place, as the approved mockup shows, and falls b
   assert.equal(rojoLinkedNote(true, undefined), "Linked to this place · relinks automatically after a restart.");
 });
 
-test("viewFromResult reads the attached view on both success and failure", () => {
+test("viewFromResult reads the attached view as-is on success", () => {
   const view: RojoView = { ...base, state: "linked-running" };
   assert.equal(viewFromResult({ ok: true, view }, "place:1"), view);
-  assert.equal(viewFromResult({ ok: false, message: "x", view }, "place:1"), view);
+});
+
+test("viewFromResult keeps a failure's attached view but lays its message onto it, rather than dropping the message", () => {
+  const view: RojoView = { ...base, state: "linked-running", project: { fileName: "default.project.json", folder: "/x" } };
+  const failed = viewFromResult({ ok: false, message: "Already linked to another place", view }, "place:1");
+  assert.deepEqual(failed, { ...view, message: "Already linked to another place" });
 });
 
 test("viewFromResult falls back to an error view, never silence, when a refusal carries no view", () => {
@@ -69,6 +75,21 @@ test("viewFromResult falls back to an error view, never silence, when a refusal 
   assert.equal(view.state, "error");
   assert.equal(view.instanceId, "place:2");
   assert.equal(view.message, "That place is not connected.");
+});
+
+test("errorViewFromRejection turns a thrown error into an error view carrying its message", () => {
+  const view = errorViewFromRejection(new Error("The link channel disconnected."), "place:1");
+  assert.equal(view.state, "error");
+  assert.equal(view.instanceId, "place:1");
+  assert.equal(view.message, "The link channel disconnected.");
+  assert.deepEqual(view.recent, []);
+});
+
+test("errorViewFromRejection falls back to a plain message for a non-Error rejection", () => {
+  const view = errorViewFromRejection("boom", null);
+  assert.equal(view.state, "error");
+  assert.equal(view.instanceId, null);
+  assert.equal(view.message, "Rojo could not complete that request.");
 });
 
 test("EMPTY_ROJO_VIEW is the quiet no-place pill, for before anything has loaded", () => {
