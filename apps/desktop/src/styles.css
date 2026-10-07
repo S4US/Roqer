@@ -302,19 +302,26 @@ button:focus-visible, textarea:focus-visible, select:focus-visible, input:focus-
 
 /* The Rojo pill, right beside the Studio one: always present, even with
    nothing Rojo-related to say, so the button to link stays findable. Its own
-   popover reuses .connection-popover's look, so the two read as one family. */
+   popover (further down, `.rojo-popover`) keeps its own frame rather than
+   reusing `.connection-popover`'s, so its soft-tint colouring, rounder
+   curves, and compact fact rows never collide with the Studio popover's --
+   see `rojoPillTone` in rojo-pill-model.ts for how a state's colour becomes
+   one of the tone-<name> classes the pill and popover both wear. No dot: the
+   whole pill is the state's colour instead. */
 .rojo-wrap { position: relative; }
-.rojo-pill { display: flex; align-items: center; gap: 7px; height: 37px; padding: 0 11px; color: var(--ink-secondary); background: var(--surface); border: 1px solid var(--border-subtle); border-radius: 10px; font-size: var(--type-label); }
+.rojo-pill { display: flex; align-items: center; gap: 7px; height: 37px; padding: 0 11px; color: var(--ink-secondary); background: var(--surface); border: 1px solid var(--border-subtle); border-radius: 12px; font-size: var(--type-label); transition: border-color .15s ease, background-color .15s ease; }
 .rojo-pill:hover { background: var(--surface-raised); border-color: var(--border); }
 .rojo-pill.muted { color: var(--muted); }
-.rojo-pill.dashed { color: var(--accent); background: transparent; border-style: dashed; border-color: var(--accent-border); }
-.rojo-dot { width: 8px; height: 8px; background: var(--faint); border-radius: 50%; }
-.rojo-dot.dot-accent { background: transparent; border: 1px solid var(--accent); }
-.rojo-dot.dot-green { background: var(--success); }
-.rojo-dot.dot-amber { background: var(--warning); }
-.rojo-dot.dot-red { background: var(--danger); }
-.rojo-recent-list { display: grid; gap: 6px; margin: 0 0 11px; padding: 0; list-style: none; }
-.rojo-recent-row { display: flex; align-items: center; gap: 8px; padding: 8px 10px; background: var(--surface-sunken); border: 1px solid var(--border); border-radius: 8px; }
+.rojo-pill.tone-accent { color: var(--accent); background: var(--accent-soft); border-color: var(--accent-border); }
+.rojo-pill.tone-success { color: var(--success); background: var(--success-soft); border-color: var(--success-border); }
+.rojo-pill.tone-warning { color: var(--warning); background: var(--warning-soft); border-color: var(--warning-border); }
+.rojo-pill.tone-danger { color: var(--danger); background: var(--danger-soft); border-color: var(--danger-border); }
+.rojo-pill.tone-accent:hover { border-color: var(--accent); }
+.rojo-pill.tone-success:hover { border-color: var(--success); }
+.rojo-pill.tone-warning:hover { border-color: var(--warning); }
+.rojo-pill.tone-danger:hover { border-color: var(--danger); }
+.rojo-recent-list { display: grid; gap: 6px; margin: 10px 0 0; padding: 0; list-style: none; }
+.rojo-recent-row { display: flex; align-items: center; gap: 8px; padding: 8px 10px; background: var(--surface-raised); border: 1px solid var(--border-subtle); border-radius: 8px; }
 .rojo-recent-name { flex: 1; min-width: 0; overflow: hidden; color: var(--ink); font-size: var(--type-meta); font-weight: var(--weight-medium); text-overflow: ellipsis; white-space: nowrap; }
 
 .connection-popover { position: absolute; top: 46px; right: 0; z-index: 50; width: 280px; padding: 15px; background: var(--surface-raised); border: 1px solid var(--border-subtle); border-radius: 14px; box-shadow: var(--shadow-lg); }
@@ -337,6 +344,31 @@ button:focus-visible, textarea:focus-visible, select:focus-visible, input:focus-
 .studio-meta { color: var(--muted); font-size: var(--type-meta); white-space: nowrap; }
 .popover-action { display: flex; align-items: center; justify-content: center; gap: 6px; width: 100%; height: 34px; color: var(--ink); background: var(--surface-sunken); border: 1px solid var(--border); border-radius: 8px; font-size: var(--type-label); font-weight: var(--weight-medium); }
 .popover-action:hover { border-color: var(--border-strong); }
+
+/* The Rojo popover's own minimal layout: a tone-coloured headline standing in
+   for the old icon-and-title header, a muted line (the project's folder, or
+   an instruction), compact fact rows, and one row of plain text actions --
+   .link-button already has that look, just reused rather than duplicated.
+   Its own rule, not a modifier on .connection-popover, so its fact rows
+   (below) never collide with the Studio popover's differently-spaced .dl. */
+.rojo-popover { position: absolute; top: 46px; right: 0; z-index: 50; width: 280px; padding: 15px; background: var(--surface-raised); border: 1px solid var(--border-subtle); border-radius: 18px; box-shadow: var(--shadow-lg); }
+.rojo-popover.tone-accent { background: var(--accent-soft); border-color: var(--accent-border); }
+.rojo-popover.tone-success { background: var(--success-soft); border-color: var(--success-border); }
+.rojo-popover.tone-warning { background: var(--warning-soft); border-color: var(--warning-border); }
+.rojo-popover.tone-danger { background: var(--danger-soft); border-color: var(--danger-border); }
+.rojo-popover-headline { margin: 0; font-size: var(--type-body); font-weight: var(--weight-medium); }
+.rojo-popover.tone-accent .rojo-popover-headline { color: var(--accent); }
+.rojo-popover.tone-success .rojo-popover-headline { color: var(--success); }
+.rojo-popover.tone-warning .rojo-popover-headline { color: var(--warning); }
+.rojo-popover.tone-danger .rojo-popover-headline { color: var(--danger); }
+.rojo-popover-subline { margin: 6px 0 0; overflow: hidden; color: var(--muted); font-size: var(--type-meta); text-overflow: ellipsis; white-space: nowrap; }
+.rojo-popover dl { display: grid; gap: 4px 14px; margin: 12px 0 0; }
+.rojo-popover dl div { display: flex; justify-content: space-between; gap: 10px; }
+.rojo-popover dt, .rojo-popover dd { margin: 0; font-size: var(--type-meta); }
+.rojo-popover dt { color: var(--muted); }
+.rojo-popover dd { color: var(--ink); font-weight: var(--weight-medium); }
+.rojo-popover-actions { display: flex; align-items: center; gap: 14px; margin-top: 12px; }
+.link-button.danger { color: var(--danger); }
 /* The way back in. It has nothing to do while the sidebar is present, so rather
    than popping into an already-settled topbar it opens up in step with the
    sidebar leaving -- widening from nothing as the space it needs appears.

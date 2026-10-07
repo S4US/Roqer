@@ -4,7 +4,7 @@ import test from "node:test";
 import type { RojoView } from "../shared/rojo";
 import {
   EMPTY_ROJO_VIEW, errorViewFromRejection, RojoPillSequence, rojoLinkedNote, rojoPillActionable, rojoPillLinked,
-  rojoPillVisual, shortRojoMessage, viewFromResult,
+  rojoPillTone, rojoPillVisual, rojoPopoverHeadline, shortRojoMessage, viewFromResult,
 } from "./rojo-pill-model";
 
 const base: RojoView = { instanceId: "place:1", published: true, state: "no-place", recent: [] };
@@ -57,6 +57,32 @@ test("the linked note names the place, as the approved mockup shows, and falls b
   assert.equal(rojoLinkedNote(false, "Creator Empire"), "Linked to Creator Empire · until this Studio session closes.");
   assert.equal(rojoLinkedNote(true), "Linked to this place · relinks automatically after a restart.");
   assert.equal(rojoLinkedNote(true, undefined), "Linked to this place · relinks automatically after a restart.");
+});
+
+test("rojoPillTone maps each dot colour to the one soft-tint tone the pill and popover share", () => {
+  assert.equal(rojoPillTone("none"), "none");
+  assert.equal(rojoPillTone("accent"), "accent");
+  assert.equal(rojoPillTone("green"), "success");
+  assert.equal(rojoPillTone("amber"), "warning");
+  assert.equal(rojoPillTone("red"), "danger");
+});
+
+test("rojoPopoverHeadline gives each state the approved mockup's exact wording, or nothing for the two quiet states", () => {
+  assert.equal(rojoPopoverHeadline({ ...base, state: "no-place" }), undefined);
+  assert.equal(rojoPopoverHeadline({ ...base, state: "not-linked" }), undefined);
+  assert.equal(
+    rojoPopoverHeadline({ ...base, state: "detected", server: { port: 34872, answering: true, projectName: "CreatorEmpire" } }),
+    "Rojo is serving CreatorEmpire",
+  );
+  assert.equal(rojoPopoverHeadline({ ...base, state: "detected" }), "Rojo is serving a project");
+  assert.equal(
+    rojoPopoverHeadline({ ...base, state: "linked-running", project: { fileName: "default.project.json", folder: "/x" } }),
+    "Synced with default.project.json",
+  );
+  assert.equal(rojoPopoverHeadline({ ...base, state: "linked-running" }), "Synced with a project");
+  assert.equal(rojoPopoverHeadline({ ...base, state: "linked-stopped" }), "Rojo is not running");
+  assert.equal(rojoPopoverHeadline({ ...base, state: "error", message: "rojo not found" }), "rojo not found");
+  assert.equal(rojoPopoverHeadline({ ...base, state: "error" }), "Rojo could not complete that request.");
 });
 
 test("viewFromResult reads the attached view as-is on success", () => {

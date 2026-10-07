@@ -64,6 +64,50 @@ export function rojoPillLinked(state: RojoPillStateKind): boolean {
 }
 
 /**
+ * The soft-tint colour the pill and its popover both wear, per the approved
+ * minimal design: the whole pill (no separate dot) and its popover take the
+ * state's colour as a pale fill, one `tone-<name>` class each. Built from the
+ * same `RojoPillDot` `rojoPillVisual` already assigns, so the two surfaces
+ * can never disagree about a state's colour. `none` is the plain neutral
+ * surface `no-place` and `not-linked` already used.
+ */
+export type RojoTone = "none" | "accent" | "success" | "warning" | "danger";
+
+export function rojoPillTone(dot: RojoPillDot): RojoTone {
+  switch (dot) {
+    case "none": return "none";
+    case "accent": return "accent";
+    case "green": return "success";
+    case "amber": return "warning";
+    case "red": return "danger";
+  }
+}
+
+/**
+ * The popover's headline, shown in the tone colour in place of the old
+ * icon-and-title header. `undefined` for the two quiet, untinted states
+ * (`no-place`, `not-linked`), which have nothing coloured to say -- the
+ * popover falls back to a plain muted line instead. For `error`, this *is*
+ * the failure message (now the headline, not a separate line), so nothing
+ * duplicates it underneath.
+ */
+export function rojoPopoverHeadline(view: RojoView): string | undefined {
+  switch (view.state) {
+    case "no-place":
+    case "not-linked":
+      return undefined;
+    case "detected":
+      return `Rojo is serving ${view.server?.projectName ?? PROJECT_FILE_FALLBACK}`;
+    case "linked-running":
+      return `Synced with ${view.project?.fileName ?? PROJECT_FILE_FALLBACK}`;
+    case "linked-stopped":
+      return "Rojo is not running";
+    case "error":
+      return view.message ?? "Rojo could not complete that request.";
+  }
+}
+
+/**
  * The popover's note once linked, naming the place the way the approved
  * mockup does ("Linked to Creator Empire · relinks automatically"): a
  * published place relinks after a restart, an unpublished one only lasts the
