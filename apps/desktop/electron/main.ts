@@ -1402,10 +1402,13 @@ function plannerFor(
   });
 }
 
-async function getStudioStatus(_event: IpcMainInvokeEvent, endpointValue: unknown): Promise<StudioStatus> {
+async function getStudioStatus(event: IpcMainInvokeEvent, endpointValue: unknown): Promise<StudioStatus> {
   const endpoint = typeof endpointValue === "string" && endpointValue !== ""
     ? endpointValue
     : DEFAULT_MCP_ENDPOINT;
+  // Answered rather than thrown: the window polls this every few seconds, and
+  // a status is what it is built to show.
+  if (!isTrusted(event.sender)) return { kind: "offline", endpoint, message: "This window may not read Studio's status." };
 
   let client: McpClient;
   try {
@@ -2160,7 +2163,10 @@ app.whenReady().then(async () => {
   ipcMain.handle("run:cancel-start", (event, id: unknown) => {
     if (isTrusted(event.sender) && typeof id === "string") pendingRuns.cancel(event.sender.id, id);
   });
-  ipcMain.handle("app:data-path", () => app.getPath("userData"));
+  ipcMain.handle("app:data-path", (event) => {
+    if (!isTrusted(event.sender)) throw new Error("This window may not read the data folder's location.");
+    return app.getPath("userData");
+  });
 
   // Windows and Linux draw Electron's default File/Edit/View/Window menu inside
   // the window frame. Roqer has no use for it, so it is removed outright
