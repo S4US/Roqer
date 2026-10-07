@@ -99,6 +99,8 @@ declare global {
       };
       app: {
         getDataPath(): Promise<string>;
+        copyDiagnostics(endpoint: string): Promise<boolean>;
+        showBridgeLog(): Promise<boolean>;
       };
     };
   }

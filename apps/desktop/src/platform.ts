@@ -462,6 +462,20 @@ export function subscribeToBridge(listener: (state: McpServerState) => void): ()
   return window.workbenchDesktop?.bridge.subscribe(listener) ?? (() => undefined);
 }
 
+/**
+ * Copy a report of the Studio connection for a bug report. False when nothing
+ * was copied, which is always the case without the desktop app: there is no
+ * bridge or log to report on.
+ */
+export async function copyDiagnostics(endpoint: string): Promise<boolean> {
+  return window.workbenchDesktop?.app.copyDiagnostics(endpoint) ?? false;
+}
+
+/** Show the bridge's log file in the file manager. False without the desktop app. */
+export async function showBridgeLog(): Promise<boolean> {
+  return window.workbenchDesktop?.app.showBridgeLog() ?? false;
+}
+
 export async function getStudioStatus(endpoint: string): Promise<StudioStatus> {
   if (window.workbenchDesktop) return window.workbenchDesktop.studio.getStatus(endpoint);
 

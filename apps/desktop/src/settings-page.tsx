@@ -8,6 +8,7 @@ import type { StudioStatus } from "../shared/studio-status";
 import type { WorkspaceState } from "./model";
 import { accountDetail } from "./account-detail";
 import { BlenderSettings } from "./blender-settings";
+import { DiagnosticsActions } from "./diagnostics-actions";
 import { EndpointPage, endpointDetail, useCustomConnections } from "./custom-connections";
 import { OpenCloudSettings } from "./open-cloud-settings";
 import {
@@ -200,6 +201,11 @@ export function SettingsPage({ preferences, studioStatus, onPreferences, onStudi
           <SettingsGroup title="Your data">
             <SettingsRow title="Chats and settings" detail="Kept on this computer only">
               <button type="button" className="small-button" onClick={onExport}>Export chats</button>
+            </SettingsRow>
+          </SettingsGroup>
+          <SettingsGroup title="Troubleshooting" footnote="The report has Roqer's version, the bridge's state, what it sees of Studio and the end of its log. Your user folder and place names are left out.">
+            <SettingsRow title="Studio connection" detail="For a bug report about Studio or playtests">
+              <DiagnosticsActions endpoint={preferences.mcpEndpoint} buttonClassName="small-button" />
             </SettingsRow>
           </SettingsGroup>
           <SettingsGroup title="About">

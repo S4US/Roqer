@@ -1,11 +1,12 @@
 import {
-  app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme, Notification, protocol, shell,
+  app, BrowserWindow, clipboard, dialog, ipcMain, Menu, nativeTheme, Notification, protocol, shell,
   type IpcMainEvent, type IpcMainInvokeEvent, type MessageBoxOptions, type WebContents,
 } from "electron";
 import { autoUpdater } from "electron-updater";
 import { spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 
 import { loadAgentRuntime, type AgentRuntime } from "../runtime/agent-definition";
@@ -71,6 +72,7 @@ import { adoptPreviousUserData, PREVIOUS_USER_DATA_SEGMENTS } from "../runtime/u
 import { RunJournal } from "../runtime/run-journal";
 import { RunAttention, type AttentionSurface } from "../runtime/run-attention";
 import { BridgeLog } from "../runtime/bridge-log";
+import { composeDiagnostics } from "../runtime/diagnostics";
 import { AttachmentRegistry, MAX_IMAGE_SOURCE_BYTES } from "../runtime/attachment-context";
 import {
   clipAnalysisFrame, clipThumbnail, composeClipSheet, composeContactSheet, encodeAttachmentImage, previewToolImage,
@@ -181,9 +183,13 @@ function store(): WorkspaceStore {
  * hour and then died, whose reason is otherwise lost with the process.
  */
 function bridgeLog(): BridgeLog {
-  return bridgeLogFile ??= new BridgeLog(path.join(app.getPath("userData"), "bridge.log"), {
+  return bridgeLogFile ??= new BridgeLog(bridgeLogPath(), {
     onError: (error) => console.error("Roqer could not write the bridge log", error),
   });
+}
+
+function bridgeLogPath(): string {
+  return path.join(app.getPath("userData"), "bridge.log");
 }
 
 function runJournal(): RunJournal {
@@ -1402,14 +1408,19 @@ function plannerFor(
   });
 }
 
+function requestedEndpoint(value: unknown): string {
+  return typeof value === "string" && value !== "" ? value : DEFAULT_MCP_ENDPOINT;
+}
+
 async function getStudioStatus(event: IpcMainInvokeEvent, endpointValue: unknown): Promise<StudioStatus> {
-  const endpoint = typeof endpointValue === "string" && endpointValue !== ""
-    ? endpointValue
-    : DEFAULT_MCP_ENDPOINT;
+  const endpoint = requestedEndpoint(endpointValue);
   // Answered rather than thrown: the window polls this every few seconds, and
   // a status is what it is built to show.
   if (!isTrusted(event.sender)) return { kind: "offline", endpoint, message: "This window may not read Studio's status." };
+  return studioStatusAt(endpoint);
+}
 
+async function studioStatusAt(endpoint: string): Promise<StudioStatus> {
   let client: McpClient;
   try {
     client = clientFor(endpoint);
@@ -1441,6 +1452,43 @@ async function getStudioStatus(event: IpcMainInvokeEvent, endpointValue: unknown
       isRunning: instance.isRunning,
     })),
   };
+}
+
+/**
+ * Put a report of the Studio connection on the clipboard, for an issue or a
+ * support conversation: see runtime/diagnostics.ts for what is in it and what
+ * is kept out. Written here rather than handed to the window, which has no
+ * reason to hold the log.
+ */
+async function copyDiagnostics(event: IpcMainInvokeEvent, endpointValue: unknown): Promise<boolean> {
+  if (!isTrusted(event.sender)) throw new Error("This window may not copy diagnostics.");
+  const [studio, log] = await Promise.all([studioStatusAt(requestedEndpoint(endpointValue)), bridgeLog().text()]);
+  clipboard.writeText(composeDiagnostics({
+    generatedAt: new Date(),
+    appVersion: app.getVersion(),
+    packaged: app.isPackaged,
+    system: `${process.platform} ${os.release()} ${process.arch}`,
+    versions: { electron: process.versions.electron, chrome: process.versions.chrome, node: process.versions.node },
+    bridge: mcpServerState,
+    studio,
+    bridgeLog: log,
+    home: os.homedir(),
+  }));
+  return true;
+}
+
+/**
+ * Show `bridge.log` in the file manager, or the data folder when nothing has
+ * been logged yet. The window never names the file: it can only ask for this one.
+ */
+async function showBridgeLog(event: IpcMainInvokeEvent): Promise<boolean> {
+  if (!isTrusted(event.sender)) throw new Error("This window may not open the data folder.");
+  const file = bridgeLogPath();
+  if (fs.existsSync(file)) {
+    shell.showItemInFolder(file);
+    return true;
+  }
+  return (await shell.openPath(app.getPath("userData"))) === "";
 }
 
 function parseOpenScriptRequest(value: unknown): OpenStudioScriptRequest | null {
@@ -2167,6 +2215,8 @@ app.whenReady().then(async () => {
     if (!isTrusted(event.sender)) throw new Error("This window may not read the data folder's location.");
     return app.getPath("userData");
   });
+  ipcMain.handle("app:copy-diagnostics", copyDiagnostics);
+  ipcMain.handle("app:show-bridge-log", showBridgeLog);
 
   // Windows and Linux draw Electron's default File/Edit/View/Window menu inside
   // the window frame. Roqer has no use for it, so it is removed outright

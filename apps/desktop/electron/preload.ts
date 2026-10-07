@@ -329,5 +329,14 @@ contextBridge.exposeInMainWorld("workbenchDesktop", {
   },
   app: {
     getDataPath: () => ipcRenderer.invoke("app:data-path"),
+    /**
+     * Put a report of the Studio connection on the clipboard. The main process
+     * writes it; the window never receives the log it is made from.
+     */
+    copyDiagnostics: async (endpoint: string): Promise<boolean> =>
+      (await ipcRenderer.invoke("app:copy-diagnostics", endpoint)) === true,
+    /** Show the bridge's log in the file manager. No path crosses this bridge. */
+    showBridgeLog: async (): Promise<boolean> =>
+      (await ipcRenderer.invoke("app:show-bridge-log")) === true,
   },
 });

@@ -38,6 +38,7 @@ import { QUESTION_ESCAPE_OPTION, type RunQuestion } from "../shared/question";
 import { summarizeTasks, type RunTask, type RunTaskStatus } from "../shared/tasks";
 import { Markdown } from "./markdown-view";
 import { SettingsPage } from "./settings-page";
+import { DiagnosticsActions } from "./diagnostics-actions";
 import { ResultsCard, type FileExpansion } from "./results-card";
 import { ModelMenu, RunMenu } from "./composer-menus";
 import { ContextMeter } from "./context-meter";
@@ -1391,6 +1392,10 @@ function App() {
                   ? <p className="popover-note">This chat already changed a place that is not open, so Roqer will not work in another one. Open that place in Studio, or pick one above to move the chat there.</p>
                   : <p className="popover-note">The place you chose is not open. Roqer is using the one above until it is.</p>)}
                 {bridgeState.kind === "failed" && <p className="popover-problem" role="alert">{bridgeState.message}</p>}
+                {/* The message says what failed; these lines are usually why,
+                    such as a port in use. They were kept and never shown. */}
+                {bridgeState.kind === "failed" && bridgeState.detail !== undefined && bridgeState.detail.trim() !== "" &&
+                  <details className="popover-detail"><summary>What the bridge said</summary><pre>{bridgeState.detail.trimEnd()}</pre></details>}
                 {/* Without this, a plugin that was never installed looks
                     exactly like Studio simply not being open. */}
                 {(bridgeState.kind === "running" || bridgeState.kind === "adopted") && bridgeState.pluginProblem !== undefined &&
@@ -1405,6 +1410,9 @@ function App() {
                 </p>}
                 <button className="popover-action" onClick={() => void refreshStudioStatus()}><RotateCw size={15} /> Check again</button>
                 {bridgeState.kind === "failed" && hasDesktopRuntime() && <button className="popover-action" disabled={bridgeBusy} onClick={() => void restartStudioBridge()}><RotateCw size={15} /> {bridgeBusy ? "Starting…" : "Restart the bridge"}</button>}
+                {hasDesktopRuntime() && <div className="popover-tools">
+                  <DiagnosticsActions endpoint={workspace.preferences.mcpEndpoint} buttonClassName="popover-tool" />
+                </div>}
               </div>}
             </div>
             <RowMenu label="Chat options" iconSize={20} disabled={!selectedChat} items={CHAT_MENU_ITEMS} onSelect={(action) => { if (selectedChat) void chatAction(workspace.selectedProjectId, selectedChat.id, action); }} />

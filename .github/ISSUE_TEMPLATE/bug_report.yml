@@ -49,8 +49,13 @@ body:
       label: Environment
       description: Operating system and Roblox Studio version; for Roqer, also the provider (ChatGPT, Claude, or a custom endpoint) and approval mode.
   - type: textarea
+    id: diagnostics
+    attributes:
+      label: Diagnostics
+      description: In Roqer, choose Copy diagnostics (under Roblox Studio at the top right, or in Settings > App) and paste the report here as it is. It leaves out your user folder and place names.
+  - type: textarea
     id: logs
     attributes:
       label: Logs
-      description: Relevant lines from `bridge.log` in Roqer's data folder (`%APPDATA%\Roqer` on Windows) or from Studio's Output window. Check them for anything private first.
+      description: Other relevant lines from `bridge.log` in Roqer's data folder (`%APPDATA%\Roqer` on Windows; Show bridge log opens it) or from Studio's Output window. Check them for anything private first.
       render: text
