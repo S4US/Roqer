@@ -11,6 +11,7 @@ import { accountDetail } from "./account-detail";
 import { BlenderSettings } from "./blender-settings";
 import { DiagnosticsActions } from "./diagnostics-actions";
 import { EndpointPage, endpointDetail, useCustomConnections } from "./custom-connections";
+import { CustomMcpConnectionPage, CustomMcpConnectionsList, useCustomMcpConnections } from "./custom-mcp-settings";
 import { OpenCloudSettings } from "./open-cloud-settings";
 import {
   cancelProviderLogin, getAppVersion, getProviderLimits, getProviderStatus, installProviderClient, loginProvider, openProviderLogin, submitProviderCode,
@@ -31,12 +32,13 @@ import { SettingsGroup, SettingsRow, SettingsSwitch } from "./settings-parts";
  * beside the model. This page only says what is available to choose from.
  */
 
-export type SettingsSectionId = "models" | "roblox" | "blender" | "app";
+export type SettingsSectionId = "models" | "roblox" | "blender" | "mcp" | "app";
 
 const SECTIONS: ReadonlyArray<{ id: SettingsSectionId; label: string }> = [
   { id: "models", label: "Models" },
   { id: "roblox", label: "Roblox" },
   { id: "blender", label: "Blender" },
+  { id: "mcp", label: "MCP" },
   { id: "app", label: "App" },
 ];
 
@@ -84,8 +86,12 @@ export function SettingsPage({ preferences, studioStatus, updateState, notice, o
   const [section, setSection] = useState<SettingsSectionId>("models");
   const [endpoint, setEndpoint] = useState<EndpointView | null>(null);
   const [endpointDirty, setEndpointDirty] = useState(false);
+  const [mcpConnection, setMcpConnection] = useState<EndpointView | null>(null);
+  const [mcpDirty, setMcpDirty] = useState(false);
+  const [mcpBusy, setMcpBusy] = useState(false);
   const [pendingLeave, setPendingLeave] = useState<(() => void) | null>(null);
   const endpoints = useCustomConnections();
+  const mcpConnections = useCustomMcpConnections();
   const mainRef = useRef<HTMLElement>(null);
   /** Asked of the running app rather than built in, so it is the version actually running. */
   const [appVersion, setAppVersion] = useState<string | null>(null);
@@ -96,11 +102,12 @@ export function SettingsPage({ preferences, studioStatus, updateState, notice, o
     return () => { cancelled = true; };
   }, []);
 
-  /** Leave the endpoint page, asking first when it holds unsaved changes. */
+  /** Leave an editor, asking first when it holds unsaved changes. */
   const guarded = useCallback((leave: () => void) => {
-    if (endpointDirty) setPendingLeave(() => leave);
+    if (mcpBusy) return;
+    if (endpointDirty || mcpDirty) setPendingLeave(() => leave);
     else leave();
-  }, [endpointDirty]);
+  }, [endpointDirty, mcpDirty, mcpBusy]);
 
   const close = useCallback(() => guarded(onClose), [guarded, onClose]);
 
@@ -116,25 +123,30 @@ export function SettingsPage({ preferences, studioStatus, updateState, notice, o
   // A new page starts at its top, the way a page does.
   useEffect(() => {
     mainRef.current?.scrollTo({ top: 0 });
-  }, [section, endpoint]);
+  }, [section, endpoint, mcpConnection]);
 
   const openSection = (next: SettingsSectionId) => guarded(() => {
     setSection(next);
     setEndpoint(null);
+    setMcpConnection(null);
   });
 
   const editing = endpoint?.id === undefined
     ? undefined
     : endpoints.connections?.find((connection) => connection.id === endpoint.id);
+  const editingMcp = mcpConnection?.id === undefined
+    ? undefined
+    : mcpConnections.connections?.find((connection) => connection.id === mcpConnection.id);
 
   return <div className="settings-page" role="region" aria-label="Settings">
     <nav className="settings-nav" aria-label="Settings sections">
-      <button type="button" className="settings-nav-back" onClick={close}><ChevronLeft size={15} /> Back to chats</button>
+      <button type="button" className="settings-nav-back" disabled={mcpBusy} onClick={close}><ChevronLeft size={15} /> Back to chats</button>
       {SECTIONS.map((entry) => <button
         key={entry.id}
         type="button"
         className="settings-nav-item"
         aria-current={section === entry.id ? "page" : undefined}
+        disabled={mcpBusy}
         onClick={() => openSection(entry.id)}
       >{entry.label}</button>)}
     </nav>
@@ -204,6 +216,34 @@ export function SettingsPage({ preferences, studioStatus, updateState, notice, o
           <BlenderSettings />
         </>}
 
+        {section === "mcp" && (mcpConnection !== null && (mcpConnection.id === undefined || editingMcp !== undefined)
+          ? <CustomMcpConnectionPage
+            key={mcpConnection.key}
+            connection={editingMcp}
+            connections={mcpConnections.connections ?? []}
+            onBack={() => guarded(() => setMcpConnection(null))}
+            onDirtyChange={setMcpDirty}
+            onBusyChange={setMcpBusy}
+            onSaved={(connections, saved) => {
+              mcpConnections.setConnections(connections);
+              setMcpConnection((current) => current === null ? null : { key: current.key, id: saved.id });
+            }}
+            onRemoved={(connections) => {
+              mcpConnections.setConnections(connections);
+              setMcpDirty(false);
+              setMcpConnection(null);
+            }}
+          />
+          : <CustomMcpConnectionsList
+            connections={mcpConnections.connections}
+            error={mcpConnections.error}
+            loading={mcpConnections.loading}
+            onReload={mcpConnections.reload}
+            onAdd={() => setMcpConnection({ key: `mcp-add-${nextEndpointVisit++}` })}
+            onEdit={(connection) => setMcpConnection({ key: connection.id, id: connection.id })}
+            onConnections={mcpConnections.setConnections}
+          />)}
+
         {section === "app" && <>
           <PageHead title="App" />
           <SettingsGroup>
@@ -248,6 +288,7 @@ export function SettingsPage({ preferences, studioStatus, updateState, notice, o
         const leave = pendingLeave;
         setPendingLeave(null);
         setEndpointDirty(false);
+        setMcpDirty(false);
         leave();
       }}
     />}
@@ -438,7 +479,7 @@ function LeaveConfirm({ onStay, onLeave }: { onStay: () => void; onLeave: () => 
   return <div className="modal-backdrop" role="presentation" onMouseDown={onStay}>
     <div className="name-modal" role="alertdialog" aria-modal="true" aria-label="Discard changes?" onMouseDown={(event) => event.stopPropagation()}>
       <div className="modal-header"><div><h2>Discard changes?</h2></div><button type="button" className="icon-button" onClick={onStay} aria-label="Keep editing"><X size={19} /></button></div>
-      <p>This endpoint has changes that are not saved yet.</p>
+      <p>This connection has changes that are not saved yet.</p>
       <div className="modal-actions">
         <button type="button" className="secondary-action" autoFocus onClick={onStay}>Keep editing</button>
         <button type="button" className="danger-action" onClick={onLeave}>Discard</button>

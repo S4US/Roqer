@@ -37,6 +37,7 @@ a sword, the Scarlet Requiem, with a combo, a flash step, and three special atta
 ## Features
 
 - **Your own model.** ChatGPT through the Codex app, Claude through Claude Code, or any OpenAI- or Anthropic-compatible endpoint, including local models.
+- **Your own MCP tools.** Add local stdio or remote Streamable HTTP servers in Settings → MCP. Calls use Roqer's approvals and run activity. See [configuration](docs/configuration.md#custom-mcp-connections-in-roqer).
 - **Works in your place.** Reads and edits instances, properties, and scripts. A script edit is refused if the script changed after the agent read it, so it won't overwrite your own changes.
 - **Models in Blender.** Turn on the optional Blender integration and the agent models what parts can't make (curved shapes, detailed props, vehicle bodies), checks each model with a preview render, and uploads it into your place. It can render UI icons too.
 - **Character animations.** Ask for a run, a wave or a dance and the agent makes an R15 animation. Roqer checks the motion before Studio sees it, and you can play it in 3D in the chat. The agent then publishes the animation as the place's owner, sets it on your players' characters, and checks in a playtest that it plays.
@@ -94,7 +95,6 @@ What Roqer is working toward. Plans can change; [open an issue](https://github.c
 - MacOS support
 - Manual compact command https://github.com/S4US/Roqer/issues/63
 - Antigravity support https://antigravity.google/product/antigravity-cli
-- Add custom MCP connections
 - Web search. An optional switch that lets the model search the web during a run, with each search shown in the run's activity.
 
 ## Contributing

@@ -21,6 +21,7 @@ import {
 } from "./agent-loop";
 import type { McpToolOutcome } from "./mcp-types";
 import { ProviderSessionStore } from "./provider-sessions";
+import { CustomMcpManager } from "./custom-mcp-manager";
 import { RunCancelledError, type PlannerContext } from "./run-engine";
 import type { SkillLibrary } from "./skill-library";
 import type { RunChange, RunEvidence, RunUsage } from "../shared/run-events";
@@ -158,6 +159,80 @@ const DONE = (text: string): readonly TurnEvent[] => [
   { kind: "delta", text },
   { kind: "completed", stopReason: "end", usage: { inputTokens: 10, outputTokens: 2 } },
 ];
+
+function customMcpManager(secret = "first") {
+  return new CustomMcpManager({ connections: [{
+    connection: { id: "docs", name: "Docs", enabled: true, transport: "stdio", command: "node", args: [] },
+    environment: { TOKEN: secret }, headers: {},
+  }] });
+}
+
+test("Custom offers the custom MCP gateway and returns its approved call's images", async () => {
+  const manager = customMcpManager();
+  manager.describe = async (server, tool) => {
+    assert.equal(server, "docs");
+    assert.equal(tool, "lookup");
+    return { name: "lookup", inputSchema: { type: "object" } };
+  };
+  const preview = { data: "iVBORw0KGgo=", mediaType: "image/png" as const };
+  const { context, recorded } = makeContext(new AbortController(), () => ({
+    ok: true, text: "Found the document.", data: {}, images: [preview], httpStatus: 200, durationMs: 1,
+  }));
+  const calls: Array<{ tool: string; args: Record<string, unknown> }> = [];
+  const originalCall = context.call;
+  context.call = async (tool, args) => { calls.push({ tool, args }); return originalCall(tool, args); };
+  const bridge = gateway([
+    [{ kind: "tool-call", call: { id: "m1", name: "mcp", arguments: {
+      action: "call", server: "docs", tool: "lookup", arguments: { instance_id: "external", query: "guide" },
+    } } }, { kind: "completed", stopReason: "tool-use" }],
+    DONE("Found it."),
+  ]);
+  await createAgentLoopPlanner({
+    transport: bridge, runId: "run_test", modelId: "openai/gpt-5.6-luna", effort: "medium",
+    agent: AGENT, skillLibrary: SKILLS, mcp: manager,
+  }).run(context);
+  assert.equal(bridge.requests[0].tools.some((tool) => tool.name === "mcp"), true);
+  assert.deepEqual(calls, [{ tool: "custom_mcp/docs/lookup", args: { instance_id: "external", query: "guide" } }]);
+  assert.deepEqual(recorded.calls, ["custom_mcp/docs/lookup"]);
+  const output = bridge.requests[1].messages.at(-1)!.content;
+  assert.ok(output.some((block) => block.kind === "tool-result" && block.content === "Found the document." && !block.failed));
+  assert.ok(output.some((block) => block.kind === "image" && block.data === preview.data));
+  await manager.close();
+});
+
+test("Custom does not offer or dispatch the custom MCP gateway without a manager", async () => {
+  const { context, recorded } = makeContext(new AbortController());
+  const bridge = gateway([
+    [{ kind: "tool-call", call: { id: "m1", name: "mcp", arguments: { action: "list" } } },
+      { kind: "completed", stopReason: "tool-use" }],
+    DONE("Unavailable."),
+  ]);
+  await planner(bridge).run(context);
+  assert.equal(bridge.requests[0].tools.some((tool) => tool.name === "mcp"), false);
+  assert.deepEqual(recorded.calls, []);
+  assert.ok(bridge.requests[1].messages.at(-1)!.content.some((block) => block.kind === "tool-result" && block.failed));
+});
+
+test("Custom starts a new conversation when its custom MCP configuration changes", async () => {
+  const { context } = makeContext(new AbortController());
+  const sessions = new ProviderSessionStore<AgentLoopSession>();
+  const first = gateway([DONE("First."), DONE("Second.")]);
+  const changed = gateway([DONE("Third.")]);
+  const manager = customMcpManager();
+  const nextManager = customMcpManager("changed-secret");
+  const base = { runId: "run_test", modelId: "openai/gpt-5.6-luna", effort: "medium" as const,
+    agent: AGENT, skillLibrary: SKILLS, chatId: "chat-1", sessions, transportKey: "endpoint-a" };
+  await createAgentLoopPlanner({ ...base, transport: first, mcp: manager }).run(context);
+  const next = followUp(context, "First.", "Again.");
+  await createAgentLoopPlanner({ ...base, transport: changed, mcp: customMcpManager() }).run(next);
+  assert.equal(first.requests.length, 2, "matching configuration continues the existing conversation");
+  await createAgentLoopPlanner({ ...base, transport: changed, mcp: nextManager }).run(followUp(next, "Second.", "Again."));
+  assert.equal(changed.requests.length, 1, "changed secrets invalidate the kept conversation");
+  assert.equal(changed.requests[0].messages.length, 1);
+  await sessions.closeAll();
+  await manager.close();
+  await nextManager.close();
+});
 
 test("an answer cut off at the output limit is not passed off as a finished one", async () => {
   // The service catches the tool-call form of this, because arguments that stop

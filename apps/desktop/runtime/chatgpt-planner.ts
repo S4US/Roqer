@@ -4,6 +4,8 @@ import type { AgentDefinition } from "./agent-definition";
 import type { ProviderStatus, ReasoningEffort } from "../shared/provider";
 import type { AppServerNotification, AppServerRequest, AppServerRequestHandler } from "./codex-app-server";
 import type { McpToolImage } from "./mcp-types";
+import type { CustomMcpManager } from "./custom-mcp-manager";
+import { CUSTOM_MCP_TOOL_NAME, customMcpToolDefinition, runCustomMcpTool } from "./custom-mcp-tool";
 import type { SkillLibrary } from "./skill-library";
 import { createIconToolRunner, iconToolDefinition, ICON_TOOL_NAME } from "./icon-tool";
 import { blenderToolDefinition, parseBlenderToolInput } from "./blender-tool";
@@ -55,6 +57,8 @@ export type ChatGptPlannerOptions = {
   blender?: boolean;
   /** Offer `reference_clip`: only in a chat holding a clip the user attached. */
   referenceClips?: boolean;
+  /** Run-scoped access to the user's enabled custom MCP connections. */
+  mcp?: CustomMcpManager;
 };
 
 export interface ChatGptAppServer {
@@ -357,7 +361,7 @@ export type CodexThreadStore = ProviderSessionStore<CodexThread>;
  * them into a run against another.
  */
 function threadKey(options: ChatGptPlannerOptions, { autoPlaytest, instanceId }: Pick<PlannerContext, "autoPlaytest" | "instanceId">): string {
-  return JSON.stringify([instanceId, autoPlaytest, options.agent.id, options.agent.version, options.blender === true, options.referenceClips === true]);
+  return JSON.stringify([instanceId, autoPlaytest, options.agent.id, options.agent.version, options.blender === true, options.referenceClips === true, options.mcp?.key ?? null]);
 }
 
 async function startThread(options: ChatGptPlannerOptions, autoPlaytest: boolean): Promise<string> {
@@ -380,6 +384,7 @@ async function startThread(options: ChatGptPlannerOptions, autoPlaytest: boolean
       { type: "function", ...questionToolDefinition() },
       ...(options.blender === true ? [{ type: "function", ...blenderToolDefinition() }] : []),
       ...(options.referenceClips === true ? [{ type: "function", ...referenceClipToolDefinition() }] : []),
+      ...(options.mcp !== undefined ? [{ type: "function", ...customMcpToolDefinition() }] : []),
     ],
   });
   const thread = isRecord(started) && isRecord(started.thread) ? started.thread : null;
@@ -587,6 +592,18 @@ export function createChatGptPlanner(options: ChatGptPlannerOptions): Planner {
         if (settled || context.signal.aborted) return undefined;
         if (request.method === "item/tool/call" && request.params.threadId === threadId) {
           const callTurnId = request.params.turnId;
+          if (options.mcp !== undefined && request.params.tool === CUSTOM_MCP_TOOL_NAME) {
+            try {
+              const result = await runCustomMcpTool(context, options.mcp, request.params.arguments);
+              const images = result.images ?? [];
+              const attached = images.length > 0 && await attachToolImages(CUSTOM_MCP_TOOL_NAME, images, callTurnId);
+              return { success: result.ok, contentItems: [{ type: "inputText", text: images.length === 0
+                ? result.text : `${result.text}\n\n${toolImageNote(images.length, attached)}` }] };
+            } catch (error) {
+              if (context.signal.aborted) fail(error);
+              return { success: false, contentItems: [{ type: "inputText", text: error instanceof Error ? error.message : String(error) }] };
+            }
+          }
           const runTextTool = textToolRunner(request.params.tool, (args) => deliverSkill(args, callTurnId), runIconTool, context);
           if (runTextTool) {
             try {

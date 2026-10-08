@@ -14,6 +14,9 @@ import { createChatGptPlanner, type CodexThread } from "../runtime/chatgpt-plann
 import { createAgentLoopPlanner, type AgentLoopSession } from "../runtime/agent-loop";
 import { toolOutputBudgetFor } from "../runtime/agent-loop-history";
 import { CustomProviderStore } from "../runtime/custom-provider-store";
+import { CustomMcpStore } from "../runtime/custom-mcp-store";
+import { CustomMcpManager, customMcpConnectionKey, withCustomMcp } from "../runtime/custom-mcp-manager";
+import { isCustomMcpConnectionId, type CustomMcpSettingsResult, type CustomMcpCheckResult } from "../shared/custom-mcp";
 import { bridgeEnvironment, checkOpenCloudKey } from "../runtime/open-cloud";
 import { BlenderSettings } from "../runtime/blender-settings";
 import { BlenderWorker } from "../runtime/blender-worker";
@@ -246,6 +249,50 @@ function customProviders(): CustomProviderStore {
     protector: electronSecretProtector,
   });
   return customProviderStore;
+}
+
+let customMcpStore: CustomMcpStore | null = null;
+const customMcpManagers = new Set<CustomMcpManager>();
+
+function customMcpConnections(): CustomMcpStore {
+  customMcpStore ??= new CustomMcpStore({
+    file: path.join(app.getPath("userData"), "custom-mcp.json"), protector: electronSecretProtector,
+  });
+  return customMcpStore;
+}
+
+async function customMcpSettings(event: IpcMainInvokeEvent, operation: "list" | "save" | "remove", payload?: unknown): Promise<CustomMcpSettingsResult> {
+  if (!isTrusted(event.sender) || shuttingDown) return { ok: false, message: "This window may not access MCP settings." };
+  try {
+    if (operation === "remove" && !isCustomMcpConnectionId(payload)) return { ok: false, message: "Invalid MCP connection ID." };
+    const store = customMcpConnections();
+    const connections = operation === "save" ? await store.save(payload)
+      : operation === "remove" ? await store.remove(payload as string) : await store.list();
+    const damaged = store.takeDamagedNotice();
+    return damaged === undefined ? { ok: true, connections }
+      : { ok: false, message: `Saved MCP settings could not be read and were preserved at ${damaged}. Add the connections again.` };
+  } catch (error) {
+    return { ok: false, message: error instanceof Error ? error.message : "MCP settings could not be saved." };
+  }
+}
+
+async function checkCustomMcp(event: IpcMainInvokeEvent, id: unknown): Promise<CustomMcpCheckResult> {
+  if (!isTrusted(event.sender) || shuttingDown || !isCustomMcpConnectionId(id)) return { ok: false, message: "This window may not check that MCP connection." };
+  let manager: CustomMcpManager | undefined;
+  try {
+    const resolved = await customMcpConnections().resolve(id);
+    if (!resolved) return { ok: false, message: "This MCP connection no longer exists." };
+    // An explicit Settings check may test a disabled connection without enabling runs.
+    manager = new CustomMcpManager({ connections: [{ ...resolved, connection: { ...resolved.connection, enabled: true } }] });
+    customMcpManagers.add(manager);
+    const catalog = (await manager.list())[0];
+    if (!catalog || catalog.message) return { ok: false, message: catalog?.message ?? "The MCP server did not return a catalog." };
+    return { ok: true, tools: catalog.tools.length, message: `Connected. ${catalog.tools.length} tools available.` };
+  } catch {
+    return { ok: false, message: "The MCP connection could not be checked. Review its command, endpoint and credentials." };
+  } finally {
+    if (manager) { await manager.close(); customMcpManagers.delete(manager); }
+  }
 }
 
 let openCloudStore: OpenCloudStore | null = null;
@@ -1366,7 +1413,7 @@ async function resolveCustomRun(modelKey: string | null): Promise<CustomRun | { 
 
 /** The agent that drives a run, chosen by the provider the user connected. */
 function plannerFor(
-  request: RunStartRequest, agentRuntime: AgentRuntime, runId: string, modelName: string | undefined, custom?: CustomRun, blender = false, referenceClips = false,
+  request: RunStartRequest, agentRuntime: AgentRuntime, runId: string, modelName: string | undefined, custom?: CustomRun, blender = false, referenceClips = false, mcp?: CustomMcpManager,
 ): Planner {
   const cwd = app.getPath("userData");
   // A conversation kept by one provider has not seen what another provider
@@ -1397,6 +1444,7 @@ function plannerFor(
       }, then ask it to continue.`,
       blender,
       referenceClips,
+      mcp,
       chatId: request.chatId,
       sessions: customConversations,
       transportKey: customTransportKey(custom),
@@ -1420,6 +1468,7 @@ function plannerFor(
       sessions: claudeSessions,
       blender,
       referenceClips,
+      mcp,
     });
   }
   return createChatGptPlanner({
@@ -1434,6 +1483,7 @@ function plannerFor(
     sessions: codexThreads,
     blender,
     referenceClips,
+    mcp,
   });
 }
 
@@ -1621,6 +1671,7 @@ async function startRun(event: IpcMainInvokeEvent, payload: unknown): Promise<Ru
   const stopped: RunStartResult = { ok: false, message: "Run startup was cancelled." };
   let journalId: string | undefined;
   let executionStarted = false;
+  let mcp: CustomMcpManager | undefined;
   try {
     await initializeStorage();
     if (cancelled()) return stopped;
@@ -1716,7 +1767,18 @@ async function startRun(event: IpcMainInvokeEvent, payload: unknown): Promise<Ru
     // the job itself checks again, so switching it off mid-run stops new jobs.
     const blender = !smokeTest && (await blenderSettings().ready().catch(() => undefined)) !== undefined;
     if (cancelled()) return stopped;
-    const planner = smokeTest ? createInspectionPlanner() : plannerFor(resolvedRequest, agentRuntime, runId, modelName, customRun, blender, clips);
+    if (!smokeTest) {
+      const connections = await customMcpConnections().snapshot();
+      if (connections.length > 0) {
+        mcp = new CustomMcpManager({ connections, isCurrent: async (id, key) => {
+          const current = await customMcpConnections().resolve(id);
+          return current !== undefined && current.connection.enabled && customMcpConnectionKey(current) === key;
+        } });
+        customMcpManagers.add(mcp);
+      }
+    }
+    if (cancelled()) return stopped;
+    const planner = smokeTest ? createInspectionPlanner() : plannerFor(resolvedRequest, agentRuntime, runId, modelName, customRun, blender, clips, mcp);
     journalId = runId;
     await runJournal().start(runId, request, request.prompt, request.approvalMode);
     if (cancelled()) return stopped;
@@ -1727,7 +1789,7 @@ async function startRun(event: IpcMainInvokeEvent, payload: unknown): Promise<Ru
     /** The pictures this run stored, held in the picture store until it ends. */
     const heldPictures = new Set<string>();
     const session = new RunSession({
-      caller: withLocalOperations(client, new Map<string, LocalOperation>([
+      caller: withCustomMcp(withLocalOperations(client, new Map<string, LocalOperation>([
         [CAPTURE_MOMENTS_OPERATION, (args, options, studio) => captureMoments(
           args, options, studio, composeContactSheet, clips ? chatClips(request.chatId) : undefined,
         )],
@@ -1736,7 +1798,7 @@ async function startRun(event: IpcMainInvokeEvent, payload: unknown): Promise<Ru
         ...(clips
           ? [[REFERENCE_CLIP_OPERATION, (args, options) => readReferenceClip(args, options, chatClips(request.chatId), composeClipSheet)] as [string, LocalOperation]]
           : []),
-      ])),
+      ])), mcp ?? new CustomMcpManager({ connections: [] })),
       bridge: bridgeRecoveryFor(client.endpoint),
       planner,
       request: { ...resolvedRequest, runId },
@@ -1767,6 +1829,7 @@ async function startRun(event: IpcMainInvokeEvent, payload: unknown): Promise<Ru
     presence.setRunning(true);
     executionStarted = true;
     const execution = session.execute().finally(async () => {
+      if (mcp) { await mcp.close(); customMcpManagers.delete(mcp); }
       runSessions.delete(runId);
       // However the run ended, it waits on no one now.
       runAttention?.endRun(runId);
@@ -1793,6 +1856,7 @@ async function startRun(event: IpcMainInvokeEvent, payload: unknown): Promise<Ru
   } finally {
     pending.finish();
     if (!executionStarted) {
+      if (mcp) { await mcp.close(); customMcpManagers.delete(mcp); }
       attachments.release(request.attachmentIds ?? []);
       if (journalId) {
         await runJournal().acknowledge([journalId]).catch((error) => console.error("Roqer could not discard a run that never started", error));
@@ -2060,9 +2124,14 @@ function runSmokeTest(window: BrowserWindow): void {
     try {
       const report = await window.webContents.executeJavaScript(`(async () => {
         const bridge = window.workbenchDesktop;
-        if (!bridge?.storage?.load || !bridge?.storage?.flush || !bridge?.studio?.getStatus || !bridge?.studio?.openScript || !bridge?.providers?.chatGpt?.models || !bridge?.providers?.chatGpt?.status || !bridge?.runs?.start || !bridge?.assets?.attachImage || !bridge?.previews?.loadModel) {
+        if (!bridge?.storage?.load || !bridge?.storage?.flush || !bridge?.studio?.getStatus || !bridge?.studio?.openScript || !bridge?.providers?.chatGpt?.models || !bridge?.providers?.chatGpt?.status || !bridge?.runs?.start || !bridge?.assets?.attachImage || !bridge?.previews?.loadModel || !bridge?.customMcp?.list) {
           return { ok: false, reason: "bridge-missing" };
         }
+
+        const mcpSettings = await bridge.customMcp.list();
+        if (mcpSettings?.ok !== true || !Array.isArray(mcpSettings.connections)) return { ok: false, reason: "mcp-settings" };
+        const invalidMcp = await bridge.customMcp.save({ name: "Invalid", enabled: true, transport: "http", url: "http://example.com/mcp" });
+        if (invalidMcp?.ok !== false) return { ok: false, reason: "mcp-validation" };
 
         // The 3D preview call answers, and names no file from what it was sent.
         const refusedPreview = await bridge.previews.loadModel("../../job-folder");
@@ -2255,6 +2324,10 @@ app.whenReady().then(async () => {
   ipcMain.handle("provider:install", installProviderClient);
   ipcMain.handle("provider:limits", getProviderLimits);
   ipcMain.handle("custom-providers:list", listCustomConnections);
+  ipcMain.handle("custom-mcp:list", (event) => customMcpSettings(event, "list"));
+  ipcMain.handle("custom-mcp:save", (event, payload: unknown) => customMcpSettings(event, "save", payload));
+  ipcMain.handle("custom-mcp:remove", (event, id: unknown) => customMcpSettings(event, "remove", id));
+  ipcMain.handle("custom-mcp:check", checkCustomMcp);
   ipcMain.handle("custom-providers:save", saveCustomConnection);
   ipcMain.handle("custom-providers:remove", removeCustomConnection);
   ipcMain.handle("custom-providers:test", testCustomConnectionModel);
@@ -2329,6 +2402,7 @@ app.on("before-quit", () => {
   void customConversations.closeAll();
   codexAppServer?.close();
   claudeCode?.close();
+  for (const manager of customMcpManagers) void manager.close();
 });
 
 app.on("will-quit", (event) => {
@@ -2338,6 +2412,7 @@ app.on("will-quit", (event) => {
   waitingForShutdownBeforeQuit = true;
   void (async () => {
     await Promise.allSettled([drainStateWrites(), drainRunExecutions()]);
+    await Promise.allSettled([...customMcpManagers].map((manager) => manager.close()));
     await runJournal().drain();
     // Last, so a run still writing its journal keeps the bridge it is using.
     await mcpServer?.stop();

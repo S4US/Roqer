@@ -10,6 +10,7 @@ import {
   type ChatGptAppServer, type CodexThread, type CodexThreadStore,
 } from "./chatgpt-planner";
 import { ProviderSessionStore } from "./provider-sessions";
+import { CustomMcpManager } from "./custom-mcp-manager";
 import type { AgentDefinition } from "./agent-definition";
 import type { PlannerContext } from "./run-engine";
 import type { RunUsage } from "../shared/run-events";
@@ -786,6 +787,7 @@ function sessionRun(
   model = "gpt-test",
   instanceId: string | null = null,
   runUsage: PlannerContext["runUsage"] = () => undefined,
+  mcp?: CustomMcpManager,
 ) {
   const context: PlannerContext = {
     prompt, conversation: { messages, truncated: false }, images: [],
@@ -800,8 +802,99 @@ function sessionRun(
   return createChatGptPlanner({
     appServer, cwd: "C:\\workbench", model, effort: "medium", agent: AGENT, skillLibrary: SKILLS,
     chatId: "chat-1", sessions,
+    mcp,
   }).run(context);
 }
+
+function customMcpManager(secret = "first") {
+  return new CustomMcpManager({ connections: [{
+    connection: { id: "docs", name: "Docs", enabled: true, transport: "stdio", command: "node", args: [] },
+    environment: { TOKEN: secret }, headers: {},
+  }] });
+}
+
+test("ChatGPT offers custom MCP and returns its approved call with attached images", async () => {
+  const manager = customMcpManager();
+  manager.describe = async (server, tool) => {
+    assert.equal(server, "docs");
+    assert.equal(tool, "lookup");
+    return { name: "lookup", inputSchema: { type: "object" } };
+  };
+  const calls: Array<{ tool: string; args: Record<string, unknown> }> = [];
+  let result: unknown;
+  class McpAppServer extends AnsweringAppServer {
+    override async request<T = unknown>(method: string, params?: unknown): Promise<T> {
+      if (method !== "turn/start") return super.request<T>(method, params);
+      this.requests.push({ method, params });
+      setImmediate(() => void (async () => {
+        result = await this.requestHandler!({ id: "m1", method: "item/tool/call", params: {
+          threadId: "thread-1", turnId: "turn-1", tool: "mcp", arguments: {
+            action: "call", server: "docs", tool: "lookup", arguments: { instance_id: "external" },
+          },
+        } });
+        this.notificationListener?.({ method: "turn/completed", params: {
+          threadId: "thread-1", turn: { id: "turn-1", status: "completed" },
+        } });
+      })());
+      return { turn: { id: "turn-1" } } as T;
+    }
+  }
+  const appServer = new McpAppServer();
+  const preview = { data: "iVBORw0KGgo=", mediaType: "image/png" as const };
+  const context: PlannerContext = {
+    prompt: "Find the guide.", conversation: { messages: [], truncated: false }, images: [],
+    instanceId: "studio-1", autoPlaytest: false, signal: new AbortController().signal,
+    progress: () => undefined, outputTokens: () => undefined, contextUsage: () => undefined, runUsage: () => undefined,
+    status: () => undefined, say: () => undefined, recordChange: () => undefined, recordEvidence: () => undefined,
+    setTasks: () => undefined, tasks: () => [], changes: () => [], evidence: () => [], decisions: () => [],
+    takeSteers: () => [], askUser: async (_question, options) => options[0],
+    checkCompletion: () => ({ verified: true, issues: [] }),
+    call: async (tool, args) => {
+      calls.push({ tool, args });
+      return { ok: true, text: "Found the guide.", data: {}, images: [preview], httpStatus: 200, durationMs: 1 };
+    },
+  };
+  await createChatGptPlanner({ appServer, cwd: process.cwd(), model: "gpt-test", effort: "medium",
+    agent: AGENT, skillLibrary: SKILLS, mcp: manager }).run(context);
+  const started = appServer.requests.find((request) => request.method === "thread/start")!.params as {
+    dynamicTools: Array<{ name: string }>;
+  };
+  assert.equal(started.dynamicTools.some((tool) => tool.name === "mcp"), true);
+  assert.deepEqual(calls, [{ tool: "custom_mcp/docs/lookup", args: { instance_id: "external" } }]);
+  assert.equal((result as { success: boolean }).success, true);
+  assert.match(JSON.stringify(result), /Found the guide/);
+  const steers = appServer.requests.filter(isImageSteer);
+  assert.equal(steers.length, 1);
+  assert.match(JSON.stringify(steers[0].params), /iVBORw0KGgo=/);
+  await manager.close();
+});
+
+test("ChatGPT offers no custom MCP gateway without a manager", async () => {
+  const appServer = new AnsweringAppServer();
+  await sessionRun(appServer, new ProviderSessionStore<CodexThread>(), "Hello.", []);
+  const started = appServer.requests.find((request) => request.method === "thread/start")!.params as {
+    dynamicTools: Array<{ name: string }>;
+  };
+  assert.equal(started.dynamicTools.some((tool) => tool.name === "mcp"), false);
+});
+
+test("ChatGPT starts a new thread when its custom MCP configuration changes", async () => {
+  const appServer = new AnsweringAppServer();
+  const sessions = new ProviderSessionStore<CodexThread>();
+  const manager = customMcpManager();
+  const changed = customMcpManager("changed-secret");
+  await sessionRun(appServer, sessions, "First.", [], "gpt-test", null, () => undefined, manager);
+  const messages = [{ role: "user" as const, text: "First." }, { role: "assistant" as const, text: "Answer 1" }];
+  await sessionRun(appServer, sessions, "Second.", messages, "gpt-test", null, () => undefined, customMcpManager());
+  assert.equal(appServer.threadsStarted, 1, "matching configuration continues the existing thread");
+  await sessionRun(appServer, sessions, "Third.", [...messages,
+    { role: "user", text: "Second." }, { role: "assistant", text: "Answer 2" },
+  ], "gpt-test", null, () => undefined, changed);
+  assert.equal(appServer.threadsStarted, 2, "changed secrets invalidate the kept thread");
+  await sessions.closeAll();
+  await manager.close();
+  await changed.close();
+});
 
 test("ChatGPT keeps a chat's thread for its next message and sends only the new prompt", async () => {
   const appServer = new AnsweringAppServer();

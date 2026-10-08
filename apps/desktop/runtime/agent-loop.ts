@@ -30,6 +30,8 @@ import {
   boundRetainedToolResults, compactHistory, describeRunState, retainedToolResultCharacters, type ToolOutputBudget,
 } from "./agent-loop-history";
 import { createIconToolRunner, iconToolDefinition, ICON_TOOL_NAME } from "./icon-tool";
+import type { CustomMcpManager } from "./custom-mcp-manager";
+import { CUSTOM_MCP_TOOL_NAME, customMcpToolDefinition, runCustomMcpTool } from "./custom-mcp-tool";
 import { runQuestionTool, questionToolDefinition, QUESTION_TOOL_NAME } from "./question-tool";
 import { RunCancelledError, type Planner, type PlannerContext } from "./run-engine";
 import { runDeveloperInstructions } from "./run-instructions";
@@ -178,6 +180,8 @@ export type AgentLoopPlannerOptions = {
   blender?: boolean;
   /** Offer `reference_clip`: only in a chat holding a clip the user attached. */
   referenceClips?: boolean;
+  /** Run-scoped access to the user's enabled custom MCP connections. */
+  mcp?: CustomMcpManager;
   /** The chat this run belongs to, which names its kept conversation. */
   chatId?: string;
   /** Where a chat's conversation waits for its next message. Without it, every run starts a new one. */
@@ -235,6 +239,7 @@ function sessionKey(options: AgentLoopPlannerOptions, { autoPlaytest, instanceId
     options.transportKey ?? null, options.plannerId ?? "agent-loop", options.modelId, autoPlaytest,
     options.agent.id, options.agent.version, options.blender === true, options.images !== false,
     options.toolOutputBudget ?? null, options.contextWindow ?? null, options.referenceClips === true,
+    options.mcp?.key ?? null,
   ]);
 }
 
@@ -324,13 +329,14 @@ function isTurnImageMediaType(value: string): value is TurnImageMediaType {
   return (TURN_IMAGE_MEDIA_TYPES as readonly string[]).includes(value);
 }
 
-function loopTools(library: SkillLibrary, blender: boolean, referenceClips = false): TurnTool[] {
+function loopTools(library: SkillLibrary, blender: boolean, referenceClips = false, mcp = false): TurnTool[] {
   const textTools = [
     skillToolDefinition(library), iconToolDefinition(), taskToolDefinition(), questionToolDefinition(),
   ];
   const localTools = [
     ...(blender ? [blenderToolDefinition()] : []),
     ...(referenceClips ? [referenceClipToolDefinition()] : []),
+    ...(mcp ? [customMcpToolDefinition()] : []),
   ];
   return [
     {
@@ -605,7 +611,7 @@ export function createAgentLoopPlanner(options: AgentLoopPlannerOptions): Planne
       let askedAfterSilence = false;
       // Broken tool calls in a row; a turn that forms a call resets it.
       let malformedInRow = 0;
-      const tools = loopTools(options.skillLibrary, options.blender === true, options.referenceClips === true);
+      const tools = loopTools(options.skillLibrary, options.blender === true, options.referenceClips === true, options.mcp !== undefined);
       const instructions = {
         system: options.agent.systemInstructions,
         developer: runDeveloperInstructions(options.agent.developerInstructions, context.autoPlaytest),
@@ -722,14 +728,18 @@ export function createAgentLoopPlanner(options: AgentLoopPlannerOptions): Planne
           // and an image the same way a screenshot does, so they share this
           // path and its image budget.
           const clipCall = options.referenceClips === true && call.name === REFERENCE_CLIP_TOOL_NAME;
-          if (call.name === STUDIO_TOOL_NAME || (options.blender === true && call.name === BLENDER_TOOL_NAME) || clipCall) {
-            const parsed = call.name === STUDIO_TOOL_NAME
-              ? parseStudioToolInput(call.arguments)
-              : clipCall
-                ? parseReferenceClipToolInput(call.arguments)
-                : parseBlenderToolInput(call.arguments);
-            measuredTool = parsed.operation;
-            const result = await runStudioTool(parsed.operation, parsed.args);
+          const mcpCall = options.mcp !== undefined && call.name === CUSTOM_MCP_TOOL_NAME;
+          if (call.name === STUDIO_TOOL_NAME || (options.blender === true && call.name === BLENDER_TOOL_NAME) || clipCall || mcpCall) {
+            const result = await (async () => {
+              if (mcpCall) return runCustomMcpTool(context, options.mcp!, call.arguments);
+              const parsed = call.name === STUDIO_TOOL_NAME
+                ? parseStudioToolInput(call.arguments)
+                : clipCall
+                  ? parseReferenceClipToolInput(call.arguments)
+                  : parseBlenderToolInput(call.arguments);
+              measuredTool = parsed.operation;
+              return runStudioTool(parsed.operation, parsed.args);
+            })();
             const returnedImages = result.images ?? [];
             const sizedImages = returnedImages
               .filter((image) => image.data.length <= MAX_TURN_IMAGE_BASE64);
@@ -738,10 +748,11 @@ export function createAgentLoopPlanner(options: AgentLoopPlannerOptions): Planne
             const overCount = acceptsImages ? sizedImages.length - images.length : 0;
             const omissionNotes = [
               ...(!acceptsImages && returnedImages.length > 0
-                ? ["This model does not accept images, so the picture was not sent. Do not take more screenshots: read the interface with inspect_ui and the instance properties instead."]
+                ? [mcpCall ? "This model does not accept images, so the MCP images were not sent."
+                  : "This model does not accept images, so the picture was not sent. Do not take more screenshots: read the interface with inspect_ui and the instance properties instead."]
                 : []),
               ...(oversized > 0
-                ? [`${oversized} image${oversized === 1 ? " was" : "s were"} too large for a model turn. Retry the screenshot once as JPEG at lower quality.`]
+                ? [`${oversized} image${oversized === 1 ? " was" : "s were"} too large for a model turn.${mcpCall ? "" : " Retry the screenshot once as JPEG at lower quality."}`]
                 : []),
               ...(overCount > 0
                 ? [`${overCount} image${overCount === 1 ? " was" : "s were"} omitted because one model turn accepts at most ${MAX_TURN_IMAGES}${
@@ -760,7 +771,7 @@ export function createAgentLoopPlanner(options: AgentLoopPlannerOptions): Planne
             // timeline that difference is invisible from the outside.
             if (omissionNotes.length > 0) {
               context.status(
-                `Screenshot not sent to the model`,
+                mcpCall ? "MCP images not sent to the model" : "Screenshot not sent to the model",
                 `${omissionNotes.join(" ")} The tool itself succeeded.`,
               );
             }

@@ -38,6 +38,8 @@ import {
   type OpenCloudSettingsResult,
 } from "../shared/open-cloud";
 import { isBlenderSettingsResult, type BlenderSettingsResult } from "../shared/blender";
+import { isCustomMcpSettingsResult, isCustomMcpCheckResult, type CustomMcpSave, type CustomMcpSettingsResult,
+  type CustomMcpCheckResult } from "../shared/custom-mcp";
 import { isModelPreviewResult, type ModelPreviewResult } from "../shared/model-preview";
 import { isEvidencePictureResult, type EvidencePictureResult } from "../shared/evidence-picture";
 
@@ -203,6 +205,21 @@ const blender = {
   redetect: () => blenderRequest("blender:redetect"),
 };
 
+async function customMcpRequest(channel: string, ...args: unknown[]): Promise<CustomMcpSettingsResult> {
+  const value: unknown = await ipcRenderer.invoke(channel, ...args);
+  return isCustomMcpSettingsResult(value) ? value : { ok: false, message: "Roqer returned invalid MCP settings." };
+}
+
+const customMcp = {
+  list: () => customMcpRequest("custom-mcp:list"),
+  save: (save: CustomMcpSave) => customMcpRequest("custom-mcp:save", save),
+  remove: (id: string) => customMcpRequest("custom-mcp:remove", id),
+  check: async (id: string): Promise<CustomMcpCheckResult> => {
+    const value: unknown = await ipcRenderer.invoke("custom-mcp:check", id);
+    return isCustomMcpCheckResult(value) ? value : { ok: false, message: "Roqer returned an invalid MCP check." };
+  },
+};
+
 /**
  * The user's own model connections. A key goes in with `save` and never comes
  * back out: what returns says only whether one is stored.
@@ -313,6 +330,7 @@ contextBridge.exposeInMainWorld("workbenchDesktop", {
   customProviders,
   openCloud,
   blender,
+  customMcp,
   runs,
   previews: {
     /** A Blender result's 3D preview, by the opaque id its evidence carries. */

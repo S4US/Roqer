@@ -62,6 +62,40 @@ function flush(): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, 0));
 }
 
+test("external MCP calls preserve their own instance_id and still ask in Full auto", async () => {
+  const caller = makeCaller(async () => outcome({ text: "external answer" }));
+  const events: RunEvent[] = [];
+  const session = new RunSession({
+    caller,
+    request: makeRequest({ instanceId: "studio-instance", approvalMode: "Full auto" }),
+    planner: planner(async (ctx) => {
+      await ctx.call("custom_mcp/test/echo", { instance_id: "external-instance" });
+      return "done";
+    }),
+    emit: (event) => {
+      events.push(event);
+      if (event.type === "approval-requested") session.resolveApproval(event.callId, "approved");
+    },
+  });
+  assert.equal(await session.execute(), "completed");
+  assert.deepEqual(caller.calls[0]?.args, { instance_id: "external-instance" });
+  assert.equal(events.filter((event) => event.type === "approval-requested").length, 1);
+  assertAllValid(events);
+});
+
+test("external MCP transport failures never recover the Studio bridge", async () => {
+  let recoveries = 0;
+  const session = new RunSession({
+    caller: makeCaller(async () => outcome({ ok: false, errorCode: "request_failed", message: "External server stopped." })),
+    request: makeRequest(),
+    bridge: { async recover() { recoveries++; return { kind: "answering" }; } },
+    planner: planner(async (ctx) => { await ctx.call("custom_mcp/test/echo", {}); return "done"; }),
+    emit: (event) => { if (event.type === "approval-requested") session.resolveApproval(event.callId, "approved"); },
+  });
+  await session.execute();
+  assert.equal(recoveries, 0);
+});
+
 test("event order and seq monotonicity for a simple read-only run", async () => {
   const caller = makeCaller(async () => outcome());
   const events: RunEvent[] = [];
