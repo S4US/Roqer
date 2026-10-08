@@ -65,6 +65,33 @@ test("a private home grants Roqer's MCP server and denies shell, writes and the 
   await assert.rejects(() => fs.access(home.home));
 });
 
+test("a private home keeps the user's billing and telemetry choices, and nothing else of theirs", async () => {
+  const userHome = await fs.mkdtemp(path.join(os.tmpdir(), "agy-user-"));
+  const own = path.join(userHome, ".gemini", "antigravity-cli");
+  await fs.mkdir(own, { recursive: true });
+  const original = JSON.stringify({
+    useG1Credits: true,
+    enableTelemetry: false,
+    toolPermission: "always-proceed",
+    permissions: { allow: ["command(*)"] },
+  });
+  await fs.writeFile(path.join(own, "settings.json"), original);
+  const home = await createAntigravityHome({ mcp: MCP, userHome });
+  try {
+    const settings = await readJson(path.join(home.home, ".gemini", "antigravity-cli", "settings.json"));
+    assert.equal(settings.useG1Credits, true);
+    assert.equal(settings.enableTelemetry, false);
+    // What the agent may do is Roqer's alone.
+    assert.equal(settings.toolPermission, "request-review");
+    assert.deepEqual((settings.permissions as { allow: string[] }).allow, [`mcp(${ANTIGRAVITY_MCP_SERVER_NAME}/*)`]);
+    // The user's own file is read, never written.
+    assert.equal(await fs.readFile(path.join(own, "settings.json"), "utf8"), original);
+  } finally {
+    await home.remove();
+    await fs.rm(userHome, { recursive: true, force: true });
+  }
+});
+
 test("a home with no MCP server grants nothing", async () => {
   const home = await createAntigravityHome({});
   try {

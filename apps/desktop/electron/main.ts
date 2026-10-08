@@ -1116,6 +1116,9 @@ async function loginProvider(event: IpcMainInvokeEvent, value: unknown): Promise
   const label = providerLabel(provider);
 
   try {
+    // Connect is how the user says they signed in from a terminal, so the
+    // account is read afresh rather than from a cached answer.
+    if (provider === "antigravity") antigravityProvider().forgetStatus();
     const current = await readProviderStatus(provider);
     if (current.kind === "signed-in") return { ok: true, message: current.message };
     if (provider === "custom") return { ok: false, message: current.message };
@@ -1124,8 +1127,14 @@ async function loginProvider(event: IpcMainInvokeEvent, value: unknown): Promise
       // not drive. Whoever signs in there next may be a different account.
       await antigravitySessions.closeAll();
       antigravityLimits?.forget();
-      antigravityProvider().forgetStatus();
-      return { ok: false, message: current.kind === "signed-out" ? ANTIGRAVITY_SIGN_IN_MESSAGE : current.message };
+      // How `agy` words a signed-out account is not something Roqer can be
+      // sure of, so the way to sign in is said whatever it reported.
+      return {
+        ok: false,
+        message: current.kind === "signed-out" ? ANTIGRAVITY_SIGN_IN_MESSAGE
+          : current.kind === "not-installed" ? current.message
+            : `${current.message} ${ANTIGRAVITY_SIGN_IN_MESSAGE}`,
+      };
     }
 
     // A new sign-in may be a different account; nothing it did not run may carry over.

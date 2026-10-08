@@ -122,6 +122,34 @@ test("status and models are asked in a private home that is removed afterwards",
   }
 });
 
+test("a signed-out answer is reused briefly, and forgetting it asks again", async () => {
+  let now = 0;
+  let asked = 0;
+  const client = new AntigravityClient({
+    now: () => now,
+    spawnProcess: () => {
+      asked += 1;
+      const child = new FakeChildProcess();
+      setImmediate(() => {
+        child.writeLine(JSON.stringify({ status: "ERROR", error: "Not signed in." }));
+        child.finish(3);
+      });
+      return child.asChild();
+    },
+  });
+  assert.equal((await client.getStatus()).kind, "signed-out");
+  now = 10_000;
+  assert.equal((await client.getStatus()).kind, "signed-out");
+  assert.equal(asked, 1);
+  // Connect forgets it: the user may just have signed in from a terminal.
+  client.forgetStatus();
+  await client.getStatus();
+  assert.equal(asked, 2);
+  now = 60_000;
+  await client.getStatus();
+  assert.equal(asked, 3);
+});
+
 test("a missing agy reads as not installed", async () => {
   const client = new AntigravityClient({
     spawnProcess: () => {

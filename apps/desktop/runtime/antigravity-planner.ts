@@ -241,8 +241,6 @@ export class AntigravitySession {
   readonly usageTotals: AntigravityUsageTotals = { inputTokens: 0, cacheReadTokens: 0, outputTokens: 0 };
   /** Skill documents delivered into this process's conversation and still in it. */
   readonly skills: SkillToolRunner;
-  /** Whether `init` has been seen and checked. */
-  initialized = false;
 
   private binding: RunBinding | null = null;
   private dead = false;
@@ -487,7 +485,6 @@ export function createAntigravityPlanner(options: AntigravityPlannerOptions): Pl
             fail(new Error(`The Antigravity CLI started under the "${String(init.permission_mode)}" permission mode instead of Roqer's rules, so the run was stopped.`));
             return;
           }
-          if (session !== undefined) session.initialized = true;
           context.progress(waitingLabel);
           return;
         }

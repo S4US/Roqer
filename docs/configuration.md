@@ -123,11 +123,14 @@ cannot be turned off, but Codex runs read-only, so any edit it tries is refused.
 
 Antigravity runs need the Antigravity CLI signed in. Roqer cannot drive its
 sign-in, so run `agy` once in a terminal and follow its prompts, then choose
-Check in Settings. Roqer runs each `agy` process with a private home folder of
+Connect in Settings. Roqer runs each `agy` process with a private home folder of
 its own, created for that process in the system temp folder and deleted when
-it ends. Your Google sign-in still applies, but your own Antigravity settings,
-MCP servers, plugins, hooks, rules and skills are not loaded, and Roqer's
-conversations do not appear in your Antigravity history. That home's rules
+it ends. Your Google sign-in still applies, but your own Antigravity MCP
+servers, plugins, hooks, rules, skills and permission settings are not loaded,
+and Roqer's conversations do not appear in your Antigravity history. Two of your
+settings do carry over, because they are about your account rather than about
+what the agent may do: `useG1Credits` and `enableTelemetry`. Roqer reads your
+settings file but never writes to it. That home's rules
 allow only Roqer's tools. Shell commands, file writes, URL reads and browser
 actions are denied, and anything else needs a review that a headless process
 cannot give. A hook Roqer installs in the same home also refuses each of

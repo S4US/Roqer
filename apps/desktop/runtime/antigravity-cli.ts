@@ -24,14 +24,20 @@ type JsonRecord = Record<string, unknown>;
 
 const STATUS_TIMEOUT_MS = 45_000;
 const MODELS_TIMEOUT_MS = 45_000;
-/** A signed-in answer is reused this long; asking starts `agy`, which takes seconds. */
-const STATUS_CACHE_TTL_MS = 60_000;
+/**
+ * How long an answer about the account is reused. Asking starts `agy` in a
+ * fresh home, which takes seconds, and the app asks about the selected
+ * provider every 15 s. Any other answer is kept for less time, so signing in
+ * from a terminal is noticed soon; Connect forgets it at once.
+ */
+const SIGNED_IN_CACHE_TTL_MS = 60_000;
+const OTHER_STATUS_CACHE_TTL_MS = 20_000;
 const MODEL_CATALOG_TTL_MS = 10 * 60_000;
 const MAX_OUTPUT_LENGTH = 256 * 1024;
 const MAX_MODELS = 64;
 
 export const ANTIGRAVITY_SIGN_IN_MESSAGE =
-  "Sign in to Antigravity: run agy in a terminal once and follow its sign-in, then choose Check.";
+  "Sign in to Antigravity: run agy in a terminal once and follow its sign-in, then choose Connect here.";
 
 const isRecord = (value: unknown): value is JsonRecord =>
   typeof value === "object" && value !== null && !Array.isArray(value);
@@ -178,11 +184,6 @@ export class AntigravityClient implements AntigravityLauncher {
     return child;
   }
 
-  /** The executable Roqer runs, for its version. */
-  locate(): Promise<string> {
-    return resolveAntigravityExecutable({ executable: this.executable });
-  }
-
   /**
    * The account `agy` is signed in with. Readers that arrive together share
    * one process, and a signed-in answer is reused briefly.
@@ -245,15 +246,16 @@ export class AntigravityClient implements AntigravityLauncher {
 
   private readAccount(): Promise<{ status: ProviderStatus; usage: JsonRecord | null }> {
     const cached = this.statusCache;
-    if (cached !== null && this.now() - cached.at < STATUS_CACHE_TTL_MS) return Promise.resolve(cached);
+    if (cached !== null) {
+      const ttl = cached.status.kind === "signed-in" ? SIGNED_IN_CACHE_TTL_MS : OTHER_STATUS_CACHE_TTL_MS;
+      if (this.now() - cached.at < ttl) return Promise.resolve(cached);
+    }
     if (this.statusRead !== null) return this.statusRead;
 
     const generation = this.statusGeneration;
     const read = this.queryAccount()
       .then((reading) => {
-        if (generation === this.statusGeneration && reading.status.kind === "signed-in") {
-          this.statusCache = { at: this.now(), ...reading };
-        }
+        if (generation === this.statusGeneration) this.statusCache = { at: this.now(), ...reading };
         return reading;
       })
       .finally(() => {

@@ -63,7 +63,7 @@ npm run start:desktop
 
 Roqer installs its Studio plugin when it starts. Open (or restart) Roblox Studio so it loads the plugin, then open a place, pick a model in Roqer, and ask for something.
 
-If you use ChatGPT, Claude or Antigravity and don't have Codex, Claude Code or the Antigravity CLI yet, open Settings in Roqer and choose Install next to your account. Roqer runs OpenAI's, Anthropic's or Google's official installer after you confirm, then you connect your subscription. To connect Antigravity, run `agy` once in a terminal and sign in there, then choose Check in Roqer.
+If you use ChatGPT, Claude or Antigravity and don't have Codex, Claude Code or the Antigravity CLI yet, open Settings in Roqer and choose Install next to your account. Roqer runs OpenAI's, Anthropic's or Google's official installer after you confirm, then you connect your subscription. To connect Antigravity, run `agy` once in a terminal and sign in there, then choose Connect in Roqer's Settings.
 
 ## Use the Studio tools from another AI client
 

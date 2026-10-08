@@ -50,8 +50,9 @@ export const GATE_REFUSAL_PREFIX = "Roqer allows only its own tools here";
  * before calling one, and a read outside the workspace still needs a review a
  * headless process cannot give.
  */
-export function antigravitySettings(options: { mcp: boolean }): Record<string, unknown> {
+export function antigravitySettings(options: { mcp: boolean; carried?: Readonly<Record<string, boolean>> }): Record<string, unknown> {
   return {
+    ...options.carried,
     toolPermission: "request-review",
     allowNonWorkspaceAccess: false,
     permissions: {
@@ -59,6 +60,35 @@ export function antigravitySettings(options: { mcp: boolean }): Record<string, u
       deny: ["command(*)", "unsandboxed(*)", "write_file(*)", "read_url(*)", "execute_url(*)"],
     },
   };
+}
+
+/**
+ * Choices in the user's own `agy` settings that are about their account rather
+ * than about what the agent may do: whether runs may spend Google One AI
+ * credits, and whether `agy` sends telemetry. A private home would otherwise
+ * reset both to `agy`'s defaults behind the user's back.
+ */
+const CARRIED_SETTINGS = ["useG1Credits", "enableTelemetry"] as const;
+
+/**
+ * Read those choices from the user's own settings file, which Roqer never
+ * writes. A file that is missing or unreadable carries nothing, and `agy`
+ * uses its defaults.
+ */
+export async function readCarriedSettings(userHome: string): Promise<Record<string, boolean>> {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(await fs.readFile(path.join(userHome, ".gemini", "antigravity-cli", "settings.json"), "utf8"));
+  } catch {
+    return {};
+  }
+  const carried: Record<string, boolean> = {};
+  if (typeof parsed !== "object" || parsed === null) return carried;
+  for (const key of CARRIED_SETTINGS) {
+    const value = (parsed as Record<string, unknown>)[key];
+    if (typeof value === "boolean") carried[key] = value;
+  }
+  return carried;
 }
 
 /**
@@ -144,6 +174,8 @@ export type AntigravityHomeOptions = {
   platform?: NodeJS.Platform;
   /** Where the directory is made. Defaults to the system temp directory. */
   parent?: string;
+  /** The user's real home, whose account-level `agy` choices are kept. Defaults to the running user's. */
+  userHome?: string;
 };
 
 export type AntigravityHome = {
@@ -181,7 +213,8 @@ export async function createAntigravityHome(options: AntigravityHomeOptions = {}
     // to the repository root; a repository of its own stops that walk here.
     await fs.mkdir(path.join(workspace, ".git"), { recursive: true });
 
-    await writePrivate(path.join(cli, "settings.json"), JSON.stringify(antigravitySettings({ mcp: options.mcp !== undefined })));
+    const carried = await readCarriedSettings(options.userHome ?? os.homedir());
+    await writePrivate(path.join(cli, "settings.json"), JSON.stringify(antigravitySettings({ mcp: options.mcp !== undefined, carried })));
     await writePrivate(path.join(config, "mcp_config.json"), JSON.stringify({
       mcpServers: options.mcp === undefined ? {} : {
         [ANTIGRAVITY_MCP_SERVER_NAME]: { url: options.mcp.url, headers: { Authorization: `Bearer ${options.mcp.token}` } },
