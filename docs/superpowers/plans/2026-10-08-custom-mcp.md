@@ -31,40 +31,40 @@
 **Files:** shared/custom-mcp.ts; runtime/custom-mcp-store.ts and their tests.
 **Interfaces:** CustomMcpConnection, CustomMcpConnectionView, CustomMcpSave, CustomMcpSettingsResult, CustomMcpCheckResult. Store list/save/remove/resolve/snapshot; resolved values have connection, environment and headers.
 
-- [ ] Write and run failing tests for URL/command validation, secret redaction, atomic persistence, corrupt recovery and replacing destination without forwarding old secrets.
-- [ ] Implement contracts and store using SecretProtector.
-- [ ] Run focused tests.
+- [x] Write and run failing tests for URL/command validation, secret redaction, atomic persistence, corrupt recovery and replacing destination without forwarding old secrets.
+- [x] Implement contracts and store using SecretProtector.
+- [x] Run focused tests.
 
 ### Task 2: SDK manager and gateway
 
 **Files:** runtime/custom-mcp-manager.ts; runtime/custom-mcp-tool.ts; runtime/run-engine.ts; focused tests.
 **Interfaces:** Manager list/describe/callTool/close; withCustomMcp routes external identities before the Studio/local caller. Gateway accepts action list/describe/call, server ID, tool and arguments.
 
-- [ ] Write and run failing tests with real stdio/HTTP fixture servers, cancellation, changed configuration and bounds.
-- [ ] Implement SDK clients and bounded parsing; never replay tools.
-- [ ] Add failing run-engine regressions for unchanged external instance_id and failure isolation; restrict Studio routing/recovery for external identities.
-- [ ] Run focused tests.
+- [x] Write and run failing tests with real stdio/HTTP fixture servers, cancellation, changed configuration and bounds.
+- [x] Implement SDK clients and bounded parsing; never replay tools.
+- [x] Add failing run-engine regressions for unchanged external instance_id and failure isolation; restrict Studio routing/recovery for external identities.
+- [x] Run focused tests.
 
 ### Task 3: Provider and desktop integration
 
 **Files:** three planners and tests; electron/main.ts; electron/preload.ts; src/platform.ts; renderer desktop contract.
 
-- [ ] Write and run failing tests showing mcp offered/dispatched only while enabled for all three providers and availability reflected in session keys.
-- [ ] Register the shared definition/runner, main-process store/IPC and run-scoped manager; cleanup on every run exit.
-- [ ] Validate trusted IPC senders, request and response contracts.
-- [ ] Run focused tests.
+- [x] Write and run failing tests showing mcp offered/dispatched only while enabled for all three providers and availability reflected in session keys.
+- [x] Register the shared definition/runner, main-process store/IPC and run-scoped manager; cleanup on every run exit.
+- [x] Validate trusted IPC senders, request and response contracts.
+- [x] Run focused tests.
 
 ### Task 4: Settings and documentation
 
 **Files:** src/custom-mcp-settings.tsx; settings-page.tsx; existing settings styles; docs/configuration.md; README.md.
 
-- [ ] Add a settings list/editor with local executable/argument JSON and remote URL, write-only env/header JSON, saved-secret labels, enable, check and remove controls.
-- [ ] Preserve existing settings layout and expose truthful pending/error states.
-- [ ] Document configuration, permissions, supported authentication and per-run lifetime.
+- [x] Add a settings list/editor with local executable/argument JSON and remote URL, write-only env/header JSON, saved-secret labels, enable, check and remove controls.
+- [x] Preserve existing settings layout and expose truthful pending/error states.
+- [x] Document configuration, permissions, supported authentication and per-run lifetime.
 
 ### Task 5: Completion and pull request
 
-- [ ] Inspect diff and obtain a fresh security/correctness review.
-- [ ] Run typecheck:desktop, lint:desktop, test:desktop, build:desktop and smoke:electron.
-- [ ] Fix material findings with regression tests; document genuine environment limitations.
+- [x] Inspect diff and obtain a fresh security/correctness review.
+- [x] Run typecheck:desktop, lint:desktop, test:desktop, build:desktop and smoke:electron.
+- [x] Fix material findings with regression tests; document genuine environment limitations.
 - [ ] Commit, push to a user-owned fork, create the requested PR and attach it to this chat.
