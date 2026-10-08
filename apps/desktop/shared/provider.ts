@@ -1,19 +1,19 @@
 /**
  * Which model drives a run.
  *
- * `chatgpt` and `claude` run on the user's own subscription through the
- * official Codex app-server and Claude Code CLI. `custom` runs a model on an
- * endpoint the user configured themselves, with their own key, through
- * Roqer's own agent loop.
+ * `chatgpt`, `claude` and `antigravity` run on the user's own subscription
+ * through the official Codex app-server, Claude Code CLI and Antigravity CLI.
+ * `custom` runs a model on an endpoint the user configured themselves, with
+ * their own key, through Roqer's own agent loop.
  *
  * Earlier builds also knew `workbench`, a hosted service that no longer
  * exists. It is not a provider id any more, so a saved workspace that names
  * it moves to the default when it loads.
  */
-export type ProviderId = "chatgpt" | "claude" | "custom";
+export type ProviderId = "chatgpt" | "claude" | "antigravity" | "custom";
 
 /** Every provider this build knows how to drive. */
-export const PROVIDER_IDS: readonly ProviderId[] = ["chatgpt", "claude", "custom"];
+export const PROVIDER_IDS: readonly ProviderId[] = ["chatgpt", "claude", "antigravity", "custom"];
 
 /** Providers this build offers. */
 export const ENABLED_PROVIDER_IDS: readonly ProviderId[] = PROVIDER_IDS;
@@ -22,7 +22,7 @@ export const ENABLED_PROVIDER_IDS: readonly ProviderId[] = PROVIDER_IDS;
 export const DEFAULT_PROVIDER_ID: ProviderId = "chatgpt";
 
 export function isProviderId(value: unknown): value is ProviderId {
-  return value === "chatgpt" || value === "claude" || value === "custom";
+  return value === "chatgpt" || value === "claude" || value === "antigravity" || value === "custom";
 }
 
 /** Whether this build can drive the provider. */
@@ -37,12 +37,14 @@ export function enabledProviderOr(value: unknown): ProviderId {
 
 export function providerLabel(provider: ProviderId): string {
   switch (provider) {
+    case "chatgpt":
+      return "ChatGPT";
     case "claude":
       return "Claude";
+    case "antigravity":
+      return "Antigravity";
     case "custom":
       return "Custom";
-    default:
-      return "ChatGPT";
   }
 }
 

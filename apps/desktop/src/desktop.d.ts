@@ -65,6 +65,7 @@ declare global {
       providers: {
         chatGpt: ProviderConnector;
         claude: ProviderConnector;
+        antigravity: ProviderConnector;
         custom: ProviderConnector;
       };
       customProviders: {

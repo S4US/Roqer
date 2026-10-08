@@ -16,6 +16,10 @@ test("a client's version is read from what that client prints, and nothing else 
   assert.equal(parseClientVersion("claude", "Blender 4.5.0\n"), null);
   assert.equal(parseClientVersion("codex", "codex-cli <script>\n"), null);
   assert.equal(parseClientVersion("codex", `codex-cli 1.2.3-${"a".repeat(80)}\n`), null);
+  // `agy --version` prints the bare version and nothing else.
+  assert.equal(parseClientVersion("antigravity", "1.3.1\r\n"), "1.3.1");
+  assert.equal(parseClientVersion("antigravity", "2.1.289 (Claude Code)\n"), null);
+  assert.equal(parseClientVersion("antigravity", "Update available\n1.3.1\n"), null);
 });
 
 test("a version check does not carry the bridge's credential", () => {

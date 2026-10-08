@@ -49,10 +49,11 @@ function runner(step: (child: FakeChildProcess) => void, options: { timeoutMs?: 
   return { install, spawned, killed };
 }
 
-test("only Codex and Claude Code have an installer, run only on Windows", () => {
+test("only the subscription clients have an installer, run only on Windows", () => {
   assert.equal(clientInstallerFor("custom"), null);
   assert.equal(codex.script, "https://chatgpt.com/codex/install.ps1");
   assert.equal(claude.script, "https://claude.ai/install.ps1");
+  assert.equal(clientInstallerFor("antigravity")?.script, "https://antigravity.google/cli/install.ps1");
   assert.equal(clientInstallSupported("win32"), true);
   assert.equal(clientInstallSupported("darwin"), false);
   assert.equal(clientInstallSupported("linux"), false);

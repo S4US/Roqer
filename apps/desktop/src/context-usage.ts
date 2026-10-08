@@ -79,7 +79,9 @@ export function compactTokenCount(tokens: number): string {
   return `${Number((whole / 1_000_000).toFixed(1))}M`;
 }
 
-const REPORTERS: Record<ProviderId, string> = { claude: "Claude Code", chatgpt: "Codex", custom: "your endpoint" };
+const REPORTERS: Record<ProviderId, string> = {
+  claude: "Claude Code", chatgpt: "Codex", antigravity: "The Antigravity CLI", custom: "your endpoint",
+};
 
 /**
  * What the meter shows for the chat on screen, given the model the composer

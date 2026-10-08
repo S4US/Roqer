@@ -65,6 +65,10 @@ import {
 import { ClientVersionReader } from "../runtime/client-version";
 import { resolveCodexExecutable } from "../runtime/codex-executable";
 import { createClaudePlanner, type ClaudeSession } from "../runtime/claude-planner";
+import { AntigravityClient, ANTIGRAVITY_SIGN_IN_HOSTS } from "../runtime/antigravity-cli";
+import { resolveAntigravityExecutable } from "../runtime/antigravity-executable";
+import { AntigravityLimitsTracker } from "../runtime/antigravity-limits";
+import { createAntigravityPlanner, type AntigravitySession } from "../runtime/antigravity-planner";
 import { ProviderSessionStore } from "../runtime/provider-sessions";
 import { CodexAppServerClient } from "../runtime/codex-app-server";
 import { CodexLimitsTracker } from "../runtime/codex-limits";
@@ -231,6 +235,8 @@ let codexAppServer: CodexAppServerClient | null = null;
 let codexLimits: CodexLimitsTracker | null = null;
 let claudeLimits: ClaudeLimitsTracker | null = null;
 let claudeCode: ClaudeCodeClient | null = null;
+let antigravityLimits: AntigravityLimitsTracker | null = null;
+let antigravityCli: AntigravityClient | null = null;
 const clientInstalls = new ClientInstallRunner();
 const clientVersions = new ClientVersionReader();
 /** A ChatGPT sign-in waiting in the browser, and how it ends. */
@@ -242,6 +248,7 @@ let clientInstallRequested = false;
  * follow-up does not replay the chat or re-read Studio. In memory only.
  */
 const claudeSessions = new ProviderSessionStore<ClaudeSession>();
+const antigravitySessions = new ProviderSessionStore<AntigravitySession>();
 const codexThreads = new ProviderSessionStore<CodexThread>();
 const customConversations = new ProviderSessionStore<AgentLoopSession>();
 let agentRuntimePromise: Promise<AgentRuntime> | null = null;
@@ -1130,6 +1137,16 @@ function claudePlanLimits(): ClaudeLimitsTracker {
   return claudeLimits;
 }
 
+function antigravityProvider(): AntigravityClient {
+  antigravityCli ??= new AntigravityClient();
+  return antigravityCli;
+}
+
+function antigravityPlanLimits(): AntigravityLimitsTracker {
+  antigravityLimits ??= new AntigravityLimitsTracker({ source: antigravityProvider() });
+  return antigravityLimits;
+}
+
 /**
  * Sign-in hosts a provider CLI is allowed to send the user to. A vendor tool
  * that returns anything else is not opened: the address comes from a child
@@ -1138,6 +1155,7 @@ function claudePlanLimits(): ClaudeLimitsTracker {
 const SIGN_IN_HOSTS: Record<ProviderId, readonly string[]> = {
   chatgpt: ["chatgpt.com", "auth.openai.com"],
   claude: ["claude.com", "claude.ai", "console.anthropic.com", "platform.claude.com"],
+  antigravity: ANTIGRAVITY_SIGN_IN_HOSTS,
   // Custom connections are configured in Settings; nothing is signed in to.
   custom: [],
 };
@@ -1148,23 +1166,33 @@ function providerArgument(value: unknown): ProviderId | null {
 }
 
 async function readProviderStatus(provider: ProviderId): Promise<ProviderStatus> {
-  if (provider === "custom") {
-    try {
-      return customProviderStatus(await customProviders().list());
-    } catch (error) {
-      return { kind: "unavailable", message: error instanceof Error ? error.message : "Your model connections could not be read." };
-    }
+  switch (provider) {
+    case "custom":
+      try {
+        return customProviderStatus(await customProviders().list());
+      } catch (error) {
+        return { kind: "unavailable", message: error instanceof Error ? error.message : "Your model connections could not be read." };
+      }
+    case "claude":
+      return claudeProvider().getStatus();
+    case "antigravity":
+      return antigravityProvider().getStatus();
+    case "chatgpt":
+      return chatGptProvider().getChatGptStatus();
   }
-  return provider === "claude"
-    ? claudeProvider().getStatus()
-    : chatGptProvider().getChatGptStatus();
 }
 
 async function readProviderCatalog(provider: ProviderId): Promise<ProviderModelCatalog> {
-  if (provider === "custom") return customModelCatalog(await customProviders().list());
-  return provider === "claude"
-    ? claudeProvider().listModels()
-    : chatGptProvider().listChatGptModels();
+  switch (provider) {
+    case "custom":
+      return customModelCatalog(await customProviders().list());
+    case "claude":
+      return claudeProvider().listModels();
+    case "antigravity":
+      return antigravityProvider().listModels();
+    case "chatgpt":
+      return chatGptProvider().listChatGptModels();
+  }
 }
 
 /**
@@ -1175,6 +1203,7 @@ async function readClientVersion(provider: ProviderId): Promise<string | null> {
   try {
     if (provider === "claude") return await clientVersions.read("claude", await resolveClaudeExecutable());
     if (provider === "chatgpt") return await clientVersions.read("codex", await resolveCodexExecutable());
+    if (provider === "antigravity") return await clientVersions.read("antigravity", await resolveAntigravityExecutable());
   } catch {
     // Not installed: the status says so itself.
   }
@@ -1217,9 +1246,29 @@ async function loginProvider(event: IpcMainInvokeEvent, value: unknown): Promise
   const label = providerLabel(provider);
 
   try {
+    // The user may have signed in from another Antigravity app since the last
+    // look, so that account is read afresh rather than from a cached answer.
+    if (provider === "antigravity") antigravityProvider().forgetStatus();
     const current = await readProviderStatus(provider);
     if (current.kind === "signed-in") return { ok: true, message: current.message };
     if (provider === "custom") return { ok: false, message: current.message };
+    if (provider === "antigravity") {
+      if (current.kind === "not-installed") return { ok: false, message: current.message };
+      // A new sign-in may be a different account; nothing it did not run may carry over.
+      await antigravitySessions.closeAll();
+      antigravityLimits?.forget();
+      const client = antigravityProvider();
+      const login = await client.beginLogin();
+      const authUrl = allowedSignInUrl(provider, login.authUrl);
+      if (authUrl === null) {
+        client.cancelLogin();
+        return { ok: false, message: `${label} returned an unexpected sign-in address.` };
+      }
+      // `agy`'s headless sign-in prints the address and waits for the code
+      // Google's page shows; it does not open a browser itself.
+      await shell.openExternal(authUrl.href);
+      return { ok: true, message: "Sign in with Google in your browser, then paste the code Google shows you here.", awaitingCode: true };
+    }
 
     // A new sign-in may be a different account; nothing it did not run may carry over.
     if (provider === "claude") {
@@ -1267,6 +1316,7 @@ async function getProviderLimits(event: IpcMainInvokeEvent, value: unknown): Pro
   const provider = providerArgument(value);
   if (provider === "chatgpt") return chatGptLimits().read();
   if (provider === "claude") return claudePlanLimits().read();
+  if (provider === "antigravity") return antigravityPlanLimits().read();
   return NO_LIMITS;
 }
 
@@ -1336,12 +1386,14 @@ function allowedSignInUrl(provider: ProviderId, address: string): URL | null {
  */
 async function openProviderLogin(event: IpcMainInvokeEvent, value: unknown): Promise<ProviderLoginResult> {
   if (!isTrusted(event.sender)) return { ok: false, message: "This window may not open sign-in." };
-  if (providerArgument(value) !== "claude") return { ok: false, message: "Unknown provider." };
-  const address = claudeProvider().pendingLoginUrl();
-  const url = address === null ? null : allowedSignInUrl("claude", address);
-  if (url === null) return { ok: false, message: "No Claude sign-in is waiting. Choose Connect to start one." };
+  const provider = providerArgument(value);
+  if (provider !== "claude" && provider !== "antigravity") return { ok: false, message: "Unknown provider." };
+  const label = providerLabel(provider);
+  const address = provider === "claude" ? claudeProvider().pendingLoginUrl() : antigravityProvider().pendingLoginUrl();
+  const url = address === null ? null : allowedSignInUrl(provider, address);
+  if (url === null) return { ok: false, message: `No ${label} sign-in is waiting. Choose Connect to start one.` };
   await shell.openExternal(url.href);
-  return { ok: true, message: "Opened the sign-in page. If Claude shows you a code, paste it here." };
+  return { ok: true, message: `Opened the sign-in page. If ${provider === "claude" ? "Claude" : "Google"} shows you a code, paste it here.` };
 }
 
 /**
@@ -1352,6 +1404,7 @@ async function waitForProviderLogin(event: IpcMainInvokeEvent, value: unknown): 
   if (!isTrusted(event.sender)) return { ok: false, message: "This window may not finish sign-in." };
   const provider = providerArgument(value);
   if (provider === "claude") return claudeProvider().waitForLogin();
+  if (provider === "antigravity") return antigravityProvider().waitForLogin();
   if (provider !== "chatgpt") return { ok: false, message: "This sign-in does not finish in the browser." };
   const pending = pendingChatGptLogin;
   if (pending === null) {
@@ -1367,8 +1420,9 @@ async function waitForProviderLogin(event: IpcMainInvokeEvent, value: unknown): 
 async function cancelProviderLogin(event: IpcMainInvokeEvent, value: unknown): Promise<ProviderLoginResult> {
   if (!isTrusted(event.sender)) return { ok: false, message: "This window may not cancel sign-in." };
   const provider = providerArgument(value);
-  if (provider === "claude") {
-    claudeProvider().cancelLogin();
+  if (provider === "claude" || provider === "antigravity") {
+    if (provider === "claude") claudeProvider().cancelLogin();
+    else antigravityProvider().cancelLogin();
     return { ok: true, message: "Sign-in cancelled." };
   }
   if (provider !== "chatgpt" || pendingChatGptLogin === null) return { ok: true, message: "Nothing to cancel." };
@@ -1378,14 +1432,19 @@ async function cancelProviderLogin(event: IpcMainInvokeEvent, value: unknown): P
 
 async function submitProviderCode(event: IpcMainInvokeEvent, payload: unknown): Promise<ProviderLoginResult> {
   if (!isTrusted(event.sender)) return { ok: false, message: "This window may not finish sign-in." };
-  if (!isRecord(payload) || providerArgument(payload.provider) !== "claude") {
+  const provider = isRecord(payload) ? providerArgument(payload.provider) : null;
+  if (!isRecord(payload) || (provider !== "claude" && provider !== "antigravity")) {
     return { ok: false, message: "Unknown provider." };
   }
-  if (typeof payload.code !== "string") return { ok: false, message: "Paste the code Claude gave you." };
+  if (typeof payload.code !== "string") {
+    return { ok: false, message: `Paste the code ${provider === "claude" ? "Claude" : "Google"} gave you.` };
+  }
   try {
-    return await claudeProvider().submitLoginCode(payload.code);
+    return provider === "claude"
+      ? await claudeProvider().submitLoginCode(payload.code)
+      : await antigravityProvider().submitLoginCode(payload.code);
   } catch (error) {
-    return { ok: false, message: error instanceof Error ? error.message : "Claude sign-in could not finish." };
+    return { ok: false, message: error instanceof Error ? error.message : `${providerLabel(provider)} sign-in could not finish.` };
   }
 }
 
@@ -1504,6 +1563,7 @@ function plannerFor(
   // A conversation kept by one provider has not seen what another provider
   // does in the same chat, so a run on any other provider retires it.
   if (request.provider !== "claude") claudeSessions.drop(request.chatId);
+  if (request.provider !== "antigravity") antigravitySessions.drop(request.chatId);
   if (request.provider !== "chatgpt") codexThreads.drop(request.chatId);
   if (request.provider !== "custom") customConversations.drop(request.chatId);
   if (request.provider === "custom") {
@@ -1554,6 +1614,24 @@ function plannerFor(
       referenceClips,
     });
   }
+  if (request.provider === "antigravity") {
+    const client = antigravityProvider();
+    return createAntigravityPlanner({
+      launcher: client,
+      getStatus: () => client.getStatus(),
+      // `agy` lists each effort of a model as a model of its own; the picker
+      // shows one model with a choice of effort, and this turns it back.
+      model: client.modelSlug(request.model!, request.effort),
+      ...(modelName === undefined ? {} : { modelName }),
+      agent: agentRuntime.definition,
+      skillLibrary: agentRuntime.skillLibrary,
+      chatId: request.chatId,
+      sessions: antigravitySessions,
+      blender,
+      referenceClips,
+    });
+  }
+  if (request.provider !== "chatgpt") throw new Error(`No planner drives ${providerLabel(request.provider)}.`);
   return createChatGptPlanner({
     appServer: chatGptProvider(),
     cwd,
@@ -2485,10 +2563,12 @@ app.on("before-quit", () => {
   void clipDecoder.close(true);
   clientInstalls.stop();
   void claudeSessions.closeAll();
+  void antigravitySessions.closeAll();
   void codexThreads.closeAll();
   void customConversations.closeAll();
   codexAppServer?.close();
   claudeCode?.close();
+  antigravityCli?.close();
 });
 
 app.on("will-quit", (event) => {

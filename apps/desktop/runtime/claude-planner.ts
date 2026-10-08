@@ -14,18 +14,9 @@ import type { AgentDefinition } from "./agent-definition";
 import type { ProviderStatus, ReasoningEffort } from "../shared/provider";
 import type { ClaudeLauncher } from "./claude-cli";
 import type { SkillLibrary } from "./skill-library";
-import { createIconToolRunner, iconToolDefinition, ICON_TOOL_NAME } from "./icon-tool";
-import { blenderToolDefinition, parseBlenderToolInput } from "./blender-tool";
-import { BLENDER_TOOL_NAME } from "../shared/blender";
-import { REFERENCE_CLIP_TOOL_NAME } from "../shared/reference-clip";
-import { parseReferenceClipToolInput, referenceClipToolDefinition } from "./reference-clip";
-import { createSkillToolRunner, skillToolDefinition, SKILL_TOOL_NAME, type SkillToolRunner } from "./skill-tool";
-import {
-  createStudioToolRunner, MalformedToolCallError, malformedCallsEndRun, MAX_CONSECUTIVE_MALFORMED_CALLS, parseStudioToolInput, studioToolDescription, studioToolInputSchema,
-  STUDIO_TOOL_NAME,
-} from "./studio-tools";
-import { runTaskTool, taskToolDefinition, TASK_TOOL_NAME } from "./task-tool";
-import { runQuestionTool, questionToolDefinition, QUESTION_TOOL_NAME } from "./question-tool";
+import { createSkillToolRunner, SKILL_TOOL_NAME, type SkillToolRunner } from "./skill-tool";
+import { STUDIO_TOOL_NAME } from "./studio-tools";
+import { createWorkbenchToolInvoker, workbenchMcpTools, workbenchToolNames } from "./workbench-tools";
 import { buildConversationPrompt, buildFollowUpPrompt, continuesConversation } from "./conversation-prompt";
 import type { ProviderSessionStore } from "./provider-sessions";
 import { runDeveloperInstructions } from "./run-instructions";
@@ -53,31 +44,14 @@ const ESCAPE_RESULT =
 
 /** The MCP server name Claude Code namespaces the tool under. */
 const MCP_SERVER_NAME = "workbench";
-const QUALIFIED_STUDIO_TOOL_NAME = `mcp__${MCP_SERVER_NAME}__${STUDIO_TOOL_NAME}`;
-const QUALIFIED_SKILL_TOOL_NAME = `mcp__${MCP_SERVER_NAME}__${SKILL_TOOL_NAME}`;
-const QUALIFIED_ICON_TOOL_NAME = `mcp__${MCP_SERVER_NAME}__${ICON_TOOL_NAME}`;
-const QUALIFIED_TASK_TOOL_NAME = `mcp__${MCP_SERVER_NAME}__${TASK_TOOL_NAME}`;
-const QUALIFIED_QUESTION_TOOL_NAME = `mcp__${MCP_SERVER_NAME}__${QUESTION_TOOL_NAME}`;
 
-const QUALIFIED_BLENDER_TOOL_NAME = `mcp__${MCP_SERVER_NAME}__${BLENDER_TOOL_NAME}`;
-const QUALIFIED_REFERENCE_CLIP_TOOL_NAME = `mcp__${MCP_SERVER_NAME}__${REFERENCE_CLIP_TOOL_NAME}`;
-
-/** Every tool Roqer grants a Claude run, in the order they are announced. */
-const QUALIFIED_TOOL_NAMES = [
-  QUALIFIED_STUDIO_TOOL_NAME,
-  QUALIFIED_SKILL_TOOL_NAME,
-  QUALIFIED_ICON_TOOL_NAME,
-  QUALIFIED_TASK_TOOL_NAME,
-  QUALIFIED_QUESTION_TOOL_NAME,
-];
-
-/** The granted tools for these options: Blender only while the user has it on, reference_clip only in a chat with clips. */
+/**
+ * Every tool Roqer grants a Claude run, as Claude Code names them, in the
+ * order they are announced: Blender only while the user has it on,
+ * reference_clip only in a chat with clips.
+ */
 function qualifiedToolNames(options: ClaudePlannerOptions): string[] {
-  return [
-    ...QUALIFIED_TOOL_NAMES,
-    ...(options.blender === true ? [QUALIFIED_BLENDER_TOOL_NAME] : []),
-    ...(options.referenceClips === true ? [QUALIFIED_REFERENCE_CLIP_TOOL_NAME] : []),
-  ];
+  return workbenchToolNames(options).map((name) => `mcp__${MCP_SERVER_NAME}__${name}`);
 }
 
 export type ClaudePlannerOptions = {
@@ -571,11 +545,7 @@ export class ClaudeSession {
   ): Promise<ClaudeSession> {
     let session: ClaudeSession | null = null;
     const server = await startWorkbenchMcpServer({
-      tools: [{
-        name: STUDIO_TOOL_NAME, description: studioToolDescription(), inputSchema: studioToolInputSchema(),
-      }, skillToolDefinition(options.skillLibrary), iconToolDefinition(), taskToolDefinition(), questionToolDefinition(),
-      ...(options.blender === true ? [blenderToolDefinition()] : []),
-      ...(options.referenceClips === true ? [referenceClipToolDefinition()] : [])],
+      tools: workbenchMcpTools(options),
       invoke: async (name, args) => session?.binding
         ? session.binding.invoke(name, args)
         : { ok: false, text: "No Roqer run is active. End this turn." },
@@ -709,8 +679,6 @@ export function createClaudePlanner(options: ClaudePlannerOptions): Planner {
       if (account.kind !== "signed-in") throw new Error(account.message);
       if (context.signal.aborted) throw new Error("Run was cancelled.");
 
-      const runStudioTool = createStudioToolRunner(context, { templates: options.skillLibrary });
-      const runIconTool = createIconToolRunner(options.skillLibrary);
       const completion = deferred<string>();
       // Startup can still be awaiting filesystem/process work when cancellation
       // rejects this promise. Observe it now; the run still awaits it below.
@@ -729,8 +697,6 @@ export function createClaudePlanner(options: ClaudePlannerOptions): Planner {
       let runUsage: ClaudeRunUsage | undefined;
       /** The same usage request by request. */
       const requestLog = new ClaudeRequestLog();
-      /** Malformed Studio or Blender calls since the last well-formed one. */
-      let malformedCalls = 0;
 
       const finish = (summary: string) => {
         if (settled) return;
@@ -762,62 +728,14 @@ export function createClaudePlanner(options: ClaudePlannerOptions): Planner {
       const onAbort = () => fail(new Error("Run was cancelled."));
       context.signal.addEventListener("abort", onAbort, { once: true });
 
-      const invokeTool = async (name: string, args: JsonRecord): Promise<WorkbenchMcpToolResult> => {
-        if (settled) return { ok: false, text: "This Roqer run has ended. End this turn." };
-        if (name === SKILL_TOOL_NAME || name === ICON_TOOL_NAME) {
-          // Tools are only reachable through a session this run has bound.
-          const run = name === SKILL_TOOL_NAME ? session!.skills : runIconTool;
-          try {
-            return { ok: true, text: await run(args) };
-          } catch (error) {
-            return { ok: false, text: error instanceof Error ? error.message : String(error) };
-          }
-        }
-        if (name === TASK_TOOL_NAME) {
-          // A malformed list is the model's mistake to correct, not a reason
-          // to end the turn, so it comes back as an ordinary tool error.
-          try {
-            return { ok: true, text: runTaskTool(context, args) };
-          } catch (error) {
-            return { ok: false, text: error instanceof Error ? error.message : String(error) };
-          }
-        }
-        if (name === QUESTION_TOOL_NAME) {
-          try {
-            return { ok: true, text: await runQuestionTool(context, args, ESCAPE_RESULT) };
-          } catch (error) {
-            // A cancelled run must still end the turn; a rejected question
-            // shape must not.
-            if (context.signal.aborted) fail(error);
-            return { ok: false, text: error instanceof Error ? error.message : String(error) };
-          }
-        }
-        let call: { operation: string; args: JsonRecord };
-        try {
-          call = options.blender === true && name === BLENDER_TOOL_NAME
-            ? parseBlenderToolInput(args)
-            : options.referenceClips === true && name === REFERENCE_CLIP_TOOL_NAME
-              ? parseReferenceClipToolInput(args)
-              : parseStudioToolInput(args);
-        } catch (error) {
-          // A malformed call is the model's mistake to correct, answered like
-          // any failed call; only a run of them that is not converging ends it.
-          const text = error instanceof Error ? error.message : String(error);
-          if (!(error instanceof MalformedToolCallError)) fail(error);
-          else if (++malformedCalls >= MAX_CONSECUTIVE_MALFORMED_CALLS) fail(malformedCallsEndRun(text));
-          return { ok: false, text };
-        }
-        malformedCalls = 0;
-        try {
-          return await runStudioTool(call.operation, call.args);
-        } catch (error) {
-          // Policy/user rejections are ordinary results from runStudioTool.
-          // Only cancellation or an unexpected host error reaches this
-          // boundary and ends the provider turn.
-          fail(error);
-          return { ok: false, text: error instanceof Error ? error.message : String(error) };
-        }
-      };
+      const invokeTool = createWorkbenchToolInvoker(context, {
+        ...options,
+        // Tools are only reachable through a session this run has bound.
+        skills: () => session!.skills,
+        escapeResult: ESCAPE_RESULT,
+        settled: () => settled,
+        fail,
+      });
 
       const limitWarnings = new LimitWarnings("Claude", (label, detail) => context.status(label, detail));
       const onMessage = (message: JsonRecord) => {

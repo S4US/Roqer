@@ -3,6 +3,8 @@ import test from "node:test";
 import { enabledProviderOr, isEnabledProvider, isProviderId } from "../shared/provider";
 import {
   appendMessage,
+  modelPreference,
+  selectedModelId,
   chatStudioInstanceId,
   chatStudioTarget,
   chatsByActivity,
@@ -218,12 +220,27 @@ test("version 2 preferences keep the vendor models", () => {
   assert.equal(migrated.preferences.chatGptModelId, "gpt-5.6-luna");
   assert.equal(migrated.preferences.claudeModelId, "claude-opus-5");
   assert.equal(migrated.preferences.reasoningEffort, "high");
+  // Saved before Antigravity was offered: none chosen, nothing else disturbed.
+  assert.equal(migrated.preferences.antigravityModelId, null);
+});
+
+test("an Antigravity model choice is kept apart from the other providers'", () => {
+  const workspace = createInitialWorkspace();
+  const saved = normalizeWorkspace({
+    ...workspace,
+    preferences: { ...workspace.preferences, provider: "antigravity", antigravityModelId: "gemini-3.8-flash-high", claudeModelId: "opus" },
+  });
+  assert.equal(saved.preferences.provider, "antigravity");
+  assert.equal(selectedModelId(saved.preferences, "antigravity"), "gemini-3.8-flash-high");
+  assert.equal(selectedModelId(saved.preferences, "claude"), "opus");
+  assert.deepEqual(modelPreference("antigravity", "gemini-3.1-pro-high"), { antigravityModelId: "gemini-3.1-pro-high" });
 });
 
 test("every provider is offered and the retired hosted gateway moves to the default", () => {
   assert.equal(isProviderId("claude"), true);
   assert.equal(isEnabledProvider("claude"), true);
   assert.equal(isEnabledProvider("chatgpt"), true);
+  assert.equal(isEnabledProvider("antigravity"), true);
   // The retired hosted gateway is no longer a provider at all.
   assert.equal(isProviderId("workbench"), false);
   assert.equal(isEnabledProvider("workbench"), false);
