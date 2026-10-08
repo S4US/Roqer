@@ -1,10 +1,9 @@
 ---
 name: roblox-npc-ai
 description: "Use when creating Roblox NPCs or enemies with pathfinding, state machines, line-of-sight or FOV detection, spawns, or AI update loops."
-last_reviewed: 2026-07-26
+last_reviewed: 2026-08-31
 sources:
   - https://raw.githubusercontent.com/Roblox/creator-docs/main/content/en-us/characters/pathfinding.md
-  - https://devforum.roblox.com/t/improving-pathfinding-quality-with-new-algorithm/3258657
   - https://create.roblox.com/docs/projects/server-authority
 ---
 
@@ -48,9 +47,9 @@ end
 
 ### Detection (distance → FOV → LOS)
 
-1. **Distance** `(a-b).Magnitude` — cheapest, always first
-2. **FOV** `forward:Dot(toTarget)` cosine — use a configured cone for the game, not a universal angle
-3. **LOS** `workspace:Raycast` — expensive, last
+1. **Distance** `(a-b).Magnitude`: cheapest, always first
+2. **FOV** `forward:Dot(toTarget)` cosine; use a configured cone for your game, not a universal angle
+3. **LOS** `workspace:Raycast`: expensive, last
 - If the design includes hearing or proximity detection, make it a separate configured signal rather than a universal FOV bypass.
 
 ### Network Ownership

@@ -1,10 +1,16 @@
 ---
 name: roblox-building
 description: "Use when building Roblox geometry, maps, props, or generated assets with MCP or standalone Luau."
-last_reviewed: 2026-09-23
+last_reviewed: 2026-10-08
 sources:
   - original
   - https://raw.githubusercontent.com/Roblox/creator-docs/main/content/en-us/studio/mcp.md
+  - https://create.roblox.com/docs/projects/assets/toolbox
+  - https://create.roblox.com/docs/scripting/security/third-party-vulnerabilities
+  - https://create.roblox.com/docs/reference/engine/classes/EditableImage
+  - https://devforum.roblox.com/t/a-complete-guide-to-editableimages/3858566
+  - https://devforum.roblox.com/t/large-scale-roblox-terrain-the-ultimate-guide/405672
+  - https://create.roblox.com/docs/production/game-design/onboarding
 ---
 
 # Roblox Building
@@ -33,7 +39,7 @@ Capture a before view, name one observable defect, repair the smallest component
 When the `blender` tool is offered, every visual piece is a Blender model, whatever the style, and walkable or interactive pieces are Parts beneath it; make the whole visual set in one job and one upload. Load [What gets modeled](references/mesh-boundary.md) before planning. Without Blender, decide per component, not once per build, and take the first source that fits:
 1. **Native Parts/CSG** for ground, blocks, walls, stairs, collision, triggers, and anything the style keeps geometric.
 2. **Existing project assets:** reuse a compatible model already in the place before making a new one.
-3. **Creator Store:** `search_assets` → `get_asset_details`/`preview_asset` → `insert_asset`. For cross-owner or paid assets, surface creator/source/price and get explicit consent first.
+3. **Creator Store:** `search_assets` → `get_asset_details`/`preview_asset` → `insert_asset`. Judge creator, previews, script count and fit before inserting; popularity is a signal, not proof. For cross-owner or paid assets, surface creator/source/price and get explicit consent first. `insert_asset` strips scripts, so recreate any behavior the asset needs.
 4. **Generated mesh:** `generate_model` for a custom textured prop. It stages the result in `ServerStorage.__MCPGeneratedModels`; move it into the build root, then inspect it before accepting it.
 
 [What gets modeled](references/mesh-boundary.md) decides, per piece, what is modeled and what is Parts, how collision is layered under a model, and what placeholder to leave when nothing available can produce a shape. For any mesh, write the brief in [Modeling a mesh](references/modeling.md) first: role, stud size, style, surfaces, moving pieces and budget. When the `blender` tool is offered, load [Blender modeling](references/blender.md) before the first job: it covers a whole kit set in one upload, and rendering PNG icons for UI. For particle textures, flipbooks and mesh-effect shapes, load the `roblox-animation-vfx` skill's `references/vfx-textures.md` and `references/vfx-mesh-shapes.md` instead. When a model must be held, driven, sat on, opened or picked up, load [Gameplay assembly](references/gameplay-assembly.md). To change a kit's template everywhere it is placed, follow "Revise a kit everywhere" in [World intent](references/world-intent.md).
@@ -57,11 +63,12 @@ Player ~5 studs | Door 4w×7h | Ceiling 10-14 | Counter 3.5-4 | Seat 1.5 | Path 
 
 ### Acceptance
 **Prop:** named model, pivot, scale, bounds, materials, collision, anchoring, no loose parts, asset provenance.
-**Map:** root/origin, zones, landmarks, spawns, path widths, traversal, and bounds checks excluding Baseplate/Terrain/SpawnLocation.
+**Map:** root/origin, zones, landmarks, spawns/return paths, path widths, traversal from the player camera, and bounds checks excluding Baseplate/Terrain/SpawnLocation.
+**Mesh:** bounds, collision fidelity, `SurfaceAppearance`/PBR at representative quality levels. `EditableImage`/`EditableMesh` have permission and memory limits (full.md).
 **Evidence:** structural readback plus screenshot when supported, console/runtime result when playtested.
 **Budget:** compare bounded `get_scene_analysis` results and local counts with the saved world budgets; report missing measurements instead of claiming a performance pass.
 
 ### Anti-Patterns
 Guessing coords | unanchored parts | hardcoded world positions | silent CSG failures | building through `execute_luau` what `build_instances` can do | one call per part | default gray | claiming generation succeeded without readback
 
-**Need detail?** Load [World intent](references/world-intent.md) for map planning, saved kit/zone conventions, cross-session reuse and targeted edits. Load [Visual repair](references/visual-repair.md) for screenshot-driven local repair and before/after verification. Load `references/full.md` for CSG wrappers, map structure, validation scripts, asset recipes, and evidence workflows.
+**Need detail?** Load [World intent](references/world-intent.md) for map planning, saved kit/zone conventions, cross-session reuse and targeted edits. Load [Visual repair](references/visual-repair.md) for screenshot-driven local repair and before/after verification. Load `references/full.md` for CSG wrappers, map structure, validation scripts, asset recipes, mesh and `EditableImage`/`EditableMesh` checks, terrain import, player-route acceptance, large-place readback, `ProximityPrompt`, and evidence workflows.
