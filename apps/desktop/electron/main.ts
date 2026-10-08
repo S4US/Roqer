@@ -38,11 +38,14 @@ import {
   testCustomModel,
 } from "../runtime/custom-provider";
 import {
+  DEFAULT_OPENCODE_CONNECTION,
+  DEFAULT_OPENCODE_CONNECTION_VIEW,
   isCustomConnectionId,
   isCustomModelId,
   parseCustomConnectionSave,
   parseCustomModelKey,
   type CustomConnection,
+  type CustomConnectionView,
   type CustomConnectionsResult,
   type CustomModel,
   type CustomModelImportResult,
@@ -246,6 +249,15 @@ function customProviders(): CustomProviderStore {
     protector: electronSecretProtector,
   });
   return customProviderStore;
+}
+
+/** Connections including the built-in OpenCode Zen free model fallback. */
+async function listEffectiveCustomConnections(): Promise<CustomConnectionView[]> {
+  const connections = await customProviders().list();
+  if (connections.some((connection) => connection.id === DEFAULT_OPENCODE_CONNECTION.id)) {
+    return connections;
+  }
+  return [DEFAULT_OPENCODE_CONNECTION_VIEW, ...connections];
 }
 
 let openCloudStore: OpenCloudStore | null = null;
@@ -1018,7 +1030,7 @@ function providerArgument(value: unknown): ProviderId | null {
 async function readProviderStatus(provider: ProviderId): Promise<ProviderStatus> {
   if (provider === "custom") {
     try {
-      return customProviderStatus(await customProviders().list());
+      return customProviderStatus(await listEffectiveCustomConnections());
     } catch (error) {
       return { kind: "unavailable", message: error instanceof Error ? error.message : "Your model connections could not be read." };
     }
@@ -1029,7 +1041,7 @@ async function readProviderStatus(provider: ProviderId): Promise<ProviderStatus>
 }
 
 async function readProviderCatalog(provider: ProviderId): Promise<ProviderModelCatalog> {
-  if (provider === "custom") return customModelCatalog(await customProviders().list());
+  if (provider === "custom") return customModelCatalog(await listEffectiveCustomConnections());
   return provider === "claude"
     ? claudeProvider().listModels()
     : chatGptProvider().listChatGptModels();
@@ -1277,7 +1289,7 @@ async function customConnectionsResult(connections: Awaited<ReturnType<CustomPro
 async function listCustomConnections(event: IpcMainInvokeEvent): Promise<CustomConnectionsResult> {
   if (!isTrusted(event.sender)) return { ok: false, message: "This window may not read model connections." };
   try {
-    return await customConnectionsResult(await customProviders().list());
+    return await customConnectionsResult(await listEffectiveCustomConnections());
   } catch (error) {
     return storeFailure(error, "Your model connections could not be read.");
   }
@@ -1316,7 +1328,10 @@ async function testCustomConnectionModel(event: IpcMainInvokeEvent, payload: unk
     return { ok: false, message: "That model was not valid." };
   }
   try {
-    const resolved = await customProviders().resolve(payload.connectionId);
+    let resolved = await customProviders().resolve(payload.connectionId);
+    if (resolved === undefined && payload.connectionId === DEFAULT_OPENCODE_CONNECTION.id) {
+      resolved = { connection: DEFAULT_OPENCODE_CONNECTION, apiKey: null };
+    }
     if (resolved === undefined) return { ok: false, message: "That connection no longer exists." };
     const model = resolved.connection.models.find((entry) => entry.id === payload.modelId);
     if (model === undefined) return { ok: false, message: "Save the model before testing it." };
@@ -1330,7 +1345,10 @@ async function importCustomModels(event: IpcMainInvokeEvent, connectionId: unkno
   if (!isTrusted(event.sender)) return { ok: false, message: "This window may not read model lists." };
   if (!isCustomConnectionId(connectionId)) return { ok: false, message: "That connection was not valid." };
   try {
-    const resolved = await customProviders().resolve(connectionId);
+    let resolved = await customProviders().resolve(connectionId);
+    if (resolved === undefined && connectionId === DEFAULT_OPENCODE_CONNECTION.id) {
+      resolved = { connection: DEFAULT_OPENCODE_CONNECTION, apiKey: null };
+    }
     if (resolved === undefined) return { ok: false, message: "That connection no longer exists." };
     return await listEndpointModels(resolved.connection, resolved.apiKey);
   } catch (error) {
@@ -1355,6 +1373,9 @@ async function resolveCustomRun(modelKey: string | null): Promise<CustomRun | { 
   let resolved: Awaited<ReturnType<CustomProviderStore["resolve"]>>;
   try {
     resolved = await customProviders().resolve(parsed.connectionId);
+    if (resolved === undefined && parsed.connectionId === DEFAULT_OPENCODE_CONNECTION.id) {
+      resolved = { connection: DEFAULT_OPENCODE_CONNECTION, apiKey: null };
+    }
   } catch (error) {
     return { message: error instanceof Error ? error.message : "Your model connection could not be read." };
   }

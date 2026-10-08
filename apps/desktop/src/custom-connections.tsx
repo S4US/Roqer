@@ -1,4 +1,4 @@
-import { Check, ChevronDown, ChevronLeft, Download, Eye, Plus, X } from "lucide-react";
+import { Check, ChevronDown, ChevronLeft, Download, Eye, Plus, Sparkles, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import {
@@ -45,9 +45,29 @@ const PRESETS: readonly Preset[] = [
   { name: "OpenAI", format: "openai-responses", baseUrl: "https://api.openai.com/v1" },
   { name: "Anthropic", format: "anthropic", baseUrl: "https://api.anthropic.com/v1" },
   { name: "OpenRouter", format: "openai", baseUrl: "https://openrouter.ai/api/v1" },
+  { name: "OpenCode Zen", format: "openai", baseUrl: "https://opencode.ai/zen/v1" },
   { name: "DeepSeek", format: "openai", baseUrl: "https://api.deepseek.com/v1" },
   { name: "Ollama", format: "openai", baseUrl: "http://localhost:11434/v1", local: true },
   { name: "LM Studio", format: "openai", baseUrl: "http://localhost:1234/v1", local: true },
+];
+
+export type FreeModelOption = Readonly<{
+  id: string;
+  displayName: string;
+  contextWindow: number;
+  category: "opencode";
+  description: string;
+}>;
+
+export const FREE_MODEL_OPTIONS: readonly FreeModelOption[] = [
+  // OpenCode Zen free model
+  {
+    id: "space-bunny-free",
+    displayName: "Space Bunny (Free · 1M)",
+    contextWindow: 1_000_000,
+    category: "opencode",
+    description: "Built-in free 1M-context model on OpenCode Zen (verified tool-calling, no key required)",
+  },
 ];
 
 const EFFORT_LABELS: Record<CustomReasoningEffort, string> = {
@@ -255,6 +275,8 @@ export function EndpointPage({ connection, onBack, onSaved, onRemoved, onDirtyCh
   const [importMessage, setImportMessage] = useState<string | null>(null);
   const [chosen, setChosen] = useState<ReadonlySet<string>>(new Set());
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set());
+  const [showFreePicker, setShowFreePicker] = useState(false);
+  const [chosenFree, setChosenFree] = useState<ReadonlySet<string>>(new Set());
   const adding = saved === undefined;
   const activePreset = PRESETS.find((preset) => preset.baseUrl === draft.baseUrl.trim() && preset.format === draft.format);
   // A preset fills the address, so its fields stay folded away until asked for.
@@ -280,10 +302,21 @@ export function EndpointPage({ connection, onBack, onSaved, onRemoved, onDirtyCh
   });
 
   const applyPreset = (preset: Preset) => {
+    const isNew = draft.models.length === 0;
+    const defaultModels = preset.name === "OpenCode Zen" && isNew
+      ? FREE_MODEL_OPTIONS.filter((m) => m.id === "space-bunny-free").map((m) => draftModel({
+          id: m.id,
+          displayName: m.displayName,
+          images: true,
+          efforts: [],
+          contextWindow: m.contextWindow,
+        }))
+      : draft.models;
     update({
       name: draft.name.trim() === "" || PRESETS.some((entry) => entry.name === draft.name.trim()) ? preset.name : draft.name,
       format: preset.format,
       baseUrl: preset.baseUrl,
+      models: defaultModels,
     });
     setShowEndpoint(false);
   };
@@ -462,11 +495,59 @@ export function EndpointPage({ connection, onBack, onSaved, onRemoved, onDirtyCh
       <SettingsGroup
         title={`Models${draft.models.length > 0 ? ` · ${draft.models.length}` : ""}`}
         action={<div className="settings-actions">
-          <button type="button" className="text-button" disabled={busy || room <= 0 || !canSave} onClick={() => void loadImport()} title={needsSaveFirst ? "Saves the endpoint, then reads its model list" : "Read the endpoint's model list"}><Download size={14} /> Find models</button>
+          <button type="button" className="text-button" disabled={busy || room <= 0} onClick={() => { setShowFreePicker(!showFreePicker); setImported(null); }}><Sparkles size={14} /> Free models</button>
+          <button type="button" className="text-button" disabled={busy || room <= 0 || !canSave} onClick={() => { void loadImport(); setShowFreePicker(false); }} title={needsSaveFirst ? "Saves the endpoint, then reads its model list" : "Read the endpoint's model list"}><Download size={14} /> Find models</button>
           <button type="button" className="text-button" disabled={room <= 0} onClick={addManual}><Plus size={14} /> Add by id</button>
         </div>}
         footnote="These appear in the composer's model picker. Roqer works through tool calls, so use models that support them; small local models may not follow its instructions well."
       >
+        {showFreePicker && <div className="custom-import">
+          <div className="custom-import-list">
+            {FREE_MODEL_OPTIONS.filter((option) => !existingIds.has(option.id)).map((option) => (
+              <label key={option.id}>
+                <input
+                  type="checkbox"
+                  checked={chosenFree.has(option.id)}
+                  disabled={!chosenFree.has(option.id) && chosenFree.size >= room}
+                  onChange={(event) => setChosenFree((current) => {
+                    const next = new Set(current);
+                    if (event.target.checked) next.add(option.id); else next.delete(option.id);
+                    return next;
+                  })}
+                />
+                <span className="custom-model-name">
+                  <strong>{option.displayName}</strong>
+                  <code>{option.id}</code>
+                </span>
+                <span className="custom-hint">{option.description}</span>
+              </label>
+            ))}
+            {FREE_MODEL_OPTIONS.every((option) => existingIds.has(option.id)) && <span className="custom-hint">All curated free models are already added.</span>}
+          </div>
+          <div className="settings-actions">
+            <span className="custom-hint">Built-in free model on OpenCode Zen.</span>
+            <button type="button" className="small-button" onClick={() => setShowFreePicker(false)}>Close</button>
+            <button
+              type="button"
+              className="small-button primary"
+              disabled={chosenFree.size === 0}
+              onClick={() => {
+                const added = FREE_MODEL_OPTIONS.filter((opt) => chosenFree.has(opt.id)).slice(0, room).map((opt) => draftModel({
+                  id: opt.id,
+                  displayName: opt.displayName,
+                  images: true,
+                  efforts: [],
+                  contextWindow: opt.contextWindow,
+                }));
+                update({ models: [...draft.models, ...added] });
+                setShowFreePicker(false);
+                setChosenFree(new Set());
+              }}
+            >
+              Add {chosenFree.size || ""} selected
+            </button>
+          </div>
+        </div>}
         {importMessage && <p className="custom-hint">{importMessage}</p>}
         {imported !== null && <div className="custom-import">
           <input value={importFilter} autoFocus placeholder={`Filter ${imported.length} models`} spellCheck={false} onChange={(event) => setImportFilter(event.target.value)} />

@@ -138,7 +138,10 @@ function upstreamDetail(error: Record<string, unknown>): string | undefined {
   return `${provider} said: ${detail}`;
 }
 
-function statusHint(status: number): string {
+function statusHint(status: number, body?: string): string {
+  if (status === 403 && body !== undefined && /FreeTierError|free tier can only/i.test(body)) {
+    return " OpenCode restricts this model to its official app. Switch to 'space-bunny-free' or provide an API key from opencode.ai/zen in Settings.";
+  }
   if (status === 401 || status === 403) return " Check the API key in Settings.";
   if (status === 404) return " Check the base URL and the model id in Settings.";
   if (status === 429) return " The endpoint is rate limiting this key; wait and try again.";
@@ -159,7 +162,7 @@ export async function readErrorBody(response: Response): Promise<string> {
 export function describeRefusal(status: number, body: string, label: string, apiKey: string | null): string {
   const detail = redact(errorDetail(body), apiKey).slice(0, MAX_ERROR_MESSAGE_CHARACTERS);
   const explained = detail ? `: ${detail}${/[.!?]$/.test(detail) ? "" : "."}` : ".";
-  return `${label} returned status ${status}${explained}${statusHint(status)}`;
+  return `${label} returned status ${status}${explained}${statusHint(status, body)}`;
 }
 
 /** Why the endpoint refused a request, in words the user can act on. */

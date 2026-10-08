@@ -1,3 +1,5 @@
+import { randomBytes } from "node:crypto";
+
 import {
   TransientTurnError,
   UnusableToolCallError,
@@ -284,6 +286,7 @@ export class OpenAiChatTurns implements TurnTransport {
   private readonly endpoint: string;
   private readonly fetchImpl: typeof globalThis.fetch;
   private readonly timeoutMs: number;
+  private readonly sessionId: string;
   private calls = 0;
   /** This run's turns that streamed reasoning, oldest first. */
   private produced: ProducedTurn[] = [];
@@ -294,6 +297,7 @@ export class OpenAiChatTurns implements TurnTransport {
     this.endpoint = endpointUrl(options.baseUrl, "chat/completions");
     this.fetchImpl = options.fetch ?? globalThis.fetch;
     this.timeoutMs = options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
+    this.sessionId = `ses_${randomBytes(12).toString("hex")}`;
   }
 
   /**
@@ -348,13 +352,19 @@ export class OpenAiChatTurns implements TurnTransport {
   }
 
   async *streamTurn(request: TurnRequest, signal: AbortSignal): AsyncGenerator<TurnEvent, void, undefined> {
-    const { label, apiKey } = this.options;
+    const { label, apiKey, baseUrl } = this.options;
+    const isOpenCode = baseUrl.includes("opencode.ai");
+    const authHeader = apiKey !== null ? `Bearer ${apiKey}` : isOpenCode ? "Bearer public" : undefined;
     for (;;) {
       const { body, sent } = this.body(request);
       const opened = await fetchWithin(this.fetchImpl, this.endpoint, {
         method: "POST",
         headers: {
-          ...(apiKey === null ? {} : { authorization: `Bearer ${apiKey}` }),
+          ...(authHeader ? { authorization: authHeader } : {}),
+          ...(isOpenCode ? {
+            "user-agent": "opencode/1.18.30",
+            "x-opencode-session": this.sessionId,
+          } : {}),
           "content-type": "application/json",
           accept: "text/event-stream",
         },
