@@ -99,11 +99,11 @@ Use `NumberSequence` and `ColorSequence` to move size, transparency, and color o
 
 ### Textures, flipbooks and non-particle effects
 
-A flipbook is one image containing frames of motion. For a native `ParticleEmitter`, set a matching `FlipbookLayout` (including `Custom` with `FlipbookSizeX`/`FlipbookSizeY` for non-square grids), then choose `FlipbookMode`: `OneShot` plays once over the particle's lifetime, while `Loop` repeats. `FlipbookStartRandom` with `FlipbookFramerate` set to zero chooses a different static frame per particle, useful for varied sparks or shards; it is not an animated flipbook. Give frames enough padding to avoid texture bleeding. Make tintable shapes with a transparent background and neutral values rather than baking a different color into every texture; test the actual `Color` sequence and blend against the scene. Verify the animation at the intended lifetime and on mobile: expensive flipbooks may be disabled on memory-constrained clients.
+A flipbook is one image containing frames of motion. For a native `ParticleEmitter`, set a matching `FlipbookLayout` (`Grid2x2`, `Grid4x4` or `Grid8x8`; see `references/vfx-textures.md` before using `Custom`), then choose `FlipbookMode`: `OneShot` plays once over the particle's lifetime, while `Loop` repeats. `FlipbookStartRandom` with `FlipbookFramerate` set to zero chooses a different static frame per particle, useful for varied sparks or shards; it is not an animated flipbook. Give frames enough padding to avoid texture bleeding. Make tintable shapes with a transparent background and neutral values rather than baking a different color into every texture; test the actual `Color` sequence and blend against the scene. Verify the animation at the intended lifetime and on mobile: expensive flipbooks may be disabled on memory-constrained clients.
 
 Not every effect with a sequence of textures is a native particle flipbook. A model can hold individually textured decals, mesh frames, or UI images advanced by a separate player or plugin. Inspect its object types, animation script and asset IDs before assuming `ParticleEmitter.Flipbook*` settings will control it. An `.rbxm` may only contain templates while a place file carries the playback machinery. Treat imported effect scripts as untrusted; inspect them before running, check whether textures are owned and usable by the target experience, and recreate the idea with your own assets when reuse rights are unclear. A visual preview alone does not prove the model will play after insertion.
 
-For one-shot hit feedback, an expanding mesh ring or a short screen-space image can make the first frame readable while particles supply texture and motion afterward. Keep screen effects local, brief and optional; do not let an overlay obscure the player's next input or an enemy's telegraph. Mesh-based shockwaves and custom image players can require more scripting than a native emitter, so prefer built-in effects when they achieve the same read.
+For one-shot hit feedback, an expanding mesh ring or a short screen-space image can make the first frame readable while particles supply texture and motion afterward. Keep screen effects local, brief and optional; do not let an overlay obscure the player's next input or an enemy's telegraph. Mesh rings are first-class here: build them with `references/vfx-mesh-shapes.md` and play them through the emit module's `Start`/`End` convention (`references/vfx-craft.md`). Custom image players need their own playback code, so prefer built-in effects when they achieve the same read.
 
 ## 5. Beams and trails
 
@@ -163,6 +163,7 @@ puff.Anchored = true
 puff.Parent = workspace
 
 local puffTween = TweenService:Create(puff, TweenInfo.new(0.3), {Transparency = 1})
+puffTween:Play()
 puffTween.Completed:Once(function(_playbackState)
     if puff.Parent then
         puff:Destroy() -- one-shot part: no other effect can reuse it

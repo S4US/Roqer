@@ -48,7 +48,7 @@ Building or editing the visual composition of a screen is `roblox-ui-design`'s j
 - Design for touch and gamepad as well as mouse/keyboard when the request needs those input modes. Bind gameplay actions with `ContextActionService` where it fits.
 - For gamepad UI, define a selected entry point and deliberate directional behavior. `GuiService.SelectedObject` plus `Selectable` is the native baseline.
 - Keep UI state separate from the server state that it displays. A button is not an authority boundary.
-- Reactive UI: own per-screen cleanup separately from session state; repeat open/close to test leaks (full.md).
+- Reactive UI: own per-screen cleanup separately from session state; when a leak is suspected, repeat open/close in a playtest to test for it (full.md).
 - In Server Authority projects, durable inventory/currency/ownership displays stay tied to confirmed state; route gameplay input through Input Actions.
 - Make scrolling, text growth, clipping, and safe-area behavior explicit before adding polish.
 - Loading UI belongs in `ReplicatedFirst`; client character teleports are not readiness gates.

@@ -210,7 +210,7 @@ CAS:BindAction("MoveUp", handleMoveUp, true,
 
 Gate handlers on `state`, not on `input.KeyCode`: touch-button input also arrives with `KeyCode.Unknown`, so a key-code filter on the start path would drop mobile presses too. Call `UnbindAction` on context exit; the `Cancel` delivery then clears the running state.
 
-`Enum.PlayerActions` is deprecated in favor of `Enum.KeyCode` and should not be used in new work; its items are `CharacterForward`/`CharacterBackward`/`CharacterLeft`/`CharacterRight`/`CharacterJump` (no `MoveUp`/`MoveForward`/`Jump` members — old examples using those fail on lookup). Bind explicit `Enum.KeyCode` entries per platform instead, as above.
+`Enum.PlayerActions` is still accepted by `BindAction`, but its items are `CharacterForward`/`CharacterBackward`/`CharacterLeft`/`CharacterRight`/`CharacterJump` (no `MoveUp`/`MoveForward`/`Jump` members — old examples using those fail on lookup). Bind explicit `Enum.KeyCode` entries when you need per-platform control, as above.
 
 For analog movement, process changing values rather than treating the stick as a digital Begin/End button. `ContextActionService` can report `Change`; `UserInputService.InputChanged` also exposes stick updates through `input.KeyCode == Enum.KeyCode.Thumbstick1` and `input.Position` (see the deadzone pattern below). Use `GetGamepadState()` to initialize held input, or keep the character controller's default movement. The example above uses a digital d-pad binding, not an analog controller.
 
@@ -244,7 +244,7 @@ Set `SelectedObject` when a menu opens or a modal takes control, and clear or re
 
 ### DragDetector essentials
 
-Default behavior: draggable in the ground plane. Key properties (defaults): `DragStyle` (`TranslatePlane`), `Axis` (world Y; changing it updates `Orientation` and vice versa), `ResponseStyle` (`Geometric`), `RunLocally` (false), `Enabled` (true).
+Default behavior: draggable in the ground plane. Key properties (defaults): `DragStyle` (`TranslatePlane`), `Axis` (world Y; changing it updates `Orientation` and vice versa), `ResponseStyle` (`Geometric`, default unverified), `RunLocally` (false), `Enabled` (true).
 
 `DragStyle` (Enum.DragDetectorDragStyle): `TranslateLine` (1D along `Axis`), `TranslatePlane` (2D perpendicular to `Axis`), `TranslatePlaneOrLine`/`TranslateLineOrPlane` (2D or 1D, modifier toggles), `TranslateViewPlane` (always faces the camera, updates live), `RotateAxis`, `RotateTrackball`, `Scriptable` (custom function), `BestForDevice` (per-input default).
 
@@ -271,8 +271,9 @@ local detector = Instance.new("DragDetector")
 detector.DragStyle = Enum.DragDetectorDragStyle.TranslateLine
 detector.ResponseStyle = Enum.DragDetectorResponseStyle.Geometric
 detector.ReferenceInstance = dresserBody -- stable frame for the limits
-detector.MinDragTranslation = Vector3.zero
-detector.MaxDragTranslation = Vector3.new(0, 0, -4) -- open distance
+detector.Axis = Vector3.zAxis -- default is world Y, which would slide it vertically
+detector.MinDragTranslation = Vector3.new(0, 0, -4) -- open distance; limits clamp per axis to [min, max]
+detector.MaxDragTranslation = Vector3.zero
 detector.Parent = drawer
 
 detector.DragStart:Connect(function(player, ray, viewFrame, hitFrame, clickedPart)
@@ -457,18 +458,7 @@ UIS.LastInputTypeChanged:Connect(updateInput)
 
 For placement, anchor to the safe area (a child `ScreenGui` with `ScreenInsets = DeviceSafeInsets` gives the safe `AbsolutePosition`/`AbsoluteSize`). Keep custom buttons out of the thumbstick zone (left edge) and don't hard-place them relative to the default jump button, which swaps size/position at a ~500px min-axis preset.
 
-```luau
--- Recompute position from the safe-area screen size each frame
-local RS = game:GetService("RunService")
-RS.RenderStepped:Connect(function()
-    if not frame.Visible then return end
-    local size = frame.Screen.AbsoluteSize
-    local minAxis = math.min(size.X, size.Y)
-    local buttonSize = (minAxis <= 500) and 70 or 120
-    frame.Size = UDim2.fromOffset(buttonSize, buttonSize)
-    frame.Position = UDim2.new(1, -(buttonSize * 1.5 - 10), 1, -buttonSize * 1.75)
-end)
-```
+Recompute from the safe-area `ScreenGui.AbsoluteSize` through `GetPropertyChangedSignal("AbsoluteSize")` rather than every frame, take the button's geometry from `roblox-ui-design`, and keep it clear of the default thumbstick and jump-button zones.
 
 ### Switch UI on PreferredInput change
 ```luau
@@ -549,7 +539,7 @@ end)
 - **Reading `MouseWheel` from InputBegan.** Wheel events only fire `InputChanged`.
 - **Touching `IsKeyDown` in a tight loop without throttling.** It's cheap but RenderStepped is the right cadence.
 - **No debounce on JumpRequest.** Fires once per frame the jump key is held.
-- **Recommending deprecated `PlayerActions` for new bindings.** Mixing it with `KeyCode` is legal, but new code should bind explicit `Enum.KeyCode` entries instead (`Enum.KeyCode.DPadUp` covers the gamepad d-pad).
+- **Using nonexistent `PlayerActions` members** (`MoveUp`, `Jump`). Mixing `PlayerActions` with `KeyCode` is legal; bind explicit `Enum.KeyCode` entries when you need per-platform control (`Enum.KeyCode.DPadUp` covers the gamepad d-pad).
 - **Setting `MouseBehavior = LockCenter` and forgetting to reset it.** Reset on player leave or context exit.
 - **Bypassing `ContextActionService` because it "feels indirect."** Most gameplay bindings should use CAS: it correctly handles chat/text-box conflicts for free.
 - **Auto-creating touch buttons beyond the 7 limit.** BindAction silently refuses to create the 8th button.

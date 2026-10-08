@@ -429,7 +429,7 @@ RunService:BindToRenderStep("RotatePlatform", Enum.RenderPriority.Camera.Value -
 end)
 ```
 
-If you only need the position (not orientation), `character:GetPivot().Position` and `CFrame.new(platform.CFrame * characterOffset)` are enough; use the full `CFrame` when the character should keep its facing relative to the platform. For vehicles or moving platforms, prefer attachment/anchor constraints or a server-authoritative simulation over per-frame character CFrame writes.
+If you only need the position (not orientation), `character:GetPivot().Position` and `CFrame.new((platform.CFrame * characterOffset).Position)` are enough; use the full `CFrame` when the character should keep its facing relative to the platform. For vehicles or moving platforms, prefer attachment/anchor constraints or a server-authoritative simulation over per-frame character CFrame writes.
 
 ### Elevator / Moving Platform
 

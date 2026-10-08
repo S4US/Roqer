@@ -210,7 +210,8 @@ local GuiService = game:GetService("GuiService")
 local playerGui = Players.LocalPlayer:WaitForChild("PlayerGui")
 
 local hovered = false
-RS.RenderStepped:Connect(function()
+-- Store the connection and Disconnect() it when the owning UI is destroyed.
+local hoverConnection = RS.RenderStepped:Connect(function()
     local pos = UIS:GetMouseLocation()
     -- GetGuiObjectsAtPosition expects inset-adjusted coordinates; subtract
     -- the top-left inset (first GetGuiInset return) before the hit test.
@@ -304,7 +305,7 @@ Any screen that opens and closes should survive this checklist (original procedu
 3. Assert the count returns to baseline. A growing count means leaked instances; a growing connection count means leaked signals.
 4. Repeat with the screen closed mid-animation and mid-network-response — the two states that expose teardown-order bugs.
 
-Run it from the command bar or as an engine test (see roblox-tooling's test-runner doctrine). It is the reactive-library equivalent of the UI checklist rule that every temporary connection, tween, and row has an owner lifetime.
+Run it when a leak is suspected or the user asked for lifecycle verification: in Roqer, in a playtest through `eval_client_runtime`, or as an engine test (see roblox-tooling's test-runner doctrine). It is the reactive-library equivalent of the UI checklist rule that every temporary connection, tween, and row has an owner lifetime.
 
 ## 10. Shops, dialogs, and notifications
 
@@ -357,13 +358,11 @@ A layout that looks correct at one Studio viewport size is not finished. Capture
 
 ## Existing style and visual verification
 
-Follow the project's existing components, typography roles, colors, spacing, and interaction states. Do not impose a genre palette or invent a new design system for one screen. A new screen or a restyle takes its visual composition from `roblox-ui-design`; a working instance tree is not proof that the UI looks right.
-
-Test the actual screen over bright and dark game scenes, not only a blank Studio canvas. Check clipping, contrast, gameplay visibility, and the rendered states that exist (such as active, selected, disabled, or purchase pending). Hover is not available on every input device; focus and touch must still work. Check `GuiService.ReducedMotionEnabled` before adding motion-heavy feedback. Layout and accessibility are engineering checks, not a prescribed visual style.
+Visual composition, edits to existing screens, and visual review belong to `roblox-ui-design`; a working instance tree is not proof that the UI looks right. From this skill, check only engine behavior: clipping and containment, focus and touch reachability when hover is unavailable, and `GuiService.ReducedMotionEnabled` before adding motion-heavy feedback.
 
 ## Shared styling and flex, when needed
 
-For an existing stylesheet-based project, extend its tokens and rules rather than setting conflicting per-instance properties. Roblox `StyleSheet` rules are attached to a UI tree with `StyleLink`; `StyleQuery` can adapt to size, preferred input, text size, or reduced motion. For a one-off UI, direct properties may be simpler. See the [official styling guide](https://create.roblox.com/docs/ui/styling) before adding a new sheet.
+For an existing stylesheet-based project, extend its tokens and rules rather than setting conflicting per-instance properties. Roblox `StyleSheet` rules are attached to a UI tree with `StyleLink`; `StyleQuery` can adapt to size, preferred input, and accessibility settings. For a one-off UI, direct properties may be simpler. See the [official styling guide](https://create.roblox.com/docs/ui/styling) before adding a new sheet.
 
 Flex is built into `UIListLayout` (`HorizontalFlex` or `VerticalFlex`); `UIFlexItem` customizes a child. There is no `UIFlexLayout` instance. Use it only when a row or column needs flexible space; otherwise ordinary list/grid layout is simpler. If items spread apart unexpectedly, inspect the layout's flex alignment before adding offsets. Keep `SortOrder = LayoutOrder` and set each child's `LayoutOrder` when order matters. See the [official list/flex guide](https://create.roblox.com/docs/ui/list-flex-layouts).
 
@@ -377,7 +376,6 @@ Top-sorted DevForum canon for UI libraries. Verify status in-thread before recom
 - [Satchel](https://devforum.roblox.com/t/satchel-open-source-modern-backpack-system/2451549): open-source inventory/backpack, study-grade.
 - [Vanilla 3](https://devforum.roblox.com/t/vanilla-3-the-pragmatic-icon-set-for-roblox-studio/935745): the pragmatic icon set.
 - Chat: BetterChat V3 discontinued; [NovaChat](https://devforum.roblox.com/t/novachat-v107-chat-update-part-2-a-modern-feature-rich-chat-replacement-update/4513813) (2026) is the active replacement line; [ViewportFrame masking](https://devforum.roblox.com/t/viewportframe-masking/2964839) (2024) heavily cited for UI VFX.
-- Design theory: [UI Design Starter Guide](https://devforum.roblox.com/t/ui-design-starter-guide/53461) (1.1k likes).
 - [Mobile button placement tutorial](https://devforum.roblox.com/t/the-correct-way-to-design-mobile-buttons/2494558) illustrates collisions with the default thumbstick/jump controls and touchscreen-PC detection pitfalls. Treat its coordinates and per-frame script as dated examples, not a portable recipe; test on the game's target devices.
 
 ## Pagination (UIPageLayout)
@@ -410,6 +408,7 @@ box.Color3 = Color3.new(1, 1, 0)
 box.SurfaceTransparency = 1
 box.Parent = workspace
 
+local Players = game:GetService("Players")
 local mouse = Players.LocalPlayer:GetMouse()
 mouse.Move:Connect(function()
     box.Adornee = mouse.Target -- nil when pointing at nothing
@@ -423,7 +422,7 @@ end)
 ```luau
 local decal = Instance.new("Decal")
 decal.Face = Enum.NormalId.Front
-decal.Texture = "rbxassetid://699259085"
+decal.ColorMap = "rbxassetid://<your image id>"
 decal.Parent = part
 ```
 
@@ -431,7 +430,7 @@ decal.Parent = part
 
 `VideoFrame` is the simple path: parent it to a `SurfaceGui` and set `Video` (ContentId) to a video-type asset; image IDs will not play. Control with `Play()`, `Pause()`, `Looped`, and `Volume`; wait for `IsLoaded` (or the `Loaded` event) before playing. `Ended`/`DidLoop` report playback progress.
 
-`VideoPlayer` is the newer wire-based source: set `VideoContent` (Content), then connect `Wire` instances to a `VideoDisplay` inside a `SurfaceGui` for visuals and an `AudioEmitter` for sound. It adds `PlaybackSpeed`, `TimePosition`, `LoadAsync()`, and a `PlayFailed` event for fetch failures. Prefer `VideoFrame` unless you need the video/audio wire split.
+`VideoPlayer` is the newer wire-based source: set `VideoContent` (Content), then connect `Wire` instances to a `VideoDisplay` inside a `SurfaceGui` for visuals and an `AudioEmitter` for sound. It adds `PlaybackSpeed`, `LoadAsync()`, and a `PlayFailed` event for fetch failures. Prefer `VideoFrame` unless you need the video/audio wire split.
 
 ```luau
 local gui = Instance.new("SurfaceGui")
@@ -440,7 +439,7 @@ gui.Parent = screenPart
 local video = Instance.new("VideoFrame")
 video.Size = UDim2.fromScale(1, 1)
 video.Looped = true
-video.Video = "rbxassetid://5608359401"
+video.Video = "rbxassetid://<your video id>"
 video.Parent = gui
 
 if not video.IsLoaded then
