@@ -1,16 +1,31 @@
 {
   "schemaVersion": 1,
   "id": "studio-workbench",
-  "version": "2026-10-04.1",
+  "version": "2026-10-08.1",
   "skillPack": {
     "name": "roblox-brain",
-    "version": "1.2.1",
-    "commit": "479b88759d27b85bb5d34dc4f3f3c3bbc2f2e983",
+    "version": "2.2.0",
+    "commit": "38826be57ee37bcf023e9c2b85681bea3909281c",
     "source": "https://github.com/TabooHarmony/roblox-brain",
     "license": {
       "spdx": "MIT",
       "notice": "skills/ROBLOX-BRAIN-LICENSE.txt"
     },
-    "customizedSkills": ["roblox-animation-vfx", "roblox-building", "roblox-studio-mcp", "roblox-ui-design"]
+    "customizedSkills": [
+      "roblox-animation-vfx",
+      "roblox-building",
+      "roblox-camera",
+      "roblox-cloud",
+      "roblox-code-review",
+      "roblox-data",
+      "roblox-growth-design",
+      "roblox-gui",
+      "roblox-npc-ai",
+      "roblox-physics",
+      "roblox-publish-checklist",
+      "roblox-studio-mcp",
+      "roblox-tooling",
+      "roblox-ui-design"
+    ]
   }
 }
