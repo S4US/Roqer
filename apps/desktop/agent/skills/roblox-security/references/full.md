@@ -29,6 +29,26 @@ For Server Authority projects:
 
 See the [Server Authority model](https://create.roblox.com/docs/projects/server-authority) and [advanced techniques](https://create.roblox.com/docs/projects/server-authority/techniques).
 
+### Server Authority migration reality check
+
+The official docs read like a flag flip, but the real cost depends on how much simulation you author. Practitioner experience is two-sided, so do not assume either extreme:
+
+- **Stock/off-the-shelf characters with little custom simulation:** migration can be genuinely simple. A beta tester who ran the API for over a year described flipping the switch for stock Humanoids as a minor change in most cases.
+- **Authored simulation (fighting games, custom movement/physics, rollback-style mechanics):** budget like a rewrite, not a configuration change. One practitioner porting a rollback fighter that was already simulation-compatible spent over a month getting back to feature parity, and warns the integration is not something you can cleanly undo once started. If the project cannot afford that, prefer classic replication with server-side validation instead.
+
+Practical constraints once you commit:
+
+- **Sources of truth must be independent and deterministic.** Reconstruct state from synchronized `time()`-derived keys, not from live attributes. Keep a per-frame snapshot of the minimum state needed to resimulate, and after a rollback discard snapshots newer than the reconciled frame.
+- **Attributes are the serialization channel and they budget hard.** The attribute payload is roughly 1 KiB (practitioner-reported); a few CFrames or Vector3s can consume it. Pack dense numeric state into 32-bit fields with `bit32` instead of storing floats; a Luau number holds integers exactly only up to 2^53.
+- **Client input can be rolled back.** Do not rely on a single input event reaching the simulation. Re-parse buffered input each frame so a misprediction retries instead of dropping the action, and expect a small input delay buffer in real-time games.
+- **Side effects are the sharpest edge.** Anything non-deterministic (UI toggles, spawns, one-shot events) fires again on resimulation unless transitions are idempotent. Beta testers call side effects the biggest pain point and recommend observing attribute changes during `PreRender` rather than reacting inside the simulation where you cannot tell a re-run from a first run.
+
+Practitioner-sourced synthesis (not official API documentation): the nightmare account that motivated this is at <https://devforum.roblox.com/t/server-authority-client-beta-was-a-damn-nightmare-heres-some-advice/4712758>; the official [Server Authority model](https://create.roblox.com/docs/projects/server-authority) and [advanced techniques](https://create.roblox.com/docs/projects/server-authority/techniques) docs remain the API source of truth.
+
+### Server Authority review
+
+Verify the complete Server Authority settings bundle during security review; a place file can drift. See `roblox-networking` §0 for the six settings, prediction and rollback behavior, and debug-surface caveats. Check game-specific attack, purchase, teleport, and permission paths separately: Server Authority does not validate those requests for you.
+
 ## Exploit Vectors & Mitigations
 
 ### Movement and physics exploits
@@ -39,6 +59,12 @@ See the [Server Authority model](https://create.roblox.com/docs/projects/server-
 | Teleport or noclip | Client requests or produces an impossible game-specific transition | Validate the requested action and the server's state, rather than blindly snapping `CFrame` every frame. Record suspicion and investigate repeated violations instead of punishing one lag spike. |
 
 Do not copy a blanket `Heartbeat` position checker into a Server Authority project. The server already owns the authoritative simulation, and writing simulation-access properties outside the simulation callback can error. If a classic project needs custom movement checks, keep the checker aware of legitimate state transitions and clean all per-player state on `PlayerRemoving`.
+
+### Server-side anticheat (classic replication)
+
+Server-side anticheats detect movement abuse by checking sustained airborne time and jump-ceiling violations (flight), horizontal velocity above a threshold using relative velocity so moving platforms don't false-flag (speed), single-tick jumps and accumulated positional drift (teleport), raycasts through collidable geometry (noclip), and consecutive angular/linear velocity spikes (fling). Structure checks as small modules exposing an id, weight, state, and a `check(state, delta)` function; tune thresholds with a ~1.5x multiplier to absorb replication quirks, and add a history record that lowers thresholds for repeat offenders. Treat these as weakening measures, not a silver bullet: subtle sub-threshold exploits slip through, and Server Authority remains the robust answer for physics-based exploits.
+
+*Community/practitioner content (lead: https://devforum.roblox.com/t/sinas-serverside-anticheat-102/4801833).*
 
 ### Remote Exploits
 
@@ -67,6 +93,11 @@ For the rate limiter and argument validation implementations, see `roblox-networ
 | Save spam | Force repeated saves to exhaust budget | Server-controlled save intervals only |
 | Session hijack | Fake session to duplicate across servers | Session lock with JobId verification |
 | BindToClose skip | Exploit shutdown timing | BindToClose with parallel saves + timeout |
+| Unsaveable payload | Remote accepts Instance/userdata into saved tables; save throws and rolls back | Validate every persisted field's type at the remote boundary; never store client-supplied tables unvalidated |
+| Malformed string | Invalid UTF-8 bytes pass type checks but fail serialization | `utf8.len(value)` must return a count before persisting client strings |
+| NaN rollback | NaN smuggled through settings remotes breaks serializers or comparisons, rolling back saves | Reject `x ~= x` and infinities wherever client numbers enter persisted state |
+
+Practitioner lead: TheGreatSageEqualToHeaven's "Data store vulnerabilities" gist documents these rollback vectors found in major titles. Treat as community research, not official documentation.
 
 ## Security Audit Checklist
 
@@ -89,12 +120,15 @@ HIGH (exploitable if missing):
 [ ] Trading system uses atomic operations
 [ ] No trusting client-reported values (damage, position, items)
 [ ] RemoteFunction return values not trusted by server
+[ ] ProximityPrompt/ClickDetector/DragDetector handlers validated like remotes
+[ ] DragDetector.RunLocally is false or its client path is re-validated server-side
+[ ] Ban flows use the native Players ban API with appeal path documented
 
 MEDIUM (quality/fairness):
 [ ] Cooldowns enforced server-side (not just client UI)
 [ ] Leaderboard values computed server-side
 [ ] Anti-AFK detection for reward systems
-[ ] Chat filter applied (TextService:FilterStringAsync)
+[ ] TextService filtering applied at submission time with the audience-correct result method (broadcast vs per-user), and failures leave text undisplayed
 ```
 
 ## Patterns
@@ -143,10 +177,153 @@ local function sanitizePlayerStats(stats)
 end
 ```
 
+## Text filtering as a workflow (audience-selected result methods)
+
+Player-typed text displayed to other players — signs, pet names, trading chat,
+name inputs, chat-adjacent UI — is the developer's filtering responsibility.
+TextChatService's default channels filter themselves; custom surfaces do not.
+
+The contract is two steps, and the second is where compliance bugs live:
+
+1. `TextService:FilterStringAsync(text, fromUserId, context)` yields and
+   returns a `TextFilterResult`.
+2. Choose the result method by **audience**, not convenience:
+   - `result:GetNonChatStringForBroadcastAsync()` — the text will be shown to
+     everyone on the server/world (signs, leaderboards, global feeds).
+   - `result:GetNonChatStringForUserAsync(userId)` — non-chat text shown to one specific recipient, such as a pet name.
+   A per-user result must not be shown to everyone. A broadcast result is the conservative choice for globally visible non-chat text. `GetChatForUserAsync` is deprecated and returns an empty string; player chat belongs in TextChatService, not a custom non-chat filtering pipeline.
+
+Workflow rules:
+
+- **Stored text needs a retrieval policy.** The text-filtering guide says stored text must be filtered when retrieved, while `FilterStringAsync` currently requires the author to be online on this server. Do not turn a previously filtered string into permanent clearance. Preserve provenance; when current filtering cannot be completed, show a safe predefined placeholder or withhold the text instead of substituting another author's UserId. Resolve the offline-author case against current Roblox guidance before shipping persistent public text.
+- **Filter once per submission**, not per keystroke. From that result, obtain the appropriate audience-specific output; a per-user string is not a broadcast string. Do not blindly retry service failures: the method already implements internal retries.
+- **Fail closed**: if `FilterStringAsync` throws or the pcall fails, display
+  nothing. Never fall back to the raw unfiltered string; store nothing and
+  prompt the author to retry.
+
+```luau
+local TextService = game:GetService("TextService")
+
+-- Illustrative server-side sign editor; validate type, length, authorization,
+-- and rate limits at the remote boundary before calling this function.
+local function setSignText(player: Player, proposedText: string): boolean
+	local ok, filtered = pcall(function()
+		local result = TextService:FilterStringAsync(proposedText, player.UserId)
+		return result:GetNonChatStringForBroadcastAsync()
+	end)
+	if not ok or type(filtered) ~= "string" then
+		return false -- fail closed: sign keeps its previous (filtered) text
+	end
+	signs[player.UserId] = filtered -- filtered display state for this session
+	return true
+end
+```
+
+## Native Enforcement APIs (Player Bans)
+
+The Players class ships a native ban API: `Players:BanAsync`, `Players:UnbanAsync`, and `Players:GetBanHistoryAsync`, all gated by the `Players.BanningEnabled` property, which cannot be set from Luau and must be toggled in Studio's Players properties window. All three are server-only: client calls error, and Studio/Team Test runs do not apply bans to production. Each performs an HTTP call to backend services that is throttled and can fail; batch calls over `UserIds` retry per ID and aggregate failures into one error message (`failure for UserId {}`), so wrap calls in `pcall`. They also back the [User Restrictions Open Cloud API](https://create.roblox.com/docs/cloud/reference/UserRestriction) for third-party moderation tooling.
+
+### BanAsync config dictionary
+
+| Field | Type | Rules |
+|-------|------|-------|
+| `UserIds` | array (required) | UserIds to ban. Max size 50. |
+| `Duration` | integer (required) | Seconds. `-1` = permanent. `0` and all other negative values are invalid. |
+| `DisplayReason` | string (required) | Shown in the error modal when the banned user tries to join. Max 400 characters, text filtered. |
+| `PrivateReason` | string (required) | Internal notes returned by `GetBanHistoryAsync`. Max 1000 characters, not filtered, never shared with the client. |
+| `ApplyToUniverse` | boolean (optional, default `true`) | `false` limits the ban to the calling place. Banning someone in the start place excludes them from the whole universe regardless. |
+| `ExcludeAltAccounts` | boolean (optional, default `false`) | `true` disables propagation to suspected alternate accounts. |
+| `ApplyDeviceBlock` | boolean (optional, default `false`) | Blocks the banned user's device from rejoining for 24 hours after the ban. Only `UnbanAsync` lifts a device block; unbanning through the Open Cloud API or Creator Hub does not. |
+
+### UnbanAsync and GetBanHistoryAsync
+
+- `Players:UnbanAsync(config)` takes `{UserIds (max 50), ApplyToUniverse}`. An unban only lifts bans with the same scope: a universe-level unban does not invalidate a place-level ban and vice versa.
+- `Players:GetBanHistoryAsync(userId)` returns `BanHistoryPages` (inherits `Pages`). Use it to escalate: count prior bans and previous `Duration` values, and read `PrivateReason` notes, when computing the next ban length.
+
+### Escalation ladder pattern
+
+Pair detection with the native API instead of kicking in a loop. Illustrative shape:
+
+```luau
+-- ServerScriptService. Detection modules feed scores; the ladder decides.
+local REPRIEVES = { [1] = 3600, [2] = 86400 } -- 1h, then 24h; third strike permanent
+
+local Players = game:GetService("Players")
+
+local function countPriorBans(userId: number): number?
+    local ok, pages = pcall(Players.GetBanHistoryAsync, Players, userId)
+    if not ok then return nil end
+    local count = 0
+    while true do
+        for _, entry in pages:GetCurrentPage() do
+            if entry.Ban then count += 1 end -- history also lists unbans (Ban = false)
+        end
+        if pages.IsFinished then break end
+        local advanced = pcall(pages.AdvanceToNextPageAsync, pages)
+        if not advanced then return nil end
+    end
+    return count
+end
+
+local function enforce(player: Player, detectorId: string)
+    local prior = countPriorBans(player.UserId)
+    if prior == nil then warn("ban history unavailable; not escalating") return end
+    local strikes = prior + 1
+
+    local duration = REPRIEVES[strikes] or -1
+    local config = { -- the parameter is typed Dictionary; there is no BanConfigType
+        UserIds = { player.UserId },
+        Duration = duration, -- -1 = permanent; 0 and other negatives are invalid
+        DisplayReason = "Violated server rules (action: " .. detectorId .. ")",
+        PrivateReason = detectorId .. " | strike " .. strikes,
+        ApplyToUniverse = true,
+        ExcludeAltAccounts = false,
+        ApplyDeviceBlock = strikes >= 3,
+    }
+    local ok, err = pcall(Players.BanAsync, Players, config)
+    if not ok then warn("ban failed:", err) end -- throttled HTTP can fail per UserId
+end
+```
+
+`Players.BanningEnabled` must be on for all three methods; verify it in Studio before shipping a flow that depends on them.
+
+Enforcement is a product decision, not an automatic response. Bans carry appeal implications, `DisplayReason` is filtered and shown to real users, and false positives from lag or tuning mistakes are permanent records in ban history. The docs themselves direct you to publish experience rules and provide an appeal path. Log detection context first, keep thresholds forgiving, and reserve permanent bans for clear violations. <!-- temporal: 2026-09 -->
+
+## Client-Triggerable Interaction Instances
+
+`ProximityPrompt`, `ClickDetector`, and `DragDetector` are remote-equivalent attack surfaces: the engine delivers a client interaction to a server-side callback with a `Player` argument, so exploiters can trigger them without your UI and outside your intended flow. The exploit table above covers only `RemoteEvent`s; these belong in the same audit.
+
+| Instance | Server-facing entry point | What the server must validate |
+|----------|---------------------------|-------------------------------|
+| `ProximityPrompt` | `Triggered(playerWhoTriggered)`, `TriggerEnded(playerWhoTriggered)` | Rate/hold logic is client-assisted: `HoldDuration` gating happens on the client, so re-check state, cooldown, and entitlements server-side on every trigger. |
+| `ClickDetector` | `MouseClick(playerWhoClicked)` | Distance: `MaxActivationDistance` (studs) bounds where the engine shows the prompt, but treat a click received beyond server-computed range as spoofed state, not just UI noise. |
+| `DragDetector` | `DragStart` / `DragContinue` / `DragEnd` | Drag limits (`MaxDragTranslation`, `MinDragTranslation`, `MaxDragAngle`, `MinDragAngle`) impede motion generation, they are not constraints; clamp final positions server-side. |
+
+`DragDetector.RunLocally` (default `false`) deserves special attention. When `false`, drag signals replicate to the server, which processes cursor rays, mutates the data model, and replicates results onward; the server still owns the outcome, so validate it. When `true`, the client processes those signals itself and does not replicate them; resulting changes reach the server only through your own `RemoteEvent` plumbing, which puts the entire burden back on remote validation. Treat `RunLocally = true` like any client-authored input channel and re-derive the result server-side.
+
+## Script Sandboxing and Capabilities
+
+Sandboxing is a defense-in-depth layer for code you did not write: toolbox models, plugin-supplied or community-contributed scripts, and player-authored code. It is experimental (client beta) and complements, never replaces, server-side validation.
+
+- Enable per place: `Workspace.SandboxedInstanceMode` must move from `Default` to `Experimental` in Studio before `Sandboxed` does anything.
+- `Instance.Sandboxed` (on Models, Folders, Scripts, and their descendants) marks a sandboxed container; scripts inside can only act per `Instance.Capabilities`, a `SecurityCapabilities` set spanning execution control (`RunClientScript`, `RunServerScript`), instance access, Luau functionality, and engine API access.
+- `Instance.IsInSandbox` is read-only and Studio-only, reporting whether an instance sits in a sandboxed container.
+- Missing capabilities fail with explicit errors (for example "lacking capability AccessOutsideWrite"), and scripts without an execution capability fail to start with a warning.
+- Scope guard: the capability set for nested containers is the intersection with the outer container; sandboxed scripts cannot fire events or call functions on unsandboxed instances with larger capability sets.
+- The docs advise avoiding the `AccessOutsideWrite` capability because sandboxing guarantees weaken when scripts can reach any instance.
+
+Reviewed against the [Script capabilities](https://create.roblox.com/docs/scripting/capabilities) page, whose example capabilities (`AccessOutsideWrite`, `CreateInstances`, `Network`, `RunServerScript`, `RunClientScript`) are the verified member names. <!-- temporal: 2026-09 -->
+
 ## What NOT to Do
 
-- **Don't obfuscate client code** — it doesn't stop exploiters and makes debugging harder
-- **Don't use _G for security state** — it's globally readable and writable
-- **Don't kick without logging** — you need data to distinguish false positives from real exploits
-- **Don't over-validate movement** — too strict = legitimate players get false-flagged on lag spikes, and blanket checks fight Server Authority prediction. Use the selected model's simulation path and tolerate legitimate corrections.
-- **Don't rely on client-side anti-cheat** — exploiters disable it first
+- **Don't obfuscate client code**: it doesn't stop exploiters and makes debugging harder
+- **Don't use _G for security state**: it's globally readable and writable
+- **Don't kick without logging**: you need data to distinguish false positives from real exploits
+- **Don't over-validate movement**: too strict = legitimate players get false-flagged on lag spikes, and blanket checks fight Server Authority prediction. Use the selected model's simulation path and tolerate legitimate corrections.
+- **Don't rely on client-side anti-cheat**: exploiters disable it first
+
+## Community ecosystem (leads, not sources)
+
+- Threat history: [Exploiting Explained](https://devforum.roblox.com/t/exploiting-explained/170977) (2.9k likes; executor timeline doc); [2025 mass hacking operation PSA](https://devforum.roblox.com/t/psa-to-all-roblox-developers-massive-hacking-operation-taking-over-massive-front-page-games/3913726); [Delta Executor detection](https://devforum.roblox.com/t/instant-detection-of-delta-executor-patched/3971400) (note: patched = fingerprint rotates).
+- Backdoors: [remove backdoors](https://devforum.roblox.com/t/how-to-remove-backdoors-from-your-game/511548); [malicious scripts/plugins clearing](https://devforum.roblox.com/t/clearing-your-game-of-malicious-scripts-plugins-and-backdoors/511830).
+- Posture: [How you should secure your game](https://devforum.roblox.com/t/how-you-should-secure-your-game-a-beginner-guide-for-secure-networking-and-developing-anticheats/351775); [Client anti-cheats aren't as bad as you think](https://devforum.roblox.com/t/client-anti-cheats-arent-as-bad-as-you-think/2471974) (detector-not-punisher framing).

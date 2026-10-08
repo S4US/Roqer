@@ -49,11 +49,19 @@ independent auto-install, lifecycle, and parallel-isolation suites.
 | Change area | Required live command |
 |---|---|
 | Ordinary feature | `npm run test:e2e` |
+| Rojo linking or file-backed script edits | Feature gate plus `npm run test:rojo` and `npm run test:studio:rojo` (needs `rojo` on PATH and someone to connect the Rojo plugin) |
 | Paths, properties, tools, runtime, simulation, or multiplayer | `npm run test:studio:runner` (replaces the smaller feature gate) |
 | Installer, package artifacts, variants, or version repair | Feature gate plus `npm run test:e2e:auto-install` |
 | Studio launch, takeover, or startup-log lifecycle | Feature gate plus `npm run test:e2e:lifecycle` |
 | Port allocation, worker directories, or concurrent Studio isolation | Feature gate plus `npm run test:studio:parallel` |
 | Release | `npm run test:e2e:full` (replaces all commands above) |
+
+For `test:studio:rojo`, the MCP server itself runs `rojo` from the temp
+project folder it links, and a Rokit-managed `rojo` with no `rokit.toml`
+there has nothing to run; Rokit users need a global install
+(`rokit add --global rojo-rbx/rojo`). `tests/rojo-sourcemap-fixture.mjs` and
+`tests/rojo-live-sync.mjs` honor an optional `ROJO_BIN` (an absolute path to
+a rojo executable) for the rojo invocations they make themselves.
 
 When `MCP_INSTANCE_ID` is unset, the runner starts the built MCP server as the
 required primary on the configured port and gives it a random, run-scoped auth

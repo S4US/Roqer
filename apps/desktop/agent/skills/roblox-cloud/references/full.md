@@ -13,6 +13,31 @@ Identify both caller and authority before writing requests:
 
 Use `roblox-data` for persistence architecture, `roblox-networking` for gameplay remotes, and `roblox-studio-mcp` for Studio control.
 
+## 1.5 Awareness surface: offer, don't script
+
+Open Cloud is not just an API reference: it is a set of capabilities that change what an agent can do *for* the user. The agent should know these options exist and offer them when it sees the user hand-doing what the API automates. This is awareness, not an X->Y rule. No hardcoded triggers.
+
+Things an agent should be able to recognize and offer:
+
+- **Bulk asset work.** The user is uploading images/models/audio one by one in Studio or Creator Dashboard, or pasting many asset IDs. Offer: Open Cloud asset upload (`assets` API) can batch-upload files and return asset IDs to insert directly. Inside Roqer, `upload_assets` uploads a finished set of local files in one call.
+- **Metadata at scale.** The user is editing descriptions, thumbnails, or categories across many assets or experiences. Offer: Open Cloud can update metadata programmatically in one pass.
+- **Automation hooks.** The user wants something to happen when an asset/experience event occurs. Offer: webhooks can notify an HTTPS endpoint the user hosts. Roqer cannot host or call such an endpoint itself.
+- **Persistence / data access outside Studio.** The user is exporting/importing data, or wants a backend to read game data. Offer: Open Cloud data APIs (data stores, ordered data stores, messaging) can be called from a trusted server, not just from in-experience code.
+- **Ads management.** The user is manually managing campaigns in Creator Dashboard. Offer: the Ads Manager API (test stage) can create/pause/resume campaigns programmatically.
+
+How to offer: name the option, state roughly what it would do, and let the user choose. Do not assume permission, keys, or quotas. If the user declines or already has a workflow, drop it. The goal is that the user never learns "Open Cloud could have done that" after the fact.
+
+### Asset pipeline menu
+
+When a user needs an asset (image, model, audio, mesh), the acquisition paths an agent should know:
+
+1. **Generate**: via the Studio bridge (`generate_model`, `roblox-studio-mcp`) or an external generator, then upload.
+2. **Search Creator Store / creator inventory**: reuse an existing asset by ID (`search_assets`, `roblox-studio-mcp`).
+3. **Upload via Open Cloud**: batch-upload local files to the user's assets, then apply by returned asset ID (this skill, §1.5).
+4. **Apply by ID**: insert an asset ID directly into the place (`insert_asset`, `roblox-studio-mcp`).
+
+Pick the source that clearly fits the task and state it; ask only when the choice would materially change the result.
+
 ## 2. Authentication decision
 
 ### API keys
@@ -111,7 +136,7 @@ If an endpoint returns an Operation, poll that resource. Use bounded exponential
 - `RESOURCE_EXHAUSTED` / HTTP 429: honor `Retry-After` when present and reduce request pressure.
 - `UNAVAILABLE` and transport failures: retry within a bounded policy.
 
-Retry only transient failures. Authentication, authorization, and validation failures need correction, not repetition. Give non-idempotent operations an idempotency boundary before retrying.
+Retry only transient failures. Authentication, authorization, and validation failures need correction, not repetition. Give non-idempotent operations an idempotency boundary before retrying. An ambiguous timeout (no status received) is not a failure: read the resource back and reconcile before repeating a non-idempotent write. Before each non-idempotent write, record the target, its prior state, the intended change, and the compensating action that would undo it.
 
 ## 5. In-experience HttpService
 
@@ -120,13 +145,26 @@ An Open Cloud endpoint is not automatically callable from an experience. Confirm
 For supported calls:
 
 - use HTTPS;
-- retrieve `x-api-key` from a Roblox Secret rather than a plain string;
+- retrieve `x-api-key` from a Roblox Secret rather than a plain string (`HttpService:GetSecret("name")`, see the secrets store below);
 - send only headers supported by the engine and endpoint;
 - validate path parameters and reject traversal-like input;
 - keep the call server-side;
 - bound retries and request volume.
 
 Do not route a request through a client to bypass server-side restrictions.
+
+### The secrets store
+
+Credentials live in the experience's secrets store, not in the place file. `HttpService:GetSecret(key): Secret` returns a `Secret` value, verified against the docs (https://create.roblox.com/docs/en-us/cloud-services/secrets and the `Secret` datatype page):
+
+- `Secret` is non-printable and non-loggable: printing it yields `Secret(<name>)`, so a leaked log line is not a leaked credential. Build the request value with `Secret:AddPrefix()` and `Secret:AddSuffix()` instead of concatenating strings.
+- Secrets are available on live servers and in collaborative testing only. Local playtesting raises `Can't find secret with given key`, and a client script raises the same error, so a `GetSecret` call belongs in a server script and must be tested on a server, not in Play Solo.
+- For local testing, define the value in Studio under File, Experience Settings, Security, Local Secrets.
+- Add secrets in the Creator Dashboard under the game's Secrets tab, or manage them through Open Cloud. Only the game or group owner can view, create, or edit them; a game holds up to 500.
+- Each secret carries an allowed domain, and the domain can be narrowed to a specific host such as `my.example.com`. Always set the narrowest domain the integration supports: an unrestricted secret is accepted by any endpoint that receives it.
+- `Allow HTTP Requests` must be enabled in Studio's Security settings for any of this to run.
+
+A true secret belongs here. A value that only needs to be hidden from players still belongs here too, but the anti-pattern to avoid is putting anything credential-shaped in `ReplicatedStorage`, a `StringValue`, or a module script, where clients can read it.
 
 ## 6. Webhooks
 
@@ -143,6 +181,8 @@ Treat delivery as at-least-once and potentially delayed:
 The exact signature algorithm and headers belong to the current webhook documentation. Do not invent verification from a generic webhook provider.
 
 Deduplication must survive process restarts if repeating the side effect would be harmful. A memory-only set is insufficient for durable grants or destructive actions.
+
+Cross-owner atomicity: durable acceptance and deduplication must not acknowledge an event before its work is recoverable; see `roblox-data` full reference, section Cross-owner atomicity limits.
 
 ## 7. Security review
 
@@ -175,6 +215,113 @@ Diagnose in this order:
 8. operation status for asynchronous calls.
 
 Do not broaden scopes until the failing permission boundary is identified.
+
+## 8.5 Ads Manager API (Open Cloud, test stage)
+
+<!-- temporal: 2026-08 -->
+
+Roblox announced an Ads Manager API on Open Cloud (DevForum, 2026-07-30, test stage) for programmatic campaign management: create/update/pause/resume/cancel campaigns, check delivery status, list billing accounts and creatives. It authenticates with an API key (`x-api-key`) or OAuth2 using scopes such as `ad.campaign:read`, `ad.campaign:write`, and `ad.billing:read`, and campaign creates take an `x-idempotency-key` header.
+
+This is a marketing-surface API, not an in-experience engine API: it lives on the Open Cloud side, so the standard rules of this skill apply (least-privilege keys, no keys in game code, server-side storage). As a test-stage API it may change before Beta; verify the current surface against the official docs before building on it, and treat anything beyond campaign CRUD as unverified.
+
+## 8.6 TeleportService (in-experience)
+
+Server-only teleports between places. Does not work during Studio playtesting; test in a published experience.
+
+- `TeleportService:TeleportAsync(placeId, players, teleportOptions?)` is the current method for every teleport (different place, specific server, reserved server); `Teleport`, `TeleportToPlaceInstance`, and `TeleportToPrivateServer` are legacy. Server scripts only; route client requests through a `RemoteEvent`. Max 50 players per call; a group must teleport within one experience.
+- Yields and can throw: always wrap in `pcall` and retry failures (official guidance recommends retries, especially for reserved-server teleports). A teleport can also fail after the call returns without throwing; handle that in `TeleportService.TeleportInitFailed` (player, `Enum.TeleportResult`, errorMessage, placeId, teleportOptions). There is no `TeleportFailed` event.
+- Options come from `Instance.new("TeleportOptions")`; there is no `CreateTeleportOptions`:
+  - `SetTeleportData(data)`: non-secure payload, visible to the client; never send secrets.
+  - `ShouldReserveServer = true` for a new reserved server, `ReservedServerAccessCode = code` for an existing one, `ServerInstanceId = jobId` for a specific public server. Mutually exclusive pairs error: `ReservedServerAccessCode`+`ServerInstanceId`, `ShouldReserveServer`+either.
+- Read data on arrival: server `player:GetJoinData().TeleportData`; client `TeleportService:GetLocalPlayerTeleportData()`.
+
+```luau
+-- Server: teleport a player with data
+local opts = Instance.new("TeleportOptions")
+opts:SetTeleportData({ round = 3 })
+local ok, err = pcall(function()
+    TeleportService:TeleportAsync(PLACE_ID, { player }, opts)
+end)
+if not ok then warn("teleport failed:", err) end
+
+-- Client on arrival
+local data = TeleportService:GetLocalPlayerTeleportData()
+if data then print("round:", data.round) end
+```
+
+### Reserved servers: identify the destination instance
+
+When `ShouldReserveServer = true` creates a new reserved server (or a teleport targets an existing `ReservedServerAccessCode`), the destination instance is private: only players you teleport in arrive. Pass the access code forward by teleporting the next group with `TeleportOptions.ReservedServerAccessCode` set. Identify the running server through DataModel properties, not fields invented on `GetJoinData()`:
+
+```luau
+-- Server script inside the reserved server
+local inReservedServer = game.PrivateServerId ~= ""
+-- A developer-created reserved server has no owning user;
+-- a purchased private server has a non-zero game.PrivateServerOwnerId.
+local developerReserved = inReservedServer and game.PrivateServerOwnerId == 0
+if inReservedServer and developerReserved then
+	-- restricted admission: verify the player against server-held state
+	-- (see the opaque-ticket pattern below), never from client claims.
+end
+```
+
+A standard public server reports `PrivateServerId = ""`. A purchased private server reports a non-empty `PrivateServerId` with a non-zero `PrivateServerOwnerId`, which is how the cases stay distinguishable. Treat any non-empty `PrivateServerId` as restricted admission and verify the player's right to be there from server-held state.
+
+### Secure teleport handoff (opaque ticket)
+
+`SetTeleportData` payloads are client-readable, so the payload must never carry authority: no grant amounts, no role strings, no unlocked flags. The verified pattern is an opaque key plus a server-side record:
+
+1. The source server generates an unguessable identifier (for example `HttpService:GenerateGUID(false)`).
+2. Write a per-player ticket record containing the expected UserId, destination PlaceId, intended reservation/match identity, and authoritative round state, with a short TTL. A party needs independently claimable admission per member, not one globally consumed ticket.
+3. Only the opaque id goes into `SetTeleportData({ ticket = id })`.
+4. On arrival, the destination server reads the id from `player:GetJoinData().TeleportData`, reads the record from MemoryStore, verifies the player's UserId is admitted, and consumes it. Unknown, expired, or non-admitted ids fail closed: kick or return the player to the lobby.
+
+Claim through `UpdateAsync`: validate the bound user and destination, then write a claimed-state record with an idempotent claim identifier. Returning `nil` from the transform cancels the update; it does not delete the ticket. Keep the transform side-effect-free because it can run again. Confirm the returned stored claim belongs to this attempt before admitting; an error or unknown outcome is not permission. Retain the claim until TTL expiry so a replay is recognized. A readable ticket is not an authorization proof.
+
+### Failure ladder: pcall throw vs TeleportInitFailed
+
+Distinguish the two failure surfaces and size retries to the cause, not to a fixed schedule:
+
+- **Call failure caught by `pcall`**: classify the error. Do not retry invalid arguments or authorization mistakes blindly; retry only documented transient failures, bounded by a deadline and player/session state.
+- **`TeleportService.TeleportInitFailed(player, teleportResult, errorMessage, placeId, teleportOptions)`** fires per player after initiation, so a group teleport can partially succeed: some arrive, some land here. Branch on the result enum:
+  - `Enum.TeleportResult.Flooded`: too many recent teleport requests. Back off rather than hot-retry. `GameFull` is the distinct destination-capacity result.
+  - `Enum.TeleportResult.Failure` and other retryable results: bounded retry with backoff.
+  - Non-retryable results (for example `Enum.TeleportResult.Unauthorized` with a bad reserved-server code): do not retry; surface to the player.
+- **Straggler policy**: when half a party arrives and half lands in `TeleportInitFailed`, the arriving server holds the match open (or re-teleports stragglers through the reserved access code) instead of starting with a broken group. Decide the wait timeout in product terms, then implement it explicitly.
+
+Keep retry counts and backoff intervals as configuration, not guessed constants: measure real failure rates in a published place before tuning.
+
+### Teleports and the durable session
+
+A teleport moves the player to a server that will re-acquire their profile. The outgoing server must flush durable work *before* the teleport freezes local gameplay, not from `PlayerRemoving` after the connection is gone:
+
+1. Stop granting progress the moment the teleport is accepted.
+2. Use the save wrapper's documented final-save/release lifecycle before `TeleportAsync` when implementing an explicit handoff. Verify completion and failure reporting; calling `EndSession` alone is not a generic proof of durability. Do not start the teleport on an unconfirmed save. The destination still needs bounded acquisition/recovery, not an assumption of instant ownership.
+3. `pcall` the teleport. If the call throws, the player is still connected and local: re-acquire the profile on this server, or disconnect the player cleanly with data already saved — never leave a released lock behind a live session.
+4. If `TeleportInitFailed` fires, the player remains in the source server unless another attempt succeeds. Keep gameplay frozen; re-acquire ownership before resuming, or disconnect cleanly. A released profile cannot remain writable just because the player is still connected.
+
+Cross-reference: session ownership protocol in `roblox-data` §4; ticket records use the MemoryStore patterns in `roblox-server-data`.
+
+## 8.7 BadgeService (in-experience)
+
+Server-side badge awarding and lookup. Awarding succeeds only when: caller is a server script, the place belongs to the badge's experience, the player is connected, the badge is enabled, and the player does not already have it (award-once per user).
+
+- `BadgeService:AwardBadgeAsync(userId, badgeId)` → boolean; yields, so wrap in `pcall`. `AwardBadge` is deprecated; do not use it. A rate limit of `50 + 35 × player count` awards per minute is community-reported, not on the docs page.
+- `BadgeService:GetBadgeInfoAsync(badgeId)` → dictionary (`Name`, `Description`, `IsEnabled`, `IconImageId`); yields. Check `IsEnabled` before awarding.
+- Ownership checks: `UserHasBadgeAsync(userId, badgeId)` for one badge; `CheckUserBadgesAsync(userId, badgeIds)` for batches. `GetUserBadgesAsync(userId, badgeIds)` also exists (its batch limit is unverified). BadgeService exposes no events; call `AwardBadgeAsync` directly; there is nothing to poll and no `BadgeAwarded` event.
+- Studio: badge awarding in Studio is community-reported to differ from live servers; verify awards in a published test place.
+
+```luau
+-- Server: award a kill-streak badge
+local function onKillStreak(player, BADGE_ID)
+    local infoOk, info = pcall(BadgeService.GetBadgeInfoAsync, BadgeService, BADGE_ID)
+    if not infoOk or not info.IsEnabled then return end
+    local hasOk, has = pcall(BadgeService.UserHasBadgeAsync, BadgeService, player.UserId, BADGE_ID)
+    if not hasOk or has then return end
+    local ok, awarded = pcall(BadgeService.AwardBadgeAsync, BadgeService, player.UserId, BADGE_ID)
+    if ok and awarded then print(player.Name, "earned the badge") end
+end
+```
 
 ## 9. Completion checklist
 

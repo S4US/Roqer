@@ -1,60 +1,43 @@
 ---
 name: roblox-luau-types
-description: "Use for Luau annotations, generics, unions, narrowing, strictness, sealed tables, module type exports, or typed metatables."
-last_reviewed: 2026-07-26
+description: "Use for Luau annotations, generics, unions, narrowing, strictness, sealed tables, module type exports, typed metatables, or new-solver features."
+last_reviewed: 2026-10-02
 sources:
-  - https://luau-lang.org/typecheck
-  - https://devforum.roblox.com/t/general-release-luau%E2%80%99s-new-type-solver/4084991
+  - https://raw.githubusercontent.com/Roblox/creator-docs/main/content/en-us/luau/type-checking.md
+  - https://luau.org/types/type-functions/
+  - https://luau.org/types/tables
 ---
 
 # Luau Type System
 
 ## When to Load
 
-Load for Luau type system work: annotations, generics, union types, type narrowing, sealed/unsealed tables, strictness modes (`--!strict` vs `--!nonstrict`), module type exports, and metatable-backed object typing. For syntax questions, use `roblox-luau-core`. For OOP/async/modules, use `roblox-luau-patterns`.
+Load for Luau types: annotations, generics, unions, narrowing, sealed/unsealed tables, strictness (`--!strict` vs `--!nonstrict`), module type exports, metatable typing, and new-solver features (`keyof`, `setmetatable<T, M>`, type functions, `read`). For syntax, `roblox-luau-core`; for OOP/async, `roblox-luau-patterns`.
 
 ## Quick Reference
 
-**Strictness:** Use `--!strict` for maintained code, `--!nonstrict` while transitioning, and `--!nocheck` only for legacy/generated code. Project settings and directives select the mode; do not assume one global default.
+**Strictness:** `--!strict` for maintained code, `--!nonstrict` while transitioning, `--!nocheck` only for legacy or generated code. Directives and project settings select the mode; never assume one global default.
 
-**Inference philosophy:** Infer first, annotate boundaries (params, returns, exports). Don't annotate every local — noise hides signal.
+**New solver gate:** `keyof`, `rawkeyof`, `setmetatable<T, M>`, `type function`s, and `read` members need the new type solver. On by default for `nocheck`/`nonstrict` projects; strict projects need `Workspace.UseNewLuauTypeSolver = Enabled` (Scripting), which is not scriptable: only the user can change it in Studio. Errors here usually mean wrong solver, not wrong syntax.
 
-**Sealed vs unsealed tables:**
-```luau
-local t = {}          -- unsealed: can add fields
-t.x = 1               -- OK
+**Inference philosophy:** Infer first; annotate boundaries (params, returns, exports). Don't annotate every local.
 
-local t: {x: number} = {x=1}  -- sealed: no new fields
-t.y = 2               -- ERROR
-```
-Build tables fully before annotating. Passing/returning seals them.
+**Sealed vs unsealed tables:** An unannotated local table stays open to new fields until annotated, returned from a function, or its scope exits; annotation seals it. Build tables fully before annotating; passing a table to a typed function does not seal it.
 
-**Unions & tagged unions:**
-```luau
-local id: string | number = "abc"
-type State<T> = {kind:"loading"} | {kind:"ready", value:T} | {kind:"fail", msg:string}
--- Discriminate: if state.kind == "ready" then state.value is narrowed
-```
+**Unions:** `local id: string | number` is a union; prefer tagged unions (`type State<T> = {kind:"loading"} | {kind:"ready", value:T}`) and discriminate on `kind` to narrow.
 
-**Narrowing:**
-```luau
-if typeof(value) == "string" then
-    print(string.upper(value)) -- primitive narrowing
-end
-if instance:IsA("BasePart") then
-    print(instance.Position) -- Instance narrowing
-end
-assert(optionalValue, "missing") -- non-nil narrowing
-```
+**Narrowing:** `typeof(v) == "string"` narrows primitives, `instance:IsA("BasePart")` narrows Instances, `assert(v, "msg")` removes `nil`. Discriminants narrow tagged unions; full reference has worked examples.
 
-**Generics:** Use when input→output type matters. `function first<T>(list: {T}): T?`. Generic aliases: `type Result<T> = {success: boolean, value: T?}`. Never replace with `any`.
+**Generics:** Use when input→output type matters: `function first<T>(list: {T}): T?`, or `type Result<T> = {success: boolean, value: T?}`. Never replace with `any`.
 
-**Type exports:** `export type Foo = {...}` at module boundary. Consumers use `require` + `Types.Foo`.
+**Type exports:** `export type Foo = {...}` at module boundaries; consumers use `Types.Foo`.
 
-**Object typing:** `export type Counter = typeof(setmetatable({} :: CounterData, Counter))` for precise self.
+**Object typing:** `typeof(setmetatable({} :: CounterData, Counter))` types precise self; the new solver adds `setmetatable<T, M>` directly.
 
-**Casts (::):** Precision tool to narrow overly generic inference — never to hide errors.
+**Casts (::):** For narrowing overly generic inference, never for hiding errors.
 
-**Key mistakes:** Unsealed `any` propagation in nonstrict, sealing tables too early, unions without discriminants, annotating every local.
+**Trust boundaries:** Annotations contract with the compiler, not runtime data. Remotes, DataStores, HttpService, and attributes still need checks; inside a trusted boundary, let types carry the load.
+
+**Key mistakes:** `any` propagation in nonstrict, sealing too early, unions without discriminants, annotating every local, deleting new-solver syntax without checking the solver setting.
 
 > Full reference: see `references/full.md`

@@ -1,4 +1,4 @@
-# Roblox NPC & AI — Full Reference
+# Roblox NPC & AI: Full Reference
 
 
 > **Code in this reference is illustrative. Adapt to your game and verify in Studio before production use.**
@@ -90,7 +90,7 @@ If this returns `false`, the caller should recompute from the NPC's current posi
 
 Control how the pathfinder treats specific regions:
 
-**Material costs** — make certain terrain materials expensive:
+**Material costs**: make certain terrain materials expensive:
 ```luau
 local path = PathfindingService:CreatePath({
     Costs = {
@@ -101,7 +101,7 @@ local path = PathfindingService:CreatePath({
 })
 ```
 
-**Region modifiers** — mark arbitrary zones as costly or impassable:
+**Region modifiers**: mark arbitrary zones as costly or impassable:
 1. Create an Anchored, CanCollide=false Part around the region
 2. Add a `PathfindingModifier` child with a `Label` (e.g. "DangerZone")
 3. Reference the label in Costs:
@@ -114,12 +114,12 @@ local path = PathfindingService:CreatePath({
 })
 ```
 
-**PassThrough** — pathfind through solid obstacles (e.g. doors):
+**PassThrough**: pathfind through solid obstacles (e.g. doors):
 1. Create an Anchored, CanCollide=false Part around the door
 2. Add a `PathfindingModifier` with `PassThrough = true`
 3. The path will route through the door as if it's open
 
-**PathfindingLink** — connect disconnected navmesh areas:
+**PathfindingLink**: connect disconnected navmesh areas:
 Use `PathfindingLink` to tell the pathfinder about custom traversal (teleporters, ziplines, boats). Set a Label and handle it in the waypoint loop via `waypoint.Action == Enum.PathWaypointAction.Custom`.
 
 ### Navigation Mesh
@@ -129,6 +129,12 @@ The navigation mesh is auto-generated from geometry. Debug it in Studio:
 - View → Visualization Options → Pathfinding Modifiers (shows labels)
 
 Colored areas = walkable. Small arrows = jump connections. Uncolored = impassable.
+
+### Custom navmesh alternatives to PathfindingService
+
+PathfindingService auto-generates its navmesh from geometry server-side. It is robust but black-box: no control over walkable geometry or generation. For full control, community modules port real navmesh generators to Luau (see the Navcast thread as a lead, https://devforum.roblox.com/t/navcast-an-attempt-to-port-recast-to-luau/4743538). Such ports are not game-ready: voxelization is far too slow for live or changing maps, so tile generation with yields between chunks is required. Use them as a reference point when PathfindingService's constraints don't fit your geometry or agent needs, not as a drop-in replacement.
+
+<!-- temporal: 2026-07 -->
 
 ## Pathfinding performance and improved search
 
@@ -242,22 +248,32 @@ end
 Only check LOS after distance check passes (raycasts are expensive):
 
 ```luau
-local function hasLineOfSight(from: Vector3, to: Vector3, ignore: {Instance}): boolean
+local function hasLineOfSight(from: Vector3, to: Vector3, ignore: {Instance}, target: Instance?): boolean
     local direction = to - from
     local params = RaycastParams.new()
     params.FilterDescendantsInstances = ignore
     params.FilterType = Enum.RaycastFilterType.Exclude
 
     local result = workspace:Raycast(from, direction, params)
-    -- nil result means nothing blocked the ray
-    return result == nil
+    -- Nothing between the endpoints: sight is clear.
+    if result == nil then return true end
+    -- The segment can clip the target's own queryable parts (aiming at the
+    -- head grazes a hat or hand). A hit inside the target means the ray
+    -- REACHED it: that is sight, not an obstruction. Only a hit on some
+    -- other instance (a wall) blocks.
+    if target and result.Instance:IsDescendantOf(target) then
+        return true
+    end
+    return false
 end
 
--- Usage: check if NPC can see player
+-- Usage: check if NPC can see player. Exclude the NPC's own character but
+-- NOT the target's: pass the target as the last argument instead.
 local canSee = hasLineOfSight(
     npc.rootPart.Position + Vector3.new(0, 2, 0), -- eye height
     targetRoot.Position + Vector3.new(0, 2, 0),   -- target eye height
-    {npc.rootPart.Parent, targetRoot.Parent}       -- ignore both endpoint characters
+    {npc.rootPart.Parent},                        -- ignore the NPC itself
+    targetRoot.Parent                             -- hits within the target are visibility
 )
 ```
 
@@ -293,11 +309,13 @@ local function canDetectPlayer(npc: NPCState, player: Player): boolean
         end
     end
 
-    -- 3. Line of sight (expensive, do last)
+    -- 3. Line of sight (expensive, do last); pass the target so hits on
+    -- the player's own parts read as visibility, not obstruction
     return hasLineOfSight(
         npc.rootPart.Position + Vector3.new(0, 2, 0),
         root.Position + Vector3.new(0, 2, 0),
-        {npc.rootPart.Parent}
+        {npc.rootPart.Parent},
+        root.Parent
     )
 end
 ```
@@ -425,3 +443,43 @@ For large NPC counts, keep a rotating work cursor or queue so not all NPCs think
 - **MoveTo timeout**: `Humanoid:MoveTo()` has an 8-second timeout. If the NPC gets stuck, `MoveToFinished` fires with `reached = false`. Handle it.
 - **Pathfinding on the client**: PathfindingService works on both client and server, but NPC movement must be server-authoritative. Compute paths on the server.
 - **No stagger for large NPC counts**: A large batch of path requests on one frame can spike the server. Stagger updates and measure the actual budget.
+
+## Community ecosystem (leads, not sources)
+
+- [SimplePath](https://devforum.roblox.com/t/simplepath-pathfinding-module/1196762) (894 likes): the PathfindingService wrapper standard; [How 2 Make A* Pathfinding](https://devforum.roblox.com/t/how-2-make-a-pathfinding/2714504) for custom grids.
+- [BehaviorTrees3 + visual editor](https://devforum.roblox.com/t/behaviortrees3-btrees-visual-editor-v30/836158): the BT reference implementation.
+- [Simulating thousands of moving NPCs performantly](https://devforum.roblox.com/t/simulating-thousands-of-moving-npcs-with-humanoidsphysics-performantly/4603494) (2026): current humanoid-scale density canon.
+## Avatar appearance: HumanoidDescription, BodyColors, Shirt, Pants
+
+### HumanoidDescription: the canonical runtime appearance API
+
+- Change an NPC's appearance at runtime with `Humanoid:ApplyDescription(description)`; read current appearance with `Humanoid:GetDescription()`. ApplyDescription batch-applies every field in one step; prefer it over piecemeal property edits.
+- Clone-and-modify: never mutate a shared or template description in place. Clone it, edit the clone, apply. A shared instance mutates every NPC referencing it.
+- Key fields: `Shirt` and `Pants` (classic clothing asset IDs), `Face`, body-part mesh IDs (`Head`, `Torso`, `LeftArm`, `RightArm`, `LeftLeg`, `RightLeg`), per-part `*Color` (Color3), and R15 scale fields: `HeadScale`, `HeightScale`, `WidthScale`, `DepthScale`, `BodyTypeScale`, `ProportionScale`.
+- Accessories: per-bone string fields (`HatAccessory`, `HairAccessory`, `FaceAccessory`, `NeckAccessory`, `FrontAccessory`, `BackAccessory`, `WaistAccessory`, `ShouldersAccessory`) plus the Accessories table managed by `SetAccessories(accessories, includeRigidAccessories)` / `GetAccessories(includeRigidAccessories)`. Attach accessory instances with `Humanoid:AddAccessory(accessory)`.
+- R6 vs R15: scale fields and body-part mesh IDs apply to R15 only; they are ignored on R6. Classic clothing (`Shirt`/`Pants` IDs) works on both. Batch-apply with ApplyDescription so the rig rebuilds once.
+- Build descriptions from real avatars: `Players:GetHumanoidDescriptionFromUserIdAsync(userId)` and `Players:GetHumanoidDescriptionFromOutfitIdAsync(outfitId)`.
+
+### BodyColors (legacy)
+
+- Legacy instance parented to the character with one BrickColor per body part: `HeadColor`, `TorsoColor`, `LeftArmColor`, `RightArmColor`, `LeftLegColor`, `RightLegColor`.
+- Superseded by `HumanoidDescription`'s `*Color` Color3 fields for most uses. Keep for R6-only or legacy rigs.
+
+### Shirt / Pants
+
+- Parent a `Shirt` or `Pants` instance to the character model; set `ShirtTemplate` / `PantsTemplate` to classic clothing content IDs (ContentId).
+- Replace safely: `character:FindFirstChildOfClass("Shirt")`, create and parent a new instance if missing, then set the template.
+
+```luau
+-- Server: clone a template description, tweak, apply
+local template = ReplicatedStorage:FindFirstChild("NPCAppearance", true):FindFirstChildOfClass("HumanoidDescription")
+local desc = template:Clone() -- never mutate the shared template
+desc.HeightScale = 1.1
+desc.HeadScale = 1.15
+desc.Shirt = 5832882895 -- classic shirt asset ID
+npcHumanoid:ApplyDescription(desc)
+```
+
+## Legacy tools: HopperBin (deprecated)
+
+`HopperBin` is the pre-2013 ancestor of `Tool`: drop it in `StarterPack` and the player auto-equips it. It is deprecated; do not use it for new work. Migrate to `Tool` (parent to `Backpack` / equip via `Humanoid:EquipTool`) or to a prompt-based interaction (`ProximityPrompt`) for non-held abilities. Do not wire `HopperBin`-era events (`Bin.Selected`/`Bin.Deselected` are the old API) into new systems; only tolerate HopperBins when preserving a legacy place file.

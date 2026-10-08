@@ -1,4 +1,4 @@
-# Luau Type System — Full Reference
+# Luau Type System: Full Reference
 
 
 > **Code in this reference is illustrative. Adapt to your game and verify in Studio before production use.**
@@ -11,7 +11,7 @@
 - Prefer explicit exported aliases at module boundaries for stable contracts
 - Use generics when input/output relationships matter; never replace with `any`
 - Use tagged unions + refinements for multi-case structured values
-- Casts (`::`) are a precision tool, not a bypass — narrow overly generic inference, don't hide errors
+- Casts (`::`) are a precision tool, not a bypass: narrow overly generic inference, don't hide errors
 
 ## Philosophy
 
@@ -21,7 +21,7 @@ The type system exists to **catch bugs at analysis time** without affecting runt
 2. **Annotate boundaries.** Function parameters, return types, and exported module surfaces benefit from explicit types. Internal locals usually don't.
 3. **Preserve relationships.** A generic `<T>` that carries a type through a transform is more valuable than `any` that erases it.
 4. **Narrow, don't cast.** Use `typeof()`, `IsA()`, and conditional checks to narrow types. Use `::` only when you genuinely know more than the checker.
-5. **Sealed vs unsealed matters.** An annotated table is sealed (no new fields). An unannotated local table accumulates fields until it leaves scope or gets returned.
+5. **Sealed vs unsealed matters.** An explicitly annotated table is sealed (no new fields). An unannotated local table stays unsealed while it is being built; it seals on annotation, on being returned from a function, or when its declaring scope exits — not on being passed to a function.
 
 ## Strictness Modes
 
@@ -100,7 +100,9 @@ local data = {
 -- data is unsealed here, you can still add fields
 data.guild = "Warriors"
 
--- But once you pass it to a typed function or return it, it seals
+-- Passing it to a typed function does NOT seal it (width subtyping allows
+-- extra properties at the call site); it seals on annotation, on return
+-- from a function, or when its declaring scope exits.
 ```
 
 ## Union and Intersection Types
@@ -158,6 +160,34 @@ local function getPlayerData(player: Player): PlayerData
     return parseStats(leaderstats)
 end
 ```
+
+### Refinements are claims about a place, and the fragile one is a table field
+
+A refinement attaches to a specific storage location — a local binding or a table field expression — and survives only as long as no intervening code invalidates it. Reassigning a narrowed local kills its refinement immediately (verified: the use after `v = nil` is a type error under the current checker). What varies between solver versions is how aggressively field refinements (`t.value ~= nil`) are invalidated by writes through other paths; treating "any intervening call may have written the field" as true is the safe assumption even when the checker in front of you still accepts the code.
+
+The robust idiom, for both reasons: copy the field to a local and narrow the local.
+
+```luau
+-- Fragile: refinement on t.value, and other code may write t.value
+if t.value ~= nil then
+    process(t.value)
+end
+
+-- Robust: the local cannot be written behind the checker's back,
+-- and reassignment of the local is visible to the checker
+local value = t.value
+if value ~= nil then
+    process(value)
+end
+```
+
+Copy before logic that may call anything; a local copy is insulated from later replacement of the original field. A captured mutable local can still be rebound by a closure, and copying a table reference does not freeze its contents.
+
+### Reading type errors: the report line is where types meet, not where the bug is
+
+A type error is reported at the point where an incompatible value is *used or assigned*, but the wrong value was usually produced one or two hops upstream. Probed: a function whose body returns a string under a `number` return annotation is flagged at the `return` — the source — not at the downstream use. Follow the value back to where it was created instead of annotating the report line into silence.
+
+Related, and equally verified: `any` at a boundary silences every check downstream. A function returning `any` can return a string, and every consumer — including `local n: number = get()` — type-checks cleanly while the bad value flows on. When you see a suspicious value that the checker "let through," look for an `any` between its origin and the failure point; fixing the annotation at that hop restores checking for everything after it.
 
 ## Generics
 
@@ -234,7 +264,7 @@ local player: Player = game.Players.LocalPlayer
 local character: Model = player.Character or player.CharacterAdded:Wait()
 local humanoid: Humanoid = character:FindFirstChildWhichIsA("Humanoid") :: Humanoid
 
--- Value types (NOT instances — value types / structs)
+-- Value types (NOT instances; value types / structs)
 local position: Vector3 = Vector3.new(10, 5, 0)
 local rotation: CFrame = CFrame.new(0, 10, 0) * CFrame.Angles(0, math.rad(90), 0)
 local color: Color3 = Color3.fromRGB(255, 0, 0)
@@ -275,7 +305,114 @@ return Counter
 - When the method is defined with `.` but called with `:` (rare, avoid if possible)
 - In type definitions (function signatures in type aliases always need explicit self)
 
+## New Solver Type Features
+
+<!-- temporal: 2026-09 -->
+Everything in this section requires the **new type solver**. The old solver cannot resolve these constructs: do not delete them, rewrite them into old-solver idioms, or report them as missing in a project still running the old solver. Roblox generalized the new solver on November 20, 2025 (see Strictness Modes above): `nocheck`/`nonstrict` projects were migrated automatically, while strict projects stay on the old solver until they opt in. Opt in per experience with the Workspace property `UseNewLuauTypeSolver` (Scripting category, set to `Enabled`); the Studio beta-feature toggle was removed on January 7, 2026. The separate `LuauTypeCheckMode` property sets the default strictness mode, not the solver. `UseNewLuauTypeSolver` is not scriptable, so the Studio bridge can neither read nor change it. Infer the solver from file directives and existing new-solver syntax; when it matters, ask the user to check Workspace > Scripting in Studio. Switching the solver changes type checking for the whole project, so it is the user's decision, never part of a code edit.
+
+### keyof and rawkeyof
+
+Built-in type functions on table types. `keyof<T>` returns the keys of `T` as a union of singleton types; `rawkeyof<T>` ignores metatables.
+
+```luau
+local config = { health = 10, range = 20, team = "red" }
+type ConfigKey = keyof<typeof(config)> -- "health" | "range" | "team"
+
+local function read(key: ConfigKey) -- callers can only pass real keys
+end
+```
+
+### setmetatable<T, M>
+
+The new solver promotes `setmetatable` to a type constructor: `setmetatable<T, M>` builds the table type `T` carrying metatable `M`, without routing through `typeof(setmetatable(...))`.
+
+```luau
+local Mt = {}
+Mt.__index = Mt
+
+type Object = setmetatable<{ value: number }, { __index: typeof(Mt) }>
+
+function Mt.new(value: number): Object
+    return setmetatable({ value = value }, Mt)
+end
+```
+
+The old-solver idiom `typeof(setmetatable({} :: T, Mt))` still works under the new solver; `setmetatable<T, M>` is the clearer form there. In old-solver projects keep the `typeof` idiom, because `setmetatable<T, M>` in type position does not resolve.
+
+### User-defined type functions
+
+Functions that run during analysis and compute a type from types. Declared with `type function`; called with angle brackets like built-ins.
+
+```luau
+type function keyofLike(ty: type)
+    if not ty:is("table") then
+        error("keyofLike expects a table type")
+    end
+    local union = nil
+    for key in ty:properties() do
+        union = if union then types.unionof(union, key) else key
+    end
+    return if union then union else types.singleton(nil)
+end
+
+type Keys = keyofLike<{ name: string, level: number }> -- "name" | "level"
+```
+
+- Runs at analysis time only: no runtime presence, no runtime cost, and no access to runtime functions or script locals.
+- The environment is sandboxed and restricted: the `types` library (constructors and inspectors such as `types.unionof`, `types.singleton`, `types.newtable`, `tabletype:properties()`, `setreadproperty`/`readproperty`) plus `assert`, `error`, `print`, `next`, `ipairs`, `pairs`, `select`, `unpack`, `getmetatable`, `setmetatable`, `rawget`, `rawset`, `rawlen`, `raweq`, `tonumber`, `tostring`, `type`, `typeof`, and the `math`, `table`, `string`, `bit32`, `utf8`, and `buffer` libraries. Nothing else is available.
+- `error()` inside a type function surfaces as a type error at the call site.
+- Status: shipped upstream (luau.org/types/type-functions) and usable on Roblox under the new solver; Roblox staff have confirmed experiences can be published with them, but editor tooling inside type-function bodies is still maturing.
+
+### read table members
+
+The new solver tracks read and write types per property. Prefix a member with `read` to make it read-only:
+
+```luau
+local function describe(box: { read part: Instance })
+    print(box.part.Name)
+    -- box.part = Instance.new("Part") -- type error: read-only
+end
+```
+
+Reads are allowed and writes are type errors, so callers can pass a narrower table (a `{ part: Part }` where `{ read part: Instance }` is expected). Functions defined with `function T.name()` syntax are inferred as read-only members. The read/write split is also visible to user-defined type functions: `ty:properties()` returns `{ [key]: { read: type?, write: type? } }`.
+
+## Function Attributes
+
+### @deprecated
+
+Marks a named function as deprecated. The linter warns at every call site and the LSP shows the entry in a distinct style in autocomplete. Both optional string parameters customize the warning: `use` names the replacement, `reason` explains.
+
+```luau
+@deprecated local function oldApi()
+end
+
+@[deprecated { use = "newApi()", reason = "oldApi miscounts negative values" }]
+local function olderApi()
+end
+```
+
+| Form | Warning |
+| --- | --- |
+| `@deprecated` | `Function 'oldApi' is deprecated.` |
+| `use = "newApi()"` | adds `use 'newApi()' instead.` |
+| member function | `Member 'class.func' is deprecated` |
+
+Attributes apply to functions only and are not user-definable. Status: documented upstream at luau.org/attributes and parsed by Studio since release 669; upstream release 0.668 fixed propagation to anonymous functions under the new solver. Treat actual Studio warning behavior as still settling; do not claim it errors or blocks anything.
+
+### Native codegen (--!native / @native)
+
+Roblox-only compiler feature: server-side scripts compile to machine code instead of bytecode. Covered in full in `roblox-luau-core`; the type-relevant facts:
+
+- `--!native` at the top of a Script enables it for all functions in the script (top-level scope only if deemed profitable). `@native` above an individual function enables it per function.
+- Enable `--!optimize 2` alongside: `--!native` benefits from aggressive optimization, and the pairing is the common performance idiom.
+- Annotate hot parameters (`v: Vector3`, not `v`): codegen specializes on type annotations, and wrong or missing hints add runtime checks or drop the function back to the interpreter.
+- Server scoping: documented for server-side scripts. Do not add `--!native` to client scripts expecting the same benefit.
+- Roblox publishes no official speedup number; measure with the Script Profiler instead of claiming a ratio.
+
 ## Common Mistakes
+
+- Using `keyof`, `setmetatable<T, M>`, type functions, or `read` members in an old-solver project and "fixing" the resulting errors by deleting them; they need the new solver (`UseNewLuauTypeSolver`)
+- Assuming upstream-only Luau features are live in the Roblox VM without checking deployment status
 
 - Leaving variables unannotated in `--!nonstrict` → unintentional `any` propagation
 - Replacing useful generic relationships with `any` or overly broad unions
@@ -283,9 +420,15 @@ return Counter
 - Expecting `:` method definitions to automatically share precise `self` type across the class
 - Using `::` to force unrelated conversions instead of fixing underlying type design
 - Building unions without a discriminant, making downstream refinement difficult
+- Narrowing a table field and holding the refinement across calls that may write the field; copy the field to a local and narrow the local instead
 - Using intersections between incompatible primitives (`string & number`)
 - Annotating every local variable (noise that hides the important annotations)
 - Exporting internal helper types that clutter the module's public surface
+
+## Solver Migration Rules
+
+- Never delete or "modernize away" new-solver syntax (`keyof`, `setmetatable<T, M>`, `type function`, `read` members) because a toolchain or collaborator reports it as unknown; see [New Solver Type Features](#new-solver-type-features) for the opt-in.
+- Do not add new-solver syntax to a project that has not opted in; the old solver will reject or mangle it.
 
 ## Quality Checklist
 
@@ -297,3 +440,4 @@ return Counter
 - [ ] Exported types are named, focused, and documented
 - [ ] Casts (`::`) are justified (narrowing, not hiding errors)
 - [ ] No sealed table violations (fields added after annotation)
+- [ ] New-solver features are only used where the new solver is enabled

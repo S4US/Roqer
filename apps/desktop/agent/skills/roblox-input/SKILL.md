@@ -1,16 +1,13 @@
 ---
 name: roblox-input
 description: "Use when handling Roblox keyboard, mouse, gamepad, touch, motion input, or cross-platform action binding."
-last_reviewed: 2026-07-26
+last_reviewed: 2026-10-02
 sources:
+  - https://devforum.roblox.com/t/the-correct-way-to-design-mobile-buttons/2494558
   - https://create.roblox.com/docs/reference/engine/classes/UserInputService
-  - https://create.roblox.com/docs/reference/engine/classes/ContextActionService
-  - https://create.roblox.com/docs/reference/engine/enums/UserInputType
-  - https://create.roblox.com/docs/reference/engine/classes/GuiService
-  - https://create.roblox.com/docs/reference/engine/classes/GuiObject
   - https://create.roblox.com/docs/projects/server-authority
-  - https://create.roblox.com/docs/input/input-action-system
-  - https://raw.githubusercontent.com/Roblox/focus-navigation/main/README.md
+  - https://create.roblox.com/docs/ui/3D-drag-detectors
+  - https://create.roblox.com/docs/ui/ui-drag-detectors
 ---
 
 # Roblox Input
@@ -23,7 +20,7 @@ Load for keyboard, mouse, gamepad, touch, motion, or cross-platform action bindi
 
 **Core events** (`UserInputService`): `InputBegan`, `InputChanged`, `InputEnded` fire as `(input: InputObject, gameProcessedEvent: boolean)`. `InputBegan` does NOT fire for mouse wheel. Events only fire while the client window is focused.
 
-**Prefer `ContextActionService` over `InputBegan`** for gameplay — free conflict resolution (chat won't steal H) and free mobile buttons:
+**Prefer `ContextActionService` over `InputBegan`** for gameplay: free conflict resolution (chat won't steal H) and free mobile buttons:
 
 ```luau
 local CAS = game:GetService("ContextActionService")
@@ -48,11 +45,13 @@ CAS:BindAction("Jump", onAction, true,
 
 **Touch:** use high-level gesture events or raw `TouchStarted`/`TouchMoved`/`TouchEnded` when tracking fingers.
 
+**Dragging:** `DragDetector` (3D parts/models, physics-capable) and `UIDragDetector` (UI) make objects draggable with zero code; events `DragStart`/`DragContinue`/`DragEnd`.
+
 **Pitfalls**:
 - `gameProcessedEvent=true` in InputBegan → UI consumed it. Filter for gameplay.
 - `BindAction` is stack-based: most-recent wins. Use `BindActionAtPriority`.
 - Client-only. Server scripts silently no-op.
-- `JumpRequest` fires multiple times per jump — debounce.
+- `JumpRequest` fires multiple times per jump; debounce.
 - Mouse wheel only fires `InputChanged`.
 
 Full event tables and polling methods: `references/full.md`.

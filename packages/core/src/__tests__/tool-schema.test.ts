@@ -452,6 +452,8 @@ describe('Tool schema compatibility', () => {
       'close',
       'status',
       'list_place_versions',
+      'link_project',
+      'unlink_project',
     ]);
     expect((props.source as { enum?: string[] }).enum).toEqual([
       'baseplate',
@@ -468,6 +470,7 @@ describe('Tool schema compatibility', () => {
       'page_token',
       'place_id',
       'place_version',
+      'project',
       'require_process_identity',
       'source',
       'studio_working_directory',

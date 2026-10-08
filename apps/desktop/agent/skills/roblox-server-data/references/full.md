@@ -1,4 +1,4 @@
-# Roblox Server & Shared Data — Full Reference
+# Roblox Server & Shared Data: Full Reference
 
 > **Code in this reference is illustrative. Adapt to your game and verify in Studio before production use.**
 
@@ -55,17 +55,63 @@ end
 ```
 
 ### Key Rules
-- Keys MUST be strings — use a stable representation such as `tostring(player.UserId)`
-- Values must be integers used for sorting — do not store strings, tables, or nested data
-- Separate from player DataStore — different key space, different purpose
-- `GetSortedAsync` returns pages, not a flat list — use pagination
+- Keys MUST be strings; use a stable representation such as `tostring(player.UserId)`
+- Values must be integers used for sorting; do not store strings, tables, or nested data
+- Separate from player DataStore (different key space, different purpose)
+- `GetSortedAsync` returns pages, not a flat list; use pagination
 - Rate limits apply same as regular DataStores
+
+### Batch reads: `BatchGetAsync`
+
+`GlobalDataStore:BatchGetAsync(keys, options?)` retrieves multiple ordered-data-store keys in a single request. Per the docs it is currently only supported on `OrderedDataStore`; calling it on a standard `GlobalDataStore` or `DataStore` throws an error. Unlike `GetAsync`, it returns no `DataStoreKeyInfo`, because ordered stores do not support versioning or metadata. <!-- temporal: 2026-09 -->
+
+- Returns a dictionary mapping each key to a table with a `value` field (for example `coins = { value = 100 }`).
+- Keys that do not exist or have empty values are omitted from the result, not returned as nil.
+- The `keys` array needs at least one key, at most a server-configured maximum (default 100). Exceeding it throws.
+- Each call counts against the ordered read budget based on the number of keys requested.
+
+```luau
+local keys = {"player_111", "player_222", "player_333"}
+local success, results = pcall(function()
+    return coinStore:BatchGetAsync(keys)
+end)
+if success then
+    for _, key in keys do
+        local entry = results[key]
+        if entry then
+            print(key .. " : " .. tostring(entry.value))
+        else
+            print(key .. " has no saved entry")
+        end
+    end
+end
+```
+
+### Reading request budgets
+
+`DataStoreService:GetRequestBudgetForRequestType(requestType)` returns the number of requests the current place can still make for a `DataStoreRequestType` (for ordered stores: `OrderedRead`, `OrderedWrite`, `OrderedList`, `OrderedRemove`). Requests beyond the budget are throttled. Poll it before bursts instead of assuming quota headroom; ordered writes default to only 30 + numPlayers x 5 per minute per server.
+
+```luau
+local function waitForBudget(requestType: Enum.DataStoreRequestType)
+    while DataStoreService:GetRequestBudgetForRequestType(requestType) <= 0 do
+        task.wait(1)
+    end
+end
+
+waitForBudget(Enum.DataStoreRequestType.OrderedWrite)
+```
+
+Quota formulas (read, write, list, remove; experience-level and per-server) and the rest of the limits tables are in the `roblox-data` full reference, section Limits and quotas.
+
+### Leaderboard Alternatives: Cached DataStore
+
+OrderedDataStore is the canonical primitive, but a leaderboard can instead be stored in a standard `DataStore` kept fully loaded in memory, with writes coalesced into batched `UpdateAsync` saves. This "cached board" model trades storage size and in-memory footprint for O(1) rank lookup of arbitrary players (OrderedDataStore only exposes ~100 entries/page) and lets you define custom ordering and non-integer/custom value types. Prefer it when arbitrary-player rank lookup, custom ranking, or API-request throttling (batching many queued saves into a few writes) outweigh a smaller, paginated board. Community leaderboard modules (e.g. Leaderboards+, https://devforum.roblox.com/t/leaderboards-the-ultimate-module-for-global-leaderboards/4706939) are a lead for this pattern.
 
 ## MessagingService
 
 ### Overview
 
-Real-time communication between server instances. Fire-and-forget — no delivery guarantee, no ordering guarantee.
+Real-time communication between server instances. Fire-and-forget: no delivery guarantee, no ordering guarantee.
 
 ### API
 
@@ -132,12 +178,12 @@ end)
 ```
 
 ### Key Rules
-- Messages are fire-and-forget — design for idempotency
-- No ordering guarantee — handle out-of-order messages gracefully
+- Messages are fire-and-forget; design for idempotency
+- No ordering guarantee; handle out-of-order messages gracefully
 - Rate limit: 600 + 240 * (players in server) messages per minute
-- Message size limited — keep payloads small
+- Message size limited; keep payloads small
 - `message.Data` contains the published payload
-- Subscribe callbacks run in a separate thread — use pcall
+- Subscribe callbacks run in a separate thread; wrap them in pcall
 
 ## GlobalDataStore
 
@@ -151,12 +197,22 @@ GlobalDataStore is the same DataStore API but used for shared, non-player state.
 local DataStoreService = game:GetService("DataStoreService")
 local guildStore = DataStoreService:GetDataStore("GuildData")
 
-local function getGuild(guildId: string): table?
-    local success, data = pcall(function()
+-- Tagged outcome so failure and absence stay distinct:
+-- (true, data) -> read succeeded, guild exists
+-- (true, nil)  -> read succeeded, guild not created yet (legitimate nil)
+-- (false, err) -> DataStore outage; do NOT treat this as "no guild"
+-- Never silently return nil on error.
+local function getGuild(guildId: string): (boolean, any)
+    return pcall(function()
         return guildStore:GetAsync("guild_" .. guildId)
     end)
-    if success then return data end
-    return nil
+end
+
+local ok, data = getGuild("guild123")
+if not ok then
+    -- DataStore failure: retry, back off, or serve stale cache. Do not create/overwrite.
+elseif data then
+    print("guild name", data.name)
 end
 
 local function updateGuild(guildId: string, callback: (data: table) -> table)
@@ -182,27 +238,41 @@ end)
 ```luau
 local counterStore = DataStoreService:GetDataStore("GlobalCounters")
 
-local function incrementCounter(name: string, delta: number)
-    pcall(function()
+-- Tagged outcome: returns (false, err) instead of just failing silently; the
+-- caller decides whether to retry, queue, or alert. Errors are preserved, not swallowed.
+local function incrementCounter(name: string, delta: number): (boolean, any)
+    local ok, err = pcall(function()
         counterStore:UpdateAsync("counter_" .. name, function(oldValue)
             return (oldValue or 0) + delta
         end)
     end)
+    if not ok then
+        warn(("counter increment failed for %s: %s"):format(name, tostring(err)))
+    end
+    return ok, err
 end
 ```
 
 ### Key Rules
-- Always use `UpdateAsync` for shared state — `SetAsync` can lose updates
-- Never store Instances — serialize to primitives
+- Always use `UpdateAsync` for shared state: `SetAsync` can lose updates
+- Never store Instances; serialize to primitives
 - Same rate limits as player DataStores
-- No session locking — don't use for player data
+- No session locking, so don't use it for player data
 - Key naming: use prefixes to namespace (`guild_`, `counter_`, `season_`)
+- Read helpers must preserve failure information: tag outcomes (ok/error/missing) or return `(success, data-or-err)`; never collapse an outage into nil, and never synthesize authoritative-looking fallback data on a failed read
+- Cross-owner atomicity: per-key atomicity does not span profiles or services; for the two-profile exchange limit, quiescence, and recovery patterns, see `roblox-data` full reference, section Cross-owner atomicity limits
 
 ## MemoryStoreService
 
 MemoryStore is for temporary, high-throughput coordination. Its values expire, so it is a poor place for authoritative player progress or a permanent leaderboard.
 
 ### Queue pattern
+
+Processor contract: `processMatchRequest(request)` returns `true` only when the
+batch's durable effect has fully succeeded, and returns `false` or throws when
+it has not. `drain` removes the read batch only when every request returned
+`true`. If any request fails, the whole batch stays queued; redelivery must be
+safe, so processing stays idempotent and includes a stable request identifier.
 
 ```luau
 local MemoryStoreService = game:GetService("MemoryStoreService")
@@ -214,37 +284,155 @@ local function enqueue(request: table)
     end)
 end
 
-local function drain(maxItems: number)
+-- Contract: processMatchRequest(request) returns true on success.
+-- Returning false or throwing means "did not complete"; drain then
+-- keeps the batch queued instead of removing it.
+local function drain(maxItems: number): (boolean, any)
     local ok, items, readId = pcall(function()
         return queue:ReadAsync(maxItems, false, 0)
     end)
-    if not ok then return end
+    if not ok then
+        -- items holds the error message here; propagate it instead of
+        -- returning silently and losing the failure.
+        return false, items
+    end
 
-    local processed = true
+    local allSucceeded = true
     for _, request in items do
-        local requestOk = pcall(function()
-            processMatchRequest(request)
+        -- Capture BOTH pcall's ok AND the processor's return value: the
+        -- contract is "returns true on success", so a false return is a
+        -- failed batch too. Capturing only pcall's first result lets a
+        -- false-returning processor have its batch removed anyway.
+        local requestOk, processed = pcall(function()
+            return processMatchRequest(request)
         end)
-        if not requestOk then
-            processed = false
+        if not requestOk or processed ~= true then
+            allSucceeded = false
         end
     end
 
-    if processed and #items > 0 then
-        pcall(function()
+    -- Remove only when every request durably succeeded. A failed batch is
+    -- left queued (invisible until the timeout expires) and must be safe
+    -- to redeliver: process idempotently.
+    if allSucceeded and #items > 0 then
+        local removed = pcall(function()
             queue:RemoveAsync(readId)
         end)
+        if not removed then
+            return false, "batch processed but RemoveAsync failed; it will be redelivered"
+        end
+    elseif not allSucceeded then
+        return false, "one or more requests failed; batch left queued"
     end
+    return true
 end
 ```
 
+### Queue retries and duplication
+
 `ReadAsync` makes items temporarily invisible to other readers. A crashed worker can therefore leave work to reappear later. Make processing idempotent, include a request or match identifier, and remove an item only after the durable or teleport-side effect has succeeded. Keep the invisibility timeout long enough for the work but short enough to recover from a dead server.
 
-### Sorted-map pattern
+Two failure classes live inside "processing failed":
+
+- **The work clearly did not happen**: retry only transient failures and normally let the original item become visible again. Do not re-add it while the original remains queued. Terminal validation failures need an explicit discard/dead-letter policy.
+- **The outcome is unknown** (the handler acted, then the server crashed, or the durable write timed out): re-adding and reprocessing may duplicate the effect. The guard is an **idempotency key inside the payload** (or a durable done-marker keyed by it), not careful timing: the processor must be able to detect "this request id already completed" and return success without repeating the effect. Redelivery after a crash then collapses to a no-op instead of a double grant.
+
+Queue retries after a successful `RemoveAsync` are a contradiction: removal is the success signal, and a failed `RemoveAsync` means the batch will be redelivered — so removal failures are retried (they leave the work queued), while *post-success* retries must never exist for the effect itself.
+
+### Sorted-map mechanics
 
 Use a sorted map for short-lived records keyed by a stable identifier, such as server heartbeats or matchmaking candidates. Set an expiration on every entry and clean stale values when reading. Do not confuse a sorted map with `OrderedDataStore`: MemoryStore entries expire and are intended for coordination, not historical persistence.
 
-The recent `PartyService Plus` DevForum resource is a useful concept specimen for queue cleanup, party leadership transfer, and cross-server matchmaking. It is a commercial community resource, not a canonical API reference. The official MemoryStore API remains the source of truth.
+```luau
+local MemoryStoreService = game:GetService("MemoryStoreService")
+local map = MemoryStoreService:GetSortedMap("ActiveServers")
+
+-- Writes carry the sort key: SetAsync(key, value, expiration, sortKey).
+local ok = pcall(function()
+	map:SetAsync(serverId, { players = #game.Players:GetPlayers() }, 45, 0)
+end)
+
+-- Paging uses exclusive bounds built from the LAST returned item's key and
+-- sortKey, not a page index. Advance the bound after each page;
+-- repeating the previous bound fetches the same range again.
+-- This is a moving live view, not a consistent multi-page snapshot.
+local exclusiveLowerBound = nil -- nil = start from the very first item
+while true do
+	local okRead, items = pcall(function()
+		return map:GetRangeAsync(Enum.SortDirection.Ascending, 100, exclusiveLowerBound)
+	end)
+	if not okRead or #items == 0 then break end
+	for _, item in items do
+		-- item.key, item.value, item.sortKey
+	end
+	if #items < 100 then break end -- short page = end of map
+	exclusiveLowerBound = { key = items[#items].key, sortKey = items[#items].sortKey }
+end
+```
+
+Cursor facts that break naive implementations:
+
+- For the cursor pattern above, use `{ key = ..., sortKey = ... }` from the last item. The API also accepts a bound with just one field. Ascending pages advance the exclusive lower bound; descending pages advance the exclusive upper bound. A cursor identifies the composite ordering position, not two independent exclusion tests.
+- A short page (`#items < count`) is the end-of-map signal. Do not loop until the bound errors.
+- Sort keys are numbers or strings, not booleans. Numeric sort keys precede strings, which precede missing sort keys; ties use the item's string key. Keep the sort-key type consistent per map.
+- **Heartbeat pattern**: heartbeat = short expiry (tens of seconds) + the owning server re-`SetAsync`ing its entry on a fixed interval. Cleanup-on-close is an optimization, not the correctness guarantee — crash expiry is what removes a dead server's entry.
+
+### Choosing a cross-server store (decision table)
+
+| Need | Use | Why not the alternatives |
+|---|---|---|
+| Persistent player/profile records | `DataStore` | MemoryStore expires; MessagingService is not state |
+| Rank queries over persistent data | `OrderedDataStore` | values must be integers; no versioning |
+| Live ordered views, leases, presence, tickets (TTL) | MemoryStore **sorted map** | DataStore has no TTL-sorted listing |
+| Point lookups on live data; paged enumeration with `ListItemsAsync` | MemoryStore **hash map** | sorted map adds sort cost you don't need |
+| Signals/commands between live servers | `MessagingService` | all stores are state, not delivery |
+| Hot-key contention | shard by key prefix + virtual shards | single-key writes serialize |
+
+Choose sharding from measured contention, request budgets, and documented store limits; do not infer hidden partition boundaries from an item count.
+
+### MessagingService request/response (ack pattern)
+
+Broadcast and migration notifications above are fire-and-forget. When a server must know whether another server *acted* on a command, add correlation and treat "no ack" correctly. The following sender/receiver fragments are illustrative, not one runnable script: install subscriptions before publishing, validate payloads and routing, protect API calls with `pcall`, and own subscription/task cleanup.
+
+```luau
+local pending = {} -- reqId -> { sentAt = os.clock() }
+
+-- Sender
+local reqId = HttpService:GenerateGUID(false)
+pending[reqId] = { sentAt = os.clock() }
+MessagingService:PublishAsync("PartyInvite", { reqId = reqId, toUserId = toUserId, kind = "invite" })
+
+-- Receiver (other server): validate, act, ack the same correlation id
+MessagingService:SubscribeAsync("PartyInvite", function(message)
+	local data = message.Data
+	if data.kind == "inviteAck" then
+		local p = pending[data.reqId]
+		if p then pending[data.reqId] = nil end
+		return
+	end
+	-- ... validate and act on the invite, then:
+	MessagingService:PublishAsync("PartyInvite", { reqId = data.reqId, kind = "inviteAck", accepted = accepted })
+end)
+
+-- Sender timeout sweep: unknown outcome, not "receiver did nothing"
+task.spawn(function()
+	while true do
+		for reqId, p in pending do
+			if os.clock() - p.sentAt > ACK_TIMEOUT then
+				pending[reqId] = nil
+				-- Absence of an ack does NOT mean the command was not executed:
+				-- the receiver may have acted and died before acking. The effect
+				-- itself must therefore be idempotent by reqId, so the recovery
+				-- path can replay the same operation safely instead of guessing
+				-- which side of the act/ack gap the failure landed on.
+			end
+		end
+		task.wait(1)
+	end
+end)
+```
+
+Design consequence: because the ack channel is best effort, the *operation* must be idempotent by correlation id. A timeout-retry must be able to replay the same operation without double-granting; for value-granting operations, keep the durable receipt pattern of `roblox-monetization` (grant and record the id in one durable operation, ack only after persistence).
 
 ## Persistent World State
 
@@ -276,12 +464,25 @@ end
 ```luau
 local seasonStore = DataStoreService:GetDataStore("SeasonData")
 
-local function getSeasonInfo(): table
-    local success, data = pcall(function()
+-- Tagged outcome: (true, data) on a successful read, (false, err) on failure.
+-- A successful read with nil data means no season has been written yet.
+-- Never synthesize a fallback season here: fabricated data ({ season = 1, ... })
+-- gets consumed as authoritative and silently corrupts rewards and schedules.
+local function getSeasonInfo(): (boolean, any)
+    return pcall(function()
         return seasonStore:GetAsync("current_season")
     end)
-    if success and data then return data end
-    return { season = 1, startedAt = os.time(), endsAt = os.time() + 604800 }
+end
+
+local ok, season = getSeasonInfo()
+if not ok then
+    -- Read failed: retry, serve a cached copy, or fail the request.
+    -- Do not fall back to invented season state.
+elseif season then
+    -- Normal path: use the stored season data.
+else
+    -- Read succeeded but no season exists yet: bootstrap the first season
+    -- with an explicit write, don't fabricate one for this request.
 end
 ```
 
@@ -293,3 +494,8 @@ end
 - **Lost updates with SetAsync**: always use `UpdateAsync` for shared state. `SetAsync` overwrites without reading.
 - **Serialization**: DataStores only store JSON-compatible types (string, number, boolean, table, nil). No Instances, no functions, no userdata.
 - **Cross-server timing**: MessagingService has latency. Don't rely on it for time-critical operations.
+- **RTBF template matching**: leaderboard keys that embed the user ID as a static string (for example `player_<UserId>`) can be matched by automated right-to-be-forgotten deletion templates; hashed or random keys cannot, making erasure manual. See the `roblox-data` full reference, section Right-to-be-forgotten deletion templates.
+
+## User identity in shared data
+
+Keep leaderboard keys and cross-server payloads on a documented, consistent identity scheme; don't mix `UserId`-based keys with domain-scoped `User.Id` keys. For the identity distinction, serialization, and migration implications, see `roblox-data` §1a.

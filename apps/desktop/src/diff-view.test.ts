@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import type { RunChange } from "../shared/run-events";
+import { ROJO_SAVE_DIVERGED_SUFFIX, ROJO_SAVE_PENDING_SUFFIX, type RunChange } from "../shared/run-events";
 import {
-  groupChangesByTarget, highlightRows, parseDiffRows, sourceRows, splitChangeGroup,
+  canOpenInStudio, groupChangesByTarget, highlightRows, parseDiffRows, sourceRows, splitChangeGroup,
   tokenizeCodeLine, type SyntaxToken,
 } from "./diff-view";
 
@@ -155,4 +155,23 @@ test("repeated edits to one path produce one editor panel", () => {
   assert.deepEqual(main.earlier.map((item) => item.id), ["c1"]);
   assert.equal(shared.latest?.id, "c3");
   assert.deepEqual(shared.earlier, []);
+});
+
+test("a Rojo save still pending or diverged offers no Open in Studio", () => {
+  const scriptChange = (summary: string): RunChange => ({
+    id: "c1", kind: "script-source", target: "game.ServerScriptService.Main", summary,
+  });
+  // studio-tools.ts builds its summary as `Saved to ${file}${SUFFIX}`; built
+  // from the same shared constants diff-view.ts checks against, rather than a
+  // copy of its wording, so the two cannot silently drift apart.
+  const savedSummary = (suffix: string) => `Saved to src/Main.server.luau${suffix}`;
+
+  assert.equal(canOpenInStudio(scriptChange(savedSummary(ROJO_SAVE_PENDING_SUFFIX))), false);
+  assert.equal(canOpenInStudio(scriptChange(savedSummary(ROJO_SAVE_DIVERGED_SUFFIX))), false);
+
+  // A synced file write, an unlinked edit, and a studio_only edit all really
+  // landed in Studio.
+  assert.equal(canOpenInStudio(scriptChange("Saved to src/Main.server.luau; Studio has the change.")), true);
+  assert.equal(canOpenInStudio(scriptChange("Updated the script in Studio.")), true);
+  assert.equal(canOpenInStudio(scriptChange("Edited the script in Studio only; it is not saved to the linked Rojo project.")), true);
 });

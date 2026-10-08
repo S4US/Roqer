@@ -1,21 +1,32 @@
 ---
 name: roblox-gui
 description: "Use when a Roblox UI task materially needs engine behavior: container choice, responsive containment, layout objects and constraints, gamepad/touch input, safe areas, lifecycle, scrolling, state ownership, or game wiring. roblox-ui-design owns visual composition and geometry."
-last_reviewed: 2026-09-13
+last_reviewed: 2026-10-08
 sources:
   - https://create.roblox.com/docs/ui
   - https://create.roblox.com/docs/ui/position-and-size
+  - https://create.roblox.com/docs/ui/styling
+  - https://create.roblox.com/docs/ui/list-flex-layouts
   - https://create.roblox.com/docs/input
   - https://create.roblox.com/docs/reference/engine/classes/GuiService
   - https://create.roblox.com/docs/reference/engine/classes/GuiObject
   - https://create.roblox.com/docs/reference/engine/classes/ScreenGui
   - https://create.roblox.com/docs/projects/server-authority
   - https://create.roblox.com/docs/input/input-action-system
+  - https://create.roblox.com/docs/reference/engine/classes/ReplicatedFirst
+  - https://create.roblox.com/docs/reference/engine/classes/ContentProvider
+  - https://create.roblox.com/docs/reference/engine/classes/UIPageLayout
+  - https://create.roblox.com/docs/reference/engine/classes/SelectionBox
+  - https://create.roblox.com/docs/reference/engine/classes/Decal
+  - https://create.roblox.com/docs/reference/engine/classes/VideoPlayer
   - https://raw.githubusercontent.com/Roblox/focus-navigation/main/README.md
   - https://devforum.roblox.com/t/introducing-improvements-to-directional-ui-selection-on-gamepad/3864317
   - https://devforum.roblox.com/t/what-are-the-best-ui-screeninset-settings-for-buttons/3519333
   - https://devforum.roblox.com/t/screenguiscreeninsets-topbarinsets-regression/4047230
   - https://raw.githubusercontent.com/Roblox/react-luau/main/README.md
+  - https://raw.githubusercontent.com/dphfox/Fusion/main/README.md
+  - https://raw.githubusercontent.com/centau/vide/main/README.md
+  - https://raw.githubusercontent.com/ffrostfall/fluid/main/README.md
   - original
 ---
 
@@ -37,7 +48,10 @@ Building or editing the visual composition of a screen is `roblox-ui-design`'s j
 - Design for touch and gamepad as well as mouse/keyboard when the request needs those input modes. Bind gameplay actions with `ContextActionService` where it fits.
 - For gamepad UI, define a selected entry point and deliberate directional behavior. `GuiService.SelectedObject` plus `Selectable` is the native baseline.
 - Keep UI state separate from the server state that it displays. A button is not an authority boundary.
-- In Server Authority projects, durable inventory/currency/ownership displays stay tied to confirmed state.
+- Reactive UI: own per-screen cleanup separately from session state; when a leak is suspected, repeat open/close in a playtest to test for it (full.md).
+- In Server Authority projects, durable inventory/currency/ownership displays stay tied to confirmed state; route gameplay input through Input Actions.
 - Make scrolling, text growth, clipping, and safe-area behavior explicit before adding polish.
+- Loading UI belongs in `ReplicatedFirst`; client character teleports are not readiness gates.
+- In a project that already uses `StyleSheet`/`StyleLink`, extend its rules instead of overriding them per instance. Flex lives in `UIListLayout` plus `UIFlexItem`; there is no `UIFlexLayout`.
 
 **Need the details?** Load `references/full.md` only when the task actually needs the deeper engine/UI behavior guidance.

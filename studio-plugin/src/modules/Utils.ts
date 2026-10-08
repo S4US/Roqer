@@ -201,6 +201,22 @@ function getRootSegment(instance: Instance): string {
 	return instance.Name;
 }
 
+/** False when any instance from this one up to game shares its name with a sibling, so a path cannot name it alone. */
+function hasUniquePath(instance: Instance): boolean {
+	let current: Instance | undefined = instance;
+	while (current && current !== game) {
+		const parent: Instance | undefined = current.Parent;
+		if (!parent) return false;
+		let sameName = 0;
+		for (const sibling of parent.GetChildren()) {
+			if (sibling.Name === current.Name) sameName += 1;
+		}
+		if (sameName > 1) return false;
+		current = parent;
+	}
+	return true;
+}
+
 function getInstancePath(instance: Instance): string {
 	if (!instance || instance === game) {
 		return "game";
@@ -755,6 +771,7 @@ export = {
 	getInstancePath,
 	getInstanceByPath,
 	getInstanceReference,
+	hasUniquePath,
 	resolveInstance,
 	resolveParentAndName,
 	splitLines,

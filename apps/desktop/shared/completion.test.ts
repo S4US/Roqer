@@ -86,6 +86,60 @@ test("a later passing read-back resolves the earlier failed attempt", () => {
   assert.deepEqual(result.issues, []);
 });
 
+test("a file-backed edit still pending delivery to Studio is not verified, but is not a generic failure either", () => {
+  const result = evaluateCompletion(input({
+    changes: [scriptChange("rev-2")],
+    evidence: [{
+      kind: "verification",
+      changeKind: "script-source",
+      title: SCRIPT,
+      detail: "The file was saved; Rojo has not delivered the change to Studio yet.",
+      metadata: [{ label: REVISION_AFTER_LABEL, value: "rev-2" }],
+    }],
+  }));
+  // Not verified: Studio has not confirmed anything yet, so this must not
+  // read as "applied and verified in Studio".
+  assert.equal(result.verified, false);
+  assert.equal(result.issues.length, 1);
+  assert.equal(result.issues[0].code, "unverified-change");
+  // Its own honest detail is surfaced, not the generic "not read back"
+  // phrase (which would misreport an unattempted read-back as a missed one)
+  // and not a "failed-evidence" complaint (nothing failed; the file write
+  // itself already succeeded).
+  assert.equal(result.issues[0].detail, "The file was saved; Rojo has not delivered the change to Studio yet.");
+  assert.ok(!result.issues.some((issue) => issue.code === "failed-evidence"));
+});
+
+test("a file-backed edit that diverged from Studio is not verified, but is not a generic failure either", () => {
+  const result = evaluateCompletion(input({
+    changes: [scriptChange("rev-2")],
+    evidence: [{
+      kind: "verification",
+      changeKind: "script-source",
+      title: SCRIPT,
+      detail: "The file was saved, but the script in Studio changed to something else meanwhile.",
+      metadata: [{ label: REVISION_AFTER_LABEL, value: "rev-2" }],
+    }],
+  }));
+  assert.equal(result.verified, false);
+  assert.equal(result.issues.length, 1);
+  assert.equal(result.issues[0].code, "unverified-change");
+  assert.equal(
+    result.issues[0].detail,
+    "The file was saved, but the script in Studio changed to something else meanwhile.",
+  );
+  assert.ok(!result.issues.some((issue) => issue.code === "failed-evidence"));
+});
+
+test("a file-backed edit that synced immediately is verified exactly as any other read-back", () => {
+  const result = evaluateCompletion(input({
+    changes: [scriptChange("rev-2")],
+    evidence: [verification(true, "rev-2")],
+  }));
+  assert.equal(result.verified, true);
+  assert.deepEqual(result.issues, []);
+});
+
 test("a property change needs host-recorded verification", () => {
   const unverified = evaluateCompletion(input({
     changes: [{ kind: "properties", target: "game.Workspace.Part" }],

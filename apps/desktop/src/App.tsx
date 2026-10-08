@@ -45,6 +45,7 @@ import { ModelMenu, RunMenu } from "./composer-menus";
 import { ContextMeter } from "./context-meter";
 import { contextMeterView, nextContextReading, type ContextReading } from "./context-usage";
 import { blockPreview, characterCount, composedMessage, isLongPaste, lineCount, textSize, type PastedBlock } from "./composer-text";
+import { RojoPill } from "./rojo-pill";
 
 /** The key that sends with Enter and makes a new chat with N, named the way this computer's keyboard names it. */
 const SEND_MODIFIER = typeof navigator !== "undefined" && /Mac/.test(navigator.userAgent) ? "⌘" : "Ctrl";
@@ -52,7 +53,7 @@ const SEND_MODIFIER = typeof navigator !== "undefined" && /Mac/.test(navigator.u
 import { providerCard } from "./provider-card";
 import { approvalCode } from "./approval-code";
 import {
-  highlightRows, parseDiffRows, sourceRows, splitChangeGroup,
+  canOpenInStudio, highlightRows, parseDiffRows, sourceRows, splitChangeGroup,
   type ChangeGroup, type DiffRow, type SyntaxToken,
 } from "./diff-view";
 import {
@@ -1445,6 +1446,7 @@ function App() {
                 </div>}
               </div>}
             </div>
+            <RojoPill instanceId={targetStudio?.instanceId ?? null} placeName={targetStudio?.name} refreshSignal={studioStatus} />
             <RowMenu label="Chat options" iconSize={20} disabled={!selectedChat} items={CHAT_MENU_ITEMS} onSelect={(action) => { if (selectedChat) void chatAction(workspace.selectedProjectId, selectedChat.id, action); }} />
           </div>
         </header>
@@ -2350,13 +2352,17 @@ function ArtifactCard({ group, expanded, onExpandedChange, onOpenInStudio }: {
   const revisionAfter = [...changes].reverse().find((change) => change.revisionAfter)?.revisionAfter;
   const scriptChange = changes.find((change) => change.kind === "script-source");
   const assetChange = changes.find((change) => change.kind === "asset");
+  // A save still pending Rojo delivery, or one Studio diverged from before it
+  // arrived, never touched Studio: offering to open it there would show the
+  // old script and imply the edit landed.
+  const openableInStudio = scriptChange !== undefined && canOpenInStudio(scriptChange);
   const [openState, setOpenState] = useState<{ kind: "idle" | "opening" | "opened" | "error"; message?: string }>({ kind: "idle" });
   const revisions: RunMetadata[] = [
     ...(revisionBefore ? [{ label: "Revision before", value: revisionBefore }] : []),
     ...(revisionAfter ? [{ label: "Revision after", value: revisionAfter }] : []),
   ];
   const openScript = async () => {
-    if (!scriptChange || openState.kind === "opening") return;
+    if (!openableInStudio || openState.kind === "opening") return;
     setOpenState({ kind: "opening" });
     const result = await onOpenInStudio(group.target, scriptChange.instanceId);
     setOpenState({ kind: result.ok ? "opened" : "error", message: result.message });
@@ -2371,7 +2377,7 @@ function ArtifactCard({ group, expanded, onExpandedChange, onOpenInStudio }: {
     <div className="diff-header" onClick={toggleFromHeader}>
       <div className="diff-file">{assetChange ? <FileBox size={14} /> : <FileCode2 size={14} />}<code title={group.target}>{group.target}</code></div>
       <div className="diff-actions">
-        {scriptChange && <button className={`open-studio-action state-${openState.kind}`} type="button" onClick={() => void openScript()} disabled={openState.kind === "opening"} title={openState.message ?? "Open this script in Roblox Studio"}>
+        {openableInStudio && <button className={`open-studio-action state-${openState.kind}`} type="button" onClick={() => void openScript()} disabled={openState.kind === "opening"} title={openState.message ?? "Open this script in Roblox Studio"}>
           {openState.kind === "opened" ? <Check size={13} /> : openState.kind === "error" ? <AlertCircle size={13} /> : <ExternalLink size={13} />}
           <span>{openState.kind === "opening" ? "Opening…" : openState.kind === "opened" ? "Opened" : openState.kind === "error" ? "Try again" : "Open in Studio"}</span>
         </button>}
