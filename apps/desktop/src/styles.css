@@ -778,6 +778,7 @@ details.task-list[open] .task-list-caret { transform: rotate(90deg); }
 .settings-page-head p { margin: 0; color: var(--muted); font-size: var(--type-label); line-height: 1.5; }
 .settings-back { display: flex; align-self: flex-start; align-items: center; gap: 3px; height: 24px; margin-bottom: 4px; padding: 0 4px 0 0; color: var(--muted); background: none; border: 0; font-size: var(--type-meta); font-weight: var(--weight-medium); }
 .settings-back:hover { color: var(--ink); }
+.settings-nav button:disabled, .settings-back:disabled { cursor: default; opacity: .45; }
 /* A group is one soft panel with hairlines between its rows. No outlines
    around it, so the few things that do carry one stand out. */
 .settings-group { display: flex; flex-direction: column; gap: 8px; }
@@ -807,6 +808,12 @@ details.task-list[open] .task-list-caret { transform: rotate(90deg); }
 .settings-field input.mono { font: var(--weight-regular) 12px/1 "Geist Mono Variable", monospace; }
 .settings-field input:focus { background: var(--surface); border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
 .settings-field input:disabled { opacity: .6; }
+.custom-mcp-settings .settings-field { align-items: start; }
+.custom-mcp-settings .settings-field > span { padding-top: 7px; }
+.custom-mcp-secret { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.custom-mcp-secret > p { margin: 0; overflow-wrap: anywhere; }
+.custom-mcp-secret .custom-key-row input { min-width: 0; }
+.custom-mcp-settings .settings-row-text > span { overflow-wrap: anywhere; }
 .settings-field .custom-endpoint-line { margin: 0; }
 .settings-field > .custom-message { grid-column: 2; margin: 0; }
 .settings-segmented { display: inline-flex; justify-self: start; gap: 2px; padding: 2px; background: var(--surface-sunken); border: 1px solid var(--border); border-radius: 9px; }

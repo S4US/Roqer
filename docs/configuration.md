@@ -2,6 +2,45 @@
 
 This file covers the MCP bridge and the Roqer desktop app.
 
+## Custom MCP connections in Roqer
+
+Open **Settings → MCP** to add a connection. Roqer supports stdio servers
+started on this computer and Streamable HTTP servers reached at an MCP URL.
+Remote URLs require HTTPS; HTTP is accepted only on loopback. Legacy SSE
+endpoints and OAuth sign-in are not supported in this first version.
+
+For stdio, enter the executable separately from its arguments. For example,
+use `npx` as the command and `["-y", "@modelcontextprotocol/server-filesystem", "C:\\MyProject"]`
+as the argument JSON. Starting or checking the connection runs that executable
+with your computer's permissions. Choose only servers you trust. Optional
+environment variables are a JSON object of strings.
+
+For HTTP, enter the complete MCP URL, such as `https://example.com/mcp`.
+Optional headers are a JSON object of strings, for example
+`{"Authorization":"Bearer YOUR_TOKEN"}`. Redirects are refused so credentials
+cannot silently move to a different endpoint.
+
+Environment variables and headers are encrypted with the operating system's
+secret storage. Settings shows only their saved names. Leave a secret field
+blank to keep it, enter a JSON object to replace it, or use **Clear**. Changing
+the URL, executable or arguments requires re-entering or explicitly clearing
+saved secrets. If encrypted storage is unavailable, connections without
+secrets still work.
+
+**Check** initializes the server and reads its tool catalog without calling a
+tool. Enabled connections are available through the `mcp` tool to ChatGPT,
+Claude and Custom models. The model lists servers, describes a tool's schema,
+then requests a call. External calls appear in run activity and require an
+explicit approval, including in Full auto. Read only refuses them; a server's
+read-only annotation does not grant permission.
+
+Each run owns its connections and closes them when it ends. Editing, disabling
+or removing a connection stops later dispatch from that run; start a new run
+to use the new settings. Cancellation stops waiting and prevents later calls,
+but cannot undo effects an external server has already applied. Calls are not
+automatically replayed. Catalogs, response bytes and model-visible results are
+bounded; resources, prompts, sampling and elicitation are not exposed.
+
 ## Local HTTP bridge
 
 The bridge binds to `127.0.0.1` by default and rejects cross-origin browser

@@ -10,6 +10,7 @@ import type {
 } from "../shared/custom-providers";
 import type { OpenCloudCheckResult, OpenCloudSave, OpenCloudSettingsResult } from "../shared/open-cloud";
 import type { BlenderSettingsResult } from "../shared/blender";
+import type { CustomMcpSave, CustomMcpSettingsResult, CustomMcpCheckResult } from "../shared/custom-mcp";
 import type { ModelPreviewResult } from "../shared/model-preview";
 import type { EvidencePictureResult } from "../shared/evidence-picture";
 import { clipMediaUrl, type ClipSelection } from "../shared/reference-clip";
@@ -89,6 +90,22 @@ function connector(provider: ProviderId) {
 }
 
 const NO_DESKTOP = "Your own model connections need the desktop app.";
+
+export async function listCustomMcpConnections(): Promise<CustomMcpSettingsResult> {
+  return window.workbenchDesktop?.customMcp.list() ?? { ok: false, message: "MCP connections need the desktop app." };
+}
+
+export async function saveCustomMcpConnection(save: CustomMcpSave): Promise<CustomMcpSettingsResult> {
+  return window.workbenchDesktop?.customMcp.save(save) ?? { ok: false, message: "MCP connections need the desktop app." };
+}
+
+export async function removeCustomMcpConnection(id: string): Promise<CustomMcpSettingsResult> {
+  return window.workbenchDesktop?.customMcp.remove(id) ?? { ok: false, message: "MCP connections need the desktop app." };
+}
+
+export async function checkCustomMcpConnection(id: string): Promise<CustomMcpCheckResult> {
+  return window.workbenchDesktop?.customMcp.check(id) ?? { ok: false, message: "MCP connections need the desktop app." };
+}
 
 export async function listCustomConnections(): Promise<CustomConnectionsResult> {
   return window.workbenchDesktop?.customProviders.list() ?? { ok: false, message: NO_DESKTOP };

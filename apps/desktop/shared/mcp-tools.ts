@@ -1,5 +1,6 @@
 import { GATEWAY_TOOL_RISK, isGatewayOperation } from "./gateway-operations";
 import type { ToolRisk } from "./policy";
+import { parseCustomMcpToolIdentity } from "./custom-mcp-identity";
 
 /**
  * Risk classification for every public Roblox Studio MCP tool.
@@ -406,6 +407,8 @@ function summarizeUploads(args: Record<string, unknown>): string {
 }
 
 export function summarizeToolCall(tool: string, args: Record<string, unknown>): string {
+  const external = parseCustomMcpToolIdentity(tool);
+  if (external) return `MCP · ${truncate(external.tool, 72)} · ${truncate(external.server, 60)}`;
   // A Blender job's only argument is its script, which is no summary.
   if (tool === "run_blender_script") return tool;
   if (tool === "animation") return summarizeAnimation(args);

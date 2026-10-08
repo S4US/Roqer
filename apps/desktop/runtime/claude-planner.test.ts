@@ -17,6 +17,7 @@ import { QUESTION_ESCAPE_OPTION } from "../shared/question";
 import type { SkillLibrary } from "./skill-library";
 import { FakeChildProcess } from "./test-child-process";
 import { ProviderSessionStore } from "./provider-sessions";
+import { CustomMcpManager } from "./custom-mcp-manager";
 
 const QUALIFIED_STUDIO_TOOL = "mcp__workbench__roblox_studio";
 const QUALIFIED_SKILL_TOOL = "mcp__workbench__load_skill";
@@ -723,7 +724,7 @@ test("Claude refuses a session that is missing only the icon tool", async () => 
 });
 
 /** A Claude Code stand-in that answers every user message it is sent, and remembers them. */
-function answeringLauncher() {
+function answeringLauncher(tools: string[] = PROVIDER_TOOLS) {
   const launches: FakeChildProcess[] = [];
   const inputs: string[] = [];
   let answer: (text: string) => Record<string, unknown> = () =>
@@ -742,7 +743,7 @@ function answeringLauncher() {
             const message = JSON.parse(line) as { message: { content: Array<{ text: string }> } };
             const text = message.message.content[0].text;
             inputs.push(text);
-            child.writeLine({ type: "system", subtype: "init", tools: PROVIDER_TOOLS });
+            child.writeLine({ type: "system", subtype: "init", tools });
             child.writeLine(answer(text));
           }
         });
@@ -767,6 +768,127 @@ function followUp(previous: PlannerContext, reply: string, prompt: string): Plan
     },
   };
 }
+
+function customMcpManager(secret = "first") {
+  return new CustomMcpManager({ connections: [{
+    connection: { id: "docs", name: "Docs", enabled: true, transport: "stdio", command: "node", args: [] },
+    environment: { TOKEN: secret }, headers: {},
+  }] });
+}
+
+test("Claude offers custom MCP and returns its approved call with images", async () => {
+  const manager = customMcpManager();
+  manager.describe = async (server, tool) => {
+    assert.equal(server, "docs");
+    assert.equal(tool, "lookup");
+    return { name: "lookup", inputSchema: { type: "object" } };
+  };
+  const preview = { data: "iVBORw0KGgo=", mediaType: "image/png" as const };
+  const { context } = makeContext(new AbortController());
+  const calls: Array<{ tool: string; args: Record<string, unknown> }> = [];
+  context.call = async (tool, args) => {
+    calls.push({ tool, args });
+    return { ok: true, text: "Found the guide.", data: {}, images: [preview], httpStatus: 200, durationMs: 1 };
+  };
+  let result: { content: Array<{ type: string; text?: string; data?: string }>; isError?: boolean } | undefined;
+  let exposed: string[] = [];
+  let allowed: string[] = [];
+  const planner = createClaudePlanner({ ...PLANNER_DEFAULTS, mcp: manager, blender: true, referenceClips: true,
+    launcher: { launch: async (args) => {
+      allowed = args[args.indexOf("--allowedTools") + 1].split(",");
+      const target = await mcpTarget(args);
+      const rpc = async (method: string, params: unknown = {}) => {
+        const response = await fetch(target.url, { method: "POST",
+          headers: { "content-type": "application/json", authorization: `Bearer ${target.token}` },
+          body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }),
+        });
+        return response.json();
+      };
+      const child = new FakeChildProcess();
+      child.stdin.on("data", () => void (async () => {
+        child.writeLine({ type: "system", subtype: "init", tools: [
+          ...PROVIDER_TOOLS, "mcp__workbench__blender", "mcp__workbench__reference_clip", "mcp__workbench__mcp",
+        ] });
+        const catalog = await rpc("tools/list") as { result: { tools: Array<{ name: string }> } };
+        exposed = catalog.result.tools.map((tool) => tool.name);
+        const response = await rpc("tools/call", { name: "mcp", arguments: {
+          action: "call", server: "docs", tool: "lookup", arguments: { instance_id: "external" },
+        } }) as { result: typeof result };
+        result = response.result;
+        child.writeLine({ type: "result", subtype: "success", is_error: false, result: "Found it." });
+      })());
+      return child.asChild();
+    } },
+  });
+  assert.equal(await planner.run(context), "Found it.");
+  assert.equal(exposed.length, 8, "the gateway fits alongside every existing optional tool");
+  assert.ok(exposed.includes("mcp"));
+  assert.ok(allowed.includes("mcp__workbench__mcp"));
+  assert.deepEqual(calls, [{ tool: "custom_mcp/docs/lookup", args: { instance_id: "external" } }]);
+  assert.equal(result?.isError, false);
+  assert.ok(result?.content.some((block) => block.type === "text" && block.text === "Found the guide."));
+  assert.ok(result?.content.some((block) => block.type === "image" && block.data === preview.data));
+  await manager.close();
+});
+
+test("Claude offers no custom MCP gateway without a manager and refuses a call to it", async () => {
+  const { context, recorded } = makeContext(new AbortController());
+  let exposed: string[] = [];
+  let error: unknown;
+  let allowed: string[] = [];
+  await createClaudePlanner({ ...PLANNER_DEFAULTS, launcher: { launch: async (args) => {
+    allowed = args[args.indexOf("--allowedTools") + 1].split(",");
+    const target = await mcpTarget(args);
+    const child = new FakeChildProcess();
+    child.stdin.on("data", () => void (async () => {
+      child.writeLine({ type: "system", subtype: "init", tools: PROVIDER_TOOLS });
+      const headers = { "content-type": "application/json", authorization: `Bearer ${target.token}` };
+      const list = await fetch(target.url, { method: "POST", headers,
+        body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }) });
+      const catalog = await list.json() as { result: { tools: Array<{ name: string }> } };
+      exposed = catalog.result.tools.map((tool) => tool.name);
+      const call = await fetch(target.url, { method: "POST", headers,
+        body: JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tools/call", params: {
+          name: "mcp", arguments: { action: "list" },
+        } }) });
+      error = (await call.json() as { error?: unknown }).error;
+      child.writeLine({ type: "result", subtype: "success", is_error: false, result: "Unavailable." });
+    })());
+    return child.asChild();
+  } } }).run(context);
+  assert.equal(exposed.includes("mcp"), false);
+  assert.equal(allowed.includes("mcp__workbench__mcp"), false);
+  assert.match(JSON.stringify(error), /Unknown tool/);
+  assert.deepEqual(recorded.calls, []);
+});
+
+test("Claude starts a new process when its custom MCP configuration changes", async () => {
+  const sessions = new ProviderSessionStore<ClaudeSession>();
+  const provider = answeringLauncher([...PROVIDER_TOOLS, "mcp__workbench__mcp"]);
+  const { context } = makeContext(new AbortController());
+  const manager = customMcpManager();
+  const changed = customMcpManager("changed-secret");
+  const base = { ...PLANNER_DEFAULTS, launcher: provider.launcher, chatId: "chat-1", sessions };
+  await createClaudePlanner({ ...base, mcp: manager }).run(context);
+  const next = followUp(context, "Answer 1", "Again.");
+  await createClaudePlanner({ ...base, mcp: customMcpManager() }).run(next);
+  assert.equal(provider.launches.length, 1, "matching configuration keeps the process");
+  await createClaudePlanner({ ...base, mcp: changed }).run(followUp(next, "Answer 2", "Again."));
+  assert.equal(provider.launches.length, 2, "changed secrets invalidate the kept process");
+  assert.equal(provider.launches[0].killed, true);
+  await sessions.closeAll();
+  await manager.close();
+  await changed.close();
+});
+
+test("Claude refuses a process that failed to load the enabled custom MCP gateway", async () => {
+  const manager = customMcpManager();
+  const provider = answeringLauncher();
+  const { context } = makeContext(new AbortController());
+  await assert.rejects(() => createClaudePlanner({ ...PLANNER_DEFAULTS, launcher: provider.launcher, mcp: manager }).run(context), /tools|tool|MCP/);
+  assert.equal(provider.launches[0].killed, true);
+  await manager.close();
+});
 
 test("Claude keeps a chat's process for its next message and sends only the new prompt", async () => {
   const sessions = new ProviderSessionStore<ClaudeSession>();

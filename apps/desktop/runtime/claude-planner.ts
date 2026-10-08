@@ -10,6 +10,8 @@ import {
 } from "../shared/run-events";
 import { isGatewayOperation } from "../shared/gateway-operations";
 import { isKnownTool } from "../shared/mcp-tools";
+import type { CustomMcpManager } from "./custom-mcp-manager";
+import { CUSTOM_MCP_TOOL_NAME, customMcpToolDefinition, runCustomMcpTool } from "./custom-mcp-tool";
 import type { AgentDefinition } from "./agent-definition";
 import type { ProviderStatus, ReasoningEffort } from "../shared/provider";
 import type { ClaudeLauncher } from "./claude-cli";
@@ -61,6 +63,7 @@ const QUALIFIED_QUESTION_TOOL_NAME = `mcp__${MCP_SERVER_NAME}__${QUESTION_TOOL_N
 
 const QUALIFIED_BLENDER_TOOL_NAME = `mcp__${MCP_SERVER_NAME}__${BLENDER_TOOL_NAME}`;
 const QUALIFIED_REFERENCE_CLIP_TOOL_NAME = `mcp__${MCP_SERVER_NAME}__${REFERENCE_CLIP_TOOL_NAME}`;
+const QUALIFIED_CUSTOM_MCP_TOOL_NAME = `mcp__${MCP_SERVER_NAME}__${CUSTOM_MCP_TOOL_NAME}`;
 
 /** Every tool Roqer grants a Claude run, in the order they are announced. */
 const QUALIFIED_TOOL_NAMES = [
@@ -77,6 +80,7 @@ function qualifiedToolNames(options: ClaudePlannerOptions): string[] {
     ...QUALIFIED_TOOL_NAMES,
     ...(options.blender === true ? [QUALIFIED_BLENDER_TOOL_NAME] : []),
     ...(options.referenceClips === true ? [QUALIFIED_REFERENCE_CLIP_TOOL_NAME] : []),
+    ...(options.mcp !== undefined ? [QUALIFIED_CUSTOM_MCP_TOOL_NAME] : []),
   ];
 }
 
@@ -102,6 +106,8 @@ export type ClaudePlannerOptions = {
   blender?: boolean;
   /** Offer `reference_clip`: only in a chat holding a clip the user attached. */
   referenceClips?: boolean;
+  /** Run-scoped access to the user's enabled custom MCP connections. */
+  mcp?: CustomMcpManager;
 };
 
 const isRecord = (value: unknown): value is JsonRecord =>
@@ -575,7 +581,8 @@ export class ClaudeSession {
         name: STUDIO_TOOL_NAME, description: studioToolDescription(), inputSchema: studioToolInputSchema(),
       }, skillToolDefinition(options.skillLibrary), iconToolDefinition(), taskToolDefinition(), questionToolDefinition(),
       ...(options.blender === true ? [blenderToolDefinition()] : []),
-      ...(options.referenceClips === true ? [referenceClipToolDefinition()] : [])],
+      ...(options.referenceClips === true ? [referenceClipToolDefinition()] : []),
+      ...(options.mcp !== undefined ? [customMcpToolDefinition()] : [])],
       invoke: async (name, args) => session?.binding
         ? session.binding.invoke(name, args)
         : { ok: false, text: "No Roqer run is active. End this turn." },
@@ -682,6 +689,7 @@ function sessionKey(options: ClaudePlannerOptions, { autoPlaytest, instanceId }:
     instanceId,
     options.model, options.supportsEffort ? options.effort : null, autoPlaytest,
     options.agent.id, options.agent.version, options.blender === true, options.referenceClips === true,
+    options.mcp?.key ?? null,
   ]);
 }
 
@@ -764,6 +772,14 @@ export function createClaudePlanner(options: ClaudePlannerOptions): Planner {
 
       const invokeTool = async (name: string, args: JsonRecord): Promise<WorkbenchMcpToolResult> => {
         if (settled) return { ok: false, text: "This Roqer run has ended. End this turn." };
+        if (options.mcp !== undefined && name === CUSTOM_MCP_TOOL_NAME) {
+          try {
+            return await runCustomMcpTool(context, options.mcp, args);
+          } catch (error) {
+            if (context.signal.aborted) fail(error);
+            return { ok: false, text: error instanceof Error ? error.message : String(error) };
+          }
+        }
         if (name === SKILL_TOOL_NAME || name === ICON_TOOL_NAME) {
           // Tools are only reachable through a session this run has bound.
           const run = name === SKILL_TOOL_NAME ? session!.skills : runIconTool;

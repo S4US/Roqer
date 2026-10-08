@@ -11,6 +11,7 @@ import type {
 } from "../shared/custom-providers";
 import type { OpenCloudCheckResult, OpenCloudSave, OpenCloudSettingsResult } from "../shared/open-cloud";
 import type { BlenderSettingsResult } from "../shared/blender";
+import type { CustomMcpSave, CustomMcpSettingsResult, CustomMcpCheckResult } from "../shared/custom-mcp";
 import type { ModelPreviewResult } from "../shared/model-preview";
 import type { EvidencePictureResult } from "../shared/evidence-picture";
 import type { ClipSelection } from "../shared/reference-clip";
@@ -72,6 +73,12 @@ declare global {
         remove(id: string): Promise<CustomConnectionsResult>;
         test(connectionId: string, modelId: string): Promise<CustomModelTestResult>;
         importModels(connectionId: string): Promise<CustomModelImportResult>;
+      };
+      customMcp: {
+        list(): Promise<CustomMcpSettingsResult>;
+        save(save: CustomMcpSave): Promise<CustomMcpSettingsResult>;
+        remove(id: string): Promise<CustomMcpSettingsResult>;
+        check(id: string): Promise<CustomMcpCheckResult>;
       };
       openCloud: {
         get(): Promise<OpenCloudSettingsResult>;

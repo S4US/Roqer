@@ -39,6 +39,7 @@ import type { RunDecision } from "../shared/run-digest";
 import { MAX_STEERS_PER_RUN, normalizeSteer } from "../shared/steer";
 import type { RunTask } from "../shared/tasks";
 import { summarizeToolOutcome } from "./result-summary";
+import { parseCustomMcpToolIdentity } from "../shared/custom-mcp-identity";
 
 /** Thrown by `PlannerContext.call` when the run was cancelled. */
 export class RunCancelledError extends Error {
@@ -733,6 +734,7 @@ export class RunSession {
    * would close the wrong window.
    */
   private routeToRunInstance(tool: string, args: Record<string, unknown>): Record<string, unknown> {
+    if (parseCustomMcpToolIdentity(tool) !== undefined) return args;
     const instanceId = this.request.instanceId;
     if (instanceId === null) return args;
     if (tool === "manage_instance") {
@@ -875,7 +877,8 @@ export class RunSession {
     // something the model can act on. What the host finds replaces it, or
     // ends the run.
     let fatal: string | undefined;
-    if (!outcome.ok && outcome.errorCode === "request_failed" && this.bridge !== undefined && !this.cancelled) {
+    if (!outcome.ok && outcome.errorCode === "request_failed" && this.bridge !== undefined && !this.cancelled
+      && parseCustomMcpToolIdentity(tool) === undefined) {
       const recovered = await this.recoverBridge(this.bridge, tool, outcome);
       outcome = recovered.outcome;
       fatal = recovered.fatal;
