@@ -130,6 +130,66 @@ function checkMessage(result: Awaited<ReturnType<typeof checkCustomMcpConnection
   };
 }
 
+export type McpMarketplaceItem = Readonly<{
+  id: string;
+  name: string;
+  tag: string;
+  description: string;
+  command: string;
+  args: readonly string[];
+}>;
+
+export const MCP_MARKETPLACE_ITEMS: readonly McpMarketplaceItem[] = [
+  {
+    id: "blender",
+    name: "Blender MCP (mcp-for-blender)",
+    tag: "3D Modeling",
+    description: "Control Blender 3D (generate & modify 3D objects, materials, scene inspection, execute Python).",
+    command: "uvx",
+    args: ["mcp-for-blender"],
+  },
+  {
+    id: "robloxstudio",
+    name: "Roblox Studio MCP",
+    tag: "Roblox Studio",
+    description: "Direct Roblox Studio AI integration (read and edit scripts, instances, properties, and playtest).",
+    command: "npx",
+    args: ["-y", "robloxstudio-mcp@latest"],
+  },
+  {
+    id: "roblox-logics",
+    name: "Roblox Logics (Brickwise)",
+    tag: "Roblox Docs & API",
+    description: "Up-to-date Roblox engine documentation, Luau syntax, engine changes, and API reference assistance.",
+    command: "npx",
+    args: ["-y", "roblox-logics-mcp@latest"],
+  },
+  {
+    id: "filesystem",
+    name: "Filesystem (Rojo & Project)",
+    tag: "Files & Rojo",
+    description: "Local workspace filesystem access for Rojo sourcemap syncing, code files, and assets on disk.",
+    command: "npx",
+    args: ["-y", "@modelcontextprotocol/server-filesystem", "."],
+  },
+  {
+    id: "fetch",
+    name: "Web Reader & Fetch",
+    tag: "Web & Docs",
+    description: "Fetch web pages, developer documentation, and API guides converted directly to Markdown.",
+    command: "npx",
+    args: ["-y", "@modelcontextprotocol/server-fetch"],
+  },
+  {
+    id: "memory",
+    name: "Project Memory & Knowledge",
+    tag: "Memory",
+    description: "Persistent knowledge graph memory allowing the model to recall game systems and lore across runs.",
+    command: "npx",
+    args: ["-y", "@modelcontextprotocol/server-memory"],
+  },
+];
+
 export function CustomMcpConnectionsList({ connections, error, loading, onReload, onAdd, onEdit, onConnections }: {
   connections: readonly CustomMcpConnectionView[] | null;
   error: string | null;
@@ -140,7 +200,9 @@ export function CustomMcpConnectionsList({ connections, error, loading, onReload
   onConnections: (connections: readonly CustomMcpConnectionView[]) => void;
 }) {
   const [pending, setPending] = useState<{ id: string; action: "enable" | "check" } | null>(null);
+  const [autoAddingId, setAutoAddingId] = useState<string | null>(null);
   const [messages, setMessages] = useState<Record<string, Message>>({});
+  const [marketMessage, setMarketMessage] = useState<Message | null>(null);
   const active = useRef(true);
   useEffect(() => { active.current = true; return () => { active.current = false; }; }, []);
 
@@ -169,7 +231,32 @@ export function CustomMcpConnectionsList({ connections, error, loading, onReload
     } finally { if (active.current) setPending(null); }
   };
 
-  const unavailable = pending !== null || loading;
+  const handleAutoAdd = async (item: McpMarketplaceItem) => {
+    setAutoAddingId(item.id);
+    setMarketMessage(null);
+    try {
+      const result = await saveCustomMcpConnection({
+        name: item.name,
+        enabled: true,
+        transport: "stdio",
+        command: item.command,
+        args: [...item.args],
+      });
+      if (!active.current) return;
+      if (result.ok) {
+        onConnections(result.connections);
+        setMarketMessage({ ok: true, text: `Auto-added ${item.name} to your connections.` });
+      } else {
+        setMarketMessage({ ok: false, text: result.message });
+      }
+    } catch {
+      if (active.current) setMarketMessage({ ok: false, text: `Could not auto-add ${item.name}. Try again.` });
+    } finally {
+      if (active.current) setAutoAddingId(null);
+    }
+  };
+
+  const unavailable = pending !== null || autoAddingId !== null || loading;
   return <div className="settings-subpage custom-mcp-settings">
     <div className="settings-page-head">
       <h1>MCP</h1>
@@ -194,8 +281,45 @@ export function CustomMcpConnectionsList({ connections, error, loading, onReload
         {pending?.id === connection.id && pending.action === "enable" && <p className="custom-message" role="status">Saving {connection.name}…</p>}
         {messages[connection.id] !== undefined && <p className={`custom-message ${messages[connection.id].ok ? "ok" : "error"}`} role={messages[connection.id].ok ? "status" : "alert"}>{messages[connection.id].text}</p>}
       </Fragment>)}
-      {!loading && connections?.length === 0 && <SettingsRow title="None yet" detail="Add a local stdio server or a Streamable HTTP endpoint." />}
+      {!loading && connections?.length === 0 && <SettingsRow title="None yet" detail="Pick an MCP tool from the Marketplace below or add your own connection." />}
       {connections !== null && connections.length >= MAX_CUSTOM_MCP_CONNECTIONS && <p className="custom-hint">All {MAX_CUSTOM_MCP_CONNECTIONS} connection slots are used. Remove a connection to add another.</p>}
+    </SettingsGroup>
+
+    <SettingsGroup
+      title="Marketplace & Presets"
+      footnote="One-click auto-add popular and verified MCP tools for Blender 3D, Roblox Studio, Luau docs, and filesystem automation."
+    >
+      <div className="custom-mcp-market-grid">
+        {MCP_MARKETPLACE_ITEMS.map((item) => {
+          const added = connections?.find((c) => c.name === item.name || (c.transport === "stdio" && c.command === item.command && JSON.stringify(c.args ?? []) === JSON.stringify(item.args)));
+          const isAutoAdding = autoAddingId === item.id;
+          return <div key={item.id} className="custom-mcp-market-card">
+            <div className="custom-mcp-market-card-head">
+              <span className="custom-mcp-market-card-title">{item.name}</span>
+              <span className="custom-mcp-market-tag">{item.tag}</span>
+            </div>
+            <p className="custom-mcp-market-desc">{item.description}</p>
+            <div className="custom-mcp-market-footer">
+              <span className="custom-mcp-market-cmd" title={`${item.command} ${item.args.join(" ")}`}>
+                <code>{item.command} {item.args.join(" ")}</code>
+              </span>
+              {added !== undefined ? (
+                <button type="button" className="small-button" disabled={unavailable} onClick={() => onEdit(added)}>Configured</button>
+              ) : (
+                <button
+                  type="button"
+                  className="small-button primary"
+                  disabled={unavailable || isAutoAdding || (connections !== null && connections.length >= MAX_CUSTOM_MCP_CONNECTIONS)}
+                  onClick={() => void handleAutoAdd(item)}
+                >
+                  {isAutoAdding ? "Adding…" : "Auto add"}
+                </button>
+              )}
+            </div>
+          </div>;
+        })}
+      </div>
+      {marketMessage && <p className={`custom-message ${marketMessage.ok ? "ok" : "error"}`}>{marketMessage.text}</p>}
     </SettingsGroup>
   </div>;
 }
@@ -316,6 +440,26 @@ export function CustomMcpConnectionPage({ connection, connections, onBack, onSav
         <span>Name</span>
         <input value={draft.name} maxLength={MAX_CUSTOM_MCP_NAME_CHARACTERS} autoFocus={adding} disabled={busy !== null} placeholder="e.g. My tools" onChange={(event) => update({ name: event.target.value })} />
       </label>
+      {adding && <div className="settings-field">
+        <span>Template</span>
+        <div className="custom-provider-grid" role="group" aria-label="Start from a template">
+          {MCP_MARKETPLACE_ITEMS.map((item) => <button
+            key={item.id}
+            type="button"
+            className="custom-provider"
+            disabled={busy !== null}
+            onClick={() => update({
+              name: item.name,
+              transport: "stdio",
+              command: item.command,
+              args: JSON.stringify(item.args),
+            })}
+          >
+            <strong>{item.name}</strong>
+            <span>{item.tag}</span>
+          </button>)}
+        </div>
+      </div>}
       <SettingsRow title="Enable for agent runs" detail="Checks work even when the connection is disabled.">
         <SettingsSwitch label="Enable for agent runs" checked={draft.enabled} disabled={busy !== null} onChange={(enabled) => update({ enabled })} />
       </SettingsRow>
