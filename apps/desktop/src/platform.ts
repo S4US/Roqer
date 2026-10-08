@@ -10,6 +10,7 @@ import type {
 } from "../shared/custom-providers";
 import type { OpenCloudCheckResult, OpenCloudSave, OpenCloudSettingsResult } from "../shared/open-cloud";
 import type { BlenderSettingsResult } from "../shared/blender";
+import type { RojoResult } from "../shared/rojo";
 import type { ModelPreviewResult } from "../shared/model-preview";
 import type { EvidencePictureResult } from "../shared/evidence-picture";
 import { clipMediaUrl, type ClipSelection } from "../shared/reference-clip";
@@ -140,6 +141,39 @@ export async function chooseBlender(): Promise<BlenderSettingsResult> {
 
 export async function redetectBlender(): Promise<BlenderSettingsResult> {
   return window.workbenchDesktop?.blender.redetect() ?? { ok: false, message: NO_DESKTOP_BLENDER };
+}
+
+const NO_DESKTOP_ROJO = "Rojo linking needs the desktop app.";
+
+/** The Rojo pill's view for a place, or `null` for no place connected. */
+export async function getRojoView(instanceId: string | null): Promise<RojoResult> {
+  return window.workbenchDesktop?.rojo.get(instanceId) ?? { ok: false, message: NO_DESKTOP_ROJO };
+}
+
+/** Opens the main process's own file dialog, filtered to `*.project.json`. */
+export async function chooseRojoProject(instanceId: string): Promise<RojoResult> {
+  return window.workbenchDesktop?.rojo.choose(instanceId) ?? { ok: false, message: NO_DESKTOP_ROJO };
+}
+
+/** Links one of the main process's own remembered recent projects, by index. */
+export async function linkRecentRojoProject(instanceId: string, index: number): Promise<RojoResult> {
+  return window.workbenchDesktop?.rojo.linkRecent(instanceId, index) ?? { ok: false, message: NO_DESKTOP_ROJO };
+}
+
+export async function unlinkRojoProject(instanceId: string): Promise<RojoResult> {
+  return window.workbenchDesktop?.rojo.unlink(instanceId) ?? { ok: false, message: NO_DESKTOP_ROJO };
+}
+
+export async function forgetRojoProject(instanceId: string): Promise<RojoResult> {
+  return window.workbenchDesktop?.rojo.forget(instanceId) ?? { ok: false, message: NO_DESKTOP_ROJO };
+}
+
+export async function retryRojoProject(instanceId: string): Promise<RojoResult> {
+  return window.workbenchDesktop?.rojo.retry(instanceId) ?? { ok: false, message: NO_DESKTOP_ROJO };
+}
+
+export async function openRojoFolder(instanceId: string): Promise<RojoResult> {
+  return window.workbenchDesktop?.rojo.openFolder(instanceId) ?? { ok: false, message: NO_DESKTOP_ROJO };
 }
 
 /**

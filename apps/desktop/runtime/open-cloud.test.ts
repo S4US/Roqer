@@ -80,6 +80,14 @@ test("the bridge gets saved settings in its environment, one creator, and inheri
     ROBLOX_OPEN_CLOUD_API_KEY: KEY,
     ROBLOX_CREATOR_USER_ID: "7",
   });
+
+  // The app does its own linking (the Rojo pill); an inherited
+  // ROQER_ROJO_PROJECT must never reach the bridge it starts, or core would
+  // link a place lazily behind the pill's back.
+  assert.deepEqual(
+    bridgeEnvironment({ ...inherited, ROQER_ROJO_PROJECT: "/x/default.project.json" }, undefined),
+    inherited,
+  );
 });
 
 /** A fetch that answers the introspect call with the given status and body, and records the request. */

@@ -45,6 +45,7 @@ import { ModelMenu, RunMenu } from "./composer-menus";
 import { ContextMeter } from "./context-meter";
 import { contextMeterView, nextContextReading, type ContextReading } from "./context-usage";
 import { blockPreview, characterCount, composedMessage, isLongPaste, lineCount, textSize, type PastedBlock } from "./composer-text";
+import { RojoPill } from "./rojo-pill";
 
 /** The key that sends with Enter and makes a new chat with N, named the way this computer's keyboard names it. */
 const SEND_MODIFIER = typeof navigator !== "undefined" && /Mac/.test(navigator.userAgent) ? "⌘" : "Ctrl";
@@ -1445,6 +1446,7 @@ function App() {
                 </div>}
               </div>}
             </div>
+            <RojoPill instanceId={targetStudio?.instanceId ?? null} placeName={targetStudio?.name} refreshSignal={studioStatus} />
             <RowMenu label="Chat options" iconSize={20} disabled={!selectedChat} items={CHAT_MENU_ITEMS} onSelect={(action) => { if (selectedChat) void chatAction(workspace.selectedProjectId, selectedChat.id, action); }} />
           </div>
         </header>

@@ -61,6 +61,11 @@ if (installOnly) {
   if (creatorId) process.env.ROBLOX_CREATOR_USER_ID = creatorId;
   if (creatorGroupId) process.env.ROBLOX_CREATOR_GROUP_ID = creatorGroupId;
 
+  // Lets an MCP client that cannot drive manage_instance {action:
+  // "link_project"} itself still get a Rojo-linked place: core links the
+  // connected place to this project lazily, on first script read/write.
+  const rojoProject = flagValue('--rojo-project') || process.env.ROQER_ROJO_PROJECT;
+
   const require = createRequire(import.meta.url);
   const { version: VERSION } = require('../package.json');
 
@@ -69,6 +74,7 @@ if (installOnly) {
     version: VERSION,
     tools: getAllTools(),
     pluginVariant: 'main',
+    rojoProject,
   });
 
   server.run().catch((error) => {

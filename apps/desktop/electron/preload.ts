@@ -38,6 +38,7 @@ import {
   type OpenCloudSettingsResult,
 } from "../shared/open-cloud";
 import { isBlenderSettingsResult, type BlenderSettingsResult } from "../shared/blender";
+import { isRojoResult, type RojoResult } from "../shared/rojo";
 import { isModelPreviewResult, type ModelPreviewResult } from "../shared/model-preview";
 import { isEvidencePictureResult, type EvidencePictureResult } from "../shared/evidence-picture";
 
@@ -203,6 +204,28 @@ const blender = {
   redetect: () => blenderRequest("blender:redetect"),
 };
 
+async function rojoRequest(channel: string, ...args: unknown[]): Promise<RojoResult> {
+  const value: unknown = await ipcRenderer.invoke(channel, ...args);
+  return isRojoResult(value) ? value : { ok: false, message: "Roqer returned an invalid Rojo link." };
+}
+
+/**
+ * The Rojo link for a place. The renderer never names a project file itself:
+ * `choose` opens the main process's own file dialog, `linkRecent` names a
+ * project only by its index into the main process's own recent list, and
+ * `openFolder` opens a folder the main process already holds -- no call here
+ * ever carries a path.
+ */
+const rojo = {
+  get: (instanceId: string | null) => rojoRequest("rojo:get", instanceId),
+  choose: (instanceId: string) => rojoRequest("rojo:choose", instanceId),
+  linkRecent: (instanceId: string, index: number) => rojoRequest("rojo:link-recent", { instanceId, index }),
+  unlink: (instanceId: string) => rojoRequest("rojo:unlink", instanceId),
+  forget: (instanceId: string) => rojoRequest("rojo:forget", instanceId),
+  retry: (instanceId: string) => rojoRequest("rojo:retry", instanceId),
+  openFolder: (instanceId: string) => rojoRequest("rojo:open-folder", instanceId),
+};
+
 /**
  * The user's own model connections. A key goes in with `save` and never comes
  * back out: what returns says only whether one is stored.
@@ -313,6 +336,7 @@ contextBridge.exposeInMainWorld("workbenchDesktop", {
   customProviders,
   openCloud,
   blender,
+  rojo,
   runs,
   previews: {
     /** A Blender result's 3D preview, by the opaque id its evidence carries. */

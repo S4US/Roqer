@@ -21,6 +21,8 @@ export interface ServerConfig {
    * plugin, or a proxy-mode server, of the other edition.
    */
   pluginVariant?: PluginVariant;
+  /** `--rojo-project`/ROQER_ROJO_PROJECT: links the connected place to this Rojo project lazily, on first use. */
+  rojoProject?: string;
 }
 
 export class RobloxStudioMCPServer {
@@ -34,7 +36,7 @@ export class RobloxStudioMCPServer {
     this.allowedToolNames = new Set(config.tools.map(t => t.name));
 
     this.bridge = new BridgeService();
-    this.tools = new RobloxStudioTools(this.bridge);
+    this.tools = new RobloxStudioTools(this.bridge, { rojoProject: config.rojoProject });
   }
 
   async run() {
@@ -104,7 +106,7 @@ export class RobloxStudioMCPServer {
       const proxyBridge = new ProxyBridgeService(`http://localhost:${basePort}`, auth.token, this.config.pluginVariant);
       await proxyBridge.waitForInitialRefresh();
       this.bridge = proxyBridge;
-      this.tools = new RobloxStudioTools(this.bridge);
+      this.tools = new RobloxStudioTools(this.bridge, { rojoProject: this.config.rojoProject });
       console.error(`Port ${basePort} in use - entering proxy mode (forwarding to localhost:${basePort})`);
 
       // Periodically try to promote to primary if the port frees up.
@@ -121,7 +123,7 @@ export class RobloxStudioMCPServer {
       const promotionIntervalMs = parseInt(process.env.ROBLOX_STUDIO_PROXY_PROMOTION_INTERVAL_MS || '5000');
       promotionInterval = setInterval(async () => {
         const candidateBridge = new BridgeService();
-        const candidateTools = new RobloxStudioTools(candidateBridge);
+        const candidateTools = new RobloxStudioTools(candidateBridge, { rojoProject: this.config.rojoProject });
         const candidateApp = createHttpServer(candidateTools, candidateBridge, this.allowedToolNames, this.config, security);
         try {
           const result = await listenWithRetry(candidateApp, host, basePort, 1);

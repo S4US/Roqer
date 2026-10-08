@@ -19,6 +19,45 @@ models. It changes where an edit to an *existing*, Rojo-owned script is saved.
 - **The Rojo plugin connected** in Studio to that server. This is the
   community Rojo plugin, not Roqer's own Studio plugin; both run at once.
 
+## Linking from the Roqer app
+
+The desktop app shows a Rojo pill next to the Studio connection pill in the
+header; you never have to type a path there.
+
+- **"Link Rojo project"** (dashed, accent-colored) means a Rojo server is
+  already answering for the connected place — click it to open the popover,
+  which shows the detected project (or Recent) with a **Link** button.
+  Detection only checks Rojo's default port (34872) and the serve port of
+  each project in **Recent**; a server on any other port shows up only after
+  you link that project once, with **Choose a project file…**.
+- **"Rojo · not linked"** (muted) means the place isn't linked and no server
+  was found; open the pill for **Recent** projects (up to five, each with its
+  own **Link** button) or **Choose a project file…**.
+- **"Rojo · no place"** (muted) means no place is connected yet.
+- **"Rojo · \<project file\>"** (green dot) means it's linked and Rojo is
+  serving it.
+- **"Rojo not running"** (amber dot) means it's linked but no server answers
+  right now.
+- **"Rojo · \<short problem\>"** (red dot) means the last link attempt
+  failed; the popover has the full message, plus **Retry** and **Choose a
+  project file…**.
+
+Opening the pill while linked also shows **Open folder**, **Change
+project…**, and **Unlink**.
+
+For a **published** place, the app remembers the link (in a small file in
+its own data folder) and relinks automatically the next time that place
+connects — after Roqer restarts, after the bridge restarts, or after a
+reconnect. An **unpublished** place's link only lasts until Studio closes;
+nothing is remembered for it. If a remembered project file no longer exists,
+the pill shows the error state with **Choose a project file…** and **Forget
+this link**, rather than retrying the same path forever; a failed automatic
+relink is also retried on the next bridge restart, reconnect, or **Retry**.
+
+You can also just ask the agent to link the place for you — it opens the same
+project picker, never typing a path itself, and reports back once you've
+chosen a file or canceled.
+
 ## Linking
 
 Ask the agent to link your project, or call `manage_instance` yourself:
@@ -154,8 +193,11 @@ after you linked still shows up):
 - New scripts, deletions, renames, and models are not persisted. A script
   your project doesn't know about is `studio_only`, and stays that way until
   you add it to the project yourself.
-- Links are lost when the MCP server restarts; relink afterward. Saving links
-  across restarts is a planned follow-up.
+- Links live in the MCP server's memory, so they are lost when that server
+  process restarts; relink afterward (or pass `--rojo-project`, below, so a
+  bare MCP client relinks itself). The desktop app is the exception: for a
+  published place, it remembers the link itself and relinks it automatically
+  whenever that place reconnects, including after the bridge restarts.
 - Links belong to one MCP server process; the desktop app and another MCP
   client connected to the same place do not share them, so link in whichever
   one you're editing from.
@@ -205,3 +247,28 @@ editing work the same way from Claude Code, Codex, Cursor, or any other MCP
 client connected to [the Studio MCP server](mcp-server.md). The read-only
 inspector edition does not expose `manage_instance`, so a place connected
 through it cannot be linked.
+
+## Linking automatically from an MCP client
+
+A client that has no way to call `manage_instance` itself — or whose agent
+you'd rather not teach to type a path — can start the server with
+`--rojo-project <path>` (or the `ROQER_ROJO_PROJECT` environment variable) to
+name a project up front. Core then links the connected place to it lazily,
+the first time a script read or write would otherwise need a link, so you
+never have to send `link_project` by hand:
+
+```sh
+claude mcp add robloxstudio -- node "C:\path\to\Roqer\packages\robloxstudio-mcp\dist\index.js" --rojo-project "C:\path\to\default.project.json"
+```
+
+This only applies once per server process: once it has linked successfully,
+or failed and reported why, it is not tried again for the life of that
+process — unlink and restart the server to retry. If another connected place
+already holds that project, the flag has no effect for this one; link it by
+hand once that place is unlinked. The inspector edition ignores the flag; it
+has no `manage_instance` writes to link through.
+
+With several places connected at once, this only links whichever place the
+first script call's own `instance_id` names — core refuses to guess among
+several connected places — so pass `instance_id` on that call, or keep only
+one place open, for the lazy link to take effect at all.
