@@ -1,4 +1,4 @@
-# Roblox Input — Full Reference
+# Roblox Input: Full Reference
 
 
 > **Code in this reference is illustrative. Adapt to your game and verify in Studio before production use.**
@@ -11,7 +11,7 @@ For a Server Authority project, inputs that affect the core simulation should us
 
 `ContextActionService` remains useful for UI-only actions and classic projects. Do not use the UI binding choice as a security boundary; the server still validates the resulting action and its game-specific permissions.
 
-## UserInputService — Properties
+## UserInputService: Properties
 
 | Property | Type | Notes |
 |----------|------|-------|
@@ -22,13 +22,13 @@ For a Server Authority project, inputs that affect the core simulation should us
 | `VREnabled` | bool | VR headset active |
 | `PreferredInput` | Enum.UserInputType | Device the player is **currently using most**. Better than per-device flags on hybrids. |
 | `MouseBehavior` | Enum.MouseBehavior | `Default`, `LockCenter`, `LockCurrentPosition` |
-| `MouseDeltaSensitivity` | number | 0–1, sensitivity multiplier |
+| `MouseDeltaSensitivity` | number | 0–10, sensitivity multiplier for mouse-movement deltas (`GetMouseDelta()`, `InputChanged`); does not affect the cursor icon or the player's own camera-sensitivity setting |
 | `MouseIcon` / `MouseIconEnabled` / `MouseIconContent` | string/bool | Custom cursor (AssetId, ContentText) |
 | `OnScreenKeyboardPosition` / `OnScreenKeyboardSize` / `OnScreenKeyboardVisible` | Vector2/bool | Mobile/console on-screen keyboard state |
 | `ModalEnabled` | bool | Block all input while a modal is active |
 | `UserHeadCFrame` / `GetUserCFrame()` | CFrame | VR head pose |
 
-## UserInputService — Methods (selection)
+## UserInputService: Methods (selection)
 
 | Method | Returns | Use for |
 |--------|---------|---------|
@@ -43,17 +43,18 @@ For a Server Authority project, inputs that affect the core simulation should us
 | `GetConnectedGamepads()` | UserInputType[] | Currently connected gamepads |
 | `GetGamepadState(UserInputType)` | InputObject[] | All active inputs on a gamepad |
 | `GetGamepadConnected(UserInputType)` | bool | Is a specific pad slot connected |
-| `GetDeviceAcceleration()` / `GetDeviceGravity()` / `GetDeviceRotation()` | Vector3 | Current mobile sensor readings |
+| `GetDeviceAcceleration()` / `GetDeviceGravity()` | InputObject | Current mobile sensor reading; `input.Position` carries the force per local device axis |
+| `GetDeviceRotation()` | (InputObject, CFrame) | Rotation-delta InputObject + current device orientation CFrame |
 | `GetFocusedTextBox()` | TextBox? | Currently-focused text input (if any) |
 | `GetStringForKeyCode(KeyCode)` / `GetImageForKeyCode(KeyCode)` | string | Display labels for key bindings |
 | `RecenterUserHeadCFrame()` | () | Reset VR head to current look direction |
 
-## UserInputService — Events
+## UserInputService: Events
 
 ### Discrete (Began → Ended)
-- `InputBegan(input: InputObject, gameProcessedEvent: boolean)` — fires when input starts. Does NOT fire for mouse wheel.
-- `InputChanged(input, gameProcessedEvent)` — fires while input is changing (mouse move, thumbstick, wheel, drag).
-- `InputEnded(input, gameProcessedEvent)` — fires when input stops.
+- `InputBegan(input: InputObject, gameProcessedEvent: boolean)`: fires when input starts. Does NOT fire for mouse wheel.
+- `InputChanged(input, gameProcessedEvent)`: fires while input is changing (mouse move, thumbstick, wheel, drag).
+- `InputEnded(input, gameProcessedEvent)`: fires when input stops.
 
 All three only fire when the Roblox client window has focus.
 
@@ -67,32 +68,32 @@ All three only fire when the Roblox client window has focus.
 - `GamepadConnected(UserInputType)`, `GamepadDisconnected(UserInputType)`.
 
 ### Mobile sensors
-- `DeviceGravityChanged(Vector3, rotation)` — fires when accelerometer present + `AccelerometerEnabled`.
-- `DeviceRotationChanged(CFrame, rotation, CFrame)` — fires when gyroscope present.
-- `DeviceAccelerationChanged(Vector3, acceleration)` — fires when accelerometer present.
+- `DeviceGravityChanged(gravity: InputObject)`: fires when accelerometer present + `AccelerometerEnabled`. Read `gravity.Position` (Vector3 gravity force per device axis).
+- `DeviceRotationChanged(rotation: InputObject, cframe: CFrame)`: fires when gyroscope present. `rotation.Position`/`rotation.Delta` carry rotation values; `cframe` is the device's current orientation.
+- `DeviceAccelerationChanged(acceleration: InputObject)`: fires when accelerometer present. Read `acceleration.Position` (force per device axis).
 
 ### Player state
-- `JumpRequest()` — fires on jump key press. Fires multiple times per jump — debounce.
-- `LastInputTypeChanged(Enum.UserInputType)` — when the active input device changes.
-- `PointerAction(Enum.PointerAction, Vector2, number)` — middle-click navigation.
+- `JumpRequest()`: fires on jump key press. Fires multiple times per jump; debounce.
+- `LastInputTypeChanged(Enum.UserInputType)`: when the active input device changes.
+- `PointerAction(Enum.PointerAction, Vector2, number)`: middle-click navigation.
 
 ### UI focus
-- `TextBoxFocused(TextBox)`, `TextBoxFocusReleased(TextBox)` — track when text input gains/loses focus.
+- `TextBoxFocused(TextBox)`, `TextBoxFocusReleased(TextBox)`: track when text input gains/loses focus.
 
 ### Window
-- `WindowFocused()`, `WindowFocusReleased()` — fires when the Roblox window gains/loses OS focus.
+- `WindowFocused()`, `WindowFocusReleased()`: fires when the Roblox window gains/loses OS focus.
 
 ### VR
-- `UserCFrameChanged(Enum.UserCFrame, CFrame)` — head/hand motion in VR.
+- `UserCFrameChanged(Enum.UserCFrame, CFrame)`: head/hand motion in VR.
 
 ## InputObject
 
 Properties you read off the input arg:
-- `UserInputType` — Keyboard, MouseButton1..3, MouseWheel, MouseMovement, Touch, Gamepad1..8, Accelerometer, Gyro, etc.
-- `KeyCode` — the specific key/button (e.g. `Enum.KeyCode.Space`, `Enum.KeyCode.ButtonA`).
-- `UserInputState` — `Begin`, `Change`, `End`, `Cancel`. `Cancel` fires when input was in progress and another action bound over it.
-- `Position` — Vector2 in viewport (mouse, touch).
-- `Delta` — Vector3 (mouse/gamepad movement this frame).
+- `UserInputType`: Keyboard, MouseButton1..3, MouseWheel, MouseMovement, Touch, Gamepad1..8, Accelerometer, Gyro, etc.
+- `KeyCode`: the specific key/button (e.g. `Enum.KeyCode.Space`, `Enum.KeyCode.ButtonA`).
+- `UserInputState`: `Begin`, `Change`, `End`, `Cancel`. `Cancel` fires when input was in progress and another action bound over it.
+- `Position`: Vector2 in viewport (mouse, touch).
+- `Delta`: Vector3 (mouse/gamepad movement this frame).
 
 Note: when `Cancel` fires, the `InputObject` is `UserInputType.None` / `KeyCode.Unknown`.
 
@@ -103,8 +104,8 @@ Note: when `Cancel` fires, the `InputObject` is `UserInputType.None` / `KeyCode.
 Signature: `BindAction(actionName: string, handler: Function, createTouchButton: boolean, ...inputTypes)`.
 
 The handler receives `(actionName, inputState, inputObject)` and returns `Enum.ContextActionResult`:
-- `Sink` — consume the input. Stops propagation.
-- `Pass` — let lower-priority bindings also receive it.
+- `Sink`: consume the input. Stops propagation.
+- `Pass`: let lower-priority bindings also receive it.
 
 Bindings form a **stack**: most recent binding on the same input wins. When you unbind, the previous binding takes over. Use `BindActionAtPriority` to force ordering (higher priority first).
 
@@ -166,7 +167,7 @@ tool.Unequipped:Connect(function()
 end)
 ```
 
-### Bind vs InputBegan — when to use which
+### Bind vs InputBegan: when to use which
 
 Use `ContextActionService.BindAction` when:
 - The action only exists in a context (holding tool, sitting in seat, near door).
@@ -183,24 +184,35 @@ Use `UserInputService.InputBegan` when:
 Bind one logical action to keyboard + gamepad + touch in one call:
 
 ```luau
-local function handleMoveUp(name, state, input)
-    if input.KeyCode == Enum.KeyCode.Unknown then return Enum.ContextActionResult.Pass end
+local moving = false
+
+local function handleMoveUp(_name, state, _input)
+    -- Process stop states FIRST, before any key-code filtering:
+    -- ContextActionService delivers End/Cancel with KeyCode.Unknown
+    -- (e.g. unbound mid-press, synthesized touch-button release), and a
+    -- key-code gate would skip the stop path and strand the action active.
+    if state == Enum.UserInputState.End or state == Enum.UserInputState.Cancel then
+        moving = false -- idempotent: safe even if Begin never ran
+        return Enum.ContextActionResult.Sink
+    end
     if state == Enum.UserInputState.Begin then
-        -- start moving up
-    else
-        -- stop
+        moving = true
     end
     return Enum.ContextActionResult.Sink
 end
 
--- W key + left thumbstick up on any gamepad + mobile button
+-- W key + d-pad up on any gamepad + mobile button
 CAS:BindAction("MoveUp", handleMoveUp, true,
     Enum.KeyCode.W,
-    Enum.PlayerActions.MoveUp   -- also binds default WASD / stick
+    Enum.KeyCode.DPadUp -- digital gamepad alternative
 )
 ```
 
-For movement bindings, prefer `Enum.PlayerActions` (e.g. `MoveForward`, `Jump`) — they automatically bind to WASD, arrows, left stick, and d-pad across platforms.
+Gate handlers on `state`, not on `input.KeyCode`: touch-button input also arrives with `KeyCode.Unknown`, so a key-code filter on the start path would drop mobile presses too. Call `UnbindAction` on context exit; the `Cancel` delivery then clears the running state.
+
+`Enum.PlayerActions` is deprecated in favor of `Enum.KeyCode` and should not be used in new work; its items are `CharacterForward`/`CharacterBackward`/`CharacterLeft`/`CharacterRight`/`CharacterJump` (no `MoveUp`/`MoveForward`/`Jump` members — old examples using those fail on lookup). Bind explicit `Enum.KeyCode` entries per platform instead, as above.
+
+For analog movement, process changing values rather than treating the stick as a digital Begin/End button. `ContextActionService` can report `Change`; `UserInputService.InputChanged` also exposes stick updates through `input.KeyCode == Enum.KeyCode.Thumbstick1` and `input.Position` (see the deadzone pattern below). Use `GetGamepadState()` to initialize held input, or keep the character controller's default movement. The example above uses a digital d-pad binding, not an analog controller.
 
 ## UI Focus and Directional Selection
 
@@ -215,6 +227,87 @@ GuiService.SelectedObject = firstButton
 ```
 
 Set `SelectedObject` when a menu opens or a modal takes control, and clear or restore it when that owner closes. For ambiguous layouts, use selection groups and explicit directional behavior where the current UI API supports them. Test gamepad, keyboard arrows, covered elements, nested containers, and dynamic list updates. The Roblox `focus-navigation` repository provides a richer optional focus model with React integration; it is not required for native selection.
+
+## Dragging: DragDetector and UIDragDetector
+
+`DragDetector` (3D; parent under a `BasePart` or `Model`) and `UIDragDetector` (2D; parent under any `GuiObject`) make objects draggable via all input types (mouse, touch, gamepad, VR), often with zero code. Both work in Studio edit mode while the Select/Move/Scale/Rotate tools (and, for UI, UI-editor plugins) are not active. Sources: create.roblox.com/docs/ui/3D-drag-detectors, create.roblox.com/docs/ui/ui-drag-detectors.
+
+### Choosing a detector
+
+| Need | Use |
+|------|-----|
+| Click/hover only, no motion | `ClickDetector` (`MouseClick`) |
+| Drag a 3D part/model, optionally with physics response | `DragDetector` |
+| Drag/rotate a UI element (sliders, spinners, inventory icons) | `UIDragDetector` |
+
+`DragDetector` is the general-purpose option: it inherits `ClickDetector` members (`MouseClick`, `RightMouseClick`, `MouseHoverEnter`/`MouseHoverLeave`, `CursorIcon`, `MaxActivationDistance`), supports 3D dragging of anchored parts (exact placement on release) and unanchored parts (constraint-force physics), and is highly scriptable (`Scriptable` drag style, custom constraint functions). `UIDragDetector` is the newer UI-only counterpart; prefer it over hand-rolled `GuiObject` input tracking for 2D drags. Both expose the same event trio, so knowledge transfers. (*practitioner*: UIDragDetector fully released Dec 2025, announced Aug 2024; source: devforum.roblox.com/t/introducing-uidragdetectors-released/3109263.)
+
+### DragDetector essentials
+
+Default behavior: draggable in the ground plane. Key properties (defaults): `DragStyle` (`TranslatePlane`), `Axis` (world Y; changing it updates `Orientation` and vice versa), `ResponseStyle` (`Geometric`), `RunLocally` (false), `Enabled` (true).
+
+`DragStyle` (Enum.DragDetectorDragStyle): `TranslateLine` (1D along `Axis`), `TranslatePlane` (2D perpendicular to `Axis`), `TranslatePlaneOrLine`/`TranslateLineOrPlane` (2D or 1D, modifier toggles), `TranslateViewPlane` (always faces the camera, updates live), `RotateAxis`, `RotateTrackball`, `Scriptable` (custom function), `BestForDevice` (per-input default).
+
+`ResponseStyle` (Enum.DragDetectorResponseStyle):
+- `Geometric`: object is moved exactly; unanchored parts are temporarily anchored during the drag and restored on release.
+- `Physical`: unanchored parts are moved by constraint forces; tune `Responsiveness` (10), `MaxForce` (10000000), `MaxTorque` (10000), `ApplyAtCenterOfMass` (false = force at the clicked point).
+- `Custom`: object does not move; `DragFrame` still updates and events still fire, so drive movement yourself.
+
+Limits: `MinDragTranslation`/`MaxDragTranslation` (Vector3) and `MinDragAngle`/`MaxDragAngle` (`RotateAxis` only) impede motion but are not constraints. When using limits, set `ReferenceInstance` first; without a reference frame, limits re-anchor to the object's own pose on each drag.
+
+Direction/reference: `Axis`/`Orientation` set the direction of motion; `ReferenceInstance` defines the reference frame; `DragFrame` (CFrame) is expressed relative to it and readable via `GetPropertyChangedSignal("DragFrame")` or `GetReferenceFrame()`.
+
+Permissions: `PermissionPolicy` = `Nobody` | `Everybody` (default) | `Scriptable` plus `SetPermissionPolicyFunction(function(player, part) -> boolean)`. Missing function or invalid return blocks everyone.
+
+Replication: `RunLocally=false` (default) → the client interprets input and the SERVER performs the drag: event connections and registered functions belong in server `Script`s. `RunLocally=true` → client-local: use `LocalScript`s and RemoteEvents to propagate changes.
+
+Events: `DragStart(playerWhoDragged: Player, cursorRay: Ray, viewFrame: CFrame, hitFrame: CFrame, clickedPart: BasePart, ...)`, `DragContinue(playerWhoDragged, cursorRay, viewFrame, ...)`, `DragEnd(playerWhoDragged)`. Modifier keys for dual-mode styles: `KeyboardModeSwitchKeyCode`/`GamepadModeSwitchKeyCode`/`VRSwitchKeyCode` (default LeftControl / ButtonR1 / ButtonL2).
+
+Scripting hooks: `SetDragStyleFunction(fn)` with `DragStyle = Scriptable`: `fn(cursorRay: Ray) -> CFrame?` returning the desired pivot CFrame in world space (`nil` = don't move). `AddConstraintFunction(priority, fn): RBXScriptConnection`: `fn(proposedMotion: CFrame) -> CFrame`, chained by priority; `Disconnect()` to remove. `RestartDrag()` re-evaluates the drag after changing `DragStyle`/`Axis`/`SecondaryAxis`.
+
+```luau
+-- Drawer: slide along its own axis, clamped (illustrative)
+local detector = Instance.new("DragDetector")
+detector.DragStyle = Enum.DragDetectorDragStyle.TranslateLine
+detector.ResponseStyle = Enum.DragDetectorResponseStyle.Geometric
+detector.ReferenceInstance = dresserBody -- stable frame for the limits
+detector.MinDragTranslation = Vector3.zero
+detector.MaxDragTranslation = Vector3.new(0, 0, -4) -- open distance
+detector.Parent = drawer
+
+detector.DragStart:Connect(function(player, ray, viewFrame, hitFrame, clickedPart)
+    print(player.Name, "started dragging", clickedPart.Name)
+end)
+detector.DragEnd:Connect(function(player)
+    -- e.g. RemoteEvent to the server to latch state / play a sound
+end)
+```
+
+### UIDragDetector essentials
+
+`DragStyle` (Enum.UIDragDetectorDragStyle): `TranslatePlane` (default, free 2D), `TranslateLine` (1D along `DragAxis: Vector2`), `Rotate`, `Scriptable`. `ResponseStyle` (Enum.UIDragDetectorResponseStyle): `Offset` (default; applies motion to the parent's `Position` Offset), `Scale`, `CustomOffset`/`CustomScale` (UI does not move; `DragUDim2` still updates and events still fire; read `DragUDim2`/`DragRotation` to drive logic yourself).
+
+Limits and bounds: `MinDragTranslation`/`MaxDragTranslation` (UDim2), `MinDragAngle`/`MaxDragAngle` (`Rotate`), `BoundingUI` (a `GuiBase2d`, e.g. a container Frame) with `BoundingBehavior` (`Automatic` default | `EntireObject` | `HitPoint`), and `ReferenceUIInstance` to re-anchor axes/origin. Speed: `SelectionModeDragSpeed` (UDim2), `SelectionModeRotateSpeed` (deg/sec), `UIDragSpeedAxisMapping`.
+
+Events: `DragStart(inputPosition: Vector2)`, `DragContinue(inputPosition: Vector2)`, `DragEnd(inputPosition: Vector2)`. For custom logic, connect `DragContinue` and read the parent's `Position` (or `DragUDim2` under Custom styles): the same callback pattern as a `.Activated` button handler.
+
+Scripting hooks: `SetDragStyleFunction(fn)` with `Scriptable`: `fn(inputPosition: Vector2) -> UDim2, float, [relativity, space]`; `DragSpace` (`Parent` | `LayerCollector`) and `DragRelativity` (`Absolute` | `Relative`) define return semantics. `AddConstraintFunction` chains like the 3D detector but passes UDim2 + float. `GetReferencePosition()`/`GetReferenceRotation()` read the reference origin. Event connections and registered functions run client-side (`LocalScript` or `RunContext = Client`), like all UI input.
+
+```luau
+-- Volume slider: handle drags along X inside its container (illustrative)
+local handle = script.Parent            -- Frame inside a container Frame
+local detector = Instance.new("UIDragDetector")
+detector.DragStyle = Enum.UIDragDetectorDragStyle.TranslateLine
+detector.DragAxis = Vector2.new(1, 0)   -- X only
+detector.ResponseStyle = Enum.UIDragDetectorResponseStyle.Scale
+detector.BoundingUI = handle.Parent     -- confine to container bounds
+detector.Parent = handle
+
+detector.DragContinue:Connect(function(_inputPos)
+    local value = math.clamp(handle.Position.X.Scale, 0, 1)
+    -- apply `value` to game state (volume, fill bar, etc.)
+end)
+```
 
 ## Gamepad Deep Dive
 
@@ -279,27 +372,31 @@ end
 ## Touch Deep Dive
 
 ### High-level gestures
-- `TouchTap` — brief single-finger tap.
-- `TouchTapInWorld` — same, with the world-space hit position (via `Camera:ScreenPointToRay`).
-- `TouchPan` — drag with one finger. Use for camera rotation/zoom in mobile games.
-- `TouchPinch` — two-finger pinch. Use for zoom.
-- `TouchRotate` — two-finger rotate gesture.
-- `TouchSwipe` — quick directional swipe.
-- `TouchLongPress` — held touch.
-- `TouchDrag` — continuous drag (useful for inventory drag-and-drop).
+- `TouchTap`: brief single-finger tap.
+- `TouchTapInWorld`: same, with the world-space hit position (via `Camera:ScreenPointToRay`).
+- `TouchPan`: drag with one finger. Use for camera rotation/zoom in mobile games.
+- `TouchPinch`: two-finger pinch. Use for zoom.
+- `TouchRotate`: two-finger rotate gesture.
+- `TouchSwipe`: quick directional swipe.
+- `TouchLongPress`: held touch.
+- `TouchDrag`: continuous drag (useful for inventory drag-and-drop).
 
 ### Multi-touch tracking
 Use raw `TouchStarted`/`TouchMoved`/`TouchEnded` and maintain your own per-touch state by `input` instance.
 
 ## Mobile Sensors
 
+The sensor callbacks and getters return `InputObject`s (analogous to key/mouse input objects); the sensor values live on `input.Position`, not on the event argument itself.
+
 ### Accelerometer (gravity direction)
 ```luau
 if UIS.AccelerometerEnabled then
-    UIS.DeviceGravityChanged:Connect(function(gravity, _rot)
-        -- gravity is a unit Vector3 pointing in the direction gravity appears
-        -- to pull on the device. Z is out of screen.
-        ball.BodyForce.Force = gravity * workspace.Gravity * ball:GetMass()
+    UIS.DeviceGravityChanged:Connect(function(gravity: InputObject)
+        -- gravity.Position is a Vector3 showing the force of gravity on each
+        -- local device axis; use it as the direction gravity appears to pull
+        -- the device (Z is out of the screen).
+        local dir = gravity.Position
+        ball.BodyForce.Force = dir * workspace.Gravity * ball:GetMass()
     end)
 end
 ```
@@ -307,29 +404,70 @@ end
 ### Gyroscope (device rotation)
 ```luau
 if UIS.GyroscopeEnabled then
-    UIS.DeviceRotationChanged:Connect(function(cframe, _rot, _prev)
-        -- cframe represents the device's orientation in world space
-        camera.CFrame = CFrame.new(camera.CFrame.Position) * (cframe - Vector3.new(0,0,0))
+    UIS.DeviceRotationChanged:Connect(function(_rotation: InputObject, cframe: CFrame)
+        -- The second argument is the device's current orientation as a CFrame
+        -- relative to its default reference frame. (_rotation.Position/.Delta
+        -- carry rotation values as Vector3s; use `cframe` for orientation.)
+        camera.CFrame = CFrame.new(camera.CFrame.Position) * cframe.Rotation
     end)
 end
 ```
 
+## VRService
+
+`VRService` handles Roblox's VR interaction. Check `VREnabled` first; every method below is LocalScript-only.
+
+Key members (verified against the class page):
+
+- **`VREnabled`** (read-only boolean): true when a VR session is active. The same flag exists on `UserInputService`.
+- **`GetUserCFrame(type: Enum.UserCFrame): CFrame`**: device pose as an offset from real-world origin. Multiply by `Camera.CFrame`, and scale the position by `Camera.HeadScale`, to place something at a headset/hand:
+  ```luau
+  local handOffset = VRService:GetUserCFrame(Enum.UserCFrame.LeftHand)
+  handOffset = handOffset.Rotation + handOffset.Position * camera.HeadScale
+  part.CFrame = camera.CFrame * handOffset
+  ```
+- **`GetUserCFrameEnabled(type): boolean`**: whether that device (Head, LeftHand, RightHand) is connected.
+- **`UserCFrameChanged(type, cframe)`**: fires on device movement; re-mirror parts there.
+- **`RecenterUserHeadCFrame()`**: re-centers the head pose (same as `UserInputService:RecenterUserHeadCFrame()`).
+- **`RequestNavigation(cframe, inputUserCFrame)`**: shows a parabola path visualizer toward a destination; pairs with the `NavigationRequested` event.
+- **`GetTouchpadMode(pad)` / `SetTouchpadMode(pad, mode)`**: legacy touchpad interaction modes (`Enum.VRTouchpad`, `Enum.VRTouchpadMode`).
+- Behavior properties: `AutomaticScaling` (`VRScaling.World` makes `Camera.HeadScale` track avatar size), `AvatarGestures` (server-set boolean for controller-driven hand/head animation), `FadeOutViewOnCollision` (default true, fades the view when the head clips geometry; do not disable without a replacement), `GuiInputUserCFrame` (which device drives UI input), `LaserPointer`, `ThirdPersonFollowCamEnabled`.
+
+Do not invent member names: older community references carry stale VRService members. Check the class page when in doubt.
+
 ## Patterns
 
-### Platform-adaptive UI
-```luau
-local Platform = {
-    HasKeyboard = UIS.KeyboardEnabled,
-    HasMouse    = UIS.MouseEnabled,
-    IsTouch     = UIS.TouchEnabled,
-    IsGamepad   = UIS.GamepadEnabled,
-}
+### Platform-adaptive mobile UI
 
-if Platform.IsTouch then
-    showMobileButtons()
-elseif Platform.IsGamepad then
-    showGamepadPrompts()
+Don't gate mobile UI on `UIS.TouchEnabled` alone: a touchscreen laptop would show mobile controls even when the player is using mouse/keyboard. Roblox core scripts detect the **last input actually used** (`GetLastInputType` / `LastInputTypeChanged`), which adapts instantly when a player switches devices mid-session.
+
+```luau
+local UIS = game:GetService("UserInputService")
+local frame = script.Parent -- mobile button container
+
+local function updateInput()
+    local last = UIS:GetLastInputType()
+    if last == Enum.UserInputType.Focus then return end -- app focus, not an input
+    frame.Visible = (last == Enum.UserInputType.Touch)
 end
+
+updateInput()
+UIS.LastInputTypeChanged:Connect(updateInput)
+```
+
+For placement, anchor to the safe area (a child `ScreenGui` with `ScreenInsets = DeviceSafeInsets` gives the safe `AbsolutePosition`/`AbsoluteSize`). Keep custom buttons out of the thumbstick zone (left edge) and don't hard-place them relative to the default jump button, which swaps size/position at a ~500px min-axis preset.
+
+```luau
+-- Recompute position from the safe-area screen size each frame
+local RS = game:GetService("RunService")
+RS.RenderStepped:Connect(function()
+    if not frame.Visible then return end
+    local size = frame.Screen.AbsoluteSize
+    local minAxis = math.min(size.X, size.Y)
+    local buttonSize = (minAxis <= 500) and 70 or 120
+    frame.Size = UDim2.fromOffset(buttonSize, buttonSize)
+    frame.Position = UDim2.new(1, -(buttonSize * 1.5 - 10), 1, -buttonSize * 1.75)
+end)
 ```
 
 ### Switch UI on PreferredInput change
@@ -361,23 +499,34 @@ end)
 
 ### Touch camera drag
 ```luau
-local dragging = false
+-- One finger owns the drag: identify it by its InputObject instance, which
+-- stays the same across that touch's Started/Moved/Ended events.
+local activeTouch: InputObject? = nil
 local lastPos = Vector2.zero
 
 UIS.TouchStarted:Connect(function(input, gpe)
     if gpe then return end
-    dragging = true
+    if activeTouch then return end -- a second finger never hijacks the drag
+    activeTouch = input
     lastPos = input.Position
 end)
 
 UIS.TouchMoved:Connect(function(input, gpe)
-    if not dragging or gpe then return end
+    if input ~= activeTouch or gpe then return end
     local delta = input.Position - lastPos
     -- rotate camera by delta
     lastPos = input.Position
 end)
 
-UIS.TouchEnded:Connect(function() dragging = false end)
+UIS.TouchEnded:Connect(function(input)
+    if input ~= activeTouch then return end -- a different finger lifting is ignored
+    activeTouch = nil
+end)
+
+-- Clear ownership on teardown so a stale touch can't block future drags.
+script.Destroying:Connect(function()
+    activeTouch = nil
+end)
 ```
 
 ### Disable default jump and handle custom
@@ -400,8 +549,8 @@ end)
 - **Reading `MouseWheel` from InputBegan.** Wheel events only fire `InputChanged`.
 - **Touching `IsKeyDown` in a tight loop without throttling.** It's cheap but RenderStepped is the right cadence.
 - **No debounce on JumpRequest.** Fires once per frame the jump key is held.
-- **Mixing `PlayerActions` with `KeyCode` in a single binding.** Use one or the other, not both. `PlayerActions` maps to the platform's natural input.
+- **Recommending deprecated `PlayerActions` for new bindings.** Mixing it with `KeyCode` is legal, but new code should bind explicit `Enum.KeyCode` entries instead (`Enum.KeyCode.DPadUp` covers the gamepad d-pad).
 - **Setting `MouseBehavior = LockCenter` and forgetting to reset it.** Reset on player leave or context exit.
-- **Bypassing `ContextActionService` because it "feels indirect."** Most gameplay bindings should use CAS — it correctly handles chat/text-box conflicts for free.
+- **Bypassing `ContextActionService` because it "feels indirect."** Most gameplay bindings should use CAS: it correctly handles chat/text-box conflicts for free.
 - **Auto-creating touch buttons beyond the 7 limit.** BindAction silently refuses to create the 8th button.
-- **Using `gameProcessedEvent` to filter CAS handlers.** CAS doesn't pass `gpe` to its handlers — by design, CAS handles conflicts itself.
+- **Using `gameProcessedEvent` to filter CAS handlers.** CAS doesn't pass `gpe` to its handlers; by design, CAS handles conflicts itself.

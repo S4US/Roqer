@@ -25,6 +25,10 @@ Use four states:
 
 Do not convert Not Applicable or Unverified into PASS. Do not calculate a readiness percentage that can hide one data-loss or purchase blocker.
 
+### Policy precedence
+
+User approval authorizes an otherwise permitted action; it does not satisfy a mandatory policy and does not turn a failed or unverified gate into PASS. A mandatory platform policy (for example, paid-random-item restrictions) is not risk-acceptable: "I accept the risk; ship unchanged" maps to NOT READY, not to READY WITH ACCEPTED RISK. READY WITH ACCEPTED RISK exists for non-policy risks (named risk, impact, owner, rollback); approval is never evidence and never upgrades UNVERIFIED or FAILED to PASS.
+
 ## 3. High-consequence gates
 
 ### Persistence, conditional on stored state
@@ -152,5 +156,7 @@ Use this structure:
 6. **Evidence:** pass results grouped by gate.
 7. **Not applicable:** skipped gates with reasons.
 8. **Rollback:** owner, trigger, and procedure.
+
+Group evidence by class in the report: edits that succeeded (readback-confirmed), runtime behavior actually observed, and checks that could not run (reported as Unverified). A successful edit is not runtime proof. The checklist documents rollback; it does not supply transactional rollback. Recovery relies on Studio undo history for Studio edits and on the compensating action recorded before each external write (DataStore, Open Cloud, webhook).
 
 `READY WITH ACCEPTED RISK` requires a named risk, impact, owner, and rollback or mitigation. It is not a softer spelling of NOT READY.

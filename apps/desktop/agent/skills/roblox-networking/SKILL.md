@@ -1,16 +1,15 @@
 ---
 name: roblox-networking
 description: "Use when validating RemoteEvent or RemoteFunction arguments, adding rate limits, designing server-authoritative systems, or preventing exploits."
-last_reviewed: 2026-07-26
+last_reviewed: 2026-10-02
 sources:
   - https://create.roblox.com/docs/scripting/events/remote
   - https://create.roblox.com/docs/scripting/security/security-tactics
   - https://create.roblox.com/docs/scripting/security/client-server-boundary
   - https://create.roblox.com/docs/projects/server-authority
   - https://create.roblox.com/docs/reference/engine/classes/UnreliableRemoteEvent
-  - https://devforum.roblox.com/t/introducing-unreliableremoteevents/2724155
-  - https://devforum.roblox.com/t/remote-packet-size-counter-accurately-measure-the-amount-of-bytes-for-remotes/2320709
-  - https://sleitnick.github.io/RbxUtil/api/TypedRemote/
+  - https://create.roblox.com/docs/reference/engine/classes/Workspace#GetServerTimeNow
+  - https://1axen.github.io/blink/
   - original
 ---
 
@@ -18,21 +17,26 @@ sources:
 
 ## When to Load
 
-Load when adding a remote, handling untrusted client input, implementing cooldowns, or deciding which side owns a gameplay result.
+Load when adding a remote, handling untrusted input, adding cooldowns, or assigning authority.
 
 ## Quick Reference
 
-- Treat every client argument as attacker-controlled input.
-- Validate type, size, ownership, state, distance, and cooldown on the server.
-- Look up prices, damage, rewards, and permissions from server-owned definitions.
-- Choose the authority model before designing movement or continuous simulation. Server Authority uses client input prediction and server rollback; it is not the same thing as handing a part to a client with `SetNetworkOwner`.
-- For simulation-affecting input in Server Authority, use `InputAction`/`InputContext` and `RunService:BindToSimulation()` (requires `Workspace.UseFixedSimulation` enabled in Studio) rather than feeding continuous input through a `RemoteEvent`.
-- Use events for most gameplay requests. Keep `RemoteFunction` calls short and bounded.
-- Use `RemoteEvent` for reliable state changes within its event channel. Do not assume a RemoteEvent is ordered with property or attribute replication; use one explicit state channel or version the state when ordering matters. Use `UnreliableRemoteEvent` only for replaceable or ephemeral data such as VFX and continuous snapshots.
-- Unreliable does not mean automatically faster: delivery is unordered, packets may be dropped, and payloads should stay at or below the documented 1000-byte limit.
-- Measure payload size and fire rate under load. Do not treat a community packet-size estimator as an official wire-format specification.
-- Validate numeric inputs for NaN and infinity before applying range checks. `NaN` makes ordinary `<` and `>` checks return false.
-- Rate limits protect the server, but validation must still reject invalid requests.
-- Record suspicious behavior and use thresholds. Do not punish a player for one malformed packet.
+- Every client argument is attacker-controlled; validate type, size, ownership, state, distance, cooldown on the server.
+- Look up prices, damage, rewards, permissions from server-owned definitions.
+- Choose the authority model first: Server Authority uses client prediction + server rollback, and is not `SetNetworkOwner`.
+- Under Server Authority, simulation input uses `InputAction`/`BindToSimulation()`, not a `RemoteEvent`.
+- Events for most gameplay requests; keep `RemoteFunction` calls short and bounded.
+- `RemoteEvent` for reliable state; not ordered vs property/attribute replication — use one explicit channel or version state. `UnreliableRemoteEvent` only for replaceable data (VFX, snapshots).
+- Unreliable is not automatically faster: unordered, droppable, 1000-byte payload cap.
+- Measure payload size and fire rate under load; estimators are not an official wire-format spec.
+- Budget rate × bytes × recipients; snapshot on join, diffs after. Measure encoded payloads.
+- Hit timestamps are untrusted context, never proof. Bound freshness and validate server history; see full.md §3a.
+- Typed schemas do not replace security checks. Pin generators and verify generated output in CI.
+- Check NaN/infinity first (`x ~= x`, `math.abs(x) == math.huge`): `NaN` defeats `<`/`>`. `utf8.len` catches malformed UTF-8 that fails a DataStore save.
+- Serialization: functions arrive `nil`, metatables stripped, mixed keys mangled, `nil` truncates tables, tables are copies — validate field by field, share state via server-owned snapshots/ids.
+- Server Authority needs `AuthorityMode = Server` + its bundle (NextGenerationReplication, PlayerScriptsUseInputActionSystem, deferred signals, UseFixedSimulation, StreamingEnabled); misprediction/rollback are normal (full.md).
+- Rate limits protect the server; validation still rejects invalid requests.
+- Record suspicion with thresholds; never punish one malformed packet.
+- Edit-mode play: wrap the network layer so `RunContext:IsEdit()` gets a loopback mock (full.md).
 
-**Need the details?** Load `references/full.md` for reusable validation and throttling patterns.
+**Need details?** `references/full.md` has validation, throttling, and mock patterns.

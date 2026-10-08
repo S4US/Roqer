@@ -1,7 +1,7 @@
 ---
 name: roblox-growth-design
-description: "Use for Roblox growth diagnosis, discovery, retention, onboarding, experiments, positioning, LiveOps, and packaging."
-last_reviewed: 2026-07-27
+description: "Use for growth diagnosis, discovery, retention, onboarding, experiments, LiveOps, and packaging."
+last_reviewed: 2026-09-22
 sources:
   - https://create.roblox.com/docs/discovery
   - https://create.roblox.com/docs/production/game-design/analytics-essentials
@@ -13,11 +13,16 @@ sources:
   - https://create.roblox.com/docs/production/game-design/core-loops
   - https://create.roblox.com/docs/production/game-design/onboarding
   - https://create.roblox.com/docs/production/game-design/liveops-planning
+  - https://create.roblox.com/docs/production/game-design/liveops-essentials
+  - https://create.roblox.com/docs/production/game-design/content-updates
+  - https://create.roblox.com/docs/production/game-design/monetization-foundations
+  - https://create.roblox.com/docs/production/game-design/season-pass-design
   - https://create.roblox.com/docs/production/publishing/experience-icons
   - https://create.roblox.com/docs/production/publishing/thumbnails
   - https://create.roblox.com/docs/production/publishing/accessibility
   - https://create.roblox.com/docs/production/monetization/regional-pricing
   - https://create.roblox.com/docs/production/monetization/price-optimization
+  - https://devforum.roblox.com/t/boost-your-discovery-by-building-games-people-want-to-play/4779042
   - https://qptr.io
   - https://creatorexchange.io
   - original
@@ -27,31 +32,52 @@ sources:
 
 ## When to Load
 
-Load for weak growth, discovery, retention, onboarding, packaging, or LiveOps. Diagnose here, then route implementation to domain skills.
+Load for growth, discovery, retention, onboarding, packaging, or LiveOps; route implementation to domain skills.
 
 ## Quick Reference
 
 ### Diagnose before prescribing
 
-1. Ask for dashboard evidence, release dates, acquisition mix, and observed sessions. Never invent metrics.
-2. Find the narrowest broken transition: impression to play, join to control, first action to payoff, return, or purchase.
+1. Ask for dashboard, release, acquisition, and session evidence. Never invent metrics.
+2. Find the narrowest broken transition: impression→play, join→control, action→payoff, return, or purchase.
 3. Write a falsifiable hypothesis: **If Y changes because evidence Z, X should move without harming G.**
-4. Prefer one interpretable experiment with a primary metric, counter-metrics, MDE, and decision rule.
-5. Stop for safety, severe regressions, or invalid instrumentation. Avoid significance peeking.
+4. Prefer one test with a primary metric, counter-metrics, MDE, and decision rule.
+5. Stop for safety, severe regressions, or invalid instrumentation; avoid significance peeking.
 
 <!-- temporal: 2026-07 -->
 ### Home diagnosis
 
-- Low QPTR: packaging readability, promise accuracy, or audience mismatch.
-- Bounce under 3 min: join failure, performance, confusing FTUE, or delayed payoff.
+- Low Play-Through Rate (PTR, was QPTR): packaging readability, promise accuracy, or audience mismatch. Also check Experience Detail Page CTR.
+- High First-Play Bounce Rate (negative stat): misleading package/clickbait, join failure, performance, confusing FTUE, or delayed payoff.
 - Low D1: core loop, onboarding, stability, goals, or first payoff.
 - Low D7/D30: progression, variety, social value, LiveOps, endgame, or exhaustion.
 - Low conversion/ARPPU: product fit, value communication, friction, catalog depth, or concentration.
+- Low 7-day spend days / play days per user: consumables, purchase pathways, or event cadence.
 
-These are hypotheses, not one-to-one causes. Segment and test. Per-stat tactics in full.md §3–§6.
+These are hypotheses, not one-to-one causes. Segment and test. Per-stat tactics in full.md §3–§5 and operations.md §6.
+
+### Algorithm hotspots (2026)
+
+In this section, (official) marks documented behavior; other ranking claims are unverified.
+
+- Cold traffic: ads are the cheapest, least-qualified players; Home algo ranks the qualified audience. Launch stats look bad on ad players. Don't panic.
+- Ranking: Roblox docs say benchmark games do not affect ranking (official); the similar-games benchmark is rough context only. An unverified hypothesis adds staging: genre-wide first, then against "experiences with similar players," where better-statted competitors take your players. Use the benchmark to choose comparison cohorts, not as a ranking rule.
+- Ads do not buy Home placement; meaningful stat-improving updates do. 28-day signals (D1, D2–7, D8–28); updates take days to show.
+- Beta mode hides a game from Home (official feature); tune metrics on cheap ad traffic before opening to the algo.
+- The 250 highly-engaged-player requirement (official): all-ages games start 16+ only until 250 highly engaged age-checked plays within 60 days. Definition (official, evolving): account tenure + playtime in your game + a purchase anywhere on Roblox in the last 60 days. 25 = publishing-fee refund threshold (separate). Ads serve 16+ automatically. Home impressions accelerate the count fastest.
+- Experience detail page matters: put your best thumbnails and a gameplay description there; it feeds overall play-through.
+- Launch realism: split ad campaigns desktop/mobile; paid playtime ≈ half of organic; low-CCU stats are noise (don't kill on a 3% D1 readout); algo "biting" shows as thumbnail impressions before CCU; console = cheap long-session niche; multiplayer needs singleplayer fallbacks; feedback forms at decision popups.
+
+### Monetization mental model
+
+- Convert valuable one-time game passes into consumables (repeat-purchase dev products): they pump 7-day spend days per user and solve recurring pain.
+- Products must be must-haves that solve a pain (effort grind, losing progress AFK, FOMO, status). Limiteds with real scarcity outsell unlimited cosmetics.
+- Place products at points of interest with high foot traffic, and time prompts at the decision moment (e.g., 2x offline earnings at the collect point).
+- Give players multiple purchase pathways: HUD shop icon, "+" next to currency, and a cash-shop popup after repeated failed buys.
+- After shipping, check collateral damage: playtime, D1, D7, FTUE, and in-game economy.
 
 ### Guardrails
 
-Use accurate metadata. Avoid dark patterns, deceptive odds, coercive scarcity, and "whale" targeting. Treat platform input, moderation, abuse, accessibility, localization, performance, and economy health as constraints.
+Use accurate metadata. Avoid dark patterns, deceptive odds, coercive scarcity, and "whale" targeting. Treat moderation, abuse, accessibility, localization, performance, and economy health as constraints.
 
-> Full signal definitions, positioning, FTUE, packaging, social design, and audit workflow: [references/full.md](references/full.md)
+> Full signal definitions, algorithm mechanics, positioning, and FTUE: [references/full.md](references/full.md). Packaging, monetization with trust, social design, LiveOps, and audit workflow: [references/operations.md](references/operations.md). Community launch benchmarks: [references/community.md](references/community.md).

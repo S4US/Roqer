@@ -1,4 +1,4 @@
-# Roblox Camera — Full Reference
+# Roblox Camera: Full Reference
 
 
 > **Code in this reference is illustrative. Adapt to your game and verify in Studio before production use.**
@@ -60,18 +60,18 @@ camera.CameraSubject = player.Character:FindFirstChildWhichIsA("Humanoid")
 |--------|---------|-----|
 | `GetRenderCFrame()` | CFrame | The "true" rendered CFrame, including VR head rotation not reflected in `.CFrame`. |
 | `GetRoll()` | float (radians) | Roll set via `SetRoll` (not roll manually applied via CFrame). |
-| `SetRoll(rollAngle)` | () | **Outdated** — apply roll via `CFrame.Angles(0, 0, roll)` on CFrame instead. |
+| `SetRoll(rollAngle)` | () | **Outdated**: apply roll via `CFrame.Angles(0, 0, roll)` on CFrame instead. |
 | `ScreenPointToRay(x, y, depth?)` | Ray | Unit ray from screen pixel coords. Accounts for GUI inset. |
 | `ViewportPointToRay(x, y, depth?)` | Ray | Unit ray from device-safe viewport coords. Does NOT account for GUI inset. |
 | `WorldToScreenPoint(worldPos)` | Vector3 | `(x, y, onScreen)`. Pixels accounting for GUI inset. |
 | `WorldToViewportPoint(worldPos)` | Vector3 | `(x, y, onScreen)` in device-safe viewport coords. |
 | `GetPartsObscuringTarget(castPoints, ignoreList)` | {BasePart} | Parts obscuring the camera's view of given world points. |
-| `ZoomToExtents()`, `Interpolate(...)` | () | Editor camera methods — not for gameplay cameras. |
+| `ZoomToExtents()`, `Interpolate(...)` | () | Editor camera methods, not for gameplay cameras. |
 | `PanUnits`, `TiltUnits`, `GetPanSpeed`, `GetTiltSpeed` | various | Editor viewport camera controls. |
 
 ### Event
 
-`InterpolationFinished` — fires when `Interpolate` completes.
+`InterpolationFinished`: fires when `Interpolate` completes.
 
 ## ScreenPointToRay vs ViewportPointToRay
 
@@ -102,7 +102,7 @@ local result = workspace:Raycast(unitRay.Origin, unitRay.Direction * 500)
 | `CFrame.new(x, y, z)` | Position only. |
 | `CFrame.new(x, y, z, qX, qY, qZ, qW)` | Position + quaternion rotation. |
 | `CFrame.new(x, y, z, R00, R01, ..., R22)` | Position + raw 3x3 rotation matrix. |
-| `CFrame.new(pos, lookAt)` | **Legacy** (back-compat) — use `CFrame.lookAt`. |
+| `CFrame.new(pos, lookAt)` | **Legacy** (back-compat); use `CFrame.lookAt`. |
 | `CFrame.lookAt(at, lookAt, up?)` | Construct at `at` oriented toward `lookAt`. Optional `up` defaults to `(0,1,0)`. Fails if `lookAt` directly above `at` (use `lookAlong`). |
 | `CFrame.lookAlong(at, direction, up?)` | Construct at `at` oriented along `direction`. |
 | `CFrame.fromRotationBetweenVectors(from, to)` | Rotation that maps `from` to `to`. |
@@ -282,6 +282,8 @@ end)
 local TweenService = game:GetService("TweenService")
 local camera = workspace.CurrentCamera
 
+-- Snapshot the current mode; restoration must put back what the player had.
+local prevCameraType = camera.CameraType
 camera.CameraType = Enum.CameraType.Scriptable
 
 local tweenInfo = TweenInfo.new(2, Enum.EasingStyle.Quad, Enum.EasingDirection.InOut)
@@ -291,15 +293,45 @@ local tween = TweenService:Create(camera, tweenInfo, {CFrame = targetCFrame})
 tween:Play()
 tween.Completed:Wait()
 
-camera.CameraType = Enum.CameraType.Custom
+-- Restore the mode the player actually had, not a hardcoded default.
+camera.CameraType = prevCameraType
 ```
 
 ### Multi-shot cutscene with input lock
 
 ```luau
+local cutsceneId = 0 -- ownership token: a newer cutscene supersedes older ones
+-- The snapshot of the state this cutscene locks. At most one cutscene owns
+-- it: a newer run ADOPTS the pending snapshot instead of re-snapshotting
+-- values it already finds locked to zero.
+local cutsceneSnapshot: {
+    cameraType: Enum.CameraType,
+    walkSpeed: number,
+    jumpPower: number,
+}? = nil
+
 local function playCutscene(cameraPath: {CFrame}, duration: number)
-    camera.CameraType = Enum.CameraType.Scriptable
+    cutsceneId += 1
+    local myId = cutsceneId
+
+    -- Adopt the prior run's snapshot if one is pending; only the FIRST
+    -- cutscene reads the player's live values. A replacement re-snapshot
+    -- would capture our own locked zeros and restore them as if they were
+    -- the player's real state.
+    local saved = cutsceneSnapshot
+    -- Function scope: both the snapshot branch and the lock/restore below
+    -- need the humanoid, so the lookup must not live inside the conditional.
     local humanoid = character:FindFirstChildWhichIsA("Humanoid")
+    if not saved then
+        saved = {
+            cameraType = camera.CameraType,
+            walkSpeed = humanoid.WalkSpeed,
+            jumpPower = humanoid.JumpPower,
+        }
+        cutsceneSnapshot = saved
+    end
+
+    camera.CameraType = Enum.CameraType.Scriptable
     humanoid.WalkSpeed = 0
     humanoid.JumpPower = 0
 
@@ -307,46 +339,84 @@ local function playCutscene(cameraPath: {CFrame}, duration: number)
         local info = TweenInfo.new(duration / #cameraPath, Enum.EasingStyle.Sine)
         local tween = TweenService:Create(camera, info, {CFrame = target})
         tween:Play()
-        tween.Completed:Wait()
+        tween.Completed:Wait() -- also resumes if a newer tween cancels this one
+        if cutsceneId ~= myId then
+            return -- superseded: the newer cutscene owns camera, movement,
+                  -- AND the pending snapshot; leave it pending for that run
+        end
     end
 
-    humanoid.WalkSpeed = 16
-    humanoid.JumpPower = 50
-    camera.CameraType = Enum.CameraType.Custom
+    -- Restore the snapshot, never hardcoded defaults. Only the newest run
+    -- reaches here (older runs returned early), and the snapshot still
+    -- pending is the original player state.
+    humanoid.WalkSpeed = saved.walkSpeed
+    humanoid.JumpPower = saved.jumpPower
+    camera.CameraType = saved.cameraType
+    cutsceneSnapshot = nil -- state is restored: nothing pending
 end
 ```
+
+Overlapping runs are safe by construction: the first run snapshots the live
+values; every superseding run reuses that same snapshot; only the run that
+finishes last (the current owner) restores it and clears the pending slot.
 
 ### Screen shake
 
 ```luau
-local shakeActive = false
+local shakeToken = 0 -- ownership token: only the newest shake drives state
 local shakeIntensity = 0
-local baseCFrame: CFrame
+local prevOffset = CFrame.identity
+local lastShakeCFrame: CFrame? = nil -- camera CFrame as our last shake write left it
 
 local function startShake(intensity: number, duration: number)
-    shakeActive = true
+    shakeToken += 1
+    local myToken = shakeToken
     shakeIntensity = intensity
-    baseCFrame = camera.CFrame
 
     task.spawn(function()
         local t = 0
         while t < duration do
             t += task.wait()
+            if myToken ~= shakeToken then return end -- a newer shake owns state
             shakeIntensity = intensity * (1 - t / duration)
         end
-        shakeActive = false
-        camera.CFrame = baseCFrame
+        if myToken ~= shakeToken then return end
+        shakeIntensity = 0
     end)
 end
 
 RunService.PreRender:Connect(function()
-    if not shakeActive then return end
+    if shakeIntensity <= 0 then
+        -- Strip the final offset exactly once so it does not stay baked in.
+        -- Only strip when the camera STILL holds our last write: another
+        -- system may have overwritten camera.CFrame since, and stripping
+        -- from that fresh base would subtract an offset it never contained.
+        if prevOffset ~= CFrame.identity then
+            if lastShakeCFrame and camera.CFrame == lastShakeCFrame then
+                camera.CFrame = camera.CFrame * prevOffset:Inverse()
+            end
+            prevOffset = CFrame.identity
+            lastShakeCFrame = nil
+        end
+        return
+    end
     local offset = CFrame.new(
         (math.random() - 0.5) * shakeIntensity,
         (math.random() - 0.5) * shakeIntensity,
         (math.random() - 0.5) * shakeIntensity
     )
-    camera.CFrame = baseCFrame * offset
+    -- Re-base on the CURRENT camera CFrame each frame, and remember it: strip
+    -- the previous frame's offset only while our last write is still current.
+    -- If another system moved the camera between frames, that fresh base never
+    -- contained our offset, so subtracting it would corrupt their CFrame;
+    -- instead the stale offset is simply dropped (resets shake baseline).
+    local base = camera.CFrame
+    if lastShakeCFrame and base == lastShakeCFrame then
+        base = base * prevOffset:Inverse() -- our offset is still baked in
+    end
+    camera.CFrame = base * offset
+    lastShakeCFrame = camera.CFrame
+    prevOffset = offset
 end)
 ```
 
@@ -362,6 +432,10 @@ local screenPos, onScreen = camera:WorldToScreenPoint(worldPos)
 -- World to viewport (raw device coords)
 local viewportPos, onScreen = camera:WorldToViewportPoint(worldPos)
 ```
+
+## ViewportFrame Portals (seamless portals)
+
+Community technique (DevForum "Making seamless portals - Tutorial", thiagop123, 2026, https://devforum.roblox.com/t/making-seamless-portals-tutorial/4731945) for rendering a live portal to another location: clone the destination world Model into a `ViewportFrame` whose camera is a second `Camera` instance, and display it on the portal's face. Crossing is handled by raycasting the `HumanoidRootPart`'s movement against the portal part each frame; when the character crosses the front face (`dot ≥ 0.999`), teleport it and remap position, direction, and velocity relative to the destination surface (180° mirrored); directionality replaces a cooldown. A per-frame "physics hole" (collision disabled within ~5 studs) lets the character pass through the opening without falling off the edges; a `CollisionGroups` server script handles portal-air collision. Verify performance: each pair costs 2 world clones + 2 clones per character + per-frame render (see the thread's common-problems table for StreamingEnabled, back-face entry, and camera-flicker/`BindToRenderStep` pitfalls).
 
 ## Mouse-to-World Raycast Pattern
 
@@ -380,18 +454,18 @@ if result then
 end
 ```
 
-## Camera in Studio MCP
+## Camera through the Studio bridge
 
-When scripting a camera via `execute_luau` in Studio (Play mode), set the camera on the active client. Useful for testing cutscenes:
+To test a camera during a playtest, set it on the client peer with `eval_client_runtime`; `execute_luau` runs in the edit DataModel, whose camera is not the player's. Useful for testing cutscenes:
 
 ```luau
--- In execute_luau, the local script context is the editing client
+-- In eval_client_runtime, workspace.CurrentCamera is that client's camera
 local camera = workspace.CurrentCamera
 camera.CameraType = Enum.CameraType.Scriptable
 camera.CFrame = CFrame.lookAt(Vector3.new(0, 50, 50), Vector3.zero)
 ```
 
-For non-Play testing (Edit mode), `CurrentCamera` exists but the perspective doesn't render the way gameplay does — Scriptable camera changes won't be visible until Play.
+For non-Play testing (Edit mode), `CurrentCamera` exists but the perspective doesn't render the way gameplay does; Scriptable camera changes won't be visible until Play.
 
 ## Common Mistakes
 
