@@ -180,7 +180,9 @@ export function schemaDirectory(home: string): string {
 /**
  * Where `agy` keeps each conversation's own files under a home, the images it
  * saved from tool results among them. The model is pointed at a Studio
- * capture there and may look at it again.
+ * capture there and may look at it again. The folder also holds `agy`'s
+ * transcript of the conversation; the home is this process's alone, so the
+ * only conversation the model can reread there is the one it is in.
  */
 export function conversationDirectory(home: string): string {
   return path.join(home, ".gemini", "antigravity-cli", "brain");

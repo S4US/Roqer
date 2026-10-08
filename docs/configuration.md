@@ -127,6 +127,14 @@ browser. When Google shows you a code, paste it into Settings and Roqer hands
 it to the CLI. The CLI keeps the sign-in itself; on Windows it is stored in
 the Credential Manager and shared by every Antigravity app, so if you already
 signed in to the Antigravity CLI, desktop app or IDE, Roqer finds you connected.
+Roqer asks for this sign-in, and checks the account, through the CLI's
+`AGY_CLI_CDE_AUTH_ACTION` variable (`login` and `check`), which Google uses
+for its own hosted environments but does not document. If an Antigravity
+update changes it, the account check falls back to `/usage` and Connect says
+it got no sign-in address; signing in with `agy` in a terminal still works.
+Where the CLI keeps its sign-in in a file rather than the system keyring (over
+SSH, in WSL or a container, or on Linux without a keyring), Roqer's runs cannot
+see it, because they use a private home folder; Roqer is tested on Windows.
 
 Roqer runs each `agy` process with a private home folder of
 its own, created for that process in the system temp folder and deleted when
