@@ -335,13 +335,14 @@ export class OpenAiChatTurns implements TurnTransport {
     };
     const messages = requestMessages(request, replay);
     if (firstMatched !== undefined && firstMatched > 0) this.produced = this.produced.slice(firstMatched);
+    const isOpenCode = this.options.baseUrl.includes("opencode.ai");
     return { body: {
       model: request.modelId,
       messages,
       stream: true,
       stream_options: { include_usage: true },
       ...(maxOutput === undefined ? {} : { [outputLimitField(this.options.baseUrl)]: maxOutput }),
-      ...(this.options.reasoning ? { reasoning_effort: request.reasoningEffort } : {}),
+      ...(this.options.reasoning && (!isOpenCode || request.reasoningEffort !== "none") ? { reasoning_effort: request.reasoningEffort } : {}),
       ...(request.tools.length === 0 ? {} : {
         tools: request.tools.map((tool) => ({
           type: "function",

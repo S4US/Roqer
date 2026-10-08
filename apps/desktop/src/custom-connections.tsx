@@ -57,6 +57,7 @@ export type FreeModelOption = Readonly<{
   contextWindow: number;
   category: "opencode";
   description: string;
+  efforts?: readonly CustomReasoningEffort[];
 }>;
 
 export const FREE_MODEL_OPTIONS: readonly FreeModelOption[] = [
@@ -66,7 +67,8 @@ export const FREE_MODEL_OPTIONS: readonly FreeModelOption[] = [
     displayName: "Space Bunny (Free · 1M)",
     contextWindow: 1_000_000,
     category: "opencode",
-    description: "Built-in free 1M-context model on OpenCode Zen (verified tool-calling, no key required)",
+    description: "Built-in free 1M-context reasoning model on OpenCode Zen (verified tool-calling, no key required)",
+    efforts: ["minimal", "low", "medium", "high", "xhigh", "max"],
   },
 ];
 
@@ -308,7 +310,7 @@ export function EndpointPage({ connection, onBack, onSaved, onRemoved, onDirtyCh
           id: m.id,
           displayName: m.displayName,
           images: true,
-          efforts: [],
+          efforts: m.efforts ?? ["minimal", "low", "medium", "high", "xhigh", "max"],
           contextWindow: m.contextWindow,
         }))
       : draft.models;
@@ -536,7 +538,7 @@ export function EndpointPage({ connection, onBack, onSaved, onRemoved, onDirtyCh
                   id: opt.id,
                   displayName: opt.displayName,
                   images: true,
-                  efforts: [],
+                  efforts: opt.efforts ?? ["minimal", "low", "medium", "high", "xhigh", "max"],
                   contextWindow: opt.contextWindow,
                 }));
                 update({ models: [...draft.models, ...added] });

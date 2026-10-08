@@ -31,6 +31,8 @@ test("a model key splits at the connection, so model ids with colons survive", (
   assert.deepEqual(parseCustomModelKey(key), { connectionId: "conn-abcd1234", modelId: "qwen2.5-coder:32b" });
   assert.deepEqual(parseCustomModelKey("conn-abcd1234:deepseek/deepseek-chat"),
     { connectionId: "conn-abcd1234", modelId: "deepseek/deepseek-chat" });
+  assert.deepEqual(parseCustomModelKey("conn-opencode-zen:space-bunny-free"),
+    { connectionId: "conn-opencode-zen", modelId: "space-bunny-free" });
   assert.equal(parseCustomModelKey("gpt-5"), null);
   assert.equal(parseCustomModelKey("conn-abcd1234:has space"), null);
   // Within the run request's 100-character model field.

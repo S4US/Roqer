@@ -132,7 +132,7 @@ export const DEFAULT_OPENCODE_CONNECTION: CustomConnection = {
       id: "space-bunny-free",
       displayName: "Space Bunny (Free · 1M)",
       images: true,
-      efforts: [],
+      efforts: ["minimal", "low", "medium", "high", "xhigh", "max"],
       contextWindow: 1_000_000,
     },
   ],
@@ -171,7 +171,7 @@ export type CustomModelImportResult =
   | Readonly<{ ok: true; modelIds: readonly string[] }>
   | Readonly<{ ok: false; message: string }>;
 
-const CONNECTION_ID = /^conn-[a-z0-9]{8}$/;
+const CONNECTION_ID = /^conn-[a-z0-9-]{8,32}$/;
 /** Printable, no whitespace: every id a real endpoint uses fits, and nothing that could split a header or a path. */
 const MODEL_ID = new RegExp(`^[\\x21-\\x7e]{1,${MAX_CUSTOM_MODEL_ID_CHARACTERS}}$`);
 
