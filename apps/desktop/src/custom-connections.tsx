@@ -62,32 +62,18 @@ export type FreeModelOption = Readonly<{
 export const FREE_MODEL_OPTIONS: readonly FreeModelOption[] = [
   // OpenCode Zen free models
   {
-    id: "opencode/zen-free",
-    displayName: "OpenCode Zen Free",
+    id: "space-bunny-free",
+    displayName: "Space Bunny Free (Verified)",
     contextWindow: 128_000,
     category: "opencode",
-    description: "Curated free coding model on OpenCode Zen",
-  },
-  {
-    id: "mimo-v2-pro-free",
-    displayName: "MiMo V2 Pro Free",
-    contextWindow: 128_000,
-    category: "opencode",
-    description: "High-reasoning free agent model for coding tasks",
-  },
-  {
-    id: "minimax-m2.5-free",
-    displayName: "MiniMax M2.5 Free",
-    contextWindow: 128_000,
-    category: "opencode",
-    description: "Fast free model for code generation and analysis",
+    description: "Active free model on OpenCode Zen (tool-calling verified, no key required)",
   },
   {
     id: "big-pickle",
-    displayName: "Big Pickle Free",
+    displayName: "Big Pickle (Needs Zen Key)",
     contextWindow: 128_000,
     category: "opencode",
-    description: "Lightweight free model on OpenCode Zen",
+    description: "Requires an API key from opencode.ai/zen (OpenCode gates anonymous access)",
   },
 
   // OpenRouter free models
@@ -362,7 +348,7 @@ export function EndpointPage({ connection, onBack, onSaved, onRemoved, onDirtyCh
   const applyPreset = (preset: Preset) => {
     const isNew = draft.models.length === 0;
     const defaultModels = preset.name === "OpenCode Zen" && isNew
-      ? FREE_MODEL_OPTIONS.filter((m) => m.category === "opencode").map((m) => draftModel({
+      ? FREE_MODEL_OPTIONS.filter((m) => m.id === "space-bunny-free").map((m) => draftModel({
           id: m.id,
           displayName: m.displayName,
           images: true,

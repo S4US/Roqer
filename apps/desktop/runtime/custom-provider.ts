@@ -174,12 +174,18 @@ export async function listEndpointModels(
   apiKey: string | null,
   fetchImpl: typeof globalThis.fetch = globalThis.fetch,
 ): Promise<CustomModelImportResult> {
+  const isOpenCode = connection.baseUrl.includes("opencode.ai");
   const headers: Record<string, string> = { accept: "application/json" };
   if (connection.format === "anthropic") {
     headers["anthropic-version"] = ANTHROPIC_VERSION;
     if (apiKey !== null) headers["x-api-key"] = apiKey;
   } else if (apiKey !== null) {
     headers.authorization = `Bearer ${apiKey}`;
+  } else if (isOpenCode) {
+    headers.authorization = "Bearer public";
+  }
+  if (isOpenCode) {
+    headers["user-agent"] = "opencode/1.18.30";
   }
   const url = endpointUrl(connection.baseUrl, connection.format === "anthropic" ? "models?limit=1000" : "models");
   const controller = new AbortController();
