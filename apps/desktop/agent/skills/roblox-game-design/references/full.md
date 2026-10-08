@@ -2,11 +2,11 @@
 
 Structural craft: core loops, tutorials/FTUE, level design, economies, retention phases, juice, player-type balance, grind avoidance, curation readiness.
 
-Sections 1–8 are design guidance; sections 9 and 10 link to Roblox's Today's Picks and Moments posts.
+Sections 1–8 are design guidance; sections 9 and 10 summarize Roblox's Today's Picks and Moments posts (listed in this skill's sources).
 
 **Scope boundaries (cross-references):**
 - Funnel metrics, discovery algorithms, experiments, LiveOps cadence, monetization packaging → `roblox-growth-design`
-- Persuasion mechanics: first-minute timelines, cognitive effects, reward-schedule detail, pricing psychology, RNG/pity, community loops → `roblox-player-psychology` (reinforcement schedules are covered there; one-line summary in §6 here)
+- Persuasion mechanics: first-minute timelines, cognitive effects, reward-schedule detail, pricing psychology, RNG/pity, community loops → `roblox-player-psychology` (reinforcement schedules are covered there; one-line summary in §8 here)
 - Juice/particle implementation in Luau → `roblox-animation-vfx`
 - Economy telemetry and dashboards → `roblox-analytics`
 
@@ -24,7 +24,7 @@ A game must function at three time scales **simultaneously**; each layer only wo
 
 **Design rules of thumb:**
 - Diagnose upward, build downward. If D1 is bad, the problem is almost always layer 1 or 2, never layer 3.
-- The core loop is the *rational* contract ("is this functional and fair?"); juice and emotional design (§7) are what make it *felt*. Players join for mechanics and stay for the emotions those mechanics evoke.
+- The core loop is the *rational* contract ("is this functional and fair?"); juice and emotional design (§6) are what make it *felt*. Players join for mechanics and stay for the emotions those mechanics evoke.
 - Every action in the core loop needs immediate, clear feedback; without feedback the psychological loop breaks (sense of control collapses).
 - Shorten the time to the first emotional peak (the "aha!" moment). Everything in the first session should drive toward it.
 
@@ -245,11 +245,13 @@ Summarizes Roblox's official DevForum guidance on **Today's Picks**, the human-c
 
 **Baseline requirements:**
 - Full compliance with Roblox Community Standards and Terms of Use.
-- **Mobile must work**: a large share of Today's Picks traffic is mobile; a broken mobile UI is an automatic disqualifier. Play well on phone, PC, and console.
-- Localization (multi-language support) strengthens the case for global curation.
-- Accurate, high-quality store metadata: icon, thumbnails, description that honestly represent gameplay.
+- Pass Roblox's safety review; thumbnails meet policy guidelines.
+- Accurate genre, subgenre, and maturity tagging, and honest positioning: themes, tone, and mechanics match the description, thumbnails, and trailers.
+- No bugs that make the game unplayable, and it runs on low-end or older devices.
+- Regular upkeep: updates (typically at least monthly), registered as experience events, plus bug fixes and community engagement.
+- Monetization (Robux spent) does not affect selection.
 
-**Process:** a mix of algorithmic discovery and manual applications/nominations via Roblox-provided survey links; curators are humans looking at your store page and your game.
+**Process:** communicating with Roblox is required to be considered; the nomination form is optional and only the owner can nominate. Unreleased games can be considered if curators get early playtest access.
 
 **Design implications:** the curation checklist is essentially this skill in audit form: FTUE (§3), polish/juice (§6), working core loop (§1), originality, and honest packaging.
 
@@ -257,7 +259,7 @@ Summarizes Roblox's official DevForum guidance on **Today's Picks**, the human-c
 
 ## 10. Roblox Moments: Clip-Based Discovery (official)
 
-Summarizes the official Roblox Newsroom post **"Roblox Moments: User-Generated Discovery."** Moments is a social, clip-based discovery feed: short vertical video clips captured by players (or developers) surface in Discovery, and viewers can teleport directly into the experience from the clip. It replaces static thumbnails with player-vouched proof of fun and cuts the friction between seeing a game and playing it. This *is* official Roblox material.
+Summarizes the official Roblox Newsroom post **"Roblox Moments: User-Generated Discovery."** Moments is a clip-based discovery feed, itself a Roblox experience in beta: players record and save gameplay clips up to 30 seconds, and viewers can jump from a clip into the experience. At launch it is limited to users 13 or older and reached from Search and the More tab, with Home placements planned. Developers get a Captures API now, with Upload and Recommendation APIs announced. This *is* official Roblox material; it adds player-vouched proof of fun alongside thumbnails rather than replacing them.
 
 **Design for the camera: make your game clippable:**
 - **Design clippable peak events**: visually distinct, dramatic moments (a massive boss explosion, a synergy buff firing, a rare pull) that read at a glance in a vertical crop.
@@ -265,7 +267,7 @@ Summarizes the official Roblox Newsroom post **"Roblox Moments: User-Generated D
 - **High-intensity visuals pay off**: juice (§6) is now a discovery surface, not just polish: clips of juicy moments vouch for your game better than studio trailers, because a real player laughing/achieving carries trust.
 - **Capture & share tools**: make it easy for players to record and share peak moments; every share is an organic acquisition loop.
 
-**Strategic stack:** Moments clips create desire → teleport button satisfies it → Today's Picks badge (§9) seals trust → the retention stack (§1–2) keeps players there.
+**Strategic stack:** Moments clips create desire → jumping in from the clip satisfies it → curation in Today's Picks (§9) adds reach → the retention stack (§1–2) keeps players there.
 
 ---
 

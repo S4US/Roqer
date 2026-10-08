@@ -28,6 +28,6 @@ Load for the structural craft of a Roblox experience: core loop and meta-game ar
 - **Economy**: every source needs a sink; soft/hard/social currencies; prices must scale with the power curve; watch hoarding, churn at choke points, currency devaluation.
 - **Anti-grind**: grind is a state of mind, not a mechanic. Fix with juice, skill ceilings, and measurable chunks.
 - **Bartle**: Achievers/Explorers/Socializers/Killers form an ecosystem; over-serve one and the others leave.
-- **Field data**: measured onboarding/monetization/retention numbers (2026; see full.md).
+- **Field data**: anecdotal onboarding/monetization/retention numbers from developer reports (2026; see full.md).
 
 > Full framework details, checklists, case studies (Stardew, Hades, Artifact), and the curation/Moments prep: [references/full.md](references/full.md)
