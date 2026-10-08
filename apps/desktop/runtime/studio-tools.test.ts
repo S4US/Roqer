@@ -790,6 +790,130 @@ test("a failed automatic read-back reports unverified without undoing a successf
   assert.match(result.text, /automatic read-back failed: Studio disconnected/);
 });
 
+test("a file-backed edit still pending delivery to Studio is saved, not a failed Studio read-back", async () => {
+  const target = "game.ServerScriptService.Main";
+  const { context, changes, evidence, calls } = contextWith([
+    ok({ source: 'print("before")', sourceRevision: "r1" }),
+    ok({
+      success: true,
+      revision: "r2",
+      previousRevision: "r1",
+      saved: { file: "src/server/Main.server.luau", sync: "pending" },
+      hint: "The file is saved. Rojo answers on port 34872 but Studio has not received the change yet; check the Rojo plugin is connected.",
+    }),
+  ]);
+  const run = createStudioToolRunner(context);
+
+  const result = await run("set_script_source", {
+    instancePath: target,
+    source: 'print("after")',
+    expectedRevision: "r1",
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(changes.length, 1);
+  assert.equal(changes[0].summary, "Saved to src/server/Main.server.luau; Rojo has not delivered it to Studio yet.");
+  assert.equal(evidence.length, 1, "no failed Studio read-back is recorded");
+  assert.equal(evidence[0].passed, undefined, "neither a Studio-confirmed pass nor a failure; just not yet known");
+  assert.match(evidence[0].detail ?? "", /Rojo has not delivered the change to Studio yet/);
+  assert.equal(
+    calls.filter((call) => call.tool === "get_script_source").length,
+    1,
+    "only the context-widening read; no automatic read-back for a pending sync",
+  );
+  assert.match(
+    result.text,
+    /Saved to src\/server\/Main\.server\.luau; Rojo has not delivered it to Studio yet\. Do not retry or force it into Studio\./,
+  );
+});
+
+test("a file-backed edit that diverged from Studio is saved without a failed Studio read-back", async () => {
+  const target = "game.ServerScriptService.Main";
+  const { context, changes, evidence, calls } = contextWith([
+    ok({ source: 'print("before")', sourceRevision: "r1" }),
+    ok({
+      success: true,
+      revision: "r2",
+      previousRevision: "r1",
+      saved: { file: "src/server/Main.server.luau", sync: "diverged" },
+      hint: "The file is saved, but the script in Studio changed to something else meanwhile. Read the script before editing again.",
+    }),
+  ]);
+  const run = createStudioToolRunner(context);
+
+  const result = await run("set_script_source", {
+    instancePath: target,
+    source: 'print("after")',
+    expectedRevision: "r1",
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(changes[0].summary, "Saved to src/server/Main.server.luau; the script in Studio changed meanwhile.");
+  assert.equal(evidence.length, 1, "no failed Studio read-back is recorded");
+  assert.equal(evidence[0].passed, undefined, "neither a Studio-confirmed pass nor a failure; just not yet known");
+  assert.match(evidence[0].detail ?? "", /the script in Studio changed to something else meanwhile/);
+  assert.equal(
+    calls.filter((call) => call.tool === "get_script_source").length,
+    1,
+    "only the context-widening read; no automatic read-back for a diverged sync",
+  );
+  assert.match(
+    result.text,
+    /Saved to src\/server\/Main\.server\.luau; the script in Studio changed meanwhile\. Read both/,
+  );
+});
+
+test("a file-backed edit that synced immediately keeps its automatic Studio verification", async () => {
+  const target = "game.ServerScriptService.Main";
+  const { context, changes, evidence } = contextWith([
+    ok({ source: 'print("before")', sourceRevision: "r1" }),
+    ok({
+      success: true,
+      revision: "r2",
+      previousRevision: "r1",
+      saved: { file: "src/server/Main.server.luau", sync: "synced" },
+    }),
+    ok({ source: 'print("after")', sourceRevision: "r2" }),
+  ]);
+  const run = createStudioToolRunner(context);
+
+  const result = await run("set_script_source", {
+    instancePath: target,
+    source: 'print("after")',
+    expectedRevision: "r1",
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(changes[0].summary, "Saved to src/server/Main.server.luau; Studio has the change.");
+  assert.equal(evidence.length, 1);
+  assert.equal(evidence[0].passed, true);
+  assert.match(result.text, /verified revision r2/);
+});
+
+test("a studio-only script edit says it was not saved to the linked project", async () => {
+  const target = "game.ServerScriptService.Main";
+  const { context, changes } = contextWith([
+    ok({ source: 'print("before")', sourceRevision: "r1" }),
+    ok({
+      success: true,
+      sourceRevision: "r2",
+      persistence: "studio_only",
+      persistenceNote: "game.ServerScriptService.Main could not be matched to the project",
+    }),
+    ok({ source: 'print("after")', sourceRevision: "r2" }),
+  ]);
+  const run = createStudioToolRunner(context);
+
+  await run("set_script_source", {
+    instancePath: target,
+    source: 'print("after")',
+    expectedRevision: "r1",
+  });
+
+  assert.equal(changes.length, 1);
+  assert.equal(changes[0].summary, "Edited the script in Studio only; it is not saved to the linked Rojo project.");
+});
+
 test("successful runtime observations are recorded with distinct evidence dimensions", async () => {
   const screenshot = {
     ...ok({ width: 800, height: 600 }),

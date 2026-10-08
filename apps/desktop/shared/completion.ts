@@ -76,6 +76,8 @@ export type GateEvidence = {
   kind: string;
   title: string;
   passed?: boolean;
+  /** Read in place of the generic "unverified-change" phrasing when a change is not verified but already explains why. */
+  detail?: string;
   metadata?: ReadonlyArray<{ label: string; value: string }>;
   requirement?: RunEvidenceRequirement;
   taskId?: string;
@@ -117,6 +119,33 @@ function changeIsVerified(change: GateChange, evidence: readonly GateEvidence[])
     (change.revisionAfter === undefined ||
       item.metadata?.some((entry) =>
         entry.label === REVISION_AFTER_LABEL && entry.value === change.revisionAfter) === true));
+}
+
+/**
+ * The most specific thing already known about why a change is not verified,
+ * when the write itself recorded one.
+ *
+ * A file-backed edit still waiting for Rojo to deliver it, or one Studio
+ * diverged from before it arrived, already explains itself at the same
+ * revision this change produced, with `passed` left unset rather than true
+ * or false — it is neither a Studio-confirmed pass nor a failure, just not
+ * yet known. Repeating the generic "was written but not read back" phrase
+ * over it would contradict what the run already reported about itself, so
+ * that explanation is used instead whenever one is on record.
+ */
+function unverifiedChangeExplanation(
+  change: GateChange,
+  evidence: readonly GateEvidence[],
+): string | undefined {
+  return evidence.find((item) =>
+    item.kind === "verification" &&
+    item.passed !== true &&
+    item.detail !== undefined &&
+    (item.changeKind === undefined || item.changeKind === change.kind) &&
+    item.title === change.target &&
+    (change.revisionAfter === undefined ||
+      item.metadata?.some((entry) =>
+        entry.label === REVISION_AFTER_LABEL && entry.value === change.revisionAfter) === true))?.detail;
 }
 
 /** True when the run collected at least one passing runtime observation. */
@@ -240,11 +269,11 @@ export function evaluateCompletion(input: GateInput): CompletionVerification {
     if (changeIsVerified(change, input.evidence)) continue;
     issues.push({
       code: "unverified-change",
-      detail: change.kind === "properties"
+      detail: unverifiedChangeExplanation(change, input.evidence) ?? (change.kind === "properties"
         ? `${change.target} changed properties, but Studio's atomic value verification was not recorded.`
         : change.kind === "instance"
           ? `${change.target} was built, but Studio's read-back of the build was not recorded.`
-          : `${change.target} was written but not read back at the revision the write reported.`,
+          : `${change.target} was written but not read back at the revision the write reported.`),
     });
   }
 

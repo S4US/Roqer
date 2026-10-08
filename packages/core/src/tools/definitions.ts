@@ -839,14 +839,27 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
   {
     name: 'manage_instance',
     category: 'write',
-    description: 'Use to manage Studio processes or list place revisions.',
+    description: 'Use to manage Studio processes, list place revisions, or link a Rojo project.',
     inputSchema: {
       type: 'object',
       properties: {
         action: {
           type: 'string',
-          enum: ['launch', 'authorize', 'complete', 'close', 'status', 'list_place_versions'],
+          enum: [
+            'launch',
+            'authorize',
+            'complete',
+            'close',
+            'status',
+            'list_place_versions',
+            'link_project',
+            'unlink_project'
+          ],
           description: 'Operation; authorize and complete only resume identity launches.'
+        },
+        project: {
+          type: 'string',
+          description: 'Rojo *.project.json path; required for link_project.'
         },
         source: {
           type: 'string',

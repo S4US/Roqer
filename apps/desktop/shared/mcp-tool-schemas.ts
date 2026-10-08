@@ -44,10 +44,10 @@ export type ToolSchema = {
 };
 
 /** sha256 of `packages/core/src/tools/definitions.ts` with LF newlines. */
-export const TOOL_DEFINITIONS_DIGEST = "1b7723891ea5f399fddb2468365473ecbd73f66e9118c82b86bf6bbf5c00a3bb";
+export const TOOL_DEFINITIONS_DIGEST = "05aa58e0c89a443f6926e579972e5e8964f5d5378c435d4a4af2fd35d893f2aa";
 
 /** What a bridge built from these definitions reports as `toolCatalogDigest` on `/health`. */
-export const TOOL_CATALOG_DIGEST = "81a46fb69d9bd5cf7357ae30bf8019fa46a6190b4b7213df292dd802e2e0563f";
+export const TOOL_CATALOG_DIGEST = "3b333c13ffff14b4fd8f9df799ff675d5f2f11fc79acd1d3a936e8c1498adf46";
 
 export const TOOL_SCHEMAS: Readonly<Record<string, ToolSchema>> = {
   animation: {
@@ -443,9 +443,10 @@ export const TOOL_SCHEMAS: Readonly<Record<string, ToolSchema>> = {
     ],
   },
   manage_instance: {
-    description: "Use to manage Studio processes or list place revisions.",
+    description: "Use to manage Studio processes, list place revisions, or link a Rojo project.",
     parameters: [
-      { name: "action", type: "string", required: true, enumValues: ["launch", "authorize", "complete", "close", "status", "list_place_versions"], description: "Operation; authorize and complete only resume identity launches." },
+      { name: "action", type: "string", required: true, enumValues: ["launch", "authorize", "complete", "close", "status", "list_place_versions", "link_project", "unlink_project"], description: "Operation; authorize and complete only resume identity launches." },
+      { name: "project", type: "string", required: false, description: "Rojo *.project.json path; required for link_project." },
       { name: "source", type: "string", required: false, enumValues: ["baseplate", "local_file", "published_place", "place_revision"], description: "Launch source; local_file needs path, published needs place_id." },
       { name: "local_place_file", type: "string", required: false, description: ".rbxl or .rbxlx path; required for local_file." },
       { name: "place_id", type: "number", required: false, description: "Place ID; required for published sources and version listing." },

@@ -1,4 +1,4 @@
-import type { RunChange } from "../shared/run-events";
+import { ROJO_SAVE_DIVERGED_SUFFIX, ROJO_SAVE_PENDING_SUFFIX, type RunChange } from "../shared/run-events";
 
 /**
  * The reader-side model of a diff.
@@ -389,6 +389,22 @@ export function splitChangeGroup(group: ChangeGroup): { latest?: RunChange; earl
     latest: group.changes[group.changes.length - 1],
     earlier: group.changes.slice(0, -1),
   };
+}
+
+/**
+ * Whether a script change actually reached Studio, so "Open in Studio" never
+ * points at an edit Studio has not seen. A save still pending delivery, or one
+ * Studio diverged from before it arrived, changed only the project's file;
+ * opening Studio there would show the old script and imply the edit landed.
+ *
+ * studio-tools.ts appends `ROJO_SAVE_PENDING_SUFFIX`/`ROJO_SAVE_DIVERGED_SUFFIX`
+ * (`shared/run-events.ts`) to the summary for exactly those two cases; the
+ * summary carries no other structured field saying so, and checking for the
+ * shared constants here, rather than a copy of the producer's wording, keeps
+ * the two sides from silently drifting apart.
+ */
+export function canOpenInStudio(change: RunChange): boolean {
+  return !change.summary.endsWith(ROJO_SAVE_PENDING_SUFFIX) && !change.summary.endsWith(ROJO_SAVE_DIVERGED_SUFFIX);
 }
 
 /** Preserve event order while giving every changed path one card. */

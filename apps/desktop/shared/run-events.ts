@@ -629,6 +629,18 @@ export function animationSlotLabel(slot: string): string {
 export const SCREENSHOT_VIEW_LABEL = "View";
 export const SCREENSHOT_VIEW_PLAYTEST = "Playtest";
 
+/**
+ * The tail of a script change's `summary` for a Rojo-linked file write whose
+ * `saved.sync` is "pending" or "diverged": studio-tools.ts appends one of
+ * these to "Saved to <file>" when it records the change, and diff-view.ts's
+ * `canOpenInStudio` checks for them to keep "Open in Studio" off a change
+ * Studio never actually received. Shared here, rather than copied as a
+ * regex on either side, so a wording change on one side cannot silently stop
+ * the other from recognizing it.
+ */
+export const ROJO_SAVE_PENDING_SUFFIX = "; Rojo has not delivered it to Studio yet.";
+export const ROJO_SAVE_DIVERGED_SUFFIX = "; the script in Studio changed meanwhile.";
+
 /** A bounded PNG or JPEG data URL: the only previews the host produces. */
 export function isEvidenceImage(value: unknown): value is string {
   return typeof value === "string" &&

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { evaluateCompletion, type CompletionVerification } from "../shared/completion";
+import { evaluateCompletion, REVISION_AFTER_LABEL, type CompletionVerification } from "../shared/completion";
 import type { RunTask } from "../shared/tasks";
 import type {
   RunChange, RunEvent, RunEventBody, RunEvidence, RunOutcome, RunUsage, ToolProposal,
@@ -649,6 +649,74 @@ test("an edited script uses the compact success state only after matching verifi
     true,
     "the failure stays visible, but a verified final state is still compactable",
   );
+});
+
+test("a Rojo-linked edit still pending delivery to Studio is neither applied-and-verified nor a generic failure", () => {
+  const view = fold(stream(
+    started,
+    { type: "change", change: {
+      id: "change-1", kind: "script-source", target: "game.ServerScriptService.Main",
+      summary: "Saved to src/server/Main.server.luau; Rojo has not delivered it to Studio yet.",
+      revisionAfter: "r2",
+    } },
+    { type: "evidence", evidence: {
+      id: "evidence-1", kind: "verification", changeKind: "script-source", title: "game.ServerScriptService.Main",
+      detail: "The file was saved; Rojo has not delivered the change to Studio yet.",
+      metadata: [{ label: REVISION_AFTER_LABEL, value: "r2" }],
+    } },
+    { type: "run-completed", outcome: "completed", summary: "Saved Main." },
+  ));
+
+  // Not the compact "Applied and verified in Studio" badge: Studio has not
+  // actually confirmed this write.
+  assert.equal(runAppliedAndVerified(view), false);
+  // And not a generic complaint either (the original bug this guards against:
+  // a pending save was shown as a run failure with an unrelated-sounding
+  // "written but not read back" message). The card shows this write's own
+  // honest caveat instead.
+  assert.deepEqual(runGateIssues(view), ["The file was saved; Rojo has not delivered the change to Studio yet."]);
+});
+
+test("a Rojo-linked edit that diverged from Studio is neither applied-and-verified nor a generic failure", () => {
+  const view = fold(stream(
+    started,
+    { type: "change", change: {
+      id: "change-1", kind: "script-source", target: "game.ServerScriptService.Main",
+      summary: "Saved to src/server/Main.server.luau; the script in Studio changed meanwhile.",
+      revisionAfter: "r2",
+    } },
+    { type: "evidence", evidence: {
+      id: "evidence-1", kind: "verification", changeKind: "script-source", title: "game.ServerScriptService.Main",
+      detail: "The file was saved, but the script in Studio changed to something else meanwhile.",
+      metadata: [{ label: REVISION_AFTER_LABEL, value: "r2" }],
+    } },
+    { type: "run-completed", outcome: "completed", summary: "Saved Main." },
+  ));
+
+  assert.equal(runAppliedAndVerified(view), false);
+  assert.deepEqual(
+    runGateIssues(view),
+    ["The file was saved, but the script in Studio changed to something else meanwhile."],
+  );
+});
+
+test("a Rojo-linked edit that synced immediately is applied-and-verified exactly as any other read-back", () => {
+  const view = fold(stream(
+    started,
+    { type: "change", change: {
+      id: "change-1", kind: "script-source", target: "game.ServerScriptService.Main",
+      summary: "Saved to src/server/Main.server.luau; Studio has the change.",
+      revisionAfter: "r2",
+    } },
+    { type: "evidence", evidence: {
+      id: "evidence-1", kind: "verification", title: "game.ServerScriptService.Main", passed: true,
+      metadata: [{ label: REVISION_AFTER_LABEL, value: "r2" }],
+    } },
+    { type: "run-completed", outcome: "completed", summary: "Saved Main." },
+  ));
+
+  assert.equal(runAppliedAndVerified(view), true);
+  assert.deepEqual(runGateIssues(view), []);
 });
 
 test("the renderer shows the host's verdict rather than recomputing one", () => {

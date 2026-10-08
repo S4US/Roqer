@@ -160,7 +160,10 @@ describe('MCP v2 tool runtime', () => {
     // The action branches on solo_playtest added about 200: a recorded run
     // started a playtest without mode because it looked optional, and each
     // miss cost a round trip to learn the rule.
-    expect(serialized.length).toBeLessThanOrEqual(50_850);
+    // Linking a Rojo project added about 40 characters to manage_instance
+    // instead of a new tool: script edits on a linked place are saved to the
+    // project's files.
+    expect(serialized.length).toBeLessThanOrEqual(50_900);
     expect(catalog.filter((tool) => tool.outputSchema)).toHaveLength(51);
     expect(catalog.every((tool) => tool.description.length <= 120)).toBe(true);
     expect(inspectorCatalog).toHaveLength(25);
