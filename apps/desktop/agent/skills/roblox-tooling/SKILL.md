@@ -42,6 +42,6 @@ Load for filesystem workflows, tool/package pins, linting, sourcemaps, and CI.
 - Generate a Rojo sourcemap for editor tooling when the project needs Roblox-aware navigation.
 - CI must check test results and expected counts, not merely exit codes. Separate logic, file/HTTP, and engine suites; see full.md.
 
-**Source-of-truth first.** Identify Studio vs files before editing; never assume they match. `rojo syncback` pulls saved-place edits, not live two-way sync; preview with dry-run/list. Follow existing tooling; do not impose optional tools. TestEZ is archived: keep where used, not as a new default. See full.md §§1b–1c.
+**Source-of-truth first.** Identify Studio vs files before editing; never assume they match. `rojo syncback` pulls saved-place edits, not live two-way sync; the user runs it (preview with dry-run/list), and it does not resolve a Roqer `rojo_conflict`. Follow existing tooling; do not impose optional tools. TestEZ is archived: keep where used, not as a new default. See full.md §§1b–1c.
 
 **Need the details?** Load `references/full.md` for setup, file layout, and CI examples.

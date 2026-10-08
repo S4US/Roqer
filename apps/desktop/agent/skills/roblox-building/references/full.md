@@ -51,7 +51,7 @@ Choose the construction per component, not once per build. A single area can mix
 
 1. **Native:** Parts, WedgeParts, CornerWedgeParts, and CSG for ground, blocks, walls, stairs, collision, triggers, and any shape the style keeps geometric. This is often most of a stylized map.
 2. **Reuse:** search the place for a compatible model before making a new one, and clone it rather than rebuilding it.
-3. **Creator Store:** `search_assets`, then `get_asset_details`, `get_asset_thumbnail`, or `preview_asset` to shortlist, then `insert_asset`. Record ID, creator, type, price, and intended parent. For cross-owner or paid results, get explicit consent before insertion. The Store is a production source for common props, not only a prototype shortcut ([Toolbox guide](https://create.roblox.com/docs/projects/assets/toolbox)), but judge each candidate before inserting it: its creator, previews, description, script count and geometry complexity. Popularity and a verified creator are signals, not proof of safety or fit. Use a Store asset when it fits the game's scale and style without heavy rework; build the piece when the mechanic, style, rights or performance budget demand it. `insert_asset` strips scripts and package links before parenting, so an asset whose behavior lives in its scripts arrives inert; Roblox warns that [third-party models can contain backdoors](https://create.roblox.com/docs/scripting/security/third-party-vulnerabilities), so recreate any behavior you need rather than restoring its code (see `roblox-security`). After insertion check pivot, player scale, collision, anchoring, textures and any nested asset the model loads, and playtest traversal around it: a model that looks right in its thumbnail can still block movement.
+3. **Creator Store:** `search_assets`, then `get_asset_details`, `get_asset_thumbnail`, or `preview_asset` to shortlist, then `insert_asset`. Record ID, creator, type, price, and intended parent. For cross-owner or paid results, get explicit consent before insertion. When the `blender` tool is offered, visual pieces are modeled in Blender instead ([What gets modeled](mesh-boundary.md)), so use the Store then only when the user asks for a Store asset. Without Blender, the Store is a production source for common props, not only a prototype shortcut ([Toolbox guide](https://create.roblox.com/docs/projects/assets/toolbox)), but judge each candidate before inserting it: its creator, previews, description, script count and geometry complexity. Popularity and a verified creator are signals, not proof of safety or fit. Use a Store asset when it fits the game's scale and style without heavy rework; build the piece when the mechanic, style, rights or performance budget demand it. `insert_asset` strips scripts and package links before parenting, so an asset whose behavior lives in its scripts arrives inert; Roblox warns that [third-party models can contain backdoors](https://create.roblox.com/docs/scripting/security/third-party-vulnerabilities), so recreate any behavior you need rather than restoring its code (see `roblox-security`). After insertion check pivot, player scale, collision, anchoring, textures and any nested asset the model loads; when it sits on a route players walk, playtest traversal around it, because a model that looks right in its thumbnail can still block movement.
 4. **Generated mesh:** `generate_model` for a custom textured prop, from a prompt or a PNG reference. Bound `size` and `max_triangles`; use `schema_groups` when the model needs separately named parts (a lid, a door, wheels). The result is staged in `ServerStorage.__MCPGeneratedModels`, not in Workspace, so move or clone it into the build root. Do not treat it as accepted until inspected.
 5. **Upload:** `upload_asset` action `upload` publishes a permitted local file (Decal, Model, Audio, Animation, Video) to the user's Roblox account. It needs an Open Cloud key and creator; if none are configured, report that instead of retrying and point the user to Roqer's Settings → Roblox → Open Cloud. Never upload external content without permission. If it is still processing after the bounded wait, keep the returned `operation_id` and call the same operation with action `status` later instead of creating a duplicate. Report the completed asset ID and Roblox moderation state.
 6. **Place:** parent the result under the named build root, set pivot/transform, and read back class, descendants, bounds, materials, collision, anchoring, and asset provenance.
@@ -64,7 +64,7 @@ Choose the construction per component, not once per build. A single area can mix
 `MeshPart` is a `BasePart` with a custom mesh. Treat the visible mesh, its appearance, and its collision shape as separate review surfaces:
 
 - read back `MeshId`/`MeshContent`, `MeshSize`, transform, bounds, `Anchored`, `CanCollide`, `CanTouch`, `CanQuery`, and `CollisionFidelity`;
-- inspect a child `SurfaceAppearance` and its `ColorMap`, normal, metalness, roughness, and emissive maps when present; PBR appearance depends on device and graphics quality, so preview representative quality levels;
+- inspect a child `SurfaceAppearance` and its `ColorMap`, normal, metalness, roughness, and emissive maps when present; PBR appearance depends on device and graphics quality, and the bridge cannot switch graphics quality, so check device classes with `set_device_simulator` or `capture_device_matrix` where that helps and report other quality levels as unverified;
 - do not imply that a runtime script can repair `MeshId` or most PBR maps. Resolve authoring/import issues before placement, then verify after insertion;
 - record source and intended use for each non-original mesh. A repeated asset key may indicate reuse, but static equality is not proof of license or quality.
 
@@ -422,15 +422,15 @@ Treat a map as a player path, not only a geometry tree:
 2. From every spawn, verify that the next landmark or affordance is visible, the camera is not inside geometry, and the player is not facing a wall or hazard.
 3. Give each critical action a readable world cue and feedback. Route prompts and input to their owning skills rather than encoding progress in decoration alone.
 4. Check the return path and recovery from falls, death, wrong turns, and interrupted traversal.
-5. Playtest from the player camera at representative movement speeds. A top-down editor view cannot prove wayfinding or spatial onboarding.
+5. When the request needs runtime evidence, playtest from the player camera at representative movement speeds; otherwise say wayfinding is unverified. A top-down editor view cannot prove wayfinding or spatial onboarding.
 
-Use runtime observation or a small funnel to judge onboarding success. Static route structure can reveal what to test, not whether players understand it.
+Judging whether players actually understand the route needs runtime observation or a funnel on a published experience; in Studio, report onboarding success as unverified. Static route structure can reveal what to test, not whether players understand it.
 
 For world interactions, prefer `ProximityPrompt` when cross-device button or hold semantics fit. Use `ClickDetector` for simple click interactions and `Touched` only when physical contact is the mechanic. `BillboardGui`, `SurfaceGui`, and `Highlight` provide cues, not authority. Validate outcomes on the server from current distance, state, cooldown, and ownership.
 
 ## Large-Place Readback
 
-For a large root, do not use an unbounded "dump everything" readback as the only check. Partition the inspection by build root or zone and collect:
+For a large root, do not use an unbounded "dump everything" readback as the only check. Partition the inspection by build root or zone and collect, with `get_scene_analysis` where it suffices and otherwise the bounded read-only query in [World intent](world-intent.md):
 
 - instance and descendant counts, plus bounds and pivot for each scope;
 - class counts for structural and effect-heavy classes such as `MeshPart`, `UnionOperation`, `SurfaceAppearance`, `Attachment`, and `ParticleEmitter`;
@@ -460,7 +460,7 @@ PPS.PromptTriggered:Connect(function(prompt, player)
 end)
 ```
 
-Server scripts can also create and configure prompts programmatically; `TriggerEnded` on the prompt itself pairs with `Triggered` for release-to-cancel mechanics. For wiring a prompt onto a held or interactive model, see [Gameplay assembly](gameplay-assembly.md).
+Server scripts can also create and configure prompts programmatically; `TriggerEnded` on the prompt itself pairs with `Triggered` for release-to-cancel mechanics. A global handler fires for every prompt in the game, so dispatch by tag or attribute and validate on the server; per-prompt handlers as in [Gameplay assembly](gameplay-assembly.md) remain fine. For wiring a prompt onto a held or interactive model, see [Gameplay assembly](gameplay-assembly.md).
 
 ## Community ecosystem (leads, not sources)
 

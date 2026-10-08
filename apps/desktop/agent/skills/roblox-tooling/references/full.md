@@ -32,9 +32,9 @@ When working with an agentic tool:
 
 - **Detect the paradigm first.** Ask or check: is this a Rojo project (files-first)? Is the place only open in Studio (Studio-first)? Is there a sync plugin with a local mirror (bidirectional)?
 - **Never assume both sides are in sync.** Before mutating, read from the source of truth, then write to the same side. After an agent changes files, verify Studio reflects it (and vice versa), especially after a reload.
-- **Rojo gotchas:** `rojo serve` watches the filesystem; a script written into Studio by another tool can be overwritten on the next sync, and an agent editing files must run `rojo build` or rely on serve to push. Do not mix MCP-driven Studio edits with a running Rojo serve on the same place without acknowledging which side wins. In Roqer, link the project with `manage_instance` `link_project` first: script edits then save to the file and Rojo syncs them into Studio, as the developer instructions describe.
+- **Rojo gotchas:** `rojo serve` watches the filesystem; a script written into Studio by another tool can be overwritten on the next sync, and an agent editing files from a shell must run `rojo build` or rely on serve to push. Outside Roqer's linked flow, do not mix MCP-driven Studio edits with a running Rojo serve on the same place without acknowledging which side wins. In Roqer, link the project with `manage_instance` `link_project` first: script edits then save to the file and Rojo syncs them into Studio, as the developer instructions describe.
 - **Bidirectional sync gotchas:** conflict resolution is a real decision, not a default. If both sides changed, pick Studio priority or local priority per file and say which; do not apply both silently.
-- **Pulling edits out of Studio (Rojo syncback):** since Rojo 7.7.0, `rojo syncback` is the first-party way to convert instances from a saved place file (`.rbxl`/`.rbxlx`/`.rbxm`/`.rbxmx`, via a required `--input`) into files under the project's mapping. It is an offline file pull from a saved file, not live two-way sync; behavior is controlled by `syncbackRules` in the project file. Preview before writing: `rojo syncback --dry-run --list --input <file>` (the project positional is optional and defaults to the current directory). Normal output goes to stderr; always dry-run first, because syncback can delete or rewrite mapped files.
+- **Pulling edits out of Studio (Rojo syncback):** since Rojo 7.7.0, `rojo syncback` is the first-party way to convert instances from a saved place file (`.rbxl`/`.rbxlx`/`.rbxm`/`.rbxmx`, via a required `--input`) into files under the project's mapping. It is an offline file pull from a saved file, not live two-way sync; behavior is controlled by `syncbackRules` in the project file. Preview before writing: `rojo syncback --dry-run --list --input <file>` (the project positional is optional and defaults to the current directory). Normal output goes to stderr; always dry-run first, because syncback can delete or rewrite mapped files. Syncback is a CLI step the user runs on a saved place file; Roqer cannot run it, and it is not an answer to a `rojo_conflict` refusal, which the developer instructions cover.
 
 ## 1c. Optional ecosystem: name it, do not push
 
@@ -245,6 +245,8 @@ Do not ignore source, lockfiles, configuration, or test fixtures by accident. Ch
 
 ## 11. Documentation indexes for agents
 
+In Roqer, look up the docs with `roblox_studio` `get_roblox_docs`; the URLs below are for people, CI, and agents that have web access.
+
 Roblox publishes LLM-oriented documentation indexes that route an agent to the correct API surface before it starts reading:
 
 - `https://create.roblox.com/docs/llms.txt`: top-level index; use it first.
@@ -304,7 +306,7 @@ Ads note: Ads Manager natively rotates multiple thumbnails as creatives in one c
 
 ### Asset / resource stack (community union)
 
-- Packages/data: wally.run community frameworks (Signal by sleitnick, Janitor, Promise v4); ProfileStore/ProfileService for data; roproxy.com as proxy for Roblox web-API calls from games. (Blueshell_Dev 2026-07-12; Qizzy 2026-07-29)
+- Packages/data: wally.run community frameworks (Signal by sleitnick, Janitor, Promise v4); ProfileStore/ProfileService for data; roproxy.com as proxy for Roblox web-API calls from games (a shared third-party proxy: never send cookies or API keys through it, expect rate limits and outages, and prefer Open Cloud from your own backend). (Blueshell_Dev 2026-07-12; Qizzy 2026-07-29)
 - Figma→Roblox UI: roimport.com (free importer); design at 16:9 for PC, export, scale with UIScale; preview/test UI code without launching the game via hoarcekat or the Vide framework; UI packs preferred over AI-generated UI frames. (Dapathy 2026-08-09; val 2026-07-30; Haze 2026-08-09; Bapo 2026-07-18)
 - AI 3D: Meshy/Tripo3D for image-to-3D (~$1 first month; meshy.ai for bulk small models), but building/modeling is the skill AI handles worst, along with non-basic UI; AI meshes are typically badly over-poly, check vertex counts before import; Blender + Claude/Astra for models, tripo3d for reference-image→3D instead of burning chat usage. (Zriptic 2026-07-10; FuturisticGames 2026-07-15; thug 2026-08-22; WASIMALT/Luna 2026-07-14; CraseDev 2026-09-14; Nyx 2026-09-01)
 - Audio/UI assets: nocapmocap.com (mocap); Moon Animator ($30) + EasyWeld plugin; builtbybit.com templates/asset packs (e.g. SFX megapacks); gvesster.itch.io free icon pack; uiresouces.com UI grid patterns; epicstockmedia.com UI SFX packs; devforum "massive sound kit" (142 categorized sounds); itch.io UI kits (rblx-essentials) for weak GUI skills; Pixabay/Creator Store sounds; RoVisuals free hourglass/icon generator for ad creatives; Vanilla 3 icon set (DevForum) for Studio editor icons. (multiple contributors, Jul–Sep 2026)
@@ -313,7 +315,7 @@ Ads note: Ads Manager natively rotates multiple thumbnails as creatives in one c
 ### AI coding stack consensus
 
 - Practical Roblox-specific workflow: keep the game in the project folder so a new AI session inherits context; connect Studio via MCP so the AI reads real code; rojo with git + selene linting for version-controlled scripting. Studio's MCP is token-hungry; sequential MCP + rojo + Codex is the leaner setup. (Nullborne 2026-07-17; chris 2026-08-23; BPAndrew 2026-07-10; Gordito 2026-07-15)
-- **Studio MCP bug warning: collaborative editing can kill the Studio session and unsaved data when using Studio MCP; turn collaborative edits off and keep file backups.** (dalph06, 2026-07-10)
+- **Roblox's built-in Studio MCP bug warning (not Roqer's bridge): collaborative editing can kill the Studio session and unsaved data when using Studio MCP; turn collaborative edits off and keep file backups.** (dalph06, 2026-07-10)
 - Open Cloud API largely removes AI-agent friction: an AI with API access can publish images, create gamepasses/dev products, and set prices itself; "AI as studio assistant" is viable end-to-end. (Nyx, 2026-08-10)
 - Performance debugging with AI: don't prompt "optimize my code"; ask for real diagnostics via MicroProfiler and script profiling to find CPU spikes; Humanoid instances are expensive at scale (hundreds of NPCs need rigs without Humanoids). (terms 2026-08-22; kah 2026-08-21)
 - Local models: Qwen3.8-27B on a 24GB+ Apple Silicon Mac inside an agentic harness was specifically recommended; pairing Studio MCP with local Ollama models was asked about but unconfirmed. (jan 2026-08-20; majorFraud 2026-08-17)
