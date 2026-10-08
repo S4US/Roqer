@@ -121,19 +121,24 @@ Codex's own tools, such as its shell, web search and image viewer, are turned
 off, so the model acts through Roqer's tools and approvals. Codex's file editor
 cannot be turned off, but Codex runs read-only, so any edit it tries is refused.
 
-Antigravity runs need the Antigravity CLI signed in. Roqer cannot drive its
-sign-in, so run `agy` once in a terminal and follow its prompts, then choose
-Connect in Settings. Roqer runs each `agy` process with a private home folder of
+To connect Antigravity, choose Connect next to it in Settings. Roqer starts
+the Antigravity CLI's own sign-in and opens Google's sign-in page in your
+browser. When Google shows you a code, paste it into Settings and Roqer hands
+it to the CLI. The CLI keeps the sign-in itself; on Windows it is stored in
+the Credential Manager and shared by every Antigravity app, so if you already
+signed in to the Antigravity CLI, desktop app or IDE, Roqer finds you connected.
+
+Roqer runs each `agy` process with a private home folder of
 its own, created for that process in the system temp folder and deleted when
 it ends. Your Google sign-in still applies, but your own Antigravity MCP
 servers, plugins, hooks, rules, skills and permission settings are not loaded,
 and Roqer's conversations do not appear in your Antigravity history. Two of your
 settings do carry over, because they are about your account rather than about
 what the agent may do: `useG1Credits` and `enableTelemetry`. Roqer reads your
-settings file but never writes to it. That home's rules
-allow only Roqer's tools. Shell commands, file writes, URL reads and browser
-actions are denied, and anything else needs a review that a headless process
-cannot give. A hook Roqer installs in the same home also refuses each of
+settings file but never writes to it. That home's rules allow only Roqer's
+tools and reads of the files described below. Shell commands, file writes, URL
+reads and browser actions are denied, and anything else needs a review that a
+headless process cannot give. A hook Roqer installs in the same home also refuses each of
 Antigravity's built-in tools before it runs, with a reason the model can read,
 so the model carries on with Roqer's tools. If a tool Roqer does not allow
 still runs, Roqer stops the run. Roqer never passes
@@ -141,8 +146,11 @@ still runs, Roqer stops the run. Roqer never passes
 in your environment is removed, so runs are billed to your subscription and
 never to a key.
 
-The Antigravity CLI reads text only, so a message with an attached image cannot
-run on an Antigravity model; choose a ChatGPT or Claude model for it. Each
+Pictures you attach reach an Antigravity model as files. The CLI takes only
+text as input, so Roqer saves each picture in the run's private folder, under
+a name of its own, and asks the model to open it. The model can open only
+those pictures, the tool definitions, and the images it received from Roqer's
+tools, such as Studio screenshots, which it sees directly. Each
 model in the picker is one of `agy models`, with its effort level in its name
 (for example Gemini 3.8 Flash High and Low), so the effort setting does not
 apply. Antigravity meters Gemini models apart from the Claude and GPT models it

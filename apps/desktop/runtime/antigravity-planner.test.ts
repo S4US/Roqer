@@ -7,7 +7,9 @@ import {
   antigravityResultUsage, antigravityToolPermitted, createAntigravityPlanner, isGateFailure, readAntigravityStep,
   type AntigravitySession,
 } from "./antigravity-planner";
-import { ANTIGRAVITY_MCP_SERVER_NAME, schemaDirectory, type AntigravityHome } from "./antigravity-home";
+import {
+  ANTIGRAVITY_MCP_SERVER_NAME, attachmentDirectory, conversationDirectory, schemaDirectory, type AntigravityHome,
+} from "./antigravity-home";
 import type { AgentDefinition } from "./agent-definition";
 import type { McpToolOutcome } from "./mcp-types";
 import type { PlannerContext } from "./run-engine";
@@ -261,13 +263,46 @@ test("Antigravity fails a turn agy reports as failed", async () => {
   await assert.rejects(() => planner.run(context), /quota exhausted/);
 });
 
-test("Antigravity says it cannot read an attached image instead of dropping it", async () => {
+test("an attached picture is put where the agent may open it, and the message says where", async () => {
   const controller = new AbortController();
-  const { context } = makeContext(controller, { images: [{ name: "ui.png", mediaType: "image/png", data: "QUJD" }] });
-  const fake = fakeLauncher(() => undefined);
+  const { context } = makeContext(controller, {
+    images: [
+      { name: "mockup.png", mediaType: "image/png", data: Buffer.from("PNG-BYTES").toString("base64") },
+      { name: "../../evil\u0007.jpg", mediaType: "image/jpeg", data: Buffer.from("JPEG-BYTES").toString("base64") },
+    ],
+  });
+  const sent: Array<Record<string, unknown>> = [];
+  let files: Array<{ name: string; bytes: string }> = [];
+  const fake = fakeLauncher((child) => child.writeLine(INIT), (child, message) => {
+    sent.push(message);
+    void (async () => {
+      // The pictures are on disk by the time the message naming them arrives.
+      const directory = attachmentDirectory(fake.launches[0].home.workspace);
+      files = await Promise.all((await fs.readdir(directory)).sort().map(async (name) => ({
+        name, bytes: (await fs.readFile(path.join(directory, name))).toString(),
+      })));
+      child.writeLine(step(2, {
+        state: "DONE", step_type: "tool", tool_name: "view_file",
+        tool_info: { name: "view_file", parameters: { AbsolutePath: path.join(directory, "message-1-1.png") } },
+      }));
+      child.writeLine(reply(3, "A mockup."));
+      child.writeLine(result("A mockup."));
+      child.finish(0);
+    })();
+  });
   const planner = createAntigravityPlanner({ ...BASE_OPTIONS, launcher: fake.launcher });
-  await assert.rejects(() => planner.run(context), /cannot read attached images/);
-  assert.equal(fake.launches.length, 0);
+  assert.equal(await planner.run(context), "A mockup.");
+
+  // Named by Roqer, never by the user's file name, and inside the attachment folder.
+  assert.deepEqual(files, [
+    { name: "message-1-1.png", bytes: "PNG-BYTES" },
+    { name: "message-1-2.jpg", bytes: "JPEG-BYTES" },
+  ]);
+  const text = firstText(sent[0]);
+  assert.match(text, /attached 2 pictures to this message\. Open each one with view_file/);
+  assert.ok(text.includes(path.join(attachmentDirectory(fake.launches[0].home.workspace), "message-1-1.png")));
+  assert.match(text, /\(the user's file "mockup\.png"\)/);
+  assert.ok(!text.includes("\u0007"));
 });
 
 test("Antigravity refuses to start without a signed-in account", async () => {
@@ -331,15 +366,21 @@ test("a kept Antigravity session carries the chat's next message, and each run r
   sessions.closeAll();
 });
 
-test("a tool step is permitted only for Roqer's server and its cached schemas", () => {
-  const home = path.resolve("agy-home");
+test("a tool step is permitted only for Roqer's server and the files in its private folders", () => {
+  const root = path.resolve("agy-root");
+  const home = { home: path.join(root, "home"), workspace: path.join(root, "workspace"), remove: async () => undefined };
   const tool = (name: string, parameters: Record<string, unknown>) =>
     readAntigravityStep(step(1, { state: "DONE", step_type: "tool", tool_name: name, tool_info: { name, parameters } }))!;
-  assert.ok(antigravityToolPermitted(tool("call_mcp_tool", { ServerName: ANTIGRAVITY_MCP_SERVER_NAME }), home));
-  assert.ok(!antigravityToolPermitted(tool("call_mcp_tool", { ServerName: "other" }), home));
-  assert.ok(antigravityToolPermitted(tool("view_file", { AbsolutePath: path.join(schemaDirectory(home), "a.json") }), home));
-  assert.ok(!antigravityToolPermitted(tool("view_file", { AbsolutePath: path.join(schemaDirectory(home), "..", "..", "settings.json") }), home));
-  assert.ok(!antigravityToolPermitted(tool("generate_image", {}), home));
+  const permitted = (name: string, parameters: Record<string, unknown>) => antigravityToolPermitted(tool(name, parameters), home);
+  assert.ok(permitted("call_mcp_tool", { ServerName: ANTIGRAVITY_MCP_SERVER_NAME }));
+  assert.ok(!permitted("call_mcp_tool", { ServerName: "other" }));
+  assert.ok(permitted("view_file", { AbsolutePath: path.join(schemaDirectory(home.home), "a.json") }));
+  assert.ok(permitted("view_file", { AbsolutePath: path.join(conversationDirectory(home.home), "c", ".system_generated", "steps", "4", "media_0.png") }));
+  assert.ok(permitted("view_file", { AbsolutePath: path.join(attachmentDirectory(home.workspace), "message-1-1.png") }));
+  assert.ok(!permitted("view_file", { AbsolutePath: path.join(schemaDirectory(home.home), "..", "..", "settings.json") }));
+  assert.ok(!permitted("view_file", { AbsolutePath: path.join(home.workspace, "notes.txt") }));
+  assert.ok(!permitted("view_file", { AbsolutePath: path.join(home.home, ".gemini", "config", "mcp_config.json") }));
+  assert.ok(!permitted("generate_image", {}));
 
   const failed = readAntigravityStep(step(1, {
     state: "ERROR", step_type: "tool", tool_name: "view_file",

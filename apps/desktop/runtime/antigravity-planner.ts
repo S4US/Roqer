@@ -1,4 +1,5 @@
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
+import fs from "node:fs/promises";
 import path from "node:path";
 import readline from "node:readline";
 
@@ -8,7 +9,7 @@ import type { AgentDefinition } from "./agent-definition";
 import type { ProviderStatus } from "../shared/provider";
 import type { AntigravityLauncher } from "./antigravity-cli";
 import {
-  ANTIGRAVITY_MCP_SERVER_NAME, createAntigravityHome, schemaDirectory, type AntigravityHome,
+  ANTIGRAVITY_MCP_SERVER_NAME, attachmentDirectory, createAntigravityHome, isWithin, readableDirectories, type AntigravityHome,
 } from "./antigravity-home";
 import type { SkillLibrary } from "./skill-library";
 import { createSkillToolRunner, type SkillToolRunner } from "./skill-tool";
@@ -151,17 +152,51 @@ export function readAntigravityStep(message: JsonRecord): AntigravityStep | null
  * that it did, so a gate that was never loaded stops the run at the first
  * tool that got past it rather than letting it carry on.
  */
-export function antigravityToolPermitted(step: AntigravityStep, home: string): boolean {
+export function antigravityToolPermitted(step: AntigravityStep, home: AntigravityHome): boolean {
   const parameters = step.toolParameters ?? {};
   if (step.toolName === "call_mcp_tool") return parameters.ServerName === ANTIGRAVITY_MCP_SERVER_NAME;
   if (step.toolName === "view_file" && typeof parameters.AbsolutePath === "string") {
-    const target = path.resolve(parameters.AbsolutePath);
-    const root = path.resolve(schemaDirectory(home)) + path.sep;
-    return process.platform === "win32"
-      ? target.toLowerCase().startsWith(root.toLowerCase())
-      : target.startsWith(root);
+    const file = parameters.AbsolutePath;
+    return readableDirectories(home).some((directory) => isWithin(file, directory));
   }
   return false;
+}
+
+/** The extension a picture is saved under, by the media type Roqer already checked. */
+const IMAGE_EXTENSIONS: Readonly<Record<string, string>> = {
+  "image/png": "png",
+  "image/jpeg": "jpg",
+  "image/webp": "webp",
+  "image/gif": "gif",
+};
+
+/**
+ * Put the pictures the user attached where the agent may open them, and say
+ * where. `agy` takes text only on its input stream, but its `view_file` shows
+ * the model an image file, and the gate lets it read Roqer's attachment
+ * folder. Files are named by Roqer, never by the name the user's file had.
+ */
+export async function writeAttachments(
+  workspace: string,
+  images: PlannerContext["images"],
+  sequence: number,
+): Promise<string> {
+  if (images.length === 0) return "";
+  const lines: string[] = [];
+  for (const [index, image] of images.entries()) {
+    const extension = IMAGE_EXTENSIONS[image.mediaType];
+    if (extension === undefined) throw new Error(`Antigravity cannot open a ${image.mediaType} picture.`);
+    const file = path.join(attachmentDirectory(workspace), `message-${sequence}-${index + 1}.${extension}`);
+    await fs.writeFile(file, Buffer.from(image.data, "base64"), { mode: 0o600 });
+    // eslint-disable-next-line no-control-regex
+    const name = image.name.replace(/[\u0000-\u001f\u007f]/g, " ").slice(0, 120);
+    lines.push(`- ${file}${name.trim() === "" ? "" : ` (the user's file "${name}")`}`);
+  }
+  return [
+    `The user attached ${images.length === 1 ? "a picture" : `${images.length} pictures`} to this message. ` +
+      "Open each one with view_file and look at it before you answer:",
+    ...lines,
+  ].join("\n");
 }
 
 /** A tool error that says the gate itself failed to run, rather than refused the call. */
@@ -238,6 +273,8 @@ type RunBinding = {
 export class AntigravitySession {
   readonly key: string;
   lastPrompt: string | null = null;
+  /** Messages written to this process, which names each one's attached pictures apart. */
+  messages = 0;
   readonly usageTotals: AntigravityUsageTotals = { inputTokens: 0, cacheReadTokens: 0, outputTokens: 0 };
   /** Skill documents delivered into this process's conversation and still in it. */
   readonly skills: SkillToolRunner;
@@ -384,11 +421,6 @@ export function createAntigravityPlanner(options: AntigravityPlannerOptions): Pl
     id: "antigravity-cli",
     async run(context: PlannerContext): Promise<string> {
       if (context.signal.aborted) throw new Error("Run was cancelled.");
-      if (context.images.length > 0) {
-        // `agy` takes text only on its input stream; dropping the picture
-        // would answer a different question than the one the user asked.
-        throw new Error("Antigravity cannot read attached images yet. Remove the image, or choose a ChatGPT or Claude model for this message.");
-      }
       context.progress("Connecting to Antigravity", "Using your Antigravity CLI sign-in");
       const waitingLabel = `Thinking with ${options.modelName ?? "Antigravity"}`;
       const account = await options.getStatus();
@@ -470,7 +502,7 @@ export function createAntigravityPlanner(options: AntigravityPlannerOptions): Pl
           fail(new Error(`Roqer's tool gate for Antigravity did not run, so Antigravity refused every tool. ${step.toolError ?? ""}`.trim()));
           return;
         }
-        if (step.state === "DONE" && !antigravityToolPermitted(step, session.home.home)) {
+        if (step.state === "DONE" && !antigravityToolPermitted(step, session.home)) {
           fail(new Error(`Antigravity ran ${step.toolName ?? "a tool"}, which Roqer does not allow, so the run was stopped.`));
         }
       };
@@ -563,9 +595,13 @@ export function createAntigravityPlanner(options: AntigravityPlannerOptions): Pl
           closed: fail,
         });
         const skills = session.skills;
-        session.writeUserMessage(resumed
+        session.messages += 1;
+        const attachments = await writeAttachments(session.home.workspace, context.images, session.messages);
+        if (settled) return await completion.promise;
+        const prompt = resumed
           ? buildFollowUpPrompt(context.conversation, context.prompt, (name) => skills.isLoaded(name))
-          : `${sessionInstructions(options, context.autoPlaytest)}\n\n${buildConversationPrompt(context.conversation, context.prompt)}`);
+          : `${sessionInstructions(options, context.autoPlaytest)}\n\n${buildConversationPrompt(context.conversation, context.prompt)}`;
+        session.writeUserMessage(attachments === "" ? prompt : `${prompt}\n\n${attachments}`);
 
         return await completion.promise;
       } finally {

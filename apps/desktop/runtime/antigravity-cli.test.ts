@@ -5,7 +5,8 @@ import path from "node:path";
 import test from "node:test";
 
 import {
-  AntigravityClient, antigravityStatusFrom, ANTIGRAVITY_SIGN_IN_MESSAGE, parseAntigravityModels,
+  AntigravityClient, antigravityCheckStatus, antigravityStatusFrom, ANTIGRAVITY_SIGN_IN_MESSAGE, parseAntigravityModels,
+  type AntigravitySpawn,
 } from "./antigravity-cli";
 import { resolveAntigravityExecutable } from "./antigravity-executable";
 import { parseAntigravityUsage } from "./antigravity-limits";
@@ -45,6 +46,63 @@ const MODELS_OUTPUT = [
   "",
 ].join("\n");
 
+/** What `agy` 1.3.1 prints for a headless sign-in, colour codes included. */
+const SIGN_IN_URL = "https://accounts.google.com/o/oauth2/auth?access_type=offline&client_id=1071006060591.apps.googleusercontent.com&code_challenge=abc&code_challenge_method=S256&prompt=consent&redirect_uri=https%3A%2F%2Fantigravity.google%2Foauth-callback&response_type=code";
+
+type Launched = { args: string[]; cwd: string; env: NodeJS.ProcessEnv };
+
+/**
+ * A stand-in `agy` that answers the way 1.3.1 does: the auth check, the
+ * headless sign-in reading its code from stdin, `models` and `/usage`.
+ */
+function fakeAgy(state: { signedIn: boolean; goodCode?: string }) {
+  const launched: Launched[] = [];
+  const spawnProcess: AntigravitySpawn = (args, options) => {
+    launched.push({ args, cwd: options.cwd, env: options.env });
+    const child = new FakeChildProcess();
+    const action = options.env.AGY_CLI_CDE_AUTH_ACTION;
+    setImmediate(() => {
+      if (action === "check") {
+        if (state.signedIn) child.writeLine("Already authenticated as player@example.com.");
+        child.finish(state.signedIn ? 0 : 1);
+      } else if (action === "login") {
+        child.write("\u001b[1mPlease visit the following URL to authorize the application:\u001b[0m\n");
+        child.write(`\u001b[34m${SIGN_IN_URL}\u001b[0m\nEnter the authorization code: `);
+        child.stdin.setEncoding("utf8");
+        child.stdin.once("data", (code: string) => {
+          if (code.trim() === state.goodCode) {
+            state.signedIn = true;
+            child.writeLine("Successfully authenticated.");
+            child.finish(0);
+          } else {
+            child.writeLine("Authentication failed: failed to exchange authorization code for token: oauth2: \"invalid_grant\" \"Bad Request\"");
+            child.finish(1);
+          }
+        });
+      } else if (args[0] === "models") {
+        child.write(MODELS_OUTPUT);
+        child.finish(0);
+      } else {
+        child.writeLine(JSON.stringify(USAGE_ENVELOPE));
+        child.finish(0);
+      }
+    });
+    return child.asChild();
+  };
+  return { launched, spawnProcess };
+}
+
+test("agy's auth check reads as an account, signed in or out", () => {
+  assert.deepEqual(
+    antigravityCheckStatus({ stdout: "Already authenticated as player@example.com.\n", stderr: "", code: 0 }),
+    { kind: "signed-in", message: "Google account connected through the Antigravity CLI", email: "player@example.com" },
+  );
+  assert.deepEqual(antigravityCheckStatus({ stdout: "", stderr: "", code: 1 }), { kind: "signed-out", message: ANTIGRAVITY_SIGN_IN_MESSAGE });
+  // Anything else is not trusted to mean either; the caller asks another way.
+  assert.equal(antigravityCheckStatus({ stdout: "Welcome to agy", stderr: "", code: 0 }), null);
+  assert.equal(antigravityCheckStatus({ stdout: "", stderr: "crash", code: 2 }), null);
+});
+
 test("a well-formed /usage answer is a signed-in account", () => {
   const status = antigravityStatusFrom({ stdout: JSON.stringify(USAGE_ENVELOPE), stderr: "Fetching...", code: 0 });
   assert.equal(status.kind, "signed-in");
@@ -62,7 +120,6 @@ test("anything but a well-formed /usage answer is not signed in", () => {
   assert.equal(failing.kind, "unavailable");
   assert.match(failing.message, /network unreachable/);
 
-  // Even a successful exit with the wrong command's answer is not an account.
   const other = antigravityStatusFrom({ stdout: JSON.stringify({ status: "SUCCESS", command: { name: "model", data: {} } }), stderr: "", code: 0 });
   assert.equal(other.kind, "unavailable");
 });
@@ -88,34 +145,30 @@ test("the meter reads the first group's five-hour and weekly windows", () => {
   assert.equal(parseAntigravityUsage(null), null);
 });
 
-test("status and models are asked in a private home that is removed afterwards", async () => {
-  const launched: Array<{ args: string[]; cwd: string; home: string | undefined; apiKey: string | undefined }> = [];
+test("status, models and usage are asked in a private home that is removed afterwards", async () => {
   process.env.GEMINI_API_KEY = "should-not-reach-agy";
   try {
-    const client = new AntigravityClient({
-      spawnProcess: (args, options) => {
-        launched.push({ args, cwd: options.cwd, home: options.env.USERPROFILE, apiKey: options.env.GEMINI_API_KEY });
-        const child = new FakeChildProcess();
-        setImmediate(() => {
-          child.writeLine(args[0] === "models" ? MODELS_OUTPUT : JSON.stringify(USAGE_ENVELOPE));
-          child.finish(0);
-        });
-        return child.asChild();
-      },
-    });
+    const fake = fakeAgy({ signedIn: true });
+    const client = new AntigravityClient({ spawnProcess: fake.spawnProcess });
 
-    assert.equal((await client.getStatus()).kind, "signed-in");
+    const status = await client.getStatus();
+    assert.equal(status.kind, "signed-in");
+    assert.equal(status.kind === "signed-in" ? status.email : undefined, "player@example.com");
     // A signed-in answer is reused rather than asked again.
     assert.equal((await client.getStatus()).kind, "signed-in");
-    const catalog = await client.listModels();
-    assert.equal(catalog.models.length, 3);
+    assert.equal((await client.listModels()).models.length, 3);
+    assert.ok(parseAntigravityUsage(await client.readUsage()));
 
-    assert.deepEqual(launched.map((entry) => entry.args), [["--print", "/usage", "--output-format", "json"], ["models"]]);
-    for (const entry of launched) {
-      assert.ok(entry.home !== undefined && entry.home !== os.homedir());
-      assert.equal(path.dirname(entry.cwd), path.dirname(entry.home!));
-      assert.equal(entry.apiKey, undefined);
-      await assert.rejects(() => fs.access(path.dirname(entry.home!)));
+    assert.deepEqual(fake.launched.map((entry) => [entry.args, entry.env.AGY_CLI_CDE_AUTH_ACTION]), [
+      [[], "check"],
+      [["models"], undefined],
+      [["--print", "/usage", "--output-format", "json"], undefined],
+    ]);
+    for (const entry of fake.launched) {
+      assert.ok(entry.env.USERPROFILE !== undefined && entry.env.USERPROFILE !== os.homedir());
+      assert.equal(path.dirname(entry.cwd), path.dirname(entry.env.USERPROFILE!));
+      assert.equal(entry.env.GEMINI_API_KEY, undefined);
+      await assert.rejects(() => fs.access(path.dirname(entry.env.USERPROFILE!)));
     }
   } finally {
     delete process.env.GEMINI_API_KEY;
@@ -124,30 +177,68 @@ test("status and models are asked in a private home that is removed afterwards",
 
 test("a signed-out answer is reused briefly, and forgetting it asks again", async () => {
   let now = 0;
-  let asked = 0;
-  const client = new AntigravityClient({
-    now: () => now,
-    spawnProcess: () => {
-      asked += 1;
-      const child = new FakeChildProcess();
-      setImmediate(() => {
-        child.writeLine(JSON.stringify({ status: "ERROR", error: "Not signed in." }));
-        child.finish(3);
-      });
-      return child.asChild();
-    },
-  });
-  assert.equal((await client.getStatus()).kind, "signed-out");
+  const fake = fakeAgy({ signedIn: false });
+  const client = new AntigravityClient({ now: () => now, spawnProcess: fake.spawnProcess });
+  assert.deepEqual(await client.getStatus(), { kind: "signed-out", message: ANTIGRAVITY_SIGN_IN_MESSAGE });
   now = 10_000;
-  assert.equal((await client.getStatus()).kind, "signed-out");
-  assert.equal(asked, 1);
-  // Connect forgets it: the user may just have signed in from a terminal.
+  await client.getStatus();
+  assert.equal(fake.launched.length, 1);
   client.forgetStatus();
   await client.getStatus();
-  assert.equal(asked, 2);
+  assert.equal(fake.launched.length, 2);
   now = 60_000;
   await client.getStatus();
-  assert.equal(asked, 3);
+  assert.equal(fake.launched.length, 3);
+});
+
+test("signing in hands agy the code Google showed, in the user's own home, and confirms the account", async () => {
+  process.env.GEMINI_API_KEY = "should-not-reach-agy";
+  try {
+    const state = { signedIn: false, goodCode: "4/0AGood-Code" };
+    const fake = fakeAgy(state);
+    const client = new AntigravityClient({ spawnProcess: fake.spawnProcess });
+    assert.equal((await client.getStatus()).kind, "signed-out");
+
+    const { authUrl } = await client.beginLogin();
+    assert.equal(authUrl, SIGN_IN_URL);
+    assert.equal(client.pendingLoginUrl(), SIGN_IN_URL);
+    const login = fake.launched.at(-1)!;
+    assert.equal(login.env.AGY_CLI_CDE_AUTH_ACTION, "login");
+    // The credential goes wherever the user's own agy keeps it, not into a home Roqer deletes.
+    assert.equal(login.env.USERPROFILE, process.env.USERPROFILE);
+    assert.equal(login.env.GEMINI_API_KEY, undefined);
+
+    const waiting = client.waitForLogin();
+    assert.deepEqual(await client.submitLoginCode("  4/0AGood-Code \n"), {
+      ok: true, message: "Google account connected through the Antigravity CLI",
+    });
+    assert.equal((await waiting).ok, true);
+    assert.equal(client.pendingLoginUrl(), null);
+  } finally {
+    delete process.env.GEMINI_API_KEY;
+  }
+});
+
+test("a code Google refuses says so, and the next Connect starts again", async () => {
+  const fake = fakeAgy({ signedIn: false, goodCode: "right" });
+  const client = new AntigravityClient({ spawnProcess: fake.spawnProcess });
+  await client.beginLogin();
+  const outcome = await client.submitLoginCode("wrong");
+  assert.equal(outcome.ok, false);
+  assert.match(outcome.message, /Google did not accept that code: Authentication failed: .*invalid_grant/);
+  assert.deepEqual(await client.submitLoginCode("right"), {
+    ok: false, message: "No Antigravity sign-in is waiting for a code. Choose Connect to start one.",
+  });
+  assert.equal((await client.submitLoginCode("has space")).ok, false);
+});
+
+test("cancelling a sign-in stops agy", async () => {
+  const fake = fakeAgy({ signedIn: false });
+  const client = new AntigravityClient({ spawnProcess: fake.spawnProcess });
+  await client.beginLogin();
+  client.cancelLogin();
+  assert.equal(client.pendingLoginUrl(), null);
+  assert.equal((await client.waitForLogin()).ok, false);
 });
 
 test("a missing agy reads as not installed", async () => {

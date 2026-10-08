@@ -6,7 +6,8 @@ import path from "node:path";
 import test from "node:test";
 
 import {
-  ANTIGRAVITY_MCP_SERVER_NAME, antigravityChildEnvironment, createAntigravityHome, GATE_REFUSAL_PREFIX, gateWrapper, schemaDirectory,
+  ANTIGRAVITY_MCP_SERVER_NAME, antigravityChildEnvironment, attachmentDirectory, conversationDirectory, createAntigravityHome,
+  GATE_REFUSAL_PREFIX, gateWrapper, readableDirectories, schemaDirectory,
 } from "./antigravity-home";
 
 const MCP = { url: "http://127.0.0.1:5000/mcp", token: "secret-token" };
@@ -45,7 +46,10 @@ test("a private home grants Roqer's MCP server and denies shell, writes and the 
     const settings = await readJson(path.join(home.home, ".gemini", "antigravity-cli", "settings.json"));
     assert.equal(settings.toolPermission, "request-review");
     const permissions = settings.permissions as { allow: string[]; deny: string[] };
-    assert.deepEqual(permissions.allow, [`mcp(${ANTIGRAVITY_MCP_SERVER_NAME}/*)`]);
+    assert.deepEqual(permissions.allow, [
+      `mcp(${ANTIGRAVITY_MCP_SERVER_NAME}/*)`,
+      ...readableDirectories(home).map((directory) => `read_file(${directory})`),
+    ]);
     for (const rule of ["command(*)", "write_file(*)", "read_url(*)", "execute_url(*)", "unsandboxed(*)"]) {
       assert.ok(permissions.deny.includes(rule), rule);
     }
@@ -56,9 +60,9 @@ test("a private home grants Roqer's MCP server and denies shell, writes and the 
     assert.deepEqual(mcp, {
       mcpServers: { [ANTIGRAVITY_MCP_SERVER_NAME]: { url: MCP.url, headers: { Authorization: `Bearer ${MCP.token}` } } },
     });
-    // The workspace is empty but for a repository marker that stops agy's
-    // search for customizations at it.
-    assert.deepEqual(await fs.readdir(home.workspace), [".git"]);
+    // The workspace holds only a repository marker that stops agy's search for
+    // customizations at it, and the folder for the user's pictures.
+    assert.deepEqual((await fs.readdir(home.workspace)).sort(), [".git", "attachments"]);
   } finally {
     await home.remove();
   }
@@ -83,7 +87,8 @@ test("a private home keeps the user's billing and telemetry choices, and nothing
     assert.equal(settings.enableTelemetry, false);
     // What the agent may do is Roqer's alone.
     assert.equal(settings.toolPermission, "request-review");
-    assert.deepEqual((settings.permissions as { allow: string[] }).allow, [`mcp(${ANTIGRAVITY_MCP_SERVER_NAME}/*)`]);
+    assert.ok(!(settings.permissions as { allow: string[] }).allow.includes("command(*)"));
+    assert.ok((settings.permissions as { allow: string[] }).allow.includes(`mcp(${ANTIGRAVITY_MCP_SERVER_NAME}/*)`));
     // The user's own file is read, never written.
     assert.equal(await fs.readFile(path.join(own, "settings.json"), "utf8"), original);
   } finally {
@@ -96,14 +101,14 @@ test("a home with no MCP server grants nothing", async () => {
   const home = await createAntigravityHome({});
   try {
     const settings = await readJson(path.join(home.home, ".gemini", "antigravity-cli", "settings.json"));
-    assert.deepEqual((settings.permissions as { allow: string[] }).allow, []);
+    assert.ok((settings.permissions as { allow: string[] }).allow.every((rule) => rule.startsWith("read_file(")));
     assert.deepEqual(await readJson(path.join(home.home, ".gemini", "config", "mcp_config.json")), { mcpServers: {} });
   } finally {
     await home.remove();
   }
 });
 
-test("the gate lets Roqer's tools and their schemas through and refuses everything else", async () => {
+test("the gate lets Roqer's tools and the files in its private folders through and refuses everything else", async () => {
   const home = await createAntigravityHome({ mcp: MCP });
   try {
     const schemas = schemaDirectory(home.home);
@@ -112,6 +117,9 @@ test("the gate lets Roqer's tools and their schemas through and refuses everythi
     const allowed = [
       call("call_mcp_tool", { ServerName: ANTIGRAVITY_MCP_SERVER_NAME, ToolName: "roblox_studio", Arguments: {} }),
       call("view_file", { AbsolutePath: path.join(schemas, "roblox_studio.json") }),
+      // A Studio capture agy saved from a tool result, and a picture the user attached.
+      call("view_file", { AbsolutePath: path.join(conversationDirectory(home.home), "c", ".system_generated", "steps", "4", "media_0.png") }),
+      call("view_file", { AbsolutePath: path.join(attachmentDirectory(home.workspace), "message-1-1.png") }),
     ];
     for (const payload of allowed) {
       const outcome = await runGate(home.home, payload);
@@ -129,6 +137,8 @@ test("the gate lets Roqer's tools and their schemas through and refuses everythi
       // A path that starts inside the schema folder and climbs out of it.
       call("view_file", { AbsolutePath: path.join(schemas, "..", "..", "settings.json") }),
       call("view_file", { AbsolutePath: `${schemas}-elsewhere${path.sep}x.json` }),
+      call("view_file", { AbsolutePath: path.join(home.workspace, ".git", "config") }),
+      call("view_file", { AbsolutePath: path.join(attachmentDirectory(home.workspace), "..", "..", "home", ".gemini", "config", "mcp_config.json") }),
       { conversationId: "c" },
     ];
     for (const payload of refused) {

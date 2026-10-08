@@ -411,10 +411,11 @@ function AccountRow({ provider, onChanged }: { provider: ProviderId; onChanged: 
       {installNote.message}
       {installNote.command !== undefined && <><br />To install it yourself, run this in PowerShell: <code className="settings-command">{installNote.command}</code></>}
     </p>}
-    {/* The fallback: a page that shows a code, opened only on request, so the
-        tab Claude Code opened is the only one unless it failed to appear. */}
+    {/* Claude's fallback: a page that shows a code, opened only on request, so
+        the tab Claude Code opened is the only one unless it failed to appear.
+        Antigravity's sign-in always ends in a code, so there it is the way in. */}
     {awaitingCode && !signedIn && <label className="settings-field">
-      <span>{`Or paste the code ${name} shows you`}</span>
+      <span>{provider === "antigravity" ? "Paste the code Google shows you" : `Or paste the code ${name} shows you`}</span>
       <div className="custom-key-row">
         <input value={code} spellCheck={false} placeholder="Authorization code" onChange={(event) => setCode(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && code.trim()) void finish(); }} />
         <button type="button" className="small-button" disabled={pending || !code.trim()} onClick={() => void finish()}>{pending ? "Finishing…" : "Finish sign-in"}</button>

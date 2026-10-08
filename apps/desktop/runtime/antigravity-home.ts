@@ -21,7 +21,9 @@ import path from "node:path";
  *    else stays at the `request-review` default, which a headless process can
  *    only refuse. This floor holds even if the gate below never runs.
  * 2. A `PreToolUse` gate. It allows a call to Roqer's MCP server and a read of
- *    the tool schemas `agy` caches for that server, and denies everything
+ *    a file Roqer or `agy` itself put in the private directories: the tool
+ *    schemas `agy` caches for Roqer's server, the images `agy` saves from
+ *    tool results, and the pictures the user attached. It denies everything
  *    else with a reason the model can read. Without it, a built-in tool with
  *    no permission of its own (web search, image generation, subagents) would
  *    simply run, and a refused one would end the turn rather than let the
@@ -50,13 +52,21 @@ export const GATE_REFUSAL_PREFIX = "Roqer allows only its own tools here";
  * before calling one, and a read outside the workspace still needs a review a
  * headless process cannot give.
  */
-export function antigravitySettings(options: { mcp: boolean; carried?: Readonly<Record<string, boolean>> }): Record<string, unknown> {
+export function antigravitySettings(options: {
+  mcp: boolean;
+  carried?: Readonly<Record<string, boolean>>;
+  /** Folders outside the workspace the agent may read: `agy`'s own saved tool images. */
+  readable?: readonly string[];
+}): Record<string, unknown> {
   return {
     ...options.carried,
     toolPermission: "request-review",
     allowNonWorkspaceAccess: false,
     permissions: {
-      allow: options.mcp ? [`mcp(${ANTIGRAVITY_MCP_SERVER_NAME}/*)`] : [],
+      allow: [
+        ...(options.mcp ? [`mcp(${ANTIGRAVITY_MCP_SERVER_NAME}/*)`] : []),
+        ...(options.readable ?? []).map((directory) => `read_file(${directory})`),
+      ],
       deny: ["command(*)", "unsandboxed(*)", "write_file(*)", "read_url(*)", "execute_url(*)"],
     },
   };
@@ -120,8 +130,9 @@ try {
   const args = call && call.args && typeof call.args === "object" ? call.args : {};
   if (name === "call_mcp_tool" && args.ServerName === config.server) {
     // Roqer's own tool: allowed, and Roqer applies its approvals itself.
-  } else if (name === "view_file" && typeof args.AbsolutePath === "string" && within(args.AbsolutePath, config.schemas)) {
-    // agy reading the schema it cached for one of Roqer's tools.
+  } else if (name === "view_file" && typeof args.AbsolutePath === "string" &&
+    config.readable.some((directory) => within(args.AbsolutePath, directory))) {
+    // A tool schema, a saved tool image, or a picture the user attached.
   } else if (name === "call_mcp_tool") {
     refuse("only the " + JSON.stringify(config.server) + " MCP server is available.");
   } else {
@@ -166,6 +177,34 @@ export function schemaDirectory(home: string): string {
   return path.join(home, ".gemini", "antigravity-cli", "mcp", ANTIGRAVITY_MCP_SERVER_NAME);
 }
 
+/**
+ * Where `agy` keeps each conversation's own files under a home, the images it
+ * saved from tool results among them. The model is pointed at a Studio
+ * capture there and may look at it again.
+ */
+export function conversationDirectory(home: string): string {
+  return path.join(home, ".gemini", "antigravity-cli", "brain");
+}
+
+/** Where Roqer puts the pictures the user attached, inside the workspace. */
+export function attachmentDirectory(workspace: string): string {
+  return path.join(workspace, "attachments");
+}
+
+/** The folders the gate lets the agent read in: nothing else of the disk. */
+export function readableDirectories(home: AntigravityHome): string[] {
+  return [schemaDirectory(home.home), conversationDirectory(home.home), attachmentDirectory(home.workspace)];
+}
+
+/** Whether `file` lies inside `directory`, by resolved path. */
+export function isWithin(file: string, directory: string): boolean {
+  const target = path.resolve(file);
+  const root = path.resolve(directory) + path.sep;
+  return process.platform === "win32"
+    ? target.toLowerCase().startsWith(root.toLowerCase())
+    : target.startsWith(root);
+}
+
 export type AntigravityHomeOptions = {
   /** Roqer's MCP server for this process; omitted for a process that only answers about itself. */
   mcp?: { url: string; token: string };
@@ -181,7 +220,7 @@ export type AntigravityHomeOptions = {
 export type AntigravityHome = {
   /** What `HOME`/`USERPROFILE` point at. */
   home: string;
-  /** The process's working directory: empty, and a repository root of its own. */
+  /** The process's working directory: empty but for attached pictures, and a repository root of its own. */
   workspace: string;
   /** Remove everything, including the MCP credential. Safe to call more than once. */
   remove(): Promise<void>;
@@ -212,9 +251,11 @@ export async function createAntigravityHome(options: AntigravityHomeOptions = {}
     // `agy` looks for workspace customizations from the working directory up
     // to the repository root; a repository of its own stops that walk here.
     await fs.mkdir(path.join(workspace, ".git"), { recursive: true });
+    await fs.mkdir(attachmentDirectory(workspace));
+    const readable = readableDirectories({ home, workspace, remove });
 
     const carried = await readCarriedSettings(options.userHome ?? os.homedir());
-    await writePrivate(path.join(cli, "settings.json"), JSON.stringify(antigravitySettings({ mcp: options.mcp !== undefined, carried })));
+    await writePrivate(path.join(cli, "settings.json"), JSON.stringify(antigravitySettings({ mcp: options.mcp !== undefined, carried, readable })));
     await writePrivate(path.join(config, "mcp_config.json"), JSON.stringify({
       mcpServers: options.mcp === undefined ? {} : {
         [ANTIGRAVITY_MCP_SERVER_NAME]: { url: options.mcp.url, headers: { Authorization: `Bearer ${options.mcp.token}` } },
@@ -225,7 +266,7 @@ export async function createAntigravityHome(options: AntigravityHomeOptions = {}
     await writePrivate(path.join(config, GATE_SCRIPT_FILE), GATE_SCRIPT);
     await writePrivate(path.join(config, GATE_CONFIG_FILE), JSON.stringify({
       server: ANTIGRAVITY_MCP_SERVER_NAME,
-      schemas: schemaDirectory(home),
+      readable,
     }));
     await fs.writeFile(path.join(config, wrapper.file), wrapper.text, { encoding: "utf8", mode: 0o700 });
     await writePrivate(path.join(config, "hooks.json"), JSON.stringify({
