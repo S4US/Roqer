@@ -1,7 +1,9 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import os from "node:os";
 
-import type { ProviderLoginResult, ProviderModel, ProviderModelCatalog, ProviderStatus } from "../shared/provider";
+import type {
+  ProviderLoginResult, ProviderModel, ProviderModelCatalog, ProviderStatus, ReasoningEffort,
+} from "../shared/provider";
 import {
   antigravityChildEnvironment, createAntigravityHome, withoutBackgroundUpdater, type AntigravityHome, type AntigravityHomeOptions,
 } from "./antigravity-home";
@@ -142,30 +144,97 @@ export function antigravityStatusFrom(output: { stdout: string; stderr: string; 
   };
 }
 
-const NO_EFFORT_SELECTION = {
-  reasoningEffort: "medium" as const,
-  description: "Antigravity names the effort in the model itself.",
+/** The efforts `agy` names in a model's slug, lowest first. */
+const SLUG_EFFORTS = ["minimal", "low", "medium", "high", "xhigh", "max"] as const satisfies readonly ReasoningEffort[];
+type SlugEffort = typeof SLUG_EFFORTS[number];
+
+const EFFORT_DESCRIPTIONS: Readonly<Record<SlugEffort, string>> = {
+  minimal: "Quickest, for the simplest edits.",
+  low: "Quick, and uses the least of your plan.",
+  medium: "Balanced for routine Studio work.",
+  high: "Thorough inspection before changes.",
+  xhigh: "Best for multi-step agentic work.",
+  max: "Correctness over cost.",
+};
+
+/** What a run starts at when the user has not chosen, if the model offers it. */
+const PREFERRED_DEFAULT_EFFORT: SlugEffort = "high";
+
+/** A model with nothing to choose: the picker shows no effort row for it. */
+const NO_EFFORT_SELECTION = { reasoningEffort: "none" as const };
+
+const MODEL_LINE = /^([A-Za-z0-9][A-Za-z0-9._-]{0,127})\t(.{1,200})$/;
+
+export type AntigravityModelListing = {
+  catalog: ProviderModelCatalog;
+  /** The slug `agy --model` takes for each catalog model at each of its efforts. */
+  slugs: ReadonlyMap<string, ReadonlyMap<ReasoningEffort, string>>;
 };
 
 /**
- * `agy models` prints one `slug<TAB>label` line per model the account may use.
- * The slug is what `--model` takes; a variant such as `-high` names its
- * effort, so each one is its own entry rather than an effort setting.
+ * Turn `agy models` into Roqer's catalog.
+ *
+ * `agy` prints one `slug<TAB>label` line per model, and lists each effort of
+ * a model as a model of its own: `gemini-3.8-flash-high`, labelled "Gemini
+ * 3.8 Flash (High)", then `-medium` and `-low`. Roqer shows that as one model
+ * with a choice of effort, as it does for the other providers, and turns the
+ * pair back into the slug when a run starts. A model whose slug names no
+ * effort, or the only one of its family, stays as `agy` lists it, with
+ * nothing to choose.
  */
-export function parseAntigravityModels(stdout: string): ProviderModelCatalog {
-  const models: ProviderModel[] = [];
+export function parseAntigravityModels(stdout: string): AntigravityModelListing {
+  type Entry = { slug: string; label: string; base?: string; effort?: SlugEffort };
+  const entries: Entry[] = [];
   for (const line of stdout.split(/\r?\n/)) {
-    const match = /^([A-Za-z0-9][A-Za-z0-9._-]{0,127})\t(.{1,200})$/.exec(line.trimEnd());
-    if (match === null || models.some((model) => model.id === match[1])) continue;
-    models.push({
-      id: match[1],
-      displayName: match[2].trim() || match[1],
-      defaultReasoningEffort: NO_EFFORT_SELECTION.reasoningEffort,
-      supportedReasoningEfforts: [NO_EFFORT_SELECTION],
-    });
+    const match = MODEL_LINE.exec(line.trimEnd());
+    if (match === null || entries.some((entry) => entry.slug === match[1])) continue;
+    const [, slug, rawLabel] = match;
+    const label = rawLabel.trim() || slug;
+    const suffix = /^(.+)-([a-z]+)$/.exec(slug);
+    const effort = SLUG_EFFORTS.find((candidate) => candidate === suffix?.[2]);
+    entries.push({ slug, label, ...(suffix && effort ? { base: suffix[1], effort } : {}) });
+    if (entries.length >= MAX_MODELS * 4) break;
+  }
+
+  const families = new Map<string, Entry[]>();
+  for (const entry of entries) {
+    if (entry.base === undefined) continue;
+    families.set(entry.base, [...(families.get(entry.base) ?? []), entry]);
+  }
+
+  const models: ProviderModel[] = [];
+  const slugs = new Map<string, Map<ReasoningEffort, string>>();
+  const listed = new Set<string>();
+  for (const entry of entries) {
+    const family = entry.base === undefined ? undefined : families.get(entry.base);
+    if (family !== undefined && family.length > 1) {
+      // The family goes where its first variant was listed, once.
+      if (listed.has(entry.base!)) continue;
+      listed.add(entry.base!);
+      const ordered = [...family].sort((a, b) => SLUG_EFFORTS.indexOf(a.effort!) - SLUG_EFFORTS.indexOf(b.effort!));
+      const efforts = ordered.map((variant) => variant.effort!);
+      // "Gemini 3.8 Flash (High)" names the family "Gemini 3.8 Flash".
+      const named = /^(.*\S)\s*\(([^)]+)\)$/.exec(entry.label);
+      const displayName = named !== null && named[2].toLowerCase().replace(/[\s-]/g, "") === entry.effort ? named[1] : entry.base!;
+      models.push({
+        id: entry.base!,
+        displayName,
+        defaultReasoningEffort: efforts.includes(PREFERRED_DEFAULT_EFFORT) ? PREFERRED_DEFAULT_EFFORT : efforts[efforts.length - 1],
+        supportedReasoningEfforts: efforts.map((reasoningEffort) => ({ reasoningEffort, description: EFFORT_DESCRIPTIONS[reasoningEffort] })),
+      });
+      slugs.set(entry.base!, new Map(ordered.map((variant) => [variant.effort!, variant.slug])));
+    } else {
+      models.push({
+        id: entry.slug,
+        displayName: entry.label,
+        defaultReasoningEffort: NO_EFFORT_SELECTION.reasoningEffort,
+        supportedReasoningEfforts: [NO_EFFORT_SELECTION],
+      });
+      slugs.set(entry.slug, new Map([[NO_EFFORT_SELECTION.reasoningEffort, entry.slug]]));
+    }
     if (models.length >= MAX_MODELS) break;
   }
-  return { models, defaultModelId: models[0]?.id ?? null };
+  return { catalog: { models, defaultModelId: models[0]?.id ?? null }, slugs };
 }
 
 /**
@@ -233,6 +302,8 @@ export class AntigravityClient implements AntigravityLauncher {
   private statusRead: Promise<ProviderStatus> | null = null;
   private statusGeneration = 0;
   private modelCatalog: { at: number; catalog: ProviderModelCatalog } | null = null;
+  /** Kept past the catalog's lifetime: a run resolves its slug just after reading the catalog. */
+  private modelSlugs: AntigravityModelListing["slugs"] = new Map();
   private pendingLogin: PendingLogin | null = null;
   private lastUpdate = Number.NEGATIVE_INFINITY;
   private updating: Promise<void> | null = null;
@@ -328,12 +399,24 @@ export class AntigravityClient implements AntigravityLauncher {
       const detail = error instanceof Error ? error.message : String(error);
       return { models: [], defaultModelId: null, message: `The Antigravity CLI did not list its models: ${detail}` };
     }
-    const catalog = parseAntigravityModels(output.stdout);
+    const { catalog, slugs } = parseAntigravityModels(output.stdout);
     if (catalog.models.length === 0) {
       return { models: [], defaultModelId: null, message: "The Antigravity CLI did not list any models for this account." };
     }
     this.modelCatalog = { at: this.now(), catalog };
+    this.modelSlugs = slugs;
     return catalog;
+  }
+
+  /**
+   * The slug `agy --model` takes for a catalog model at an effort, from the
+   * latest listing. The catalog was read to resolve the run's model moments
+   * before, so it is there; a model the listing never named passes through
+   * unchanged, and `agy` refuses one it does not know.
+   */
+  modelSlug(modelId: string, effort: ReasoningEffort): string {
+    const variants = this.modelSlugs.get(modelId);
+    return variants?.get(effort) ?? variants?.values().next().value ?? modelId;
   }
 
   /**

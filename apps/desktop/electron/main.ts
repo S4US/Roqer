@@ -1487,7 +1487,9 @@ function plannerFor(
     return createAntigravityPlanner({
       launcher: client,
       getStatus: () => client.getStatus(),
-      model: request.model!,
+      // `agy` lists each effort of a model as a model of its own; the picker
+      // shows one model with a choice of effort, and this turns it back.
+      model: client.modelSlug(request.model!, request.effort),
       ...(modelName === undefined ? {} : { modelName }),
       agent: agentRuntime.definition,
       skillLibrary: agentRuntime.skillLibrary,

@@ -129,15 +129,58 @@ test("anything but a well-formed /usage answer is not signed in", () => {
   assert.equal(other.kind, "unavailable");
 });
 
-test("the model listing keeps agy's slugs, labels and order", () => {
-  const catalog = parseAntigravityModels(`Fetching available models...\n${MODELS_OUTPUT}not a model line\n`);
-  assert.deepEqual(catalog.models.map((model) => [model.id, model.displayName]), [
-    ["gemini-3.8-flash-high", "Gemini 3.8 Flash (High)"],
-    ["gemini-3.1-pro-low", "Gemini 3.1 Pro (Low)"],
-    ["claude-sonnet-4-6", "Claude Sonnet 4.6 (Thinking)"],
+/** `agy models` as 1.3.1 printed it for a personal account. */
+const FULL_LISTING = [
+  "Fetching available models...",
+  "gemini-3.8-flash-high\tGemini 3.8 Flash (High)",
+  "gemini-3.8-flash-medium\tGemini 3.8 Flash (Medium)",
+  "gemini-3.8-flash-low\tGemini 3.8 Flash (Low)",
+  "gemini-3.7-flash-high\tGemini 3.7 Flash (High)",
+  "gemini-3.7-flash-medium\tGemini 3.7 Flash (Medium)",
+  "gemini-3.7-flash-low\tGemini 3.7 Flash (Low)",
+  "gemini-3.1-pro-high\tGemini 3.1 Pro (High)",
+  "gemini-3.1-pro-low\tGemini 3.1 Pro (Low)",
+  "claude-sonnet-4-6\tClaude Sonnet 4.6 (Thinking)",
+  "claude-opus-4-6-thinking\tClaude Opus 4.6 (Thinking)",
+  "gpt-oss-120b-medium\tGPT-OSS 120B (Medium)",
+  "not a model line",
+].join("\n");
+
+test("each family of agy's models is one model with a choice of effort", () => {
+  const { catalog, slugs } = parseAntigravityModels(FULL_LISTING);
+  assert.deepEqual(catalog.models.map((model) => [model.id, model.displayName, model.supportedReasoningEfforts.map((entry) => entry.reasoningEffort), model.defaultReasoningEffort]), [
+    ["gemini-3.8-flash", "Gemini 3.8 Flash", ["low", "medium", "high"], "high"],
+    ["gemini-3.7-flash", "Gemini 3.7 Flash", ["low", "medium", "high"], "high"],
+    ["gemini-3.1-pro", "Gemini 3.1 Pro", ["low", "high"], "high"],
+    // Nothing to choose: no effort row, and the name agy gives it.
+    ["claude-sonnet-4-6", "Claude Sonnet 4.6 (Thinking)", ["none"], "none"],
+    ["claude-opus-4-6-thinking", "Claude Opus 4.6 (Thinking)", ["none"], "none"],
+    // The only variant of its family is not a choice either.
+    ["gpt-oss-120b-medium", "GPT-OSS 120B (Medium)", ["none"], "none"],
   ]);
-  assert.equal(catalog.defaultModelId, "gemini-3.8-flash-high");
-  assert.ok(catalog.models.every((model) => model.supportedReasoningEfforts.length === 1));
+  assert.equal(catalog.defaultModelId, "gemini-3.8-flash");
+  assert.equal(slugs.get("gemini-3.8-flash")?.get("medium"), "gemini-3.8-flash-medium");
+  assert.equal(slugs.get("gemini-3.1-pro")?.get("low"), "gemini-3.1-pro-low");
+  assert.equal(slugs.get("gpt-oss-120b-medium")?.get("none"), "gpt-oss-120b-medium");
+});
+
+test("a run's model and effort become the slug agy takes", async () => {
+  const fake = fakeAgy({ signedIn: true });
+  const client = new AntigravityClient({
+    spawnProcess: (args, options) => {
+      if (args[0] !== "models") return fake.spawnProcess(args, options);
+      const child = new FakeChildProcess();
+      setImmediate(() => { child.write(FULL_LISTING); child.finish(0); });
+      return child.asChild();
+    },
+  });
+  await client.listModels();
+  assert.equal(client.modelSlug("gemini-3.8-flash", "low"), "gemini-3.8-flash-low");
+  assert.equal(client.modelSlug("gemini-3.8-flash", "high"), "gemini-3.8-flash-high");
+  assert.equal(client.modelSlug("claude-sonnet-4-6", "none"), "claude-sonnet-4-6");
+  // An effort the model does not list takes its first variant rather than an invented slug.
+  assert.equal(client.modelSlug("gemini-3.1-pro", "medium"), "gemini-3.1-pro-low");
+  assert.equal(client.modelSlug("unknown-model", "high"), "unknown-model");
 });
 
 test("the meter reads the first group's five-hour and weekly windows", () => {

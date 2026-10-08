@@ -167,10 +167,11 @@ way: Roqer sends it as sheets of its frames, saved like any other picture, and
 the model looks closer with `reference_clip`, whose frames reach it directly.
 The model can open only those pictures, the tool definitions, and the images
 it received from Roqer's tools, such as Studio screenshots, which it sees
-directly. Each
-model in the picker is one of `agy models`, with its effort level in its name
-(for example Gemini 3.8 Flash High and Low), so the effort setting does not
-apply. Antigravity meters Gemini models apart from the Claude and GPT models it
+directly. The Antigravity CLI lists each effort of a model as a model of its
+own (`gemini-3.8-flash-high`, `-medium`, `-low`); the picker shows each such
+family once, with its efforts as the thinking-effort choice, and Roqer starts
+the variant you chose. A model with only one variant, such as the Claude and
+GPT models Antigravity offers, has no effort to choose. Antigravity meters Gemini models apart from the Claude and GPT models it
 also offers. The plan meter in Settings shows the Gemini group.
 
 A model endpoint you configure runs on Roqer's own agent loop. The next
