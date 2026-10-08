@@ -172,7 +172,7 @@ const config = { speed = 16 } -- the binding is frozen, not the table
 config.speed = 20 -- allowed; use table.freeze for value immutability
 ```
 
-A `const` binding freezes the name, not the value; it applies to the binding like `local`, and the table itself stays mutable unless frozen. It is a contextual keyword, valid only where `local` is. `const` must be initialized at declaration. Prefer `const` for module-level values and constants that must never be rebound; it lets the typechecker and tools treat the symbol as stable.
+A `const` binding freezes the name, not the value; it applies to the binding like `local`, and the table itself stays mutable unless frozen. It is a contextual keyword, valid only where `local` is. `const` must be initialized at declaration. It lets the typechecker and tools treat the symbol as stable, but Studio support has moved during rollout (an `export const` form was rolled back), so use `const` only where the place already uses it or after confirming Studio parses it, and do not convert existing `local`s.
 
 ## 6. Method syntax
 
@@ -369,9 +369,9 @@ Luau starts from Lua 5.1 and subtracts. When porting Lua code or answering "why 
 | `package` library | Removed entirely (native module loading). |
 | `dofile` / `loadfile` | Removed (filesystem access). |
 | `string.dump` | Removed; bytecode access is unsafe to validate. `loadstring` accepts source only, never bytecode. |
-| `debug` library | Removed to a large extent; only `debug.traceback` and `debug.info` remain. |
+| `debug` library | Reduced. Luau keeps `debug.traceback` and `debug.info`; Roblox adds `profilebegin`/`profileend`, `getmemorycategory`/`setmemorycategory`/`resetmemorycategory`, and `dumpcodesize`. No `getinfo`, `getlocal`, or `sethook`. |
 | `os` | Reduced to `os.clock`, `os.date`, `os.difftime`, `os.time`. No `os.execute`, `os.exit`, `os.getenv`, `os.rename`, `os.remove`, `os.tmpname`. |
-| `collectgarbage` | Only `"count"` works; other options are rejected because GC manipulation breaks isolation. `collectgarbage()` is effectively a weaker `gcinfo()` and deprecated in Roblox. |
+| `collectgarbage` | Only `collectgarbage("count")` (heap size in KB) works; every other option, including the no-argument collect, is rejected because GC manipulation breaks isolation. |
 | `newproxy` | Accepts `nil`/`false` (bare userdata) or `true` (empty metatable); the generator-function form is gone. |
 | Builtin globals | Libraries, the string metatable, and the builtin globals table are read-only; monkey-patching `string` or `_G` builtin tables fails. Each script gets its own globals table that reads through to the builtins, so per-script globals still work. |
 | `getfenv` / `setfenv` | Still present (legacy code relies on them) but costly to isolation: they can inject globals into callers on the stack. Avoid in new code; `debug.info`/upvalues and module returns cover the legitimate cases. |

@@ -308,7 +308,7 @@ return Counter
 ## New Solver Type Features
 
 <!-- temporal: 2026-09 -->
-Everything in this section requires the **new type solver**. The old solver cannot resolve these constructs: do not delete them, rewrite them into old-solver idioms, or report them as missing in a project still running the old solver. Roblox generalized the new solver on November 20, 2025 (see Strictness Modes above): `nocheck`/`nonstrict` projects were migrated automatically, while strict projects stay on the old solver until they opt in. Opt in per experience with the Workspace property `UseNewLuauTypeSolver` (Scripting category, set to `Enabled`); the Studio beta-feature toggle was removed on January 7, 2026. The separate `LuauTypeCheckMode` property sets the default strictness mode, not the solver. Check which solver a project uses, or set the property explicitly, before editing these features.
+Everything in this section requires the **new type solver**. The old solver cannot resolve these constructs: do not delete them, rewrite them into old-solver idioms, or report them as missing in a project still running the old solver. Roblox generalized the new solver on November 20, 2025 (see Strictness Modes above): `nocheck`/`nonstrict` projects were migrated automatically, while strict projects stay on the old solver until they opt in. Opt in per experience with the Workspace property `UseNewLuauTypeSolver` (Scripting category, set to `Enabled`); the Studio beta-feature toggle was removed on January 7, 2026. The separate `LuauTypeCheckMode` property sets the default strictness mode, not the solver. `UseNewLuauTypeSolver` is not scriptable, so the Studio bridge can neither read nor change it. Infer the solver from file directives and existing new-solver syntax; when it matters, ask the user to check Workspace > Scripting in Studio. Switching the solver changes type checking for the whole project, so it is the user's decision, never part of a code edit.
 
 ### keyof and rawkeyof
 
@@ -380,7 +380,7 @@ Reads are allowed and writes are type errors, so callers can pass a narrower tab
 
 ### @deprecated
 
-Marks a named function or property as deprecated. The linter warns at every call site and the LSP shows the entry in a distinct style in autocomplete. Both optional string parameters customize the warning: `use` names the replacement, `reason` explains.
+Marks a named function as deprecated. The linter warns at every call site and the LSP shows the entry in a distinct style in autocomplete. Both optional string parameters customize the warning: `use` names the replacement, `reason` explains.
 
 ```luau
 @deprecated local function oldApi()
@@ -441,4 +441,3 @@ Roblox-only compiler feature: server-side scripts compile to machine code instea
 - [ ] Casts (`::`) are justified (narrowing, not hiding errors)
 - [ ] No sealed table violations (fields added after annotation)
 - [ ] New-solver features are only used where the new solver is enabled
-- [ ] Time-sensitive claims (solver rollout, attributes, Studio behavior) carry a `<!-- temporal: YYYY-MM -->` marker

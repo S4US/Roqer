@@ -76,7 +76,7 @@ Pair `begin`/`finish` around each measured region (per-system updates, expensive
 
 ## What Luau actually charges for (hot-loop cost model)
 
-The Scripts table above lists fixes; this section explains why they work so agents can generalize
+The Scripts table under Common Performance Issues lists fixes; this section explains why they work so agents can generalize
 instead of cargo-culting. Everything here traces to [luau.org/performance](https://luau.org/performance)
 (the "How we make Luau fast" page) — ordering claims only; no absolute cycle counts are published.
 
@@ -204,7 +204,7 @@ local oldValue = SharedTable.increment(stats, "damageDealt", 1) -- errors if key
 -- Compound read-modify-write: update may call f MORE THAN ONCE under contention;
 -- f must be pure (no side effects, no captures you mutate), or retried runs double-apply.
 SharedTable.update(stats, "bestLap", function(best)
-    if lapTime < best then return lapTime end
+    if best == nil or lapTime < best then return lapTime end
     return best
 end)
 
@@ -283,7 +283,7 @@ end)
 
 Notes:
 - The same leak exists on the client (e.g. Player/character references from LocalScripts); clean up there too.
-- `Workspace.PlayerCharacterDestroyBehavior` (default `Disabled`) controls whether the engine destroys characters on removal. Even if set to destroy, don't rely on it for the Player object, and explicit cleanup is harmless.
+- `Workspace.PlayerCharacterDestroyBehavior` (items `Default`, `Disabled`, `Enabled`; not scriptable, so set it in Studio) controls whether the engine destroys characters and players on removal. Explicit cleanup is harmless either way.
 
 ### Rendering
 

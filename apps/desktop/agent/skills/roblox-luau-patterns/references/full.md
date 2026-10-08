@@ -57,7 +57,7 @@ Rules:
 - Store mutable state on `self`. Fields on the class table are shared.
 - Prefer composition to metatable inheritance. Inheritance obscures fields, construction, and cleanup, and often produces weak type inference.
 - Give owned resources an explicit `destroy` or equivalent lifecycle only when the object actually owns resources.
-- Share exactly one metatable per type. `__eq` dispatches only when both operands carry the *same* handler — two classes with separate `__eq` handlers silently compare by raw identity. Runtime hook semantics (`__newindex` absent-key interception, `__eq` dispatch, what the table library ignores): see `roblox-luau-core` §7.
+- Share exactly one metatable per type. `__eq` dispatches only when both operands carry the *same* handler — two classes with separate `__eq` handlers silently compare by raw identity. Runtime hook semantics (`__newindex` absent-key interception, `__eq` dispatch, what the table library ignores): see `roblox-luau-core` §2 (`__newindex`) and §7 (`__eq`, library operations).
 
 Do not wrap a single table in an object merely to imitate another language.
 

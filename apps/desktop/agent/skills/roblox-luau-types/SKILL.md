@@ -18,7 +18,7 @@ Load for Luau types: annotations, generics, unions, narrowing, sealed/unsealed t
 
 **Strictness:** `--!strict` for maintained code, `--!nonstrict` while transitioning, `--!nocheck` only for legacy or generated code. Directives and project settings select the mode; never assume one global default.
 
-**New solver gate:** `keyof`, `rawkeyof`, `setmetatable<T, M>`, `type function`s, and `read` members need the new type solver. On by default for `nocheck`/`nonstrict` projects; strict projects need `Workspace.UseNewLuauTypeSolver = Enabled` (Scripting). Errors here usually mean wrong solver, not wrong syntax.
+**New solver gate:** `keyof`, `rawkeyof`, `setmetatable<T, M>`, `type function`s, and `read` members need the new type solver. On by default for `nocheck`/`nonstrict` projects; strict projects need `Workspace.UseNewLuauTypeSolver = Enabled` (Scripting), which is not scriptable: only the user can change it in Studio. Errors here usually mean wrong solver, not wrong syntax.
 
 **Inference philosophy:** Infer first; annotate boundaries (params, returns, exports). Don't annotate every local.
 

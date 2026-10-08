@@ -28,7 +28,7 @@ Load for pure Luau syntax and semantics: truthiness, tables, iteration, function
 - Luau string patterns are not regular expressions. Their syntax and capabilities differ.
 - Backtick interpolation and `..` concatenation are both valid. Choose the clearer form; join many fragments once in a hot loop.
 - NaN does not equal itself and defeats `<`/`>`; test with `x ~= x`.
-- Binary data uses the `buffer` library: fixed size, 0-based offsets, explicit-width reads/writes. Avoid `buffer.readinteger`/`writeinteger` (stubs, not released runtime).
+- Binary data uses the `buffer` library: fixed size, 0-based offsets, explicit-width reads/writes. Avoid `buffer.readinteger`/`writeinteger` unless the target runtime is verified to have them (flagged upstream, not in the Roblox reference).
 - For Base64, hashing, or compression use `EncodingService` (buffers, not strings; JSON via `HttpService`). Details: see full reference.
 
 ```luau
