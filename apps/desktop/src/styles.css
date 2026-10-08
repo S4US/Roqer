@@ -361,7 +361,7 @@ button:focus-visible, textarea:focus-visible, select:focus-visible, input:focus-
 .rojo-popover.tone-success .rojo-popover-headline { color: var(--success); }
 .rojo-popover.tone-warning .rojo-popover-headline { color: var(--warning); }
 .rojo-popover.tone-danger .rojo-popover-headline { color: var(--danger); }
-.rojo-popover-subline { margin: 6px 0 0; overflow: hidden; color: var(--muted); font-size: var(--type-meta); text-overflow: ellipsis; white-space: nowrap; }
+.rojo-popover-subline { margin: 6px 0 0; color: var(--muted); font-size: var(--type-meta); overflow-wrap: anywhere; }
 .rojo-popover dl { display: grid; gap: 4px 14px; margin: 12px 0 0; }
 .rojo-popover dl div { display: flex; justify-content: space-between; gap: 10px; }
 .rojo-popover dt, .rojo-popover dd { margin: 0; font-size: var(--type-meta); }
