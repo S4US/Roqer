@@ -121,8 +121,30 @@ export type CustomConnection = Readonly<{
   models: readonly CustomModel[];
 }>;
 
+/** Built-in free OpenCode connection always available out-of-the-box in Roqer. */
+export const DEFAULT_OPENCODE_CONNECTION: CustomConnection = {
+  id: "conn-opencode-zen",
+  name: "OpenCode Zen",
+  format: "openai",
+  baseUrl: "https://opencode.ai/zen/v1",
+  models: [
+    {
+      id: "space-bunny-free",
+      displayName: "Space Bunny (Free · 1M)",
+      images: true,
+      efforts: [],
+      contextWindow: 1_000_000,
+    },
+  ],
+};
+
 /** A connection as the renderer sees it. */
 export type CustomConnectionView = CustomConnection & Readonly<{ hasKey: boolean }>;
+
+export const DEFAULT_OPENCODE_CONNECTION_VIEW: CustomConnectionView = {
+  ...DEFAULT_OPENCODE_CONNECTION,
+  hasKey: false,
+};
 
 /**
  * A connection the renderer asks to create or update.

@@ -4,6 +4,7 @@ import path from "node:path";
 
 import {
   DEFAULT_CUSTOM_REASONING_EFFORTS,
+  DEFAULT_OPENCODE_CONNECTION,
   isCustomConnection,
   MAX_CUSTOM_API_KEY_CHARACTERS,
   MAX_CUSTOM_CONNECTIONS,
@@ -219,9 +220,10 @@ export class CustomProviderStore {
   save(save: CustomConnectionSave): Promise<CustomConnectionView[]> {
     return this.enqueue(async () => {
       const current = await this.read();
+      const isDefault = save.id === DEFAULT_OPENCODE_CONNECTION.id;
       const existing = save.id === undefined
         ? undefined
-        : current.connections.find((connection) => connection.id === save.id);
+        : current.connections.find((connection) => connection.id === save.id) ?? (isDefault ? (DEFAULT_OPENCODE_CONNECTION as StoredConnection) : undefined);
       if (save.id !== undefined && existing === undefined) {
         throw new CustomProviderStoreError("That connection no longer exists.");
       }
@@ -241,16 +243,16 @@ export class CustomProviderStore {
         ? existing?.encryptedApiKey
         : save.apiKey === null ? undefined : this.encrypt(save.apiKey);
       const connection: StoredConnection = {
-        id: existing?.id ?? `conn-${randomBytes(6).toString("hex").slice(0, 8)}`,
+        id: existing?.id ?? save.id ?? `conn-${randomBytes(6).toString("hex").slice(0, 8)}`,
         name: save.name,
         format: save.format,
         baseUrl: save.baseUrl,
         models: save.models.map((model) => ({ ...model })),
         ...(encryptedApiKey === undefined ? {} : { encryptedApiKey }),
       };
-      const connections = existing === undefined
-        ? [...current.connections, connection]
-        : current.connections.map((entry) => entry.id === existing.id ? connection : entry);
+      const connections = current.connections.some((entry) => entry.id === existing?.id)
+        ? current.connections.map((entry) => entry.id === existing?.id ? connection : entry)
+        : [...current.connections, connection];
       await this.write({ schemaVersion: SCHEMA_VERSION, connections });
       return connections.map(view);
     });

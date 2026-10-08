@@ -115,9 +115,9 @@ export function isKnownTool(tool: string): boolean {
   return Object.prototype.hasOwnProperty.call(TOOL_RISK, tool);
 }
 
-/** A Studio tool, an operation Roqer composes from them, or one of its local operations: something the risk tables classify. */
+/** A Studio tool, an operation Roqer composes from them, an external MCP tool, or one of its local operations: something the risk tables classify. */
 export function isClassifiedTool(tool: string): boolean {
-  return isKnownTool(tool) || isGatewayOperation(tool) || Object.prototype.hasOwnProperty.call(LOCAL_TOOL_RISK, tool);
+  return isKnownTool(tool) || isGatewayOperation(tool) || parseCustomMcpToolIdentity(tool) !== undefined || Object.prototype.hasOwnProperty.call(LOCAL_TOOL_RISK, tool);
 }
 
 /** Profiler arguments that name a file on the user's disk rather than anything in Studio. */
@@ -129,7 +129,8 @@ const PROFILER_FILE_ARGUMENTS: Readonly<Record<string, readonly string[]>> = {
 /**
  * Risk of a tool call. Unknown tools are treated as irreversible so that a tool
  * added to the MCP server before this table catches up can never run
- * unattended.
+ * unattended. External MCP tools are classified as mutation risk so they run
+ * automatically in Auto approve and Full auto, and ask only in Ask first.
  */
 export function riskForTool(tool: string, args?: Record<string, unknown>): ToolRisk {
   // Reading a durable Roblox operation cannot publish or mutate anything. The
@@ -153,6 +154,7 @@ export function riskForTool(tool: string, args?: Record<string, unknown>): ToolR
   }
   if (isKnownTool(tool)) return TOOL_RISK[tool];
   if (isGatewayOperation(tool)) return GATEWAY_TOOL_RISK[tool];
+  if (parseCustomMcpToolIdentity(tool) !== undefined) return "mutation";
   return Object.prototype.hasOwnProperty.call(LOCAL_TOOL_RISK, tool) ? LOCAL_TOOL_RISK[tool] : "irreversible";
 }
 

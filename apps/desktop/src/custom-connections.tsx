@@ -55,62 +55,18 @@ export type FreeModelOption = Readonly<{
   id: string;
   displayName: string;
   contextWindow: number;
-  category: "opencode" | "openrouter";
+  category: "opencode";
   description: string;
 }>;
 
 export const FREE_MODEL_OPTIONS: readonly FreeModelOption[] = [
-  // OpenCode Zen free models
+  // OpenCode Zen free model
   {
     id: "space-bunny-free",
-    displayName: "Space Bunny Free (Verified)",
-    contextWindow: 128_000,
-    category: "opencode",
-    description: "Active free model on OpenCode Zen (tool-calling verified, no key required)",
-  },
-  {
-    id: "big-pickle",
-    displayName: "Big Pickle (Needs Zen Key)",
-    contextWindow: 128_000,
-    category: "opencode",
-    description: "Requires an API key from opencode.ai/zen (OpenCode gates anonymous access)",
-  },
-
-  // OpenRouter free models
-  {
-    id: "deepseek/deepseek-r1:free",
-    displayName: "DeepSeek R1 (Free)",
-    contextWindow: 64_000,
-    category: "openrouter",
-    description: "Open reasoning model with chain-of-thought",
-  },
-  {
-    id: "meta-llama/llama-3.3-70b-instruct:free",
-    displayName: "Llama 3.3 70B (Free)",
-    contextWindow: 128_000,
-    category: "openrouter",
-    description: "Meta's flagship 70B open-weights instruction model",
-  },
-  {
-    id: "qwen/qwen-2.5-coder-32b-instruct:free",
-    displayName: "Qwen 2.5 Coder 32B (Free)",
-    contextWindow: 32_000,
-    category: "openrouter",
-    description: "Alibaba's specialized code generation model",
-  },
-  {
-    id: "google/gemini-2.0-flash-exp:free",
-    displayName: "Gemini 2.0 Flash (Free)",
+    displayName: "Space Bunny (Free · 1M)",
     contextWindow: 1_000_000,
-    category: "openrouter",
-    description: "Google's 1M-token multimodal experimental model",
-  },
-  {
-    id: "deepseek/deepseek-chat:free",
-    displayName: "DeepSeek V3 (Free)",
-    contextWindow: 64_000,
-    category: "openrouter",
-    description: "Strong general coding and conversation model",
+    category: "opencode",
+    description: "Built-in free 1M-context model on OpenCode Zen (verified tool-calling, no key required)",
   },
 ];
 
@@ -569,7 +525,7 @@ export function EndpointPage({ connection, onBack, onSaved, onRemoved, onDirtyCh
             {FREE_MODEL_OPTIONS.every((option) => existingIds.has(option.id)) && <span className="custom-hint">All curated free models are already added.</span>}
           </div>
           <div className="settings-actions">
-            <span className="custom-hint">Curated free models for OpenCode Zen and OpenRouter.</span>
+            <span className="custom-hint">Built-in free model on OpenCode Zen.</span>
             <button type="button" className="small-button" onClick={() => setShowFreePicker(false)}>Close</button>
             <button
               type="button"

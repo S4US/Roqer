@@ -788,10 +788,10 @@ export class RunSession {
       return refusedToolOutcome(tool, "equivalent-action-pending");
     }
 
-    // `Full auto` waives confirmation for the actions Roqer has classified.
+    // `Full auto` waives confirmation for the actions Roqer has classified and custom MCP tools.
     // A tool missing from the risk table has no classification to waive, so it
     // falls back to asking rather than running unattended on a guess.
-    const mode = this.request.approvalMode === "Full auto" && !isClassifiedTool(tool)
+    const mode = this.request.approvalMode === "Full auto" && !isClassifiedTool(tool) && parseCustomMcpToolIdentity(tool) === undefined
       ? "Ask first"
       : this.request.approvalMode;
     const decision = decideToolPolicy(mode, risk);
