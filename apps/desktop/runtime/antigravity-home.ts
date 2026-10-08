@@ -291,11 +291,27 @@ export async function createAntigravityHome(options: AntigravityHomeOptions = {}
  * - Roqer runs Antigravity on the user's subscription only. With an API key in
  *   the environment `agy` would bill that key instead, as the Claude provider
  *   likewise refuses a Console login.
+ * - `agy`'s background updater stays off; see `withoutBackgroundUpdater`.
  */
 export function antigravityChildEnvironment(environment: NodeJS.ProcessEnv, home: string): NodeJS.ProcessEnv {
-  const child: NodeJS.ProcessEnv = { ...environment, HOME: home, USERPROFILE: home };
+  const child = withoutBackgroundUpdater({ ...environment, HOME: home, USERPROFILE: home });
   delete child.ROBLOX_STUDIO_AUTH_TOKEN;
   delete child.GEMINI_API_KEY;
   delete child.GOOGLE_API_KEY;
   return child;
+}
+
+/**
+ * Turn off the updater `agy` starts in the background on launch.
+ *
+ * It runs as a detached process, and the `agy --version` it starts is given a
+ * console window of its own, which flashes on screen when `agy` itself was
+ * started without one, as every process from Roqer is. A fresh private home
+ * has no record of the last check, so it would flash on every status read,
+ * model listing and run. Roqer asks for updates itself instead
+ * (`AntigravityClient.updateInBackground`); an explicit `agy update` still
+ * works with this set.
+ */
+export function withoutBackgroundUpdater(environment: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  return { ...environment, AGY_CLI_DISABLE_AUTO_UPDATE: "true" };
 }

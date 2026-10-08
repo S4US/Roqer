@@ -136,6 +136,12 @@ Where the CLI keeps its sign-in in a file rather than the system keyring (over
 SSH, in WSL or a container, or on Linux without a keyring), Roqer's runs cannot
 see it, because they use a private home folder; Roqer is tested on Windows.
 
+The Antigravity CLI normally checks for updates in a background process each
+time it starts, and on Windows that process briefly shows a console window
+when the CLI was started by an app rather than a terminal. Roqer turns that
+updater off for the CLI processes it starts (`AGY_CLI_DISABLE_AUTO_UPDATE`)
+and runs `agy update` itself, hidden, at most once a day instead.
+
 Roqer runs each `agy` process with a private home folder of
 its own, created for that process in the system temp folder and deleted when
 it ends. Your Google sign-in still applies, but your own Antigravity MCP

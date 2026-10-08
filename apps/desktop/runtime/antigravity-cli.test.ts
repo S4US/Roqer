@@ -57,8 +57,10 @@ type Launched = { args: string[]; cwd: string; env: NodeJS.ProcessEnv };
  */
 function fakeAgy(state: { signedIn: boolean; goodCode?: string }) {
   const launched: Launched[] = [];
+  const updates: Launched[] = [];
   const spawnProcess: AntigravitySpawn = (args, options) => {
-    launched.push({ args, cwd: options.cwd, env: options.env });
+    // The daily `agy update` goes in a list of its own; most tests are about the rest.
+    (args[0] === "update" ? updates : launched).push({ args, cwd: options.cwd, env: options.env });
     const child = new FakeChildProcess();
     const action = options.env.AGY_CLI_CDE_AUTH_ACTION;
     setImmediate(() => {
@@ -79,6 +81,9 @@ function fakeAgy(state: { signedIn: boolean; goodCode?: string }) {
             child.finish(1);
           }
         });
+      } else if (args[0] === "update") {
+        child.writeLine("You are already on the latest version.");
+        child.finish(0);
       } else if (args[0] === "models") {
         child.write(MODELS_OUTPUT);
         child.finish(0);
@@ -89,7 +94,7 @@ function fakeAgy(state: { signedIn: boolean; goodCode?: string }) {
     });
     return child.asChild();
   };
-  return { launched, spawnProcess };
+  return { launched, updates, spawnProcess };
 }
 
 test("agy's auth check reads as an account, signed in or out", () => {
@@ -164,7 +169,9 @@ test("status, models and usage are asked in a private home that is removed after
       [["models"], undefined],
       [["--print", "/usage", "--output-format", "json"], undefined],
     ]);
-    for (const entry of fake.launched) {
+    for (const entry of [...fake.launched, ...fake.updates]) {
+      // agy's own background updater flashes a console window; Roqer's processes keep it off.
+      assert.equal(entry.env.AGY_CLI_DISABLE_AUTO_UPDATE, "true");
       assert.ok(entry.env.USERPROFILE !== undefined && entry.env.USERPROFILE !== os.homedir());
       assert.equal(path.dirname(entry.cwd), path.dirname(entry.env.USERPROFILE!));
       assert.equal(entry.env.GEMINI_API_KEY, undefined);
@@ -207,6 +214,7 @@ test("signing in hands agy the code Google showed, in the user's own home, and c
     // The credential goes wherever the user's own agy keeps it, not into a home Roqer deletes.
     assert.equal(login.env.USERPROFILE, process.env.USERPROFILE);
     assert.equal(login.env.GEMINI_API_KEY, undefined);
+    assert.equal(login.env.AGY_CLI_DISABLE_AUTO_UPDATE, "true");
 
     const waiting = client.waitForLogin();
     assert.deepEqual(await client.submitLoginCode("  4/0AGood-Code \n"), {
@@ -239,6 +247,26 @@ test("cancelling a sign-in stops agy", async () => {
   client.cancelLogin();
   assert.equal(client.pendingLoginUrl(), null);
   assert.equal((await client.waitForLogin()).ok, false);
+});
+
+test("Roqer asks agy to update itself at most once a day, in place of agy's background updater", async () => {
+  let now = 0;
+  const fake = fakeAgy({ signedIn: true });
+  const client = new AntigravityClient({ now: () => now, spawnProcess: fake.spawnProcess });
+  await client.getStatus();
+  await client.updateInBackground();
+  assert.equal(fake.updates.length, 1);
+  assert.deepEqual(fake.updates[0].args, ["update"]);
+  now = 23 * 60 * 60_000;
+  client.forgetStatus();
+  await client.getStatus();
+  await client.updateInBackground();
+  assert.equal(fake.updates.length, 1);
+  now = 25 * 60 * 60_000;
+  client.forgetStatus();
+  await client.getStatus();
+  await client.updateInBackground();
+  assert.equal(fake.updates.length, 2);
 });
 
 test("a missing agy reads as not installed", async () => {

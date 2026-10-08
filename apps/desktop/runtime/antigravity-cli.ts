@@ -3,7 +3,7 @@ import os from "node:os";
 
 import type { ProviderLoginResult, ProviderModel, ProviderModelCatalog, ProviderStatus } from "../shared/provider";
 import {
-  antigravityChildEnvironment, createAntigravityHome, type AntigravityHome, type AntigravityHomeOptions,
+  antigravityChildEnvironment, createAntigravityHome, withoutBackgroundUpdater, type AntigravityHome, type AntigravityHomeOptions,
 } from "./antigravity-home";
 import { resolveAntigravityExecutable } from "./antigravity-executable";
 import { ClientNotInstalledError } from "./client-not-installed";
@@ -50,6 +50,10 @@ const LOGIN_FINISH_TIMEOUT_MS = 90_000;
 /** How long a sign-in may wait for its code before it is given up. */
 const LOGIN_WAIT_TIMEOUT_MS = 10 * 60_000;
 const MAX_LOGIN_CODE_LENGTH = 512;
+/** How often Roqer asks `agy` to update itself, in place of the background updater it turns off. */
+const UPDATE_INTERVAL_MS = 24 * 60 * 60_000;
+/** An update downloads and installs a new `agy`, which can take a while. */
+const UPDATE_TIMEOUT_MS = 10 * 60_000;
 
 /** Where Google's sign-in for `agy` starts; the address `agy` prints must be on it. */
 export const ANTIGRAVITY_SIGN_IN_HOSTS: readonly string[] = ["accounts.google.com"];
@@ -169,7 +173,7 @@ export function parseAntigravityModels(stdout: string): ProviderModelCatalog {
  * lands wherever their own `agy` keeps it, less what must stay in Roqer.
  */
 export function antigravityLoginEnvironment(environment: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
-  const child: NodeJS.ProcessEnv = { ...environment, [AUTH_ACTION]: "login" };
+  const child: NodeJS.ProcessEnv = withoutBackgroundUpdater({ ...environment, [AUTH_ACTION]: "login" });
   delete child.ROBLOX_STUDIO_AUTH_TOKEN;
   delete child.GEMINI_API_KEY;
   delete child.GOOGLE_API_KEY;
@@ -230,6 +234,8 @@ export class AntigravityClient implements AntigravityLauncher {
   private statusGeneration = 0;
   private modelCatalog: { at: number; catalog: ProviderModelCatalog } | null = null;
   private pendingLogin: PendingLogin | null = null;
+  private lastUpdate = Number.NEGATIVE_INFINITY;
+  private updating: Promise<void> | null = null;
 
   constructor(options: AntigravityClientOptions = {}) {
     this.executable = options.executable;
@@ -275,6 +281,27 @@ export class AntigravityClient implements AntigravityLauncher {
   async readUsage(): Promise<unknown> {
     const output = await this.collect(["--print", "/usage", "--output-format", "json"], USAGE_TIMEOUT_MS);
     return antigravityUsageData(parseAntigravityEnvelope(output.stdout));
+  }
+
+  /**
+   * Keep `agy` current, at most once a day. Every process Roqer starts has
+   * `agy`'s background updater turned off, because it flashes a console
+   * window (see `withoutBackgroundUpdater`), so a user who only runs `agy`
+   * through Roqer would otherwise never be updated. `agy update` in the
+   * foreground runs in the hidden console Roqer starts it with. A failed
+   * check is tried again the next day; it never affects a run.
+   */
+  updateInBackground(): Promise<void> {
+    if (this.updating !== null) return this.updating;
+    if (this.now() - this.lastUpdate < UPDATE_INTERVAL_MS) return Promise.resolve();
+    this.lastUpdate = this.now();
+    const update = this.collect(["update"], UPDATE_TIMEOUT_MS)
+      .then(() => undefined, () => undefined)
+      .finally(() => {
+        if (this.updating === update) this.updating = null;
+      });
+    this.updating = update;
+    return update;
   }
 
   /** Forget the account and its models, because something that can change them may have happened. */
@@ -444,6 +471,8 @@ export class AntigravityClient implements AntigravityLauncher {
   private async queryStatus(): Promise<ProviderStatus> {
     try {
       const checked = antigravityCheckStatus(await this.collect([], CHECK_TIMEOUT_MS, { [AUTH_ACTION]: "check" }));
+      // `agy` is installed and answers: the moment to see whether it needs an update.
+      void this.updateInBackground();
       if (checked !== null) return checked;
       return antigravityStatusFrom(await this.collect(["--print", "/usage", "--output-format", "json"], USAGE_TIMEOUT_MS));
     } catch (error) {
