@@ -109,6 +109,7 @@ export type Preferences = {
   /** Remembered per provider so switching back keeps the previous choice. */
   chatGptModelId: string | null;
   claudeModelId: string | null;
+  antigravityModelId: string | null;
   /** A custom model, as `<connection id>:<model id>`. The connection itself lives in the main process. */
   customModelId: string | null;
   reasoningEffort: ReasoningEffort;
@@ -116,14 +117,30 @@ export type Preferences = {
 
 /** The model the user last chose for a provider, if any. */
 export function selectedModelId(preferences: Preferences, provider: ProviderId): string | null {
-  if (provider === "custom") return preferences.customModelId;
-  return provider === "claude" ? preferences.claudeModelId : preferences.chatGptModelId;
+  switch (provider) {
+    case "chatgpt":
+      return preferences.chatGptModelId;
+    case "claude":
+      return preferences.claudeModelId;
+    case "antigravity":
+      return preferences.antigravityModelId;
+    case "custom":
+      return preferences.customModelId;
+  }
 }
 
 /** A preference patch that records a model choice against its own provider. */
 export function modelPreference(provider: ProviderId, modelId: string): Partial<Preferences> {
-  if (provider === "custom") return { customModelId: modelId };
-  return provider === "claude" ? { claudeModelId: modelId } : { chatGptModelId: modelId };
+  switch (provider) {
+    case "chatgpt":
+      return { chatGptModelId: modelId };
+    case "claude":
+      return { claudeModelId: modelId };
+    case "antigravity":
+      return { antigravityModelId: modelId };
+    case "custom":
+      return { customModelId: modelId };
+  }
 }
 
 export type WorkspaceState = {
@@ -191,6 +208,7 @@ export function createInitialWorkspace(theme: Theme = "dark"): WorkspaceState {
       provider: DEFAULT_PROVIDER_ID,
       chatGptModelId: null,
       claudeModelId: null,
+      antigravityModelId: null,
       customModelId: null,
       reasoningEffort: "medium",
     },
@@ -336,6 +354,10 @@ export function normalizeWorkspace(value: unknown, themeFallback: Theme = "dark"
       : null,
     claudeModelId: typeof rawPreferences.claudeModelId === "string" && rawPreferences.claudeModelId !== ""
       ? rawPreferences.claudeModelId
+      : null,
+    // Additive: a workspace saved before Antigravity was offered has none chosen.
+    antigravityModelId: typeof rawPreferences.antigravityModelId === "string" && rawPreferences.antigravityModelId !== ""
+      ? rawPreferences.antigravityModelId
       : null,
     // Additive: a workspace saved before custom models existed has none chosen.
     customModelId: typeof rawPreferences.customModelId === "string" && rawPreferences.customModelId !== ""

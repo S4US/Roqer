@@ -43,13 +43,16 @@ const SECTIONS: ReadonlyArray<{ id: SettingsSectionId; label: string }> = [
 /** A subscription account; the Custom provider is the endpoints list instead. */
 const ACCOUNT_PROVIDERS = ENABLED_PROVIDER_IDS.filter((provider) => provider !== "custom");
 
-const ACCOUNT_CLIENTS: Partial<Record<ProviderId, string>> = { chatgpt: "Codex", claude: "Claude Code" };
+const ACCOUNT_CLIENTS: Partial<Record<ProviderId, string>> = {
+  chatgpt: "Codex", claude: "Claude Code", antigravity: "Antigravity CLI",
+};
 
 /**
  * What a plan's limits cover: ChatGPT meters Codex apart from chat, while
- * Claude's limits are shared by every Claude app.
+ * Claude's limits are shared by every Claude app. Antigravity meters groups of
+ * models apart, and the meter shows its Gemini group.
  */
-const USAGE_SCOPES: Partial<Record<ProviderId, string>> = { chatgpt: "Codex", claude: "Claude" };
+const USAGE_SCOPES: Partial<Record<ProviderId, string>> = { chatgpt: "Codex", claude: "Claude", antigravity: "Gemini models" };
 
 /**
  * Where Roqer's source and licence are published. The About group shows them

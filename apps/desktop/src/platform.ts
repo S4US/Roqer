@@ -82,10 +82,17 @@ export function subscribeToRuns(listener: (event: RunEvent) => void): () => void
 }
 
 function connector(provider: ProviderId) {
-  if (provider === "custom") return window.workbenchDesktop?.providers.custom;
-  return provider === "claude"
-    ? window.workbenchDesktop?.providers.claude
-    : window.workbenchDesktop?.providers.chatGpt;
+  const providers = window.workbenchDesktop?.providers;
+  switch (provider) {
+    case "chatgpt":
+      return providers?.chatGpt;
+    case "claude":
+      return providers?.claude;
+    case "antigravity":
+      return providers?.antigravity;
+    case "custom":
+      return providers?.custom;
+  }
 }
 
 const NO_DESKTOP = "Your own model connections need the desktop app.";

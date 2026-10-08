@@ -36,7 +36,7 @@ a sword, the Scarlet Requiem, with a combo, a flash step, and three special atta
 
 ## Features
 
-- **Your own model.** ChatGPT through the Codex app, Claude through Claude Code, or any OpenAI- or Anthropic-compatible endpoint, including local models.
+- **Your own model.** ChatGPT through the Codex app, Claude through Claude Code, Gemini through the Antigravity CLI, or any OpenAI- or Anthropic-compatible endpoint, including local models.
 - **Works in your place.** Reads and edits instances, properties, and scripts. A script edit is refused if the script changed after the agent read it, so it won't overwrite your own changes.
 - **Models in Blender.** Turn on the optional Blender integration and the agent models what parts can't make (curved shapes, detailed props, vehicle bodies), checks each model with a preview render, and uploads it into your place. It can render UI icons too.
 - **Character animations.** Ask for a run, a wave or a dance and the agent makes an R15 animation. Roqer checks the motion before Studio sees it, and you can play it in 3D in the chat. The agent then publishes the animation as the place's owner, sets it on your players' characters, and checks in a playtest that it plays.
@@ -51,7 +51,7 @@ You need:
 
 - Windows and Roblox Studio (macOS is untested)
 - [Node.js](https://nodejs.org) 20 or newer
-- a model: ChatGPT with the Codex app, Claude with [Claude Code](https://claude.com/claude-code), or any OpenAI- or Anthropic-compatible endpoint
+- a model: ChatGPT with the Codex app, Claude with [Claude Code](https://claude.com/claude-code), Gemini with the [Antigravity CLI](https://antigravity.google/product/antigravity-cli), or any OpenAI- or Anthropic-compatible endpoint
 
 ```bash
 git clone https://github.com/S4US/Roqer.git
@@ -63,7 +63,7 @@ npm run start:desktop
 
 Roqer installs its Studio plugin when it starts. Open (or restart) Roblox Studio so it loads the plugin, then open a place, pick a model in Roqer, and ask for something.
 
-If you use ChatGPT or Claude and don't have Codex or Claude Code yet, open Settings in Roqer and choose Install next to your account. Roqer runs OpenAI's or Anthropic's official installer after you confirm, then you connect your subscription.
+If you use ChatGPT, Claude or Antigravity and don't have Codex, Claude Code or the Antigravity CLI yet, open Settings in Roqer and choose Install next to your account. Roqer runs OpenAI's, Anthropic's or Google's official installer after you confirm, then you connect your subscription. To connect Antigravity, run `agy` once in a terminal and sign in there, then choose Check in Roqer.
 
 ## Use the Studio tools from another AI client
 

@@ -2,6 +2,7 @@ import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import path from "node:path";
 
 import type { ProviderId, ProviderInstallResult } from "../shared/provider";
+import { resolveAntigravityExecutable } from "./antigravity-executable";
 import { resolveClaudeExecutable } from "./claude-executable";
 import { resolveCodexExecutable } from "./codex-executable";
 
@@ -44,6 +45,13 @@ const INSTALLERS: Partial<Record<ProviderId, ClientInstaller>> = {
     script: "https://claude.ai/install.ps1",
     environment: {},
     locate: (env) => resolveClaudeExecutable({ env, platform: "win32" }),
+  },
+  antigravity: {
+    client: "Antigravity CLI",
+    publisher: "Google",
+    script: "https://antigravity.google/cli/install.ps1",
+    environment: {},
+    locate: (env) => resolveAntigravityExecutable({ env, platform: "win32" }),
   },
 };
 

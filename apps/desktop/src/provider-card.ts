@@ -8,7 +8,7 @@ import { providerLabel, type ProviderId, type ProviderStatus } from "../shared/p
 export type ProviderCard = Readonly<{ title: string; detail: string; badge?: string }>;
 
 /** The app each subscription is run through. */
-const CLIENTS: Partial<Record<ProviderId, string>> = { claude: "Claude Code", chatgpt: "Codex" };
+const CLIENTS: Partial<Record<ProviderId, string>> = { claude: "Claude Code", chatgpt: "Codex", antigravity: "Antigravity CLI" };
 
 const capitalized = (text: string) => `${text[0]?.toUpperCase() ?? ""}${text.slice(1)}`;
 

@@ -79,15 +79,17 @@ finds the Decal finished looks it up again.
 
 Roqer needs no account and no service. A run uses the provider chosen in the
 composer: the user's own ChatGPT subscription through the Codex app, their
-Claude subscription through Claude Code, or a model endpoint they configure in
-Settings. One run can be active across the app at a time, against one Studio
-place.
+Claude subscription through Claude Code, their Google account through the
+Antigravity CLI (`agy`), or a model endpoint they configure in Settings. One
+run can be active across the app at a time, against one Studio place.
 
 The ring in the composer's corner shows how full the model's context window
 was at its latest response in the chat, as the provider reported it: Claude
 Code and Codex report both the tokens in use and the window's size, and a
 configured endpoint reports the tokens while the window is the one set for the
-model in Settings. Roqer never estimates either number. A chat with nothing
+model in Settings. The Antigravity CLI reports the tokens but not the window,
+so its meter shows a count rather than a share. Roqer never estimates either
+number. A chat with nothing
 reported, or a model with no known window, says so instead of showing a share.
 The ring turns amber at 70% and red at 90%, and clicking it shows the figures
 and who reported them. Readings are not saved: after a restart, the meter
@@ -106,6 +108,8 @@ the number of requests and a price when the provider gives them.
   no request count or price, and cache writes are not shown apart.
 - **A configured endpoint** is counted the same way as Codex, with the number
   of responses as its requests.
+- **The Antigravity CLI** reports input, cache reads and output, with the
+  model's thinking counted as output. There is no request count or price.
 
 A run stopped before its provider reported anything shows no figure, never a
 zero.
@@ -116,6 +120,30 @@ signed in, and your own Codex MCP servers and plugins are not loaded there.
 Codex's own tools, such as its shell, web search and image viewer, are turned
 off, so the model acts through Roqer's tools and approvals. Codex's file editor
 cannot be turned off, but Codex runs read-only, so any edit it tries is refused.
+
+Antigravity runs need the Antigravity CLI signed in. Roqer cannot drive its
+sign-in, so run `agy` once in a terminal and follow its prompts, then choose
+Check in Settings. Roqer runs each `agy` process with a private home folder of
+its own, created for that process in the system temp folder and deleted when
+it ends. Your Google sign-in still applies, but your own Antigravity settings,
+MCP servers, plugins, hooks, rules and skills are not loaded, and Roqer's
+conversations do not appear in your Antigravity history. That home's rules
+allow only Roqer's tools. Shell commands, file writes, URL reads and browser
+actions are denied, and anything else needs a review that a headless process
+cannot give. A hook Roqer installs in the same home also refuses each of
+Antigravity's built-in tools before it runs, with a reason the model can read,
+so the model carries on with Roqer's tools. If a tool Roqer does not allow
+still runs, Roqer stops the run. Roqer never passes
+`--dangerously-skip-permissions`, and any `GEMINI_API_KEY` or `GOOGLE_API_KEY`
+in your environment is removed, so runs are billed to your subscription and
+never to a key.
+
+The Antigravity CLI reads text only, so a message with an attached image cannot
+run on an Antigravity model; choose a ChatGPT or Claude model for it. Each
+model in the picker is one of `agy models`, with its effort level in its name
+(for example Gemini 3.8 Flash High and Low), so the effort setting does not
+apply. Antigravity meters Gemini models apart from the Claude and GPT models it
+also offers. The plan meter in Settings shows the Gemini group.
 
 A model endpoint you configure runs on Roqer's own agent loop. The next
 message in the same chat continues the conversation it left, tool results
@@ -169,6 +197,7 @@ the table says so.
 | `ROQER_DISCORD_CLIENT_ID` | Build | The Discord application id embedded for Rich Presence. Defaults to Roqer's registered application; set it to test presence against another. |
 | `WORKBENCH_CODEX_EXECUTABLE` | Launch | Absolute path to `codex.exe` for a portable Codex install the normal discovery cannot find. |
 | `WORKBENCH_CLAUDE_EXECUTABLE` | Launch | Absolute path to the `claude` executable for a portable Claude Code install. |
+| `WORKBENCH_ANTIGRAVITY_EXECUTABLE` | Launch | Absolute path to the `agy` executable for an Antigravity CLI install outside `%LOCALAPPDATA%\agy\bin` (Windows) or `~/.local/bin`. |
 | `WORKBENCH_MCP_SERVER_ENTRY` | Development launch | Overrides the bridge entry point Roqer spawns, instead of the bundled or repository-relative one. |
 | `WORKBENCH_USER_DATA` | Development and tests | Overrides Electron's user-data directory, which is how the smoke test runs against an isolated profile. |
 | `WORKBENCH_DEV_SERVER_URL` | Development launch | The Vite dev server the main process loads instead of the built renderer. |
