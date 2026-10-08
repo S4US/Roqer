@@ -265,7 +265,7 @@ export function CustomMcpConnectionsList({ connections, error, loading, onReload
     <SettingsGroup
       title="Your connections"
       action={<button type="button" className="text-button" disabled={unavailable || connections === null || connections.length >= MAX_CUSTOM_MCP_CONNECTIONS} onClick={onAdd}><Plus size={14} aria-hidden="true" /> Add connection</button>}
-      footnote="Starting a local server runs its configured executable on this computer. External tools require your approval, including in Full auto. Read only blocks their calls."
+      footnote="Starting a local server runs its configured executable on this computer. External tools run automatically in Auto approve and Full auto, and ask under Ask first. Read only blocks their calls."
     >
       {loading && <p className="custom-hint" role="status">Loading MCP connections…</p>}
       {error !== null && <div className="custom-editor">
@@ -502,7 +502,7 @@ export function CustomMcpConnectionPage({ connection, connections, onBack, onSav
     <SettingsGroup title="Check" footnote={draft.transport === "stdio"
       ? "Checking starts this executable on this computer and reads its tool list. It does not call a tool."
       : "Use HTTPS, or HTTP on loopback only. Checking reads the server's tool list without calling a tool."}>
-      <SettingsRow title="Discover tools" detail="External tools require approval, including in Full auto. Read only blocks calls.">
+      <SettingsRow title="Discover tools" detail="External tools run automatically in Auto approve and Full auto. Read only blocks calls.">
         <button type="button" className="small-button" disabled={!canSave} onClick={() => void check()}>{busy === "check" ? "Checking…" : needsSave ? "Save & check" : "Check"}</button>
       </SettingsRow>
     </SettingsGroup>

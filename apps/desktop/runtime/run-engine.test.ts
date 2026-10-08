@@ -62,7 +62,7 @@ function flush(): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, 0));
 }
 
-test("external MCP calls preserve their own instance_id and still ask in Full auto", async () => {
+test("external MCP calls preserve their own instance_id and auto-approve in Full auto", async () => {
   const caller = makeCaller(async () => outcome({ text: "external answer" }));
   const events: RunEvent[] = [];
   const session = new RunSession({
@@ -79,6 +79,47 @@ test("external MCP calls preserve their own instance_id and still ask in Full au
   });
   assert.equal(await session.execute(), "completed");
   assert.deepEqual(caller.calls[0]?.args, { instance_id: "external-instance" });
+  assert.equal(events.filter((event) => event.type === "approval-requested").length, 0);
+  assert.equal(events.filter((event) => event.type === "approval-resolved" && event.decision === "approved" && event.automatic).length, 1);
+  assertAllValid(events);
+});
+
+test("external MCP calls auto-approve in Auto approve", async () => {
+  const caller = makeCaller(async () => outcome({ text: "external answer" }));
+  const events: RunEvent[] = [];
+  const session = new RunSession({
+    caller,
+    request: makeRequest({ instanceId: "studio-instance", approvalMode: "Auto approve" }),
+    planner: planner(async (ctx) => {
+      await ctx.call("custom_mcp/test/echo", { instance_id: "external-instance" });
+      return "done";
+    }),
+    emit: (event) => {
+      events.push(event);
+    },
+  });
+  assert.equal(await session.execute(), "completed");
+  assert.equal(events.filter((event) => event.type === "approval-requested").length, 0);
+  assert.equal(events.filter((event) => event.type === "approval-resolved" && event.decision === "approved" && event.automatic).length, 1);
+  assertAllValid(events);
+});
+
+test("external MCP calls ask in Ask first", async () => {
+  const caller = makeCaller(async () => outcome({ text: "external answer" }));
+  const events: RunEvent[] = [];
+  const session = new RunSession({
+    caller,
+    request: makeRequest({ instanceId: "studio-instance", approvalMode: "Ask first" }),
+    planner: planner(async (ctx) => {
+      await ctx.call("custom_mcp/test/echo", { instance_id: "external-instance" });
+      return "done";
+    }),
+    emit: (event) => {
+      events.push(event);
+      if (event.type === "approval-requested") session.resolveApproval(event.callId, "approved");
+    },
+  });
+  assert.equal(await session.execute(), "completed");
   assert.equal(events.filter((event) => event.type === "approval-requested").length, 1);
   assertAllValid(events);
 });
