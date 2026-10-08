@@ -35,6 +35,6 @@ Load for player saves, migrations, retries, shutdowns, or session ownership. Lea
 - RTBF: keep the user ID as a static substring in keys (`player_<UserId>`) so `{UserId}` deletion templates can match; hashed or random keys make erasure manual.
 - `GetAsync` serves a 4-second local cache (`DataStoreGetOptions.UseCache`, default `true`); verify writes with `UseCache = false`.
 - Poll `DataStoreService:GetRequestBudgetForRequestType` for live headroom; quotas scale with concurrent users (experience reads: 300 + concurrentUsers x 40/min).
-- New code identifies users with `player.User` (`User.Id`, `DomainType`, `DomainId`); `UserId` remains valid, but never mix the two IDs in one key scheme.
+- `player.User` (`User.Id`, `DomainType`, `DomainId`) is the newer identity; `UserId` stays valid. Keep persistent and RTBF-matched keys on `UserId` (see full.md §1a), and never mix the two IDs in one key scheme.
 
 > Persistence workflows: [references/full.md](references/full.md)

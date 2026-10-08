@@ -39,7 +39,7 @@ The official docs read like a flag flip, but the real cost depends on how much s
 Practical constraints once you commit:
 
 - **Sources of truth must be independent and deterministic.** Reconstruct state from synchronized `time()`-derived keys, not from live attributes. Keep a per-frame snapshot of the minimum state needed to resimulate, and after a rollback discard snapshots newer than the reconciled frame.
-- **Attributes are the serialization channel and they budget hard.** The attribute payload is roughly 1 KiB; a few CFrames or Vector3s can consume it. Pack dense numeric state into bit flags (32 bits per value; split a 64-bit Lua number with `math.fmod` if you need two) instead of storing floats.
+- **Attributes are the serialization channel and they budget hard.** The attribute payload is roughly 1 KiB (practitioner-reported); a few CFrames or Vector3s can consume it. Pack dense numeric state into 32-bit fields with `bit32` instead of storing floats; a Luau number holds integers exactly only up to 2^53.
 - **Client input can be rolled back.** Do not rely on a single input event reaching the simulation. Re-parse buffered input each frame so a misprediction retries instead of dropping the action, and expect a small input delay buffer in real-time games.
 - **Side effects are the sharpest edge.** Anything non-deterministic (UI toggles, spawns, one-shot events) fires again on resimulation unless transitions are idempotent. Beta testers call side effects the biggest pain point and recommend observing attribute changes during `PreRender` rather than reacting inside the simulation where you cannot tell a re-run from a first run.
 
@@ -248,9 +248,27 @@ Pair detection with the native API instead of kicking in a loop. Illustrative sh
 -- ServerScriptService. Detection modules feed scores; the ladder decides.
 local REPRIEVES = { [1] = 3600, [2] = 86400 } -- 1h, then 24h; third strike permanent
 
+local Players = game:GetService("Players")
+
+local function countPriorBans(userId: number): number?
+    local ok, pages = pcall(Players.GetBanHistoryAsync, Players, userId)
+    if not ok then return nil end
+    local count = 0
+    while true do
+        for _, entry in pages:GetCurrentPage() do
+            if entry.Ban then count += 1 end -- history also lists unbans (Ban = false)
+        end
+        if pages.IsFinished then break end
+        local advanced = pcall(pages.AdvanceToNextPageAsync, pages)
+        if not advanced then return nil end
+    end
+    return count
+end
+
 local function enforce(player: Player, detectorId: string)
-    local history = Players:GetBanHistoryAsync(player.UserId)
-    local strikes = #history:GetCurrentPage() + 1 -- iterate Pages for full history
+    local prior = countPriorBans(player.UserId)
+    if prior == nil then warn("ban history unavailable; not escalating") return end
+    local strikes = prior + 1
 
     local duration = REPRIEVES[strikes] or -1
     local config = { -- the parameter is typed Dictionary; there is no BanConfigType

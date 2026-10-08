@@ -194,7 +194,7 @@ volume with a few studs of slack. Failure of a tolerance check is suspicion, not
 type Swing = { id: string, stamp: number, origin: Vector3, target: Model? }
 
 local MAX_AGE = 0.35 -- freshness window: re-derive from measured RTT + interpolation buffer
-local pending = {} -- [player] = { [swingId] = expiry } filled when the swing anim starts
+local pending = {} -- [player] = { [swingId] = { expiry = number } } filled when the swing anim starts
 
 local function validateSwing(player: Player, claim: Swing): boolean
     local now = workspace:GetServerTimeNow() -- server-side read is authoritative
@@ -318,7 +318,7 @@ server. Build it deliberately, from measured numbers — never from a library's 
 1. **Enumerate every remote** with: fire rate at max realistic concurrency (peak fight, not average),
    bytes per call measured in a test place (§7), and — the step most budgets skip — **recipients per
    call**. `FireAllClients` multiplies bytes by the player count and fanout is the dominant term for
-   broadcast events; a 200-byte event to 40 players every frame is ~19 KB/frame ≈ 1.1 MB/s.
+   broadcast events; a 200-byte event to 40 players every frame is ~8 KB/frame ≈ 480 KB/s at 60 Hz.
 2. **Classify each event** replaceable (unreliable-eligible; a newer value supersedes a lost one) vs
    must-arrive (reliable, and then count its retransmission cost under packet loss too). Reuse the §6
    decision; the budget does not change it.
@@ -414,6 +414,8 @@ Client code that requires a network module fails to load in edit mode (no player
 
 ```luau
 -- Network/init.luau
+-- Shared.RunContext is your own module exposing a context flag set by the preview harness;
+-- RunService:IsEdit() is plugin-only and not callable from game scripts.
 local RunContext = require(Shared.RunContext)
 local Network
 

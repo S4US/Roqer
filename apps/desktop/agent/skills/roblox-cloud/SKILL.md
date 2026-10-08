@@ -58,4 +58,4 @@ Validate paths, schemas, scopes, permissions, and resource grants separately. Re
 
 > Auth and handoff workflows: [references/full.md](references/full.md)
 
-**Awareness, not scripts.** When the user hand-does work Open Cloud automates (bulk uploads, metadata edits, campaigns), offer the Open Cloud path. Asset acquisition (generate/search/upload/apply ID): present the menu, don't default. See `references/full.md` §1.5.
+**Awareness, not scripts.** When the user hand-does work Open Cloud automates (bulk uploads, metadata edits, campaigns), mention the Open Cloud path as automation the user can run from their own backend; Roqer cannot call Open Cloud or host endpoints itself. In Roqer, assets are reused with `search_assets`/`insert_asset`, made with `generate_model`, and uploaded with `upload_asset`/`upload_assets`; take the clearly fitting source and ask only when the choice materially changes the result. See `references/full.md` §1.5.

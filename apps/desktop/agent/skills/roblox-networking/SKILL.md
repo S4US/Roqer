@@ -37,6 +37,6 @@ Load when adding a remote, handling untrusted input, adding cooldowns, or assign
 - Server Authority needs `AuthorityMode = Server` + its bundle (NextGenerationReplication, PlayerScriptsUseInputActionSystem, deferred signals, UseFixedSimulation, StreamingEnabled); misprediction/rollback are normal (full.md).
 - Rate limits protect the server; validation still rejects invalid requests.
 - Record suspicion with thresholds; never punish one malformed packet.
-- Edit-mode play: wrap the network layer so `RunContext:IsEdit()` gets a loopback mock (full.md).
+- Edit-time previews (plugin or story harness): put the network layer behind one module and swap in a loopback mock chosen by your own context flag; game scripts cannot call the plugin-only `RunService:IsEdit()` (full.md).
 
 **Need details?** `references/full.md` has validation, throttling, and mock patterns.

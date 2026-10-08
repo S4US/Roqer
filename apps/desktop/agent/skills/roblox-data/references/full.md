@@ -58,7 +58,7 @@ Handling the request once it arrives:
 
 - Roblox sends a daily message listing RTBF requests requiring action. When one appears, verify the corresponding data is removed within 30 days. <!-- temporal: 2026-09 -->
 - For data outside your templates (custom schemas, non-data-store storage), configure a creator webhook with the Right to Erasure Request trigger. Its payload carries `EventPayload.UserId` and `EventPayload.GameIds`; verify the `Roblox-Signature` header before acting on it.
-- A `RemoveAsync` deletion is a soft delete: the key reads back `nil`, but older versions stay retrievable during their retention window (see section 5c). Decide whether your erasure flow must also cover version history.
+- A `RemoveAsync` deletion is a soft delete: the key reads back `nil`, but older versions stay retrievable during their retention window (see section 8a). Decide whether your erasure flow must also cover version history.
 
 ## 2. Define a serializable schema
 
@@ -465,6 +465,8 @@ if closest then
     store:SetAsync(key, value, nil, setOptions)
 end
 ```
+
+Only restore after the key's live session has ended or been released (section 4), or the raw `SetAsync` can overwrite a session in progress; with ProfileStore, restore through the library rather than raw `SetAsync`, which would overwrite its lock metadata.
 
 Interaction with soft delete: `RemoveAsync` does not erase anything by itself. It appends a tombstone version, so subsequent `GetAsync` calls return `nil`, while older versions stay readable via `ListVersionsAsync` and `GetVersionAsync` until they expire. Two consequences: data thought deleted can still be retrievable (relevant to erasure obligations, section 1b), and an accidental `RemoveAsync` is recoverable by reading the prior version and rewriting it. Only the latest version counts toward the storage limit (section 10).
 

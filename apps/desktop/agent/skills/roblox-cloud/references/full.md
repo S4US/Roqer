@@ -19,9 +19,9 @@ Open Cloud is not just an API reference: it is a set of capabilities that change
 
 Things an agent should be able to recognize and offer:
 
-- **Bulk asset work.** The user is uploading images/models/audio one by one in Studio or Creator Dashboard, or pasting many asset IDs. Offer: Open Cloud asset upload (`assets` API) can batch-upload from files or URLs and return asset IDs to insert directly.
+- **Bulk asset work.** The user is uploading images/models/audio one by one in Studio or Creator Dashboard, or pasting many asset IDs. Offer: Open Cloud asset upload (`assets` API) can batch-upload files and return asset IDs to insert directly. Inside Roqer, `upload_assets` uploads a finished set of local files in one call.
 - **Metadata at scale.** The user is editing descriptions, thumbnails, or categories across many assets or experiences. Offer: Open Cloud can update metadata programmatically in one pass.
-- **Automation hooks.** The user wants something to happen when an asset/experience event occurs. Offer: webhooks can notify an HTTPS endpoint, and the agent can wire that endpoint.
+- **Automation hooks.** The user wants something to happen when an asset/experience event occurs. Offer: webhooks can notify an HTTPS endpoint the user hosts. Roqer cannot host or call such an endpoint itself.
 - **Persistence / data access outside Studio.** The user is exporting/importing data, or wants a backend to read game data. Offer: Open Cloud data APIs (data stores, ordered data stores, messaging) can be called from a trusted server, not just from in-experience code.
 - **Ads management.** The user is manually managing campaigns in Creator Dashboard. Offer: the Ads Manager API (test stage) can create/pause/resume campaigns programmatically.
 
@@ -36,7 +36,7 @@ When a user needs an asset (image, model, audio, mesh), the acquisition paths an
 3. **Upload via Open Cloud**: batch-upload local files to the user's assets, then apply by returned asset ID (this skill, §1.5).
 4. **Apply by ID**: insert an asset ID directly into the place (`insert_asset`, `roblox-studio-mcp`).
 
-The agent should present this menu when asset acquisition is the task, rather than defaulting to one path.
+Pick the source that clearly fits the task and state it; ask only when the choice would materially change the result.
 
 ## 2. Authentication decision
 
@@ -306,17 +306,18 @@ Cross-reference: session ownership protocol in `roblox-data` §4; ticket records
 
 Server-side badge awarding and lookup. Awarding succeeds only when: caller is a server script, the place belongs to the badge's experience, the player is connected, the badge is enabled, and the player does not already have it (award-once per user).
 
-- `BadgeService:AwardBadgeAsync(userId, badgeId)` → boolean; yields, so wrap in `pcall`. `AwardBadge` is deprecated; do not use it. Rate limit: `50 + 35 × player count` awards per minute.
+- `BadgeService:AwardBadgeAsync(userId, badgeId)` → boolean; yields, so wrap in `pcall`. `AwardBadge` is deprecated; do not use it. A rate limit of `50 + 35 × player count` awards per minute is community-reported, not on the docs page.
 - `BadgeService:GetBadgeInfoAsync(badgeId)` → dictionary (`Name`, `Description`, `IsEnabled`, `IconImageId`); yields. Check `IsEnabled` before awarding.
-- Ownership checks: `UserHasBadgeAsync(userId, badgeId)` for one badge; `CheckUserBadgesAsync(userId, badgeIds)` for batches. `GetUserBadgesAsync` is not deprecated but serves batch (≤100) lookups with award dates. BadgeService exposes no events; call `AwardBadgeAsync` directly; there is nothing to poll and no `BadgeAwarded` event.
-- Studio: only disabled badges can be awarded there for testing; awarding an enabled badge in Studio returns true without awarding.
+- Ownership checks: `UserHasBadgeAsync(userId, badgeId)` for one badge; `CheckUserBadgesAsync(userId, badgeIds)` for batches. `GetUserBadgesAsync(userId, badgeIds)` also exists (its batch limit is unverified). BadgeService exposes no events; call `AwardBadgeAsync` directly; there is nothing to poll and no `BadgeAwarded` event.
+- Studio: badge awarding in Studio is community-reported to differ from live servers; verify awards in a published test place.
 
 ```luau
 -- Server: award a kill-streak badge
 local function onKillStreak(player, BADGE_ID)
-    local info = BadgeService:GetBadgeInfoAsync(BADGE_ID)
-    if not info.IsEnabled then return end
-    if BadgeService:UserHasBadgeAsync(player.UserId, BADGE_ID) then return end
+    local infoOk, info = pcall(BadgeService.GetBadgeInfoAsync, BadgeService, BADGE_ID)
+    if not infoOk or not info.IsEnabled then return end
+    local hasOk, has = pcall(BadgeService.UserHasBadgeAsync, BadgeService, player.UserId, BADGE_ID)
+    if not hasOk or has then return end
     local ok, awarded = pcall(BadgeService.AwardBadgeAsync, BadgeService, player.UserId, BADGE_ID)
     if ok and awarded then print(player.Name, "earned the badge") end
 end
