@@ -51,13 +51,69 @@ Choose the construction per component, not once per build. A single area can mix
 
 1. **Native:** Parts, WedgeParts, CornerWedgeParts, and CSG for ground, blocks, walls, stairs, collision, triggers, and any shape the style keeps geometric. This is often most of a stylized map.
 2. **Reuse:** search the place for a compatible model before making a new one, and clone it rather than rebuilding it.
-3. **Creator Store:** `search_assets`, then `get_asset_details`, `get_asset_thumbnail`, or `preview_asset` to shortlist, then `insert_asset`. Record ID, creator, type, price, and intended parent. For cross-owner or paid results, get explicit consent before insertion.
+3. **Creator Store:** `search_assets`, then `get_asset_details`, `get_asset_thumbnail`, or `preview_asset` to shortlist, then `insert_asset`. Record ID, creator, type, price, and intended parent. For cross-owner or paid results, get explicit consent before insertion. When the `blender` tool is offered, visual pieces are modeled in Blender instead ([What gets modeled](mesh-boundary.md)), so use the Store then only when the user asks for a Store asset. Without Blender, the Store is a production source for common props, not only a prototype shortcut ([Toolbox guide](https://create.roblox.com/docs/projects/assets/toolbox)), but judge each candidate before inserting it: its creator, previews, description, script count and geometry complexity. Popularity and a verified creator are signals, not proof of safety or fit. Use a Store asset when it fits the game's scale and style without heavy rework; build the piece when the mechanic, style, rights or performance budget demand it. `insert_asset` strips scripts and package links before parenting, so an asset whose behavior lives in its scripts arrives inert; Roblox warns that [third-party models can contain backdoors](https://create.roblox.com/docs/scripting/security/third-party-vulnerabilities), so recreate any behavior you need rather than restoring its code (see `roblox-security`). After insertion check pivot, player scale, collision, anchoring, textures and any nested asset the model loads; when it sits on a route players walk, playtest traversal around it, because a model that looks right in its thumbnail can still block movement.
 4. **Generated mesh:** `generate_model` for a custom textured prop, from a prompt or a PNG reference. Bound `size` and `max_triangles`; use `schema_groups` when the model needs separately named parts (a lid, a door, wheels). The result is staged in `ServerStorage.__MCPGeneratedModels`, not in Workspace, so move or clone it into the build root. Do not treat it as accepted until inspected.
 5. **Upload:** `upload_asset` action `upload` publishes a permitted local file (Decal, Model, Audio, Animation, Video) to the user's Roblox account. It needs an Open Cloud key and creator; if none are configured, report that instead of retrying and point the user to Roqer's Settings → Roblox → Open Cloud. Never upload external content without permission. If it is still processing after the bounded wait, keep the returned `operation_id` and call the same operation with action `status` later instead of creating a duplicate. Report the completed asset ID and Roblox moderation state.
 6. **Place:** parent the result under the named build root, set pivot/transform, and read back class, descendants, bounds, materials, collision, anchoring, and asset provenance.
 7. **Fallback:** use native Parts, CSG, primitives, and coherent materials when generation is unavailable, slow, rejected, or visually unsuitable.
 
 `generate_model` and the upload action are irreversible: outside Full auto, Roqer asks the user before each call, so make each one count. Checking an existing upload operation is read-only. Generated assets are candidates. Structural and visual review are still required.
+
+## Mesh-Backed Geometry
+
+`MeshPart` is a `BasePart` with a custom mesh. Treat the visible mesh, its appearance, and its collision shape as separate review surfaces:
+
+- read back `MeshId`/`MeshContent`, `MeshSize`, transform, bounds, `Anchored`, `CanCollide`, `CanTouch`, `CanQuery`, and `CollisionFidelity`;
+- inspect a child `SurfaceAppearance` and its `ColorMap`, normal, metalness, roughness, and emissive maps when present; PBR appearance depends on device and graphics quality, and the bridge cannot switch graphics quality, so check device classes with `set_device_simulator` or `capture_device_matrix` where that helps and report other quality levels as unverified;
+- do not imply that a runtime script can repair `MeshId` or most PBR maps. Resolve authoring/import issues before placement, then verify after insertion;
+- record source and intended use for each non-original mesh. A repeated asset key may indicate reuse, but static equality is not proof of license or quality.
+
+Use native Parts or CSG for simple collision and blockout geometry, and layer collision under a detailed or large mesh as [What gets modeled](mesh-boundary.md) describes. Let measured playtests and profiling, not class counts, decide performance changes.
+
+## EditableImage and EditableMesh (runtime pixel/vertex editing)
+
+`EditableImage` and `EditableMesh` are runtime-editable image and mesh objects (not `Instance`s, so `Instance.new` does not work). Create them through `AssetService`:
+
+```luau
+local AssetService = game:GetService("AssetService")
+
+-- from scratch (synchronous)
+local image = AssetService:CreateEditableImage({ Size = Vector2.new(256, 256) })
+
+-- from an owned asset (async, may throw on permission/network failure)
+local loaded = AssetService:CreateEditableImageAsync(Content.fromUri(assetUri))
+```
+
+Hard constraints (official):
+
+- Creation APIs can return `nil` when the device is out of `Editable*` memory budget. Always nil-check before use; `:Destroy()` finished objects to free budget.
+- In published experiences the creator must be 13+, ID-verified, and have the "Allow Mesh / Image APIs" toggle on (Game Settings → Security). Loading assets works only for assets the experience owner (or group) owns.
+- `Editable*` objects do not replicate. Each client/server boundary needs its own creation; replicating edits means sending your own data (and you are then responsible for moderation of user-generated content, so prefer seed/slider parameters over free-form pixel replication).
+- `EditableImage` size is fixed at creation. `EditableMesh` created from an asset is fixed-size by default (cheaper; positions/attributes editable, topology not). Non-fixed meshes: 60,000 vertex / 20,000 triangle limit.
+
+Rendering to UI: wrap with `Content.fromObject(image)` and assign to `ImageLabel.ImageContent` (or `MeshPart.TextureContent` / `MeshPart.MeshContent`). Practitioner tip: set `ResampleMode` to `Pixelated` for crisp low-resolution renders.
+
+Pixel work uses the `buffer` library, 4 bytes per pixel RGBA, row-major:
+
+```luau
+local w, h = image.Size.X, image.Size.Y
+local px = buffer.create(w * h * 4)
+for y = 0, h - 1 do
+    for x = 0, w - 1 do
+        local i = (y * w + x) * 4
+        buffer.writeu8(px, i, r) buffer.writeu8(px, i + 1, g)
+        buffer.writeu8(px, i + 2, b) buffer.writeu8(px, i + 3, 255)
+    end
+end
+image:WritePixelsBuffer(Vector2.zero, image.Size, px)
+```
+
+Practitioner guidance (DevForum, unverified):
+
+- Pack a pixel as one `u32` write where possible instead of four `u8` writes; batch per-row and write once per frame. A one-`EditableImage`-update-per-frame limit has been reported, so profile before assuming per-frame writes are free.
+- Expensive per-pixel loops (raycast renderers, fractals) benefit from Parallel Luau: compute row buffers inside Actors, then `task.synchronize` before `WritePixelsBuffer` (it is not callable in parallel).
+- For painting on meshes: `EditableMesh:RaycastLocal` gives the hit UV, then draw at that coordinate on the paired `EditableImage` (`DrawImageTransformed` for cropping/rotation, `DrawCircle`/`DrawRectangle`/`DrawLine` for shapes).
+- `EditableMesh` IDs (vertex/face/UV/normal) are stable but unordered with holes; iterate `GetVertices()`/`GetFaces()` results, never `1..count`. Use batch APIs (`BatchSetValues`) over per-element calls for bulk edits; re-derive collision via `AssetService:CreateMeshPartAsync` at the end of a conceptual edit, not per-op.
 
 ## Player Scale Reference
 
@@ -226,6 +282,21 @@ end
 - GeometryService supports Part, PartOperation, and MeshPart. Terrain is NOT supported.
 - Set `CollisionFidelity = Enum.CollisionFidelity.Box` on decorative unions for performance.
 
+## Terrain Import Workflow
+
+Roblox's built-in terrain sculpting is fine for small worlds but tedious for large open-world landscapes. When a user wants a large landscape, this external pipeline is the proven one; the user runs it with their own desktop tools and Studio plugins, so describe it rather than attempting it through the bridge: generate a landscape in a desktop terrain tool, import it as an OBJ mesh, then convert it to voxel terrain so it streams with the engine.
+
+1. Generate: Quadspinner Gaea (free tier, 1k map resolution) with a Primitive → Displace → Erosion node graph. Add a Mesher node at the end, export as `.tor` then OBJ.
+2. Optimize (optional): import OBJ into Blender, apply a Decimate modifier down to ~50-200k faces if the mesh is too heavy to import (note: too few triangles = holes after voxel conversion).
+3. Import into Studio: use the OBJ Importer plugin (converts vertex data to wedges/parts) in a blank place; this bypasses Roblox's OBJ polygon limit.
+4. Convert to terrain: run a part-to-voxel conversion script over the imported parts. Heightmap import is faster and supports higher resolutions, but the selective material-painting step below only works on the mesh path.
+
+**Material painting:** with the mesh path you can paint materials automatically by slope and altitude (e.g. rock on steep slopes, grass on flats), then the voxel conversion preserves the painted result. For imported heightmaps, paint via a color map that adheres to Roblox's colormap material set instead.
+
+Gaea is resource-hungry (8-16 GB RAM recommended; Studio uses a lot during import). Lower-end hardware can still manage the 1k free-tier resolution.
+
+> Heightmaps cannot represent overhangs or caves; use the mesh path for those.
+
 ## Platform Quirks
 
 ### Cylinder Orientation
@@ -337,10 +408,37 @@ Before calling a map phase complete, verify:
 
 - the map root and `Origin` are present
 - zone floors and landmarks are inside the intended bounds
-- spawn points and main paths are reachable and wide enough
+- each named spawn has a navigable return path, is not inside collision or facing a wall, and, when the design declares a fixed session population, spawn count matches it
+- main paths are reachable and wide enough
 - geometry is connected to the ground or a parent structure
 - bounds calculations exclude `Baseplate`, `Terrain`, and default `SpawnLocation` unless intentionally included
 - saved world intent agrees with the verified phase; compare local counts and bounded `get_scene_analysis` output with the world budgets (see [World intent](world-intent.md))
+
+## Player-Facing Route Acceptance
+
+Treat a map as a player path, not only a geometry tree:
+
+1. Draw the main route as nodes and edges: spawn, first action, decision points, checkpoints, goals, returns, and exits.
+2. From every spawn, verify that the next landmark or affordance is visible, the camera is not inside geometry, and the player is not facing a wall or hazard.
+3. Give each critical action a readable world cue and feedback. Route prompts and input to their owning skills rather than encoding progress in decoration alone.
+4. Check the return path and recovery from falls, death, wrong turns, and interrupted traversal.
+5. When the request needs runtime evidence, playtest from the player camera at representative movement speeds; otherwise say wayfinding is unverified. A top-down editor view cannot prove wayfinding or spatial onboarding.
+
+Judging whether players actually understand the route needs runtime observation or a funnel on a published experience; in Studio, report onboarding success as unverified. Static route structure can reveal what to test, not whether players understand it.
+
+For world interactions, prefer `ProximityPrompt` when cross-device button or hold semantics fit. Use `ClickDetector` for simple click interactions and `Touched` only when physical contact is the mechanic. `BillboardGui`, `SurfaceGui`, and `Highlight` provide cues, not authority. Validate outcomes on the server from current distance, state, cooldown, and ownership.
+
+## Large-Place Readback
+
+For a large root, do not use an unbounded "dump everything" readback as the only check. Partition the inspection by build root or zone and collect, with `get_scene_analysis` where it suffices and otherwise the bounded read-only query in [World intent](world-intent.md):
+
+- instance and descendant counts, plus bounds and pivot for each scope;
+- class counts for structural and effect-heavy classes such as `MeshPart`, `UnionOperation`, `SurfaceAppearance`, `Attachment`, and `ParticleEmitter`;
+- anchoring, collision, and query-state exceptions;
+- repeated mesh, texture, and image references that may deserve deduplication review;
+- the smallest representative set of paths needed to investigate each exception.
+
+Use the report to choose the next bounded inspection or playtest. Static counts are triage signals, not proof of quality, usability, memory use, or frame rate. Confirm performance concerns with `get_scene_analysis`, `get_memory_breakdown`, `capture_micro_profiler`, and representative devices.
 
 ## Evidence Recipes
 
@@ -348,3 +446,24 @@ Before calling a map phase complete, verify:
 - **Visual:** aim the view with `selection` `action: "view"` (a target `path`, plus `from`, `angleY` and `padding`), then `capture_screenshot`. Do not move the camera through `execute_luau`. For a repair, follow [Visual repair](visual-repair.md): bracket the mutation with comparable before/after views and pair them with structural readback. If capture fails or hangs, report that and retain structural evidence rather than inventing visual conclusions.
 - **Runtime:** start play, navigate to the spawn and a representative landmark, exercise the relevant interaction, collect console output, and stop play. A clean console is evidence of no observed errors, not proof of all behavior.
 - **Recovery:** if a phase fails, preserve the last verified phase, remove only the disposable failed output, and retry with a smaller batch or native fallback.
+
+## Interaction Prompts: ProximityPrompt and ProximityPromptService
+
+`ProximityPrompt` (parent to a `BasePart`, `Attachment`, or `Model`) renders a built-in interaction prompt (key hint + label) and fires `Triggered` when the player interacts; no GUI code needed. Default `RequiresLineOfSight = true` and `MaxActivationDistance = 10`. `HoldDuration` makes the player hold the key; `GamepadKeyCode`/`Style` control presentation. `ObjectText`/`ActionText` are the sub-label and main label. `KeyboardKeyCode`/`ClickablePrompt` customize input.
+
+`ProximityPromptService` is the manager: `Enabled` toggles all prompts, `MaxPromptsVisible` (default 16) caps simultaneous prompts, `MaxIndicatorsVisible` (default 16, clamped 0-64) caps opt-in distance indicators. Events: `PromptShown`/`PromptHidden` (client-side visibility), `PromptTriggered(prompt, player)` fires on completed interaction (key press, or after `HoldDuration` hold), `PromptTriggerEnded`, `PromptButtonHoldBegan`/`PromptButtonHoldEnded` (hold-progress UI), plus `IndicatorShown`/`IndicatorHidden` for custom indicator UI (indicators only appear when a prompt sets `MaxIndicatorDistance > 0`). Listen globally on the service to avoid per-prompt wiring:
+
+```luau
+local PPS = game:GetService("ProximityPromptService")
+PPS.PromptTriggered:Connect(function(prompt, player)
+    handleInteraction(prompt, player) -- one connection for every prompt in the game
+end)
+```
+
+Server scripts can also create and configure prompts programmatically; `TriggerEnded` on the prompt itself pairs with `Triggered` for release-to-cancel mechanics. A global handler fires for every prompt in the game, so dispatch by tag or attribute and validate on the server; per-prompt handlers as in [Gameplay assembly](gameplay-assembly.md) remain fine. For wiring a prompt onto a held or interactive model, see [Gameplay assembly](gameplay-assembly.md).
+
+## Community ecosystem (leads, not sources)
+
+- [Large-Scale Roblox Terrain: the ultimate guide](https://devforum.roblox.com/t/large-scale-roblox-terrain-the-ultimate-guide/405672) (84k views): still the terrain-at-scale reference.
+- [Realistic oceans via mesh deformation](https://devforum.roblox.com/t/realistic-oceans-using-mesh-deformation/1159345); [greedy meshing explainer](https://devforum.roblox.com/t/consume-everything-how-greedy-meshing-works/452717).
+- [Free texture sites](https://devforum.roblox.com/t/free-texture-sites/70131) (174k views); [City Loader plugin](https://devforum.roblox.com/t/city-loader-plugin-templates-for-real-life-buildingscities-in-studio/696886).

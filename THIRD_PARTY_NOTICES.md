@@ -105,7 +105,7 @@ THE SOFTWARE.
 
 Most of the Roblox domain skills in `apps/desktop/agent/skills/` are based on
 [TabooHarmony/roblox-brain](https://github.com/TabooHarmony/roblox-brain)
-1.2.1, under the MIT licence. Its notice is
+2.2.0, under the MIT licence. Its notice is
 [`apps/desktop/agent/skills/ROBLOX-BRAIN-LICENSE.txt`](apps/desktop/agent/skills/ROBLOX-BRAIN-LICENSE.txt),
 and [`apps/desktop/agent/PROVENANCE.md`](apps/desktop/agent/PROVENANCE.md)
 records which skills were changed here and which material was written for

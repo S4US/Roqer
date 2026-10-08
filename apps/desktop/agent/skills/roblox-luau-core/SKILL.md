@@ -1,31 +1,35 @@
 ---
 name: roblox-luau-core
 description: "Use for Luau language semantics, tables, control flow, string patterns, scope, closures, and cross-language translation errors."
-last_reviewed: 2026-07-26
+last_reviewed: 2026-10-02
 sources:
   - https://luau.org/syntax
   - https://luau.org/library
+  - https://raw.githubusercontent.com/Roblox/creator-docs/main/content/en-us/reference/engine/libraries/vector.yaml
 ---
 
 # Luau Core Language
 
 ## When to Load
 
-Load for pure Luau syntax and semantics: truthiness, tables, iteration, functions, scope, operators, string patterns, and ports from JavaScript or Python. Use `roblox-luau-types` for type annotations, `roblox-luau-patterns` for ownership and lifecycle, and domain skills for Roblox APIs.
+Load for pure Luau syntax and semantics: truthiness, tables, iteration, functions, scope, operators, string patterns, and JS/Python ports. Routing: types → `roblox-luau-types`; ownership/lifecycle → `roblox-luau-patterns`; Roblox APIs → domain skills.
 
 ## Quick Reference
 
 - Only `false` and `nil` are falsy. `0`, `""`, and `{}` are truthy.
 - Equality does not coerce types. `0 == "0"` is false. Inequality is `~=`.
 - Array conventions are 1-based. `#array` is meaningful only for a sequence without nil gaps.
-- Assigning `nil` removes a table key. Assigning a table copies the reference. `table.clone` is shallow.
+- Assigning `nil` removes a table key; assigning a table copies the reference; `table.clone` is shallow.
 - Dictionary iteration order is unspecified. Do not make behavior depend on it.
 - Dynamic keys require brackets: `record[field]`. Dot syntax uses a literal identifier.
-- Missing arguments become `nil`; extra results and arguments can be discarded by context.
-- Prefer an `if` expression over `condition and a or b` when `a` may be `false` or `nil`.
+- Missing arguments become `nil`; extra results and arguments can be discarded.
+- Prefer an `if` expression over `condition and a or b` when `a` may be falsy.
 - Local names are scoped from their declaration onward. Forward-declare mutually recursive functions.
 - Luau string patterns are not regular expressions. Their syntax and capabilities differ.
-- Backtick interpolation and `..` concatenation are both valid. Choose the clearer form; collect many fragments and join once in a hot loop.
+- Backtick interpolation and `..` concatenation are both valid. Choose the clearer form; join many fragments once in a hot loop.
+- NaN does not equal itself and defeats `<`/`>`; test with `x ~= x`.
+- Binary data uses the `buffer` library: fixed size, 0-based offsets, explicit-width reads/writes. Avoid `buffer.readinteger`/`writeinteger` unless the target runtime is verified to have them (flagged upstream, not in the Roblox reference).
+- For Base64, hashing, or compression use `EncodingService` (buffers, not strings; JSON via `HttpService`). Details: see full reference.
 
 ```luau
 local label = if enabled then "On" else "Off"
@@ -48,6 +52,6 @@ end
 
 ### Review
 
-Valid Luau, intentional array/dictionary shape, no nil gaps in sequences, no assumed dictionary order, no accidental aliases, no cross-language syntax, and no clever boolean expression hiding `false` or `nil`.
+Valid Luau, no nil gaps, no assumed dictionary order, no accidental aliases, no cross-language syntax, no fallbacks hiding `false` or `nil`.
 
 > Detailed language traps and translation examples: [references/full.md](references/full.md)

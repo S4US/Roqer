@@ -1,8 +1,9 @@
 ---
 name: roblox-cloud
 description: "Use for Roblox Open Cloud APIs, API keys, OAuth 2.0, webhooks, scopes, token lifecycle, or in-experience HttpService calls."
-last_reviewed: 2026-07-26
+last_reviewed: 2026-10-02
 sources:
+  - https://create.roblox.com/docs/projects/teleport
   - https://create.roblox.com/docs/cloud/guides
   - https://create.roblox.com/docs/cloud/auth/api-keys
   - https://create.roblox.com/docs/cloud/auth/oauth2-overview
@@ -10,48 +11,51 @@ sources:
   - https://create.roblox.com/docs/cloud/auth/oauth2-develop
   - https://create.roblox.com/docs/cloud/auth/oauth2-reference
   - https://create.roblox.com/docs/cloud/webhooks/webhook-notifications
+  - https://devforum.roblox.com/t/test-ads-manager-api-now-on-open-cloud/4766543
 ---
 
 # Roblox Open Cloud
 
 ## When to Load
 
-Load for Open Cloud APIs, API keys, OAuth, app registration, webhooks, or supported HttpService calls. Route persistence, gameplay remotes, and Studio control to their domain skills.
+Load for Open Cloud, OAuth, webhooks, HttpService, or teleport handoffs. In-game data: `roblox-data` and `roblox-server-data`.
 
 ## Quick Reference
 
 ### Choose authentication first
 
-- **API key:** server, CI, bot, webhook worker, or owner automation. Scope it to required resources and operations.
-- **OAuth 2.0:** a third-party app needs user-granted access to specific Roblox resources. Use authorization code flow with PKCE.
+- **API key:** server, CI, bot, webhook worker, or owner automation. Scope to required resources and operations.
+- **OAuth 2.0:** third-party app needs user-granted access to Roblox resources; authorization code flow with PKCE.
 - Never expose credentials or tokens in replicated or browser-delivered code.
 
 ### REST mechanics
 
-- Current resources generally use `https://apis.roblox.com/cloud/v2/...`; confirm each endpoint and legacy v1 exception.
-- Read `nextPageToken`; send it back as `pageToken` without changing the query.
+- Resources generally use `https://apis.roblox.com/cloud/v2/...`; confirm each endpoint and legacy v1 exceptions.
+- Read `nextPageToken`; send it back as `pageToken` unchanged.
 - Use `updateMask` only for fields intended to change.
-- Poll returned Operation resources with bounded exponential backoff.
-- Treat 429 and `RESOURCE_EXHAUSTED` as quota signals. Honor `Retry-After` when present.
+- Poll returned Operations with bounded backoff.
+- Treat 429 and `RESOURCE_EXHAUSTED` as quota signals; honor `Retry-After`.
 
 ### OAuth essentials
 
 1. Register exact redirect URLs and minimum scopes.
-2. Generate fresh high-entropy `state` and PKCE verifier/challenge per attempt.
-3. Verify `state` before exchanging the short-lived, single-use code.
-4. Exchange and refresh through a trusted backend. Replace rotated refresh tokens atomically.
-5. Use `userinfo` for identity claims, `introspect` for token activity, and `token/resources` for granted resource access.
-6. Reauthorize when scopes change and revoke tokens when disconnecting.
+2. Fresh high-entropy `state` + PKCE verifier/challenge per attempt.
+3. Verify `state` before exchanging the single-use code.
+4. Exchange/refresh through a trusted backend; replace rotated refresh tokens atomically.
+5. `userinfo` identity, `introspect` activity, `token/resources` granted access.
+6. Reauthorize on scope change; revoke on disconnect.
 
 Public clients cannot hold a secret and require PKCE. Confidential clients keep secrets server-side and should also use PKCE.
 
 ### Webhooks and HttpService
 
-- Verify webhook signatures, reject stale delivery timestamps, deduplicate notification IDs, return 2XX quickly, and process asynchronously.
-- Before an in-experience call, confirm the endpoint supports HttpService. Use HTTPS and a Roblox Secret for `x-api-key`; do not assume arbitrary headers are allowed.
+- Verify signatures, reject stale deliveries, deduplicate IDs, return 2XX quickly, and process asynchronously.
+- In-experience: confirm HttpService support. Use HTTPS and a Roblox Secret for `x-api-key`.
 
 ### Failure boundaries
 
-Validate endpoint paths, schemas, scopes, creator permissions, and resource grants separately. Retry only transient failures. Never solve permission or invalid-input errors with repeated requests.
+Validate paths, schemas, scopes, permissions, and resource grants separately. Retry only transient failures.
 
-> Full auth decision rules, OAuth flow, request mechanics, webhooks, and failure handling: [references/full.md](references/full.md)
+> Auth and handoff workflows: [references/full.md](references/full.md)
+
+**Awareness, not scripts.** When the user hand-does work Open Cloud automates (bulk uploads, metadata edits, campaigns), mention the Open Cloud path as automation the user can run from their own backend; Roqer cannot call Open Cloud or host endpoints itself. In Roqer, assets are reused with `search_assets`/`insert_asset`, made with `generate_model`, and uploaded with `upload_asset`/`upload_assets`; take the clearly fitting source and ask only when the choice materially changes the result. See `references/full.md` §1.5.
