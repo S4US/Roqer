@@ -263,7 +263,7 @@ test("Antigravity fails a turn agy reports as failed", async () => {
   await assert.rejects(() => planner.run(context), /quota exhausted/);
 });
 
-test("an attached picture is put where the agent may open it, and the message says where", async () => {
+test("attached images are put where the agent may open them, and the message says where", async () => {
   const controller = new AbortController();
   const { context } = makeContext(controller, {
     images: [
@@ -299,9 +299,11 @@ test("an attached picture is put where the agent may open it, and the message sa
     { name: "message-1-2.jpg", bytes: "JPEG-BYTES" },
   ]);
   const text = firstText(sent[0]);
-  assert.match(text, /attached 2 pictures to this message\. Open each one with view_file/);
-  assert.ok(text.includes(path.join(attachmentDirectory(fake.launches[0].home.workspace), "message-1-1.png")));
-  assert.match(text, /\(the user's file "mockup\.png"\)/);
+  assert.match(text, /comes with 2 images, saved as files\. Open each one with view_file/);
+  // Numbered as they are among the message's images, which a clip's text refers to.
+  const directory = attachmentDirectory(fake.launches[0].home.workspace);
+  assert.ok(text.includes(`Image 1 ("mockup.png"): ${path.join(directory, "message-1-1.png")}`));
+  assert.ok(text.includes(`Image 2 ("../../evil .jpg"): ${path.join(directory, "message-1-2.jpg")}`));
   assert.ok(!text.includes("\u0007"));
 });
 

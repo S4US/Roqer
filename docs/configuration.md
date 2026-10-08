@@ -156,9 +156,12 @@ never to a key.
 
 Pictures you attach reach an Antigravity model as files. The CLI takes only
 text as input, so Roqer saves each picture in the run's private folder, under
-a name of its own, and asks the model to open it. The model can open only
-those pictures, the tool definitions, and the images it received from Roqer's
-tools, such as Studio screenshots, which it sees directly. Each
+a name of its own, and asks the model to open it. A video clip goes the same
+way: Roqer sends it as sheets of its frames, saved like any other picture, and
+the model looks closer with `reference_clip`, whose frames reach it directly.
+The model can open only those pictures, the tool definitions, and the images
+it received from Roqer's tools, such as Studio screenshots, which it sees
+directly. Each
 model in the picker is one of `agy models`, with its effort level in its name
 (for example Gemini 3.8 Flash High and Low), so the effort setting does not
 apply. Antigravity meters Gemini models apart from the Claude and GPT models it

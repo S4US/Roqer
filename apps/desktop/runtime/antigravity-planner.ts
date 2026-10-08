@@ -175,6 +175,10 @@ const IMAGE_EXTENSIONS: Readonly<Record<string, string>> = {
  * where. `agy` takes text only on its input stream, but its `view_file` shows
  * the model an image file, and the gate lets it read Roqer's attachment
  * folder. Files are named by Roqer, never by the name the user's file had.
+ *
+ * A video clip arrives as sheets of its frames among the message's images,
+ * and its attachment text names them by position ("Image 1 of this message"),
+ * so every picture is listed under the number it has among the images.
  */
 export async function writeAttachments(
   workspace: string,
@@ -190,10 +194,10 @@ export async function writeAttachments(
     await fs.writeFile(file, Buffer.from(image.data, "base64"), { mode: 0o600 });
     // eslint-disable-next-line no-control-regex
     const name = image.name.replace(/[\u0000-\u001f\u007f]/g, " ").slice(0, 120);
-    lines.push(`- ${file}${name.trim() === "" ? "" : ` (the user's file "${name}")`}`);
+    lines.push(`Image ${index + 1}${name.trim() === "" ? "" : ` ("${name}")`}: ${file}`);
   }
   return [
-    `The user attached ${images.length === 1 ? "a picture" : `${images.length} pictures`} to this message. ` +
+    `This message comes with ${images.length === 1 ? "an image" : `${images.length} images`}, saved as files. ` +
       "Open each one with view_file and look at it before you answer:",
     ...lines,
   ].join("\n");
