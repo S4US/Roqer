@@ -120,7 +120,8 @@ export type AntigravityStep = {
   toolName?: string;
   toolParameters?: JsonRecord;
   toolError?: string;
-  usage?: { input?: number; output?: number; thinking?: number };
+  /** One model request: `input` is only what was not read from the prompt cache. */
+  usage?: { input?: number; cacheRead?: number; output?: number; thinking?: number };
 };
 
 export function readAntigravityStep(message: JsonRecord): AntigravityStep | null {
@@ -140,7 +141,12 @@ export function readAntigravityStep(message: JsonRecord): AntigravityStep | null
     ...(info !== undefined && isRecord(info.parameters) ? { toolParameters: info.parameters } : {}),
     ...(error !== undefined && typeof error.message === "string" ? { toolError: error.message } : {}),
     ...(usage === undefined ? {} : {
-      usage: { input: tokenCount(usage.input_tokens), output: tokenCount(usage.output_tokens), thinking: tokenCount(usage.thinking_tokens) },
+      usage: {
+        input: tokenCount(usage.input_tokens),
+        cacheRead: tokenCount(usage.cache_read_tokens),
+        output: tokenCount(usage.output_tokens),
+        thinking: tokenCount(usage.thinking_tokens),
+      },
     }),
   };
 }
@@ -227,12 +233,12 @@ export function antigravityResultUsage(result: JsonRecord): AntigravityUsageTota
   const input = tokenCount(usage.input_tokens);
   const output = tokenCount(usage.output_tokens);
   if (input === undefined || output === undefined) return null;
-  const cacheRead = tokenCount(usage.cache_read_tokens) ?? 0;
   return {
-    // Gemini's API counts cached input inside its input figure, and `agy`'s
-    // figures are read the same way; Roqer's input figure leaves cache reads out.
-    inputTokens: Math.max(0, input - cacheRead),
-    cacheReadTokens: cacheRead,
+    // `agy` counts input read from the prompt cache apart from the rest, as
+    // Roqer does: on a cached turn `input_tokens` is only what was new.
+    inputTokens: input,
+    cacheReadTokens: tokenCount(usage.cache_read_tokens) ?? 0,
+    // Thinking is counted apart from the reply, and outside `total_tokens`.
     outputTokens: output + (tokenCount(usage.thinking_tokens) ?? 0),
   };
 }
@@ -493,11 +499,14 @@ export function createAntigravityPlanner(options: AntigravityPlannerOptions): Pl
             context.outputTokens(estimateTurnOutputTokens(responseCharacters), false);
           }
           if (step.state === "DONE" && step.usage !== undefined) {
-            const output = (step.usage.output ?? 0) + (step.usage.thinking ?? 0);
-            if (step.usage.output !== undefined) context.outputTokens(output, true);
-            // Everything that request read, plus what it wrote, is what the
-            // conversation now holds. `agy` does not say how large its window is.
-            if (step.usage.input !== undefined) context.contextUsage(step.usage.input + output, null);
+            const { input, cacheRead, output, thinking } = step.usage;
+            if (output !== undefined) context.outputTokens(output + (thinking ?? 0), true);
+            // What the request read, the cached part included, plus the reply
+            // it wrote, is what the conversation now holds. Its thinking is not
+            // carried into the next request. `agy` does not say how large the
+            // window is, in print mode or anywhere else Roqer can read, so the
+            // meter shows the count alone rather than a guessed share.
+            if (input !== undefined) context.contextUsage(input + (cacheRead ?? 0) + (output ?? 0), null);
           }
           return;
         }

@@ -162,8 +162,9 @@ test("Antigravity routes a call to Roqer's MCP server through PlannerContext and
   assert.deepEqual(recorded.said.join(""), "Main prints hi.");
   assert.deepEqual(recorded.calls, ["get_script_source"]);
   assert.match(toolResult, /rev-1/);
-  assert.deepEqual(recorded.context, [950]);
-  assert.deepEqual(recorded.usage.at(-1), { inputTokens: 1000, cacheReadTokens: 200, outputTokens: 100 });
+  // What the request read plus its reply; its thinking does not stay in the conversation.
+  assert.deepEqual(recorded.context, [940]);
+  assert.deepEqual(recorded.usage.at(-1), { inputTokens: 1200, cacheReadTokens: 200, outputTokens: 100 });
 
   const { args, home } = fake.launches[0];
   assert.deepEqual(args, [
@@ -183,6 +184,23 @@ test("Antigravity routes a call to Roqer's MCP server through PlannerContext and
 
   // The private home, credential included, does not outlive the run.
   await assert.rejects(() => fs.access(home.home));
+});
+
+test("the context meter counts what agy read from its cache, not only what was new", async () => {
+  const controller = new AbortController();
+  const { context, recorded } = makeContext(controller);
+  const fake = fakeLauncher((child) => {
+    child.writeLine(INIT);
+    // agy 1.3.1 after a 21,117-token first turn: 4,891 new tokens, 16,307 from the cache.
+    child.writeLine(step(3, {
+      state: "DONE", step_type: "agent_response", text_delta: "0",
+      usage: { input_tokens: 4891, output_tokens: 1, thinking_tokens: 0, cache_read_tokens: 16307, total_tokens: 4892 },
+    }));
+    child.writeLine(result("0"));
+    child.finish(0);
+  });
+  await createAntigravityPlanner({ ...BASE_OPTIONS, launcher: fake.launcher }).run(context);
+  assert.deepEqual(recorded.context, [21199]);
 });
 
 test("Antigravity stops a run the moment a tool Roqer does not allow got through", async () => {
@@ -396,10 +414,12 @@ test("a tool step is permitted only for Roqer's server and the files in its priv
   assert.ok(!isGateFailure(refused));
 });
 
-test("a result's usage leaves cache reads out of input and counts thinking as output", () => {
+test("a result's usage keeps agy's input apart from its cache reads and counts thinking as output", () => {
+  // agy 1.3.1, the third turn of a session whose earlier turns were cached:
+  // `input_tokens` is only the new input, and cache reads may exceed it.
   assert.deepEqual(
-    antigravityResultUsage({ usage: { input_tokens: 500, output_tokens: 30, thinking_tokens: 12, cache_read_tokens: 100 } }),
-    { inputTokens: 400, cacheReadTokens: 100, outputTokens: 42 },
+    antigravityResultUsage({ usage: { input_tokens: 30990, output_tokens: 3, thinking_tokens: 12, cache_read_tokens: 32605, total_tokens: 30993 } }),
+    { inputTokens: 30990, cacheReadTokens: 32605, outputTokens: 15 },
   );
   assert.equal(antigravityResultUsage({ usage: { output_tokens: 3 } }), null);
 });
