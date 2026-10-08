@@ -93,6 +93,9 @@ What Roqer is working toward. Plans can change; [open an issue](https://github.c
 - Rojo and version control. Link a Rojo-synced place and script edits save to the file Rojo syncs from, instead of only the copy inside Studio, so they show up in `git diff` and survive a rebuild. Still ahead: new scripts, deletions, renames, and models.
 - MacOS support
 - Manual compact command https://github.com/S4US/Roqer/issues/63
+- Antigravity support https://antigravity.google/product/antigravity-cli
+- Add custom MCP connections
+- Web search. An optional switch that lets the model search the web during a run, with each search shown in the run's activity.
 
 ## Contributing
 
