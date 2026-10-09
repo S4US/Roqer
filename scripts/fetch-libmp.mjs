@@ -19,7 +19,7 @@ import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 
 export const LIBMP_URL = 'https://github.com/Roblox/libmp/releases/download/latest/LibMP.luau';
-export const LIBMP_SHA256 = 'ab9579e592e8751386a01537152f2b739cc7942ce565d3c11337cddaa250d231';
+export const LIBMP_SHA256 = '236fea082f323facd08109f9fd6dab70350bd0cc69617e07cc194778415a0bb8';
 
 const rootDir = join(dirname(fileURLToPath(import.meta.url)), '..');
 export const LIBMP_DESTINATION = join(rootDir, 'studio-plugin', 'include', 'LibMP.lua');

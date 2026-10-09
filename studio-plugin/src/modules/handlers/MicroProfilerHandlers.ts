@@ -589,10 +589,11 @@ function captureMicroProfiler(requestData: Record<string, unknown>): unknown {
 	}
 
 	const [bufferOk, snapshotOrErr] = safeCall(() => LibMP.Control.CaptureToBufferSync());
-	if (!bufferOk) {
+	// LibMP 1.1 returns nil when MicroProfilerService hands back a short read.
+	if (!bufferOk || !typeIs(snapshotOrErr, "buffer")) {
 		return {
 			error: "micro_profiler_snapshot_failed",
-			message: tostring(snapshotOrErr),
+			message: bufferOk ? "LibMP returned no capture buffer." : tostring(snapshotOrErr),
 			backend,
 		};
 	}

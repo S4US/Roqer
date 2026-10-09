@@ -42,6 +42,13 @@ MCP_INSTANCE_ID=anon:... ROBLOX_STUDIO_PORT=43123 node tests/run-all.mjs
 node tests/execute-luau-error-preservation.mjs
 ```
 
+`npm run test:package-contents` checks npm/npx CLI resolution, then runs real
+`npm pack --dry-run` against disposable fixtures for both published editions.
+It checks the runtime file list, plugin staging and licence files. On Windows
+it invokes npm's JavaScript CLI through Node. The fixture path includes spaces,
+Unicode and shell metacharacters; its npm cache is removed with the fixture.
+The gate needs Node and npm, and runs without installing repository dependencies.
+
 The full gate does not launch the feature smoke separately: its complete
 functional runner covers those checks in the same Studio session before the
 independent auto-install, lifecycle, and parallel-isolation suites.

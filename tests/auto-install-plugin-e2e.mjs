@@ -10,6 +10,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 import { BASE_PORT, McpClient, REPO_ROOT } from './lib/mcp-client.mjs';
 import { acquireSuitePort, windowsPortIsAvailable } from './lib/test-port.mjs';
+import { resolveWindowsNodeCli } from './lib/node-cli.mjs';
 import {
   closeStudioProcess,
   configureStudioDirectoryIsolation,
@@ -46,21 +47,6 @@ const deferredCleanupErrors = [];
 function assert(cond, message) {
   if (!cond) throw new Error(message);
   console.log(`  ✓ ${message}`);
-}
-
-function resolveWindowsNodeCli(command, platform, childEnv) {
-  if (platform !== 'win32') return undefined;
-  const executable = path.win32.basename(command).toLowerCase().replace(/\.cmd$/, '');
-  if (executable !== 'npm' && executable !== 'npx') return undefined;
-
-  const cliName = `${executable}-cli.js`;
-  const executableDir = path.dirname(process.execPath);
-  const candidates = [
-    childEnv.npm_execpath && path.join(path.dirname(childEnv.npm_execpath), cliName),
-    path.join(executableDir, 'node_modules', 'npm', 'bin', cliName),
-    path.resolve(executableDir, '..', 'lib', 'node_modules', 'npm', 'bin', cliName),
-  ].filter(Boolean);
-  return candidates.find((candidate) => existsSync(candidate));
 }
 
 function terminateProcessTree(proc, platform, signal) {
