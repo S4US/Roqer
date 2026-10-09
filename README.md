@@ -90,11 +90,11 @@ claude mcp add robloxstudio -- node C:\path\to\Roqer\packages\robloxstudio-mcp\d
 
 What Roqer is working toward. Plans can change; [open an issue](https://github.com/S4US/Roqer/issues) to suggest something.
 
-- Rojo and version control. Link a Rojo-synced place, with one click on the app's Rojo pill or by asking the agent, and script edits save to the file Rojo syncs from, instead of only the copy inside Studio, so they show up in `git diff` and survive a rebuild. Still ahead: new scripts, deletions, renames, and models.
 - MacOS support
 - Manual compact command https://github.com/S4US/Roqer/issues/63
 - Add custom MCP connections
 - Web search. An optional switch that lets the model search the web during a run, with each search shown in the run's activity.
+- Rojo: new scripts, deletions, renames, and models in linked projects.
 
 ## Contributing
 
