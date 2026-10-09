@@ -112,6 +112,9 @@ export function gitIgnored(root: string, files: string[]): Promise<Set<string>> 
       if (error && (error as { code?: unknown }).code !== 1) return resolve(new Set());
       resolve(new Set(String(stdout).split('\0').filter(Boolean).map((file) => path.resolve(root, file))));
     });
+    // Git can exit (e.g. not a repository) before reading stdin; the write then fails with EPIPE.
+    // The exit code above already decides the result, so a broken pipe is not an error here.
+    child.stdin?.on('error', () => {});
     child.stdin?.end(files.join('\0') + '\0');
   });
 }
