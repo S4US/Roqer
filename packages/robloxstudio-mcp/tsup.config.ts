@@ -10,6 +10,7 @@ export default defineConfig({
   splitting: false,
   clean: true,
   noExternal: ['@roqer/mcp-core'],
+  external: ['proper-lockfile'],
   banner: {
     js: '#!/usr/bin/env node',
   },

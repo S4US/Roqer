@@ -3,13 +3,16 @@
 // Rojo project on disk, so _scriptWrite's plan/write/sync-wait pipeline runs
 // against an actual file instead of a mock of one.
 import * as fs from 'fs';
-import * as os from 'os';
+import nativeFs from 'fs';
+import os from 'os';
 import * as path from 'path';
-import { afterEach, describe, expect, test } from '@jest/globals';
+import { afterEach, describe, expect, jest, test } from '@jest/globals';
 import { BridgeService } from '../bridge-service.js';
 import { RojoIntegration } from '../rojo/index.js';
 import { sourceRevision } from '../rojo/source-revision.js';
+import { sourceWriteLockPath } from '../rojo/file-write-lock.js';
 import { RobloxStudioTools } from '../tools/index.js';
+import { stubWindowsProcessObserver } from './rojo-process-observer-fixture.js';
 
 type Call = { endpoint: string; data: Record<string, unknown> };
 const body = (result: { content: { text?: string }[] }) => JSON.parse(result.content[0].text!);
@@ -21,11 +24,13 @@ const sourcemap = { name: 'Game', className: 'DataModel', children: [
 ] };
 
 const roots: string[] = [];
-afterEach(() => { for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true }); });
+afterEach(() => { jest.restoreAllMocks(); for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true }); });
 
-async function setup(fileText: string, options: { studioText?: string; studioAfter?: string[]; link?: boolean; preWriteText?: string } = {}) {
+async function setup(fileText: string, options: { studioText?: string; studioAfter?: string[]; link?: boolean; preWriteText?: string; beforeRecheck?: () => void } = {}) {
   const root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'roqer edit ')));
   roots.push(root);
+  jest.spyOn(os, 'homedir').mockReturnValue(path.join(root, 'private-home'));
+  stubWindowsProcessObserver();
   fs.mkdirSync(path.join(root, 'src'));
   fs.mkdirSync(path.join(root, 'Packages', '_Index', 'x'), { recursive: true });
   fs.writeFileSync(path.join(root, 'default.project.json'), '{"name":"Fixture","tree":{"$className":"DataModel"}}');
@@ -34,6 +39,7 @@ async function setup(fileText: string, options: { studioText?: string; studioAft
   const file = path.join(root, 'src', 'Main.server.luau');
   const studioText = options.studioText ?? fileText;
   const after = [...(options.studioAfter ?? [])];
+  let rechecked = false;
   const tools = new RobloxStudioTools(new BridgeService());
   const calls: Call[] = [];
   const nameOf = (instancePath: unknown) => String(instancePath).split('.').at(-1)!;
@@ -45,6 +51,7 @@ async function setup(fileText: string, options: { studioText?: string; studioAft
       return data.planOnly ? plan : { success: true, instancePath: plan.instancePath, previousRevision: plan.previousRevision, revision: plan.revision };
     },
     '/api/get-script-source': () => {
+      if (!rechecked) { rechecked = true; options.beforeRecheck?.(); }
       // Before the write lands on disk this answers the pre-write recheck
       // (and, on a failed write, the post-failure conflict read) with
       // preWriteText if given, else studioText unchanged. Once the file on
@@ -75,6 +82,35 @@ async function setup(fileText: string, options: { studioText?: string; studioAft
 const studioWrites = (calls: Call[]) => calls.filter((call) => call.endpoint === '/api/edit-script-lines' && call.data.planOnly !== true);
 
 describe('script edits on a Rojo-linked place', () => {
+  test('ownership identity survives the Studio recheck window without following a replacement junction', async () => {
+    const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'roqer outside-write '));
+    roots.push(outside);
+    fs.writeFileSync(path.join(outside, 'Main.server.luau'), 'local x = 1\n');
+    let source = '';
+    const { tools, calls, file } = await setup('local x = 1\n', { beforeRecheck: () => {
+      fs.renameSync(source, `${source}.retired`);
+      fs.symlinkSync(outside, source, process.platform === 'win32' ? 'junction' : 'dir');
+    } });
+    source = path.dirname(file);
+    const result = body(await tools.editScriptLines('game.ServerScriptService.Main', 'x = 1', 'x = 2'));
+    expect(result).toMatchObject({ errorCode: 'rojo_write_failed', error: expect.stringContaining('path changed') });
+    expect(fs.readFileSync(path.join(outside, 'Main.server.luau'), 'utf8')).toBe('local x = 1\n');
+    expect(fs.readFileSync(path.join(`${source}.retired`, 'Main.server.luau'), 'utf8')).toBe('local x = 1\n');
+    expect(studioWrites(calls)).toEqual([]);
+  });
+  test('saved result preserves the lock-release warning without reporting an unapplied write', async () => {
+    const { tools, file } = await setup('local x = 1\n', { studioAfter: ['local x = 2\n'] });
+    const lockPath = sourceWriteLockPath(fs.realpathSync.native(file));
+    const rmdir = nativeFs.rmdirSync;
+    jest.spyOn(nativeFs, 'rmdirSync').mockImplementation(((directory: fs.PathLike, ...args: unknown[]) => {
+      if (String(directory) === lockPath) throw Object.assign(new Error('test release failure'), { code: 'EIO' });
+      return Reflect.apply(rmdir, nativeFs, [directory, ...args]);
+    }) as typeof nativeFs.rmdirSync);
+    const result = body(await tools.editScriptLines('game.ServerScriptService.Main', 'x = 1', 'x = 2'));
+    expect(result).toMatchObject({ success: true, saved: { sync: 'synced', lockReleaseWarning: expect.stringContaining('test release failure') } });
+    expect(result.errorCode).toBeUndefined();
+    expect(fs.readFileSync(file, 'utf8')).toBe('local x = 2\n');
+  });
   test('unlinked: requests are exactly as before', async () => {
     const { tools, calls } = await setup('local x = 1\n', { link: false });
     await tools.editScriptLines('game.ServerScriptService.Main', 'x = 1', 'x = 2');

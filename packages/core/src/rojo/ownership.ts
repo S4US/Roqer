@@ -2,6 +2,7 @@ import { execFile } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
 import type { SourcemapNode } from './sourcemap.js';
+import { captureSourceFileIdentity, type SourceFileIdentity } from './source-file-identity.js';
 
 export type Persistence = 'file' | 'studio_only' | 'generated' | 'unsupported';
 
@@ -9,6 +10,8 @@ export interface Ownership {
   persistence: Persistence;
   /** Absolute real path of the source file, for file and generated. */
   file?: string;
+  /** Internal evidence from the ownership check; never part of a tool result. */
+  fileIdentity?: SourceFileIdentity;
   /** The file relative to the project folder, as shown to the caller. */
   relativeFile?: string;
   reason?: string;
@@ -88,7 +91,11 @@ export function checkFile(
   if (relative.split(path.sep).includes('_Index') || ignored(real)) {
     return { persistence: 'generated', file: real, relativeFile: relative, reason: `${relative} is a package or build output, not source` };
   }
-  return { persistence: 'file', file: real, relativeFile: relative };
+  try {
+    return { persistence: 'file', file: real, relativeFile: relative, fileIdentity: captureSourceFileIdentity(real) };
+  } catch {
+    return { persistence: 'unsupported', reason: `${path.normalize(relativePath)} changed while checking the source file; read it again` };
+  }
 }
 
 export function scriptFiles(tree: SourcemapNode): string[] {

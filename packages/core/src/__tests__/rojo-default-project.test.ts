@@ -5,13 +5,14 @@
 // rojo-script-edits.test.ts (a real temp Rojo project on disk, Studio faked
 // at the plugin boundary).
 import * as fs from 'fs';
-import * as os from 'os';
+import os from 'os';
 import * as path from 'path';
-import { afterEach, describe, expect, test } from '@jest/globals';
+import { afterEach, describe, expect, jest, test } from '@jest/globals';
 import { BridgeService } from '../bridge-service.js';
 import { RojoIntegration } from '../rojo/index.js';
 import { sourceRevision } from '../rojo/source-revision.js';
 import { RobloxStudioTools } from '../tools/index.js';
+import { stubWindowsProcessObserver } from './rojo-process-observer-fixture.js';
 
 type Call = { endpoint: string; data: Record<string, unknown> };
 const body = (result: { content: { text?: string }[] }) => JSON.parse(result.content[0].text!);
@@ -22,11 +23,13 @@ const sourcemap = { name: 'Game', className: 'DataModel', children: [
 ] };
 
 const roots: string[] = [];
-afterEach(() => { for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true }); });
+afterEach(() => { jest.restoreAllMocks(); for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true }); });
 
 function makeProject(fileText: string) {
   const root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'roqer default-project ')));
   roots.push(root);
+  jest.spyOn(os, 'homedir').mockReturnValue(path.join(root, 'private-home'));
+  stubWindowsProcessObserver();
   fs.mkdirSync(path.join(root, 'src'));
   fs.writeFileSync(path.join(root, 'default.project.json'), '{"name":"Fixture","tree":{"$className":"DataModel"}}');
   fs.writeFileSync(path.join(root, 'src', 'Main.server.luau'), fileText);

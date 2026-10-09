@@ -2777,7 +2777,7 @@ export class RobloxStudioTools {
 
     let written: Awaited<ReturnType<typeof compareAndWrite>>;
     try {
-      written = await compareAndWrite(owner.file, plan.previousRevision, plan.source);
+      written = await compareAndWrite(owner.file, plan.previousRevision, plan.source, owner.fileIdentity);
     } catch (error) {
       const message = (error instanceof Error ? error.message : String(error)).replace(/\s*\n+\s*/g, ' ');
       return { error: `Could not write ${owner.relativeFile}: ${message}. Nothing was changed in Studio.`, errorCode: 'rojo_write_failed', file: owner.relativeFile };
@@ -2813,7 +2813,7 @@ export class RobloxStudioTools {
     return {
       success: true,
       ...rest,
-      saved: { file: owner.relativeFile, sync },
+      saved: { file: owner.relativeFile, sync, ...(written.lockReleaseWarning ? { lockReleaseWarning: written.lockReleaseWarning } : {}) },
       ...(hint ? { hint } : {}),
     };
   }

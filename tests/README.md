@@ -117,6 +117,34 @@ npm run test:codex-wrapper
 Each test prints `✅ PASSED` or `❌ FAILED` plus the failing assertion. On
 failure the test's MCP subprocess stderr tail is dumped for context.
 
+## Rojo concurrent file writes
+
+`npm run test:rojo` builds both editions, checks a real Rojo sourcemap fixture,
+and runs `tests/rojo-write-concurrency.mjs`. The latter needs no Studio: it
+uses real Node subprocesses and temporary source files, with IPC barriers
+before commit validation. It covers busy/stale revisions, junction/symlink
+aliases, Windows case aliases, independent files, a live writer deliberately
+paused after its final checks beyond the production stale threshold, and
+forced process exit followed by production 30-second stale-lease recovery.
+Hard kills during guard publication and stale recovery are separate cases:
+subsequent writers fail closed until the test confirms every owned writer
+has exited and explicitly removes its own identified guard. These are
+manual-recovery checks, not automatic-recovery passes. Each subprocess
+uses an owned temporary home directory for its leases. The script cleans up
+its own children and fixtures on success and failure.
+
+After a core build, run that regression alone with:
+
+```bash
+node tests/rojo-write-concurrency.mjs
+```
+
+The core file-write unit suites stub the Windows process-query boundary to
+avoid running many PowerShell startups in parallel Jest workers under the
+runtime's 2-second query limit. File I/O and lock-library state transitions
+remain exercised. Those unit results are not native-process evidence; the
+subprocess suite above retains real OS identity queries and fault injection.
+
 ## Creator Store sanitizer unit test
 
 The Creator Store import sanitizer has a separate Node-side behavioral suite

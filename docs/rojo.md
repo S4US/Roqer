@@ -141,12 +141,66 @@ file-backed script, a successful edit adds `saved: { file, sync }`, where
 - `diverged` — the file is saved, but Studio moved to some other content in
   the meantime; a `hint` says to read both sides before editing again.
 
+If the file was saved but releasing its write lease failed, `saved` also
+contains `lockReleaseWarning`. The edit did happen; read the result before
+retrying rather than treating the warning as an unapplied write.
+
 Roqer never writes Studio directly to force a sync; it only waits briefly and
 reports what it saw. On a `studio_only` script, the edit writes Studio exactly
 as it always did, and the result adds `persistence: "studio_only"` and a
 `persistenceNote` explaining why.
 
 ## Conflicts and how to resolve them
+
+Roqer serializes writes to the same real source file across participating
+processes of the same OS user, including paths through symlinks or junctions. After the first
+writer saves, a second writer with the same old revision is refused. Writes
+to different files can proceed independently. The shared leases live outside
+the project in `~/.roqer/rojo-write-locks/v1`, keyed by the actual file path;
+they do not depend on the bridge's port or managed-instance registry.
+A busy lease returns `rojo_write_failed` immediately, without a queued retry
+that could outlive a caller's timeout. Read/retry after the current writer
+finishes. A live owner refreshes the lease every 5 seconds. A lease older
+than 30 seconds is reclaimable only when its recorded OS process creation
+identity has exited or its PID now belongs to a different process. An alive
+but paused owner retains exclusivity. Missing, damaged, foreign-host, or
+unverifiable owner metadata refuses takeover.
+
+OS process identity observation can also be unavailable. Windows uses a
+hidden, system PowerShell query with a 2-second limit; if that query fails,
+the edit is refused before source writing. A failed observation is not
+cached and schedules no later write. After the OS observation service is
+available again, read/retry explicitly. A successful observation of the
+bridge's own creation identity is cached for that process.
+
+The final identity/lease checks and rename run synchronously, without an
+event-loop yield or queued filesystem rename between them. Publication and
+removal of lease metadata are serialized by a separate short `.guard`
+directory. An interrupted guard is never automatically reclaimed. If a
+damaged lease or guard remains, stop all bridge processes that can write the
+project, confirm its recorded owner is stopped (coordinate with the recorded
+host for a foreign-host record), then remove only that file's identified
+lease/guard directory under `~/.roqer/rojo-write-locks/v1`. Keep the source
+file. Do not remove these directories while a writer is alive.
+
+Ordinary owner-publication I/O failures clean up only the just-created,
+identity-verified metadata file and empty directory. A heartbeat failure
+that makes the lock library forget this request also releases its unchanged
+owned namespace, so a live bridge can retry. If I/O access is still broken
+or cleanup ownership cannot be established, the refusal or saved-write
+warning says recovery remains necessary.
+
+The file and its parent directories are checked against their identities
+from ownership resolution after the lease wait and before replacement.
+Replacing a file with equal text still requires a fresh read. If a parent
+directory is replaced, Roqer also refuses to clean temporary files through
+that new path; a temporary file in the moved original directory may remain.
+
+External editors do not participate in this lease. Roqer checks their saves
+before writing and again before renaming its temporary file, but an external
+save after that final check can still race the rename. Older bridge versions
+also do not take the lease; all concurrent Roqer writers must use a version
+with this protection.
 
 An edit to a file-backed script can fail with nothing changed on either side:
 
