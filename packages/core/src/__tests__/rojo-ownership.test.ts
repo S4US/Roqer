@@ -177,4 +177,15 @@ describe('gitIgnored', () => {
       fs.rmSync(outside, { recursive: true, force: true });
     }
   });
+
+  test('Git exiting before it reads the file list is not an error', async () => {
+    // Far more than a pipe buffers, so Git (not a repository) exits mid-write and the write breaks.
+    const outside = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'roqer notrepo ')));
+    try {
+      const files = Array.from({ length: 20_000 }, (_, i) => path.join(outside, 'src', `Module${i}.luau`));
+      expect(await gitIgnored(outside, files)).toEqual(new Set());
+    } finally {
+      fs.rmSync(outside, { recursive: true, force: true });
+    }
+  });
 });
