@@ -10,6 +10,7 @@ import { taskToolDefinition } from "./task-tool";
 import type { McpToolOutcome } from "./mcp-types";
 import type { PlannerContext } from "./run-engine";
 import { ANIMATION_BOXES_LABEL, ANIMATION_NAME_LABEL, ANIMATION_RIG_LABEL, RIG_RANGE_SHEET_TITLE, type RunEvidence } from "../shared/run-events";
+import { REVISION_AFTER_LABEL } from "../shared/completion";
 import { runDeveloperInstructions } from "./run-instructions";
 import {
   createStudioToolRunner, MalformedToolCallError, MAX_TOOL_DESCRIPTION_CHARS, parseStudioToolInput, studioToolDescription, studioToolGuide, studioToolResultText,
@@ -2298,7 +2299,9 @@ test("a build saved to Rojo files is recorded as those files, never as an undoab
   assert.equal(result.ok, true);
   assert.equal(changes[0].summary, "Saved 2 new files to the Rojo project: src/Combat/init.server.luau, src/Combat/Config.luau; Studio has the new scripts.");
   assert.equal(evidence[0].passed, true);
-  assert.deepEqual(evidence[0].metadata, [{ label: "Undo", value: "Not in Studio's undo history; delete the files to take them back out" }]);
+  assert.deepEqual(evidence[0].metadata?.[0], { label: "Undo", value: "Not in Studio's undo history; delete the files to take them back out" });
+  // The change and its evidence share a token, so no other build on this root can verify it.
+  assert.equal(evidence[0].metadata?.find((entry) => entry.label === REVISION_AFTER_LABEL)?.value, changes[0].revisionAfter);
 });
 
 test("a build saved to Rojo files that Studio has not received yet is neither passed nor failed", async () => {
@@ -2313,7 +2316,33 @@ test("a build saved to Rojo files that Studio has not received yet is neither pa
   assert.equal(changes[0].summary, "Saved 1 new file to the Rojo project: src/Util.luau; Rojo has not delivered the new scripts to Studio yet.");
   assert.equal(evidence[0].passed, undefined);
   assert.match(evidence[0].detail ?? "", /Rojo has not delivered the new scripts to Studio yet/);
-  assert.match(result.text, /Do not retry or build them in Studio\./);
+  assert.match(result.text, /Do not retry or build them in Studio; once Rojo delivers them, reading each new script confirms the build\./);
+});
+
+test("a pending saved build is confirmed once every new script reads back as saved", async () => {
+  const { context, evidence } = contextWith([
+    ok({ success: true, path: "game.ServerScriptService", created: 2, cloned: 0, updated: 0, removed: 0, undoable: false,
+      saved: { files: ["src/A.luau", "src/B.luau"], sync: "pending", scripts: [
+        { path: "game.ServerScriptService.A", revision: "ra" },
+        { path: "game.ServerScriptService.B", revision: "rb" },
+      ] } }),
+    ok({ source: "", revision: "ra" }),
+    ok({ source: "", revision: "other" }),
+    ok({ source: "", revision: "rb" }),
+  ]);
+  const run = createStudioToolRunner(context);
+
+  await run("build_instances", { path: "game.ServerScriptService", operations: [] });
+  await run("get_script_source", { instancePath: "game.ServerScriptService.A" });
+  await run("get_script_source", { instancePath: "game.ServerScriptService.B" });
+  assert.equal(evidence.filter((item) => item.passed === true).length, 0, "B read back something else, so nothing is confirmed yet");
+  await run("get_script_source", { instancePath: "game.ServerScriptService.B" });
+
+  const confirmed = evidence.filter((item) => item.passed === true);
+  assert.equal(confirmed.length, 1);
+  assert.equal(confirmed[0].title, "game.ServerScriptService");
+  assert.deepEqual(confirmed[0].metadata?.find((entry) => entry.label === REVISION_AFTER_LABEL)?.value,
+    evidence[0].metadata?.find((entry) => entry.label === REVISION_AFTER_LABEL)?.value);
 });
 
 test("a build whose new scripts stayed in Studio on a linked place says so", async () => {

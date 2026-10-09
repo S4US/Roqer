@@ -201,7 +201,12 @@ describe('new scripts on a Rojo-linked place', () => {
       tops: [top('game.ServerScriptService', { name: 'Util', className: 'ModuleScript', source: '' })],
     });
     const result = await build(tools);
-    expect(result.saved).toEqual({ files: [path.join('src', 'Util.luau')], sync: 'pending' });
+    expect(result.saved).toEqual({
+      files: [path.join('src', 'Util.luau')],
+      sync: 'pending',
+      // What a later read must show for the build to count as delivered.
+      scripts: [{ path: 'game.ServerScriptService.Util', revision: sourceRevision('') }],
+    });
     expect(result.hint).toMatch(/rojo serve/);
     expect(listing()).toContain('src/Util.luau');
     expect(studioBuilds()).toEqual([]);
@@ -230,6 +235,36 @@ describe('new scripts on a Rojo-linked place', () => {
     expect(studioBuilds()).toHaveLength(1);
     expect(result.persistence).toBeUndefined();
     expect(result.undoable).toBe(true);
+  });
+
+  test('a batch with no new scripts never asks Rojo, so a broken project cannot block it', async () => {
+    const { tools, studioBuilds, root } = await setup({
+      tops: [top('game.ServerScriptService', { name: 'Marker', className: 'Part' })],
+    });
+    fs.writeFileSync(path.join(root, 'default.project.json'), '{ not json');
+    let rojoRuns = 0;
+    tools.rojo = Object.assign(tools.rojo, { run: async () => { rojoRuns += 1; throw new Error('rojo is gone'); } });
+    const result = await build(tools);
+    expect(result.undoable).toBe(true);
+    expect(studioBuilds()).toHaveLength(1);
+    expect(rojoRuns).toBe(0);
+  });
+
+  test('a rollback that cannot take everything back out names what is left, and claims no clean undo', async () => {
+    let root = '';
+    const { tools, listing } = await setup({
+      omit: (node) => {
+        // Someone saves into the new folder between the write and the read-back.
+        if (node.name === 'Kit' && root) fs.writeFileSync(path.join(root, 'src', 'Kit', 'theirs.txt'), 'keep me');
+        return node.name === 'Kit';
+      },
+      tops: [top('game.ServerScriptService', { name: 'Kit', className: 'Folder', children: [{ name: 'A', className: 'ModuleScript', source: '' }] })],
+    }).then((ready) => { root = ready.root; return ready; });
+    const result = await build(tools);
+    expect(result.errorCode).toBe('rojo_unsupported');
+    expect(result.leftovers).toEqual([path.join('src', 'Kit')]);
+    expect(result.error).toMatch(/could not be taken back out; delete it by hand\. Nothing was changed in Studio\.$/);
+    expect(listing()).toEqual(['src/Kit/theirs.txt', 'src/Main.server.luau']);
   });
 
   test('new scripts mixed with Studio-only changes are refused, nothing changed', async () => {
@@ -297,7 +332,7 @@ describe('new scripts on a Rojo-linked place', () => {
     });
     const result = await build(tools);
     expect(result.errorCode).toBe('rojo_unsupported');
-    expect(result.error).toMatch(/Rojo did not read the new files as planned \(it lists no single ServerScriptService\.Util\), so they were removed again\. Nothing was changed\.$/);
+    expect(result.error).toBe('Rojo did not read the new files as planned (it lists no single ServerScriptService.Util), so the new files were taken back out. Nothing was changed.');
     expect(listing()).toEqual(['src/Main.server.luau']);
     expect(studioBuilds()).toEqual([]);
   });

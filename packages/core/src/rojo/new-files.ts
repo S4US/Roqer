@@ -41,6 +41,14 @@ export interface NewInstance {
   id?: string;
 }
 
+/** A project folder new files can go in, and the project file that governs it. */
+export interface ProjectFolder {
+  dir: string;
+  projectFile: string;
+  /** Whether any project file on the way to it sets syncRules. */
+  syncRules: boolean;
+}
+
 export interface Naming {
   emitLegacyScripts: boolean;
   extension: '.luau' | '.lua';
@@ -76,12 +84,19 @@ export function nameProblem(name: string): string | undefined {
   return undefined;
 }
 
-/** The instance name Rojo gives a directory entry. */
-function instanceNameOf(entry: fs.Dirent): string {
-  if (entry.isDirectory()) return entry.name;
+/** The instance names Rojo could give a directory entry: a project file in a folder is named by its own `name`. */
+function instanceNamesOf(dir: string, entry: fs.Dirent): string[] {
+  if (entry.isDirectory()) return [entry.name];
   const lower = entry.name.toLowerCase();
   const ending = RECOGNIZED_ENDINGS.find((suffix) => lower.endsWith(suffix));
-  return ending ? entry.name.slice(0, -ending.length) : entry.name;
+  const stem = ending ? entry.name.slice(0, -ending.length) : entry.name;
+  if (!/\.project\.jsonc?$/.test(lower)) return [stem];
+  try {
+    const name = (JSON.parse(fs.readFileSync(path.join(dir, entry.name), 'utf8')) as { name?: unknown }).name;
+    return typeof name === 'string' ? [stem, name] : [stem];
+  } catch {
+    return [stem];
+  }
 }
 
 function exactEntry(dir: string, name: string): fs.Dirent | undefined {
@@ -146,63 +161,96 @@ const SCRIPT_FILE = /^(.*?)(\.server|\.client|\.plugin)?\.luau?$/i;
  * with no folder of its own is answered with why, never guessed from where
  * its siblings' files happen to be.
  */
-export function projectDirectory(projectFile: string, segments: string[]): { dir: string } | { reason: string } {
+export function projectDirectory(projectFile: string, segments: string[]): ProjectFolder | { reason: string } {
   const label = (count: number) => segments.slice(0, count).join('.') || 'the place';
-  let node = treeOf(readProject(projectFile), projectFile);
-  let base = path.dirname(projectFile);
+  let node: Record<string, unknown> = {};
+  let base = '';
+  let governing = projectFile;
+  let syncRules = false;
+  let nested = 0;
+  // Rojo applies each project file's own settings to the part of the tree it describes.
+  const enter = (file: string) => {
+    const project = readProject(file);
+    node = treeOf(project, file);
+    base = path.dirname(file);
+    governing = file;
+    syncRules ||= project.syncRules !== undefined;
+  };
+  enter(projectFile);
   let index = 0;
-  for (let nested = 0; ; ) {
+  outer: for (;;) {
+    // The node's own keys first: Rojo adds them to whatever its $path holds.
+    if (index < segments.length) {
+      const child = childNode(node, segments[index]);
+      if (child) {
+        node = child;
+        index += 1;
+        continue;
+      }
+    }
     const target = pathOf(node);
-    if (target !== undefined && /\.project\.jsonc?$/i.test(target)) {
+    if (target === undefined) {
+      return index === segments.length
+        ? { reason: `${label(index)} is written out in the project file, with no folder of its own ($path)` }
+        : { reason: `${segments[index]} is not in the Rojo project` };
+    }
+    const resolved = path.resolve(base, target);
+    if (!fs.existsSync(resolved)) return { reason: `${label(index)} points at ${target}, which is missing on disk` };
+    if (/\.project\.jsonc?$/i.test(target)) {
       if (++nested > MAX_NESTED_PROJECTS) return { reason: `${label(index)} nests project files too deeply` };
-      const file = path.resolve(base, target);
-      node = treeOf(readProject(file), file);
-      base = path.dirname(file);
+      enter(resolved);
       continue;
     }
-    if (index === segments.length) break;
-    const child = childNode(node, segments[index]);
-    if (child) {
-      node = child;
-      index += 1;
-      continue;
-    }
-    if (target === undefined) return { reason: `${segments[index]} is not in the Rojo project` };
-    let dir = path.resolve(base, target);
-    if (!isDirectory(dir)) return { reason: `${label(index)} comes from a single file in the project, so it has no folder for new files` };
-    for (; index < segments.length; index += 1) {
+    if (!isDirectory(resolved)) return { reason: `${label(index)} comes from a single file in the project, so it has no folder for new files` };
+    let dir = resolved;
+    for (;;) {
+      // A folder holding default.project.json is that project to Rojo, not a plain folder.
+      const inner = path.join(dir, 'default.project.json');
+      if (fs.existsSync(inner)) {
+        if (++nested > MAX_NESTED_PROJECTS) return { reason: `${label(index)} nests project files too deeply` };
+        enter(inner);
+        continue outer;
+      }
+      if (index === segments.length) return { dir, projectFile: governing, syncRules };
       const entry = exactEntry(dir, segments[index]);
       const next = path.join(dir, segments[index]);
       if (entry && isDirectory(next)) {
         dir = next;
+        index += 1;
         continue;
       }
-      const scriptFile = fs.readdirSync(dir).some((name) => SCRIPT_FILE.exec(name)?.[1] === segments[index]);
-      if (scriptFile) return { reason: `${label(index + 1)} is a script saved as a single file, so it has no folder for new files` };
+      let names: string[] = [];
+      try {
+        names = fs.readdirSync(dir);
+      } catch {
+        // Unreadable: answered as not in the project below.
+      }
+      if (names.some((name) => SCRIPT_FILE.exec(name)?.[1] === segments[index])) {
+        return { reason: `${label(index + 1)} is a script saved as a single file, so it has no folder for new files` };
+      }
       return { reason: `${segments[index]} is not in the Rojo project` };
     }
-    return { dir };
   }
-  const target = pathOf(node);
-  if (target === undefined) return { reason: `${label(index)} is written out in the project file, with no folder of its own ($path)` };
-  const dir = path.resolve(base, target);
-  if (!isDirectory(dir)) return { reason: `${label(index)} comes from a single file in the project, so it has no folder for new files` };
-  return { dir };
 }
 
-/** How the project names a new script's file, or why Roqer cannot tell. */
-export function projectNaming(projectFile: string, tree: SourcemapNode): Naming | { reason: string } {
-  const project = readProject(projectFile);
-  if (project.syncRules !== undefined) {
+/**
+ * How a new script's file is named in `folder`, or why Roqer cannot tell: the
+ * project file governing that folder decides emitLegacyScripts (Rojo does not
+ * carry it into a nested project), and syncRules anywhere on the way there
+ * could rename it. The extension follows the project's existing source.
+ */
+export function projectNaming(folder: ProjectFolder, tree: SourcemapNode): Naming | { reason: string } {
+  if (folder.syncRules) {
     return { reason: 'the project sets syncRules, so Roqer cannot tell which file name Rojo reads a new script from' };
   }
   let lua = 0;
   let luau = 0;
   for (const file of scriptFiles(tree)) {
+    if (file.split('/').includes('_Index')) continue;
     if (/\.luau$/i.test(file)) luau += 1;
     else lua += 1;
   }
-  return { emitLegacyScripts: project.emitLegacyScripts !== false, extension: lua > luau ? '.lua' : '.luau' };
+  return { emitLegacyScripts: readProject(folder.projectFile).emitLegacyScripts !== false, extension: lua > luau ? '.lua' : '.luau' };
 }
 
 /** The `.server`/`.client` part of a script's file name, from its class and RunContext. */
@@ -288,16 +336,32 @@ export function layoutNew(
 export function nameInDirectory(dir: string, name: string): string | undefined {
   const lower = name.toLowerCase();
   try {
-    return fs.readdirSync(dir, { withFileTypes: true }).find((entry) => instanceNameOf(entry).toLowerCase() === lower)?.name;
+    return fs.readdirSync(dir, { withFileTypes: true })
+      .find((entry) => instanceNamesOf(dir, entry).some((name) => name.toLowerCase() === lower))?.name;
   } catch {
     return undefined;
   }
 }
 
 /**
+ * New files that could not be kept: the write failed (`rojo_write_failed`),
+ * or Rojo did not read them as planned (the code of that refusal). Every file
+ * was taken back out except `leftovers`, absolute paths a caller must name.
+ */
+export class NewFilesError extends Error {
+  readonly code: string;
+  constructor(failure: unknown, readonly leftovers: string[], code?: string) {
+    super(failure instanceof Error ? failure.message : String(failure));
+    this.name = 'NewFilesError';
+    this.code = code ?? (failure instanceof RojoError ? failure.code : 'rojo_write_failed');
+  }
+}
+
+/**
  * Creates every entry, failing on any that already exists, and removes what
- * it created if any step fails. Resolves with what it created, in order, so
- * a later check can take it back out with removeNew.
+ * it created if any step fails (rejecting with NewFilesError, which names
+ * anything that could not be removed). Resolves with what it created, in
+ * order, so a later check can take it back out with removeNew.
  */
 export async function createNew(entries: NewEntry[]): Promise<string[]> {
   const created: string[] = [];
@@ -309,17 +373,25 @@ export async function createNew(entries: NewEntry[]): Promise<string[]> {
     }
     return created;
   } catch (error) {
-    await removeNew(created);
-    throw error;
+    throw new NewFilesError(error, await removeNew(created));
   }
 }
 
-/** Removes what createNew made, newest first; a folder only while it is still empty. */
-export async function removeNew(created: string[]): Promise<void> {
+/**
+ * Removes what createNew made, newest first; a folder only while it is still
+ * empty, so nothing anyone else put there goes with it. Resolves with every
+ * path it could not remove, so a caller never reports a clean undo that was not.
+ */
+export async function removeNew(created: string[]): Promise<string[]> {
+  const leftovers: string[] = [];
   for (const file of [...created].reverse()) {
-    await fsp.rm(file, { force: true }).catch(() => undefined);
-    await fsp.rmdir(file).catch(() => undefined);
+    const removed = await fsp.lstat(file).then(
+      (stat) => (stat.isDirectory() ? fsp.rmdir(file) : fsp.rm(file)).then(() => true, () => false),
+      (error: NodeJS.ErrnoException) => error.code === 'ENOENT',
+    );
+    if (!removed) leftovers.push(file);
   }
+  return leftovers;
 }
 
 /** The one sourcemap node at `segments`, or undefined when there is none or several. */

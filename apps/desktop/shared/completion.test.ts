@@ -179,6 +179,29 @@ test("a build needs Studio's read-back of the same root, not another kind of che
   assert.equal(verified.verified, true);
 });
 
+test("a build saved to Rojo files is verified only by its own evidence, not another build on the same root", () => {
+  const root = "game.ReplicatedStorage";
+  const saved = { kind: "instance", target: root, revisionAfter: "files:1:abc" };
+  const pending: GateEvidence = {
+    kind: "verification", changeKind: "instance", title: root,
+    detail: "The new files were saved; Rojo has not delivered the new scripts to Studio yet.",
+    metadata: [{ label: REVISION_AFTER_LABEL, value: "files:1:abc" }],
+  };
+  const laterStudioBuild = { kind: "instance", target: root };
+  const result = evaluateCompletion(input({
+    changes: [saved, laterStudioBuild],
+    evidence: [pending, { kind: "verification", changeKind: "instance", title: root, passed: true }],
+  }));
+  assert.equal(result.verified, false);
+  assert.equal(result.issues[0].detail, pending.detail);
+
+  const confirmed = evaluateCompletion(input({
+    changes: [saved],
+    evidence: [pending, { kind: "verification", changeKind: "instance", title: root, passed: true, metadata: pending.metadata }],
+  }));
+  assert.equal(confirmed.verified, true);
+});
+
 test("a task that promised runtime evidence and has none fails the gate", () => {
   const result = evaluateCompletion(input({
     tasks: [task({ requiresRuntimeEvidence: true })],

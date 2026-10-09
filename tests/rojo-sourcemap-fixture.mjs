@@ -117,6 +117,12 @@ async function checkNewFiles(RojoIntegration) {
     fs.mkdirSync(path.join(root, 'client'));
     write(root, '.gitignore', 'out/\n');
     write(root, 'lib.project.json', JSON.stringify({ name: 'Lib', tree: { $path: 'lib' } }));
+    // A nested project with its own emitLegacyScripts, which Rojo applies to its subtree only.
+    write(root, 'modern/Keep.luau', 'return {}\n');
+    write(root, 'modern.project.json', JSON.stringify({ name: 'Modern', emitLegacyScripts: false, tree: { $path: 'modern' } }));
+    // A folder holding default.project.json is that project to Rojo, not a plain folder.
+    write(root, 'pkg/src/Keep.luau', 'return {}\n');
+    write(root, 'pkg/default.project.json', JSON.stringify({ name: 'Pkg', tree: { $path: 'src' } }));
     write(root, 'default.project.json', JSON.stringify({
       name: 'RoqerRojoNew',
       globIgnorePaths: ['**/Skipped*'],
@@ -131,8 +137,9 @@ async function checkNewFiles(RojoIntegration) {
           $className: 'ReplicatedStorage',
           Inline: { $className: 'Folder' },
           Lib: { $path: 'lib.project.json' },
+          Modern: { $path: 'modern.project.json' },
         },
-        ServerStorage: { $className: 'ServerStorage', Out: { $path: 'out' } },
+        ServerStorage: { $className: 'ServerStorage', Out: { $path: 'out' }, Pkg: { $path: 'pkg' } },
       },
     }, null, 2));
     await execFileAsync('git', ['init', '-q'], { cwd: root });
@@ -158,6 +165,12 @@ async function checkNewFiles(RojoIntegration) {
       ['srv/Npc/init.meta.json', 'srv/Npc/Brain.server.luau']);
     await save('a LocalScript in a $className + $path folder', [top('game.StarterPlayer.StarterPlayerScripts', script('Hud', 'LocalScript'))], ['client/Hud.client.luau']);
     await save('a ModuleScript through a nested project file', [top('game.ReplicatedStorage.Lib', script('Extra', 'ModuleScript'))], ['lib/Extra.luau']);
+    // Rojo makes .client a Script here, which the read-back checks; a LocalScript would come back wrong.
+    await save('a client Script under a nested project with emitLegacyScripts false',
+      [top('game.ReplicatedStorage.Modern', { ...script('Ui', 'Script'), runContext: 'Client' })], ['modern/Ui.client.luau']);
+    const modernLocal = await rojo.placeNew(link, [top('game.ReplicatedStorage.Modern', script('Hud', 'LocalScript'))]);
+    assert(modernLocal[0].persistence === 'unsupported', `a LocalScript under that nested project is refused (got ${modernLocal[0].persistence})`);
+    await save('a ModuleScript in a folder that holds its own default.project.json', [top('game.ServerStorage.Pkg', script('Extra', 'ModuleScript'))], ['pkg/src/Extra.luau']);
 
     const inline = await rojo.placeNew(link, [top('game.ReplicatedStorage.Inline', script('Mod', 'ModuleScript'))]);
     assert(inline[0].persistence === 'studio_only', `a node written out in the project file stays Studio-only (got ${inline[0].persistence})`);

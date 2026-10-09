@@ -56,7 +56,7 @@ import type { Rig } from '../animation/rig.js';
 import { RIGS, rigFor } from '../animation/rigs.js';
 import { cachedRigMeshes, currentRigMeshes, modelRigMeshes, rigMeshCacheDirectory, storeRigMeshes, type BoxedMeshPart } from '../animation/rig-meshes.js';
 import { MAX_MESHES_PER_READ, meshesToRead, storeModelMesh } from '../animation/model-meshes.js';
-import { RojoError, RojoIntegration, type FilePlacement, type NewInstance, type Ownership, type PlannedTop, type ProjectLink } from '../rojo/index.js';
+import { NewFilesError, RojoError, RojoIntegration, containsScript, type FilePlacement, type NewInstance, type Ownership, type PlannedTop, type ProjectLink } from '../rojo/index.js';
 import { formatInstancePath, parseInstancePath } from '../rojo/instance-path.js';
 import { compareAndWrite } from '../rojo/file-write.js';
 import { waitForStudio } from '../rojo/sync-wait.js';
@@ -1945,6 +1945,8 @@ export class RobloxStudioTools {
     const plan = await this._callSingle('/api/build-instances', { ...payload, planOnly: true }, undefined, instance_id);
     if (!plan || plan.planned !== true) return plan;
     const tops = Array.isArray(plan.added) ? plan.added as PlannedTop[] : [];
+    // No new script anywhere: nothing for the project to hold, so the build is what it always was.
+    if (!tops.some((top) => containsScript(top.node))) return this._callSingle('/api/build-instances', payload, undefined, instance_id);
 
     let placements: Awaited<ReturnType<RojoIntegration['placeNew']>>;
     try {
@@ -1970,7 +1972,7 @@ export class RobloxStudioTools {
         placement.persistence === 'studio_only' && placement.scripts && placement.reason ? [placement.reason] : []))];
       return applied?.error || notes.length === 0
         ? applied
-        : { ...applied, persistence: 'studio_only', persistenceNote: `The new scripts are saved in Studio only: ${notes.join('; ')}.` };
+        : { ...applied, persistence: 'studio_only', persistenceNote: `The new scripts are not saved to the Rojo project: ${notes.join('; ')}.` };
     }
     if (files.length < placements.length || Number(plan.liveChanges) > 0) {
       return {
@@ -1992,9 +1994,17 @@ export class RobloxStudioTools {
     try {
       saved = await this.rojo.saveNew(link, files);
     } catch (error) {
-      if (error instanceof RojoError) return { error: rojoNothingChanged(error.message), errorCode: error.code };
-      const message = (error instanceof Error ? error.message : String(error)).replace(/\s*\n+\s*/g, ' ');
-      return { error: `Could not save the new files: ${message}. Nothing was changed in Studio.`, errorCode: 'rojo_write_failed' };
+      if (!(error instanceof NewFilesError)) throw error;
+      const message = error.message.replace(/\s*\n+\s*/g, ' ').replace(/\.$/, '');
+      const leftovers = error.leftovers.map((file) => path.relative(link.root, file));
+      const failed = error.code === 'rojo_write_failed' ? `Could not save the new files: ${message}` : message;
+      return leftovers.length === 0
+        ? { error: `${failed}, so the new files were taken back out. Nothing was changed.`, errorCode: error.code }
+        : {
+          error: `${failed}, and ${leftovers.join(', ')} could not be taken back out; delete ${leftovers.length === 1 ? 'it' : 'them'} by hand. Nothing was changed in Studio.`,
+          errorCode: error.code,
+          leftovers,
+        };
     }
 
     // Each script's revision joined in one string: complete only once every
@@ -2029,7 +2039,8 @@ export class RobloxStudioTools {
       // Rojo made these instances from the files, so Studio's undo cannot take them back out.
       undoable: false,
       ...newInstanceIds(instances),
-      saved: { files: saved, sync },
+      // The new scripts and the revision each should read back at, so a later read can confirm a pending delivery.
+      saved: { files: saved, sync, scripts: scripts.map((instance) => ({ path: formatInstancePath(instance.segments), revision: sourceRevision(instance.source ?? '') })) },
       ...(hint ? { hint } : {}),
     };
   }

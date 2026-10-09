@@ -40,6 +40,8 @@ const MAX_REPORTED_CLASSES = 12;
 const MAX_TAG_LENGTH = 100;
 const MIN_SCALE = 0.05;
 const MAX_SCALE = 20;
+/** The most script source, in total, a plan carries; a batch rarely copies more than a few scripts. */
+const MAX_PLANNED_SOURCE = 2_000_000;
 /** Properties a plan describes on its own, so setting them is not reported as an extra. */
 const PLANNED_PROPERTIES = new Set(["Name", "RunContext", "Enabled", "Disabled"]);
 
@@ -401,6 +403,9 @@ function prepareClone(state: BuildState, step: Step, index: number): void {
 			applyScale(instance, scale);
 		}
 		if (position || rotation) applyPivot(instance, placement(currentPivot(instance, index, op), position, rotation));
+		// A plan cannot describe a placement, or what a copied Model carries beyond its name and children.
+		if (scale !== undefined || position || rotation) state.decorated.add(instance);
+		for (const model of [instance, ...instance.GetDescendants()]) if (model.IsA("Model")) state.decorated.add(model);
 		attach(state, instance, parent);
 		registerId(state, step, instance, index, op);
 		state.cloned += 1;
@@ -486,7 +491,10 @@ function prepareSet(state: BuildState, step: Step, index: number): void {
 			if (properties.PrimaryPart !== undefined || properties.WorldPivot !== undefined) state.unsettled.delete(target);
 			else if (position || rotation) settlePivot(state, target);
 		}
-		if (position || rotation) applyPivot(target, placement(currentPivot(target, index, op), position, rotation));
+		if (position || rotation) {
+			applyPivot(target, placement(currentPivot(target, index, op), position, rotation));
+			state.decorated.add(target);
+		}
 	}
 	state.updated += 1;
 }
@@ -623,22 +631,28 @@ function prepareScatter(state: BuildState, step: Step, index: number): void {
  * linked Rojo project saves new scripts to files instead). Extras are what a
  * name, class, and source cannot carry.
  */
-function describeNew(state: BuildState, instance: Instance, idOf: Map<Instance, string>): Record<string, unknown> {
+function describeNew(state: BuildState, instance: Instance, idOf: Map<Instance, string>, budget: { source: number }): Record<string, unknown> {
 	const node: Record<string, unknown> = { name: instance.Name, className: instance.ClassName };
 	const id = idOf.get(instance);
 	if (id !== undefined) node.id = id;
-	if (instance.IsA("LuaSourceContainer")) node.source = (instance as unknown as { Source: string }).Source;
+	const extras: string[] = [];
+	if (instance.IsA("LuaSourceContainer")) {
+		const source = (instance as unknown as { Source: string }).Source;
+		// The plan stays bounded: past the budget a source is left out, which the caller sees as an extra.
+		budget.source -= source.size();
+		if (budget.source >= 0) node.source = source;
+		else extras.push("source too long to plan");
+	}
 	if (instance.IsA("BaseScript")) {
 		node.runContext = instance.RunContext.Name;
 		if (!instance.Enabled) node.disabled = true;
 	}
-	const extras: string[] = [];
 	if (state.decorated.has(instance)) extras.push("properties");
 	if (instance.GetTags().size() > 0) extras.push("tags");
 	if (instance.GetAttributes().size() > 0) extras.push("attributes");
 	if (extras.size() > 0) node.extras = extras;
 	const children = instance.GetChildren();
-	if (children.size() > 0) node.children = children.map((child) => describeNew(state, child, idOf));
+	if (children.size() > 0) node.children = children.map((child) => describeNew(state, child, idOf, budget));
 	return node;
 }
 
@@ -646,6 +660,7 @@ function describeNew(state: BuildState, instance: Instance, idOf: Map<Instance, 
 function describePlan(state: BuildState, path: string, createdRoot: boolean, rootParent: Instance | undefined): Record<string, unknown> {
 	const idOf = new Map<Instance, string>();
 	for (const [id, instance] of state.ids) idOf.set(instance, id);
+	const budget = { source: MAX_PLANNED_SOURCE };
 	const tops: Array<[Instance, Instance]> = [];
 	if (createdRoot && rootParent) tops.push([state.root, rootParent]);
 	else for (const instance of state.added) {
@@ -661,7 +676,7 @@ function describePlan(state: BuildState, path: string, createdRoot: boolean, roo
 			parentPath: getInstancePath(parent),
 			parentUnique: hasUniquePath(parent),
 			nameTaken: parent.FindFirstChild(instance.Name) !== undefined,
-			node: describeNew(state, instance, idOf),
+			node: describeNew(state, instance, idOf, budget),
 		})),
 		liveChanges: state.liveChanges,
 		created: state.created,

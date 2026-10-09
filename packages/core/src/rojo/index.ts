@@ -3,14 +3,15 @@ import * as path from 'path';
 import { checkFile, gitIgnored, locateScript, scriptFiles, type Ownership, type Persistence } from './ownership.js';
 import { parseInstancePath } from './instance-path.js';
 import {
-  containsScript, createNew, layoutNew, nameInDirectory, nodeAt, projectDirectory, projectNaming, removeNew,
-  type Naming, type NewEntry, type NewInstance, type PlannedTop,
+  NewFilesError, containsScript, createNew, layoutNew, nameInDirectory, nodeAt, projectDirectory, projectNaming, removeNew,
+  type NewEntry, type NewInstance, type PlannedTop,
 } from './new-files.js';
 import { probeRojoServer } from './rojo-server.js';
 import { RojoError, execRojo, loadSourcemap, rojoVersion, type RojoRunner, type SourcemapNode } from './sourcemap.js';
 
 export { RojoError } from './sourcemap.js';
 export type { Ownership, Persistence } from './ownership.js';
+export { NewFilesError, containsScript } from './new-files.js';
 export type { NewInstance, PlannedNode, PlannedTop } from './new-files.js';
 
 /**
@@ -180,8 +181,10 @@ export class RojoIntegration {
    * source to describe is refused rather than half-saved.
    */
   async placeNew(link: ProjectLink, tops: PlannedTop[]): Promise<NewPlacement[]> {
-    const tree = await loadSourcemap(link.projectFile, this.run, { nonScripts: true });
-    let naming: Naming | { reason: string } | undefined;
+    // Read only once a script needs a folder: a build with no new scripts must
+    // not start depending on Rojo, or on the project file being valid.
+    let tree: SourcemapNode | undefined;
+    const sourcemap = async () => (tree ??= await loadSourcemap(link.projectFile, this.run, { nonScripts: true }));
     const claimed = new Set<string>();
     const placements: NewPlacement[] = [];
     for (const top of tops) {
@@ -218,7 +221,7 @@ export class RojoIntegration {
         refuse(`another instance on the path to ${top.parentPath} in Studio has the same name, so where ${name} goes is ambiguous`);
         continue;
       }
-      const parentNode = nodeAt(tree, segments);
+      const parentNode = nodeAt(await sourcemap(), segments);
       if (!parentNode) {
         refuse(`Rojo's sourcemap does not list ${top.parentPath} exactly once, so ${shown(dir)} cannot be matched to it`);
         continue;
@@ -234,7 +237,7 @@ export class RojoIntegration {
         continue;
       }
       claimed.add(key);
-      naming ??= projectNaming(link.projectFile, tree);
+      const naming = projectNaming(located, await sourcemap());
       if ('reason' in naming) {
         refuse(naming.reason);
         continue;
@@ -265,9 +268,9 @@ export class RojoIntegration {
    * Creates the planned files, then reads Rojo's sourcemap back to check it
    * makes exactly the planned instances from them. Anything else (a glob the
    * project ignores, a name Rojo reads differently) takes every new file back
-   * out and throws `rojo_unsupported`, so nothing is left half-saved. A write
-   * that fails rejects with the file system's error, also with nothing left.
-   * Resolves with the new files, relative to the project folder.
+   * out and rejects with NewFilesError (`rojo_unsupported`), as does a write
+   * that fails (`rojo_write_failed`); either names any file it could not
+   * remove. Resolves with the new files, relative to the project folder.
    */
   async saveNew(link: ProjectLink, placements: FilePlacement[]): Promise<string[]> {
     const entries = placements.flatMap((placement) => placement.entries);
@@ -275,6 +278,14 @@ export class RojoIntegration {
     const created = await createNew(entries);
     // Script ownership is read from a cached sourcemap; it no longer matches the files.
     this.cache.delete(link.projectFile);
+    // Rojo names a file by the path the project gave it, which may run through a link.
+    const real = (file: string) => {
+      try {
+        return fs.realpathSync.native(file);
+      } catch {
+        return file;
+      }
+    };
     let mismatch: string | undefined;
     try {
       const tree = await loadSourcemap(link.projectFile, this.run, { nonScripts: true });
@@ -283,18 +294,16 @@ export class RojoIntegration {
         const node = nodeAt(tree, instance.segments);
         if (!node) mismatch = `it lists no single ${where}`;
         else if (node.className !== instance.className) mismatch = `it makes ${where} a ${node.className}, not a ${instance.className}`;
-        else if (instance.file && !(node.filePaths ?? []).some((file) => path.resolve(link.root, file) === instance.file)) {
+        else if (instance.file && !(node.filePaths ?? []).some((file) => real(path.resolve(link.root, file)) === instance.file)) {
           mismatch = `it does not read ${where} from ${path.relative(link.root, instance.file)}`;
         }
         if (mismatch) break;
       }
     } catch (error) {
-      await removeNew(created);
-      throw error;
+      throw new NewFilesError(error, await removeNew(created));
     }
     if (mismatch) {
-      await removeNew(created);
-      throw new RojoError('rojo_unsupported', `Rojo did not read the new files as planned (${mismatch}), so they were removed again`);
+      throw new NewFilesError(`Rojo did not read the new files as planned (${mismatch})`, await removeNew(created), 'rojo_unsupported');
     }
     return entries.filter((entry) => entry.kind === 'file').map((entry) => path.relative(link.root, entry.path));
   }

@@ -180,7 +180,7 @@ What a new tree becomes:
   "Model"}`.
 
 The extension follows whichever of `.lua` and `.luau` the project's scripts
-already use most, `.luau` when tied. With `"emitLegacyScripts": false`, a
+already use most (packages under `_Index` aside), `.luau` when tied. With `"emitLegacyScripts": false`, a
 Script with RunContext Client is `Name.client.luau`, and one with RunContext
 Legacy or Server is `Name.server.luau`, which Rojo builds with RunContext
 Server. New files are saved with LF line endings and no BOM, the way Rojo
@@ -191,22 +191,25 @@ not make exactly the planned instances from them (for example, a
 `globIgnorePaths` pattern hides one), every new file is removed again and the
 build is refused. Otherwise the result has:
 
-- `saved: { files, sync }`: `files` lists the new files, relative to the
-  project folder. `sync` is `synced` once Studio has every new script with
-  its source, `pending` while it has not (a `hint` says whether a Rojo
+- `saved: { files, sync, scripts }`: `files` lists the new files, relative
+  to the project folder. `sync` is `synced` once Studio has every new script
+  with its source, `pending` while it has not (a `hint` says whether a Rojo
   server answers), or `diverged` when Studio holds something else at those
-  paths;
+  paths. `scripts` gives each new script's path and the `revision` a read of
+  it should show once Rojo has delivered it;
 - `undoable: false`: Rojo made the instances, so Studio's undo cannot take
   them out. Delete the files instead.
 
 While `sync` is `pending`, the new scripts are not in Studio yet. Wait, or
 get Rojo serving and connected; do not build them again.
 
-A new tree with no script in it, and a script going somewhere the project
-has no folder (a service the project does not map, an instance written out in
-the project file with no `$path`, or a script saved as a single file), is
-built in Studio exactly as before. When it holds scripts, the result adds
-`persistence: "studio_only"` and a `persistenceNote` saying why.
+A batch with no new script in it is built in Studio exactly as before, without
+running Rojo at all. A script going somewhere the project has no folder (a
+service the project does not map, an instance written out in the project file
+with no `$path`, an instance that exists only in Studio, or a script saved as
+a single file) is built in Studio too, and the result adds `persistence:
+"studio_only"` and a `persistenceNote` saying why it is not saved to the
+project.
 
 The whole batch is refused, with nothing changed, when:
 
@@ -214,9 +217,12 @@ The whole batch is refused, with nothing changed, when:
   (another new tree, or an edit or removal of something already there). Send
   the new scripts in a batch of their own;
 - a new tree cannot be described by names, classes and source alone: tags,
-  attributes, other properties, a disabled script, a Script whose RunContext
-  needs a meta file, a LocalScript when `emitLegacyScripts` is false, or
-  anything but scripts, Folders and Models under it;
+  attributes, other properties, a position, rotation or scale, a cloned
+  Model (whose own properties a file cannot carry), a disabled script, a
+  Script whose RunContext needs a meta file, a LocalScript when
+  `emitLegacyScripts` is false, more script source than one plan carries
+  (2,000,000 characters in all), or anything but scripts, Folders and Models
+  under it;
 - a name could not round-trip through a file name: characters a file name
   cannot hold, a trailing dot or space, a Windows-reserved name, `init`, or
   an ending Rojo reads as a file type, such as `.server` or `.json`;
@@ -224,9 +230,26 @@ The whole batch is refused, with nothing changed, when:
   folder Rojo would read under that name, ignoring case (a stale
   `Name.meta.json` included). Two new siblings whose names differ only in
   case are refused too;
-- the project sets `syncRules`, so the file name Rojo expects cannot be known;
-- the folder is Git-ignored or under `_Index` (`rojo_generated`);
+- the folder resolves outside the project folder (for example a `$path` of
+  `../shared/src`, or a link out of it), as for edits to existing scripts;
+- the path to the parent is ambiguous: another instance on it in Studio
+  shares its name with a sibling, or Rojo's sourcemap does not list the
+  parent exactly once;
+- the project file governing the folder sets `syncRules`, or one on the way
+  to it does, so the file name Rojo expects cannot be known;
+- a new file or folder would be Git-ignored (by its folder or its own name)
+  or sits under `_Index` (`rojo_generated`);
 - it would save more than 25 new scripts at once.
+
+`emitLegacyScripts` is read from the project file that governs the folder:
+the nested one when the folder is reached through one (including a folder
+holding its own `default.project.json`), since Rojo does not carry the
+setting into a nested project.
+
+If a save has to be taken back out and a file or folder cannot be removed
+(for example someone saved into the new folder meanwhile, or a program holds
+the file open), the error names it in `leftovers`, relative to the project
+folder, and says to delete it by hand; Studio was not changed.
 
 ## Conflicts and how to resolve them
 

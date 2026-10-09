@@ -940,6 +940,28 @@ describe('build_instances plugin handler', () => {
     expect(recording.beginRecording).not.toHaveBeenCalled();
   });
 
+  test('planOnly reports what a name, class, and source cannot carry: a placement, or a copied Model', async () => {
+    const world = newWorld();
+    const kit = new FakeInstance('Model', 'Kit');
+    kit.Parent = world.storage;
+    const brain = new FakeInstance('Script', 'Brain');
+    brain.Parent = kit;
+    const folder = new FakeInstance('Folder', 'Scripts');
+    folder.Parent = world.storage;
+    const handlers = await loadBuildHandlers(world, newRecording());
+
+    const plan = handlers.buildInstances({ path: 'game.Workspace', planOnly: true, operations: [
+      { op: 'clone', source: 'game.ServerStorage.Kit', transforms: [{ position: [0, 5, 0] }] },
+      { op: 'clone', source: 'game.ServerStorage.Scripts' },
+    ] });
+
+    expect(plan.added.map((added: { node: Record<string, unknown> }) => added.node)).toEqual([
+      { name: 'Kit', className: 'Model', extras: ['properties'], children: [{ name: 'Brain', className: 'Script', source: '', runContext: 'Legacy' }] },
+      { name: 'Scripts', className: 'Folder' },
+    ]);
+    expect(world.workspace.children).toEqual([]);
+  });
+
   test('planOnly reports a new root as one new tree, and edits or removals of live instances as liveChanges', async () => {
     const world = newWorld();
     const map = new FakeInstance('Model', 'Map');
