@@ -14,6 +14,7 @@ import {
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { resolveWindowsNodeCli } from './lib/node-cli.mjs';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const prepackScript = path.join(repoRoot, 'scripts', 'prepack.mjs');
@@ -38,12 +39,19 @@ const licenseFiles = {
   'THIRD_PARTY_NOTICES.md': 'third-party-notices-text',
 };
 
-const fixtureRoot = mkdtempSync(path.join(os.tmpdir(), 'robloxstudio-mcp-prepack-'));
+const npmCli = resolveWindowsNodeCli('npm', process.platform, process.env);
+assert.ok(process.platform !== 'win32' || npmCli,
+  'Cannot find npm-cli.js. Run npm run test:package-contents with an installed npm.');
+
+// Exercise cwd handling without allowing these characters to become shell syntax.
+// npm 10 cannot pack a cwd containing a bare percent sign (URI malformed).
+// The launcher regression exercises percent signs separately from npm itself.
+const fixtureRoot = mkdtempSync(path.join(os.tmpdir(), 'roqer prepack 中文 & !-'));
 const fixtureScriptsDir = path.join(fixtureRoot, 'scripts');
-mkdirSync(fixtureScriptsDir, { recursive: true });
-copyFileSync(prepackScript, path.join(fixtureScriptsDir, 'prepack.mjs'));
 
 try {
+  mkdirSync(fixtureScriptsDir, { recursive: true });
+  copyFileSync(prepackScript, path.join(fixtureScriptsDir, 'prepack.mjs'));
   const sourcePluginDir = path.join(fixtureRoot, 'studio-plugin');
   mkdirSync(path.join(sourcePluginDir, 'src'), { recursive: true });
   mkdirSync(path.join(sourcePluginDir, 'include'), { recursive: true });
@@ -73,13 +81,16 @@ try {
     writeFileSync(path.join(destination, 'stale-source.ts'), 'left by an interrupted pack');
 
     const result = spawnSync(
-      process.platform === 'win32' ? 'npm.cmd' : 'npm',
-      ['pack', '--dry-run', '--json', '--silent'],
+      npmCli ? process.execPath : 'npm',
+      [...(npmCli ? [npmCli] : []), 'pack', '--dry-run', '--json', '--silent',
+        '--cache', path.join(fixtureRoot, 'npm-cache')],
       {
         cwd: packageDir,
         encoding: 'utf8',
+        windowsHide: true,
       },
     );
+    assert.ifError(result.error);
     assert.equal(
       result.status,
       0,

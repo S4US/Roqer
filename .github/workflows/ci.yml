@@ -13,6 +13,22 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  windows-package-contents:
+    name: Windows package contents (Node ${{ matrix.node }})
+    runs-on: windows-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        node: [20, 24]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+      # This fixture uses Node built-ins and npm; no dependency or Studio install.
+      - run: npm run test:package-contents
+
   mcp:
     name: MCP bridge and Studio plugin
     runs-on: ubuntu-latest
