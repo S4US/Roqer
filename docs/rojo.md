@@ -6,8 +6,9 @@ edits also land in the file Rojo syncs from, so they show up in `git diff` and
 survive your next Rojo build. A place with no linked project behaves exactly
 as it does without this page.
 
-Linking does not create new script files, move or rename anything, or persist
-models. It changes where an edit to an *existing*, Rojo-owned script is saved.
+Linking changes where an edit to an existing, Rojo-owned script is saved, and
+where a new script made with `build_instances` goes: into a project folder, as
+a new file. It does not delete, move or rename anything, or persist models.
 
 ## What you need
 
@@ -153,6 +154,80 @@ reports what it saw. On a `studio_only` script, the edit writes Studio exactly
 as it always did, and the result adds `persistence: "studio_only"` and a
 `persistenceNote` explaining why.
 
+## New scripts
+
+On a linked place, `build_instances` first asks Studio what the batch would
+add, without changing anything. A new instance tree with a script in it,
+going into an instance the project gives a folder, is saved as new files in
+that folder, and Rojo makes the instances in Studio. Roqer never also builds
+them in Studio, since Studio would then get a second copy once Rojo delivered
+the files.
+
+An instance has a folder when the project maps it with `$path` to a
+directory, or when it sits in such a directory as a subfolder, including a
+script stored as `Name/init.luau`. Roqer reads that from the project file
+(and any nested project file it points to), never from where sibling files
+happen to be.
+
+What a new tree becomes:
+
+- a ModuleScript: `Name.luau`;
+- a Script: `Name.server.luau`; a LocalScript: `Name.client.luau`;
+- a script with children: a `Name/` folder holding `init.luau` (or
+  `init.server.luau`, `init.client.luau`) and its children;
+- a Folder: a `Name/` folder;
+- a Model: a `Name/` folder with an `init.meta.json` of `{"className":
+  "Model"}`.
+
+The extension follows whichever of `.lua` and `.luau` the project's scripts
+already use most, `.luau` when tied. With `"emitLegacyScripts": false`, a
+Script with RunContext Client is `Name.client.luau`, and one with RunContext
+Legacy or Server is `Name.server.luau`, which Rojo builds with RunContext
+Server. New files are saved with LF line endings and no BOM, the way Rojo
+delivers them.
+
+Once written, the files are read back through `rojo sourcemap`. If Rojo does
+not make exactly the planned instances from them (for example, a
+`globIgnorePaths` pattern hides one), every new file is removed again and the
+build is refused. Otherwise the result has:
+
+- `saved: { files, sync }`: `files` lists the new files, relative to the
+  project folder. `sync` is `synced` once Studio has every new script with
+  its source, `pending` while it has not (a `hint` says whether a Rojo
+  server answers), or `diverged` when Studio holds something else at those
+  paths;
+- `undoable: false`: Rojo made the instances, so Studio's undo cannot take
+  them out. Delete the files instead.
+
+While `sync` is `pending`, the new scripts are not in Studio yet. Wait, or
+get Rojo serving and connected; do not build them again.
+
+A new tree with no script in it, and a script going somewhere the project
+has no folder (a service the project does not map, an instance written out in
+the project file with no `$path`, or a script saved as a single file), is
+built in Studio exactly as before. When it holds scripts, the result adds
+`persistence: "studio_only"` and a `persistenceNote` saying why.
+
+The whole batch is refused, with nothing changed, when:
+
+- it mixes new scripts saved to files with anything that stays in Studio
+  (another new tree, or an edit or removal of something already there). Send
+  the new scripts in a batch of their own;
+- a new tree cannot be described by names, classes and source alone: tags,
+  attributes, other properties, a disabled script, a Script whose RunContext
+  needs a meta file, a LocalScript when `emitLegacyScripts` is false, or
+  anything but scripts, Folders and Models under it;
+- a name could not round-trip through a file name: characters a file name
+  cannot hold, a trailing dot or space, a Windows-reserved name, `init`, or
+  an ending Rojo reads as a file type, such as `.server` or `.json`;
+- the name is already taken, in Studio, in the project, or by any file or
+  folder Rojo would read under that name, ignoring case (a stale
+  `Name.meta.json` included). Two new siblings whose names differ only in
+  case are refused too;
+- the project sets `syncRules`, so the file name Rojo expects cannot be known;
+- the folder is Git-ignored or under `_Index` (`rojo_generated`);
+- it would save more than 25 new scripts at once.
+
 ## Conflicts and how to resolve them
 
 Roqer serializes writes to the same real source file across participating
@@ -258,9 +333,13 @@ after you linked still shows up):
 - `execute_luau` and other runtime eval can still change a script's source in
   Studio directly. The agent is told not to use them to get around a `rojo_*`
   refusal, but nothing stops arbitrary Luau from doing it anyway.
-- New scripts, deletions, renames, and models are not persisted. A script
-  your project doesn't know about is `studio_only`, and stays that way until
-  you add it to the project yourself.
+- Deletions, renames, moves, and models are not persisted, and neither is a
+  new script anywhere but a project folder (see [New scripts](#new-scripts)).
+  A script your project doesn't know about is `studio_only`, and stays that
+  way until you add it to the project yourself.
+- `build_instances` is the only call that saves new scripts. `import_rbxm`,
+  `insert_asset`, `animation`, and `execute_luau` still make their instances
+  in Studio only.
 - Links live in the MCP server's memory, so they are lost when that server
   process restarts; relink afterward (or pass `--rojo-project`, below, so a
   bare MCP client relinks itself). The desktop app is the exception: for a
@@ -309,7 +388,7 @@ after you linked still shows up):
 
 Everything above is the same `manage_instance`, `get_script_source`,
 `set_script_source`, `edit_script_lines`, `edit_script_batch`,
-`insert_script_lines`, `delete_script_lines`, and
+`insert_script_lines`, `delete_script_lines`, `build_instances`, and
 `find_and_replace_in_scripts` calls Roqer's own agent uses, so linking and
 editing work the same way from Claude Code, Codex, Cursor, or any other MCP
 client connected to [the Studio MCP server](mcp-server.md). The read-only

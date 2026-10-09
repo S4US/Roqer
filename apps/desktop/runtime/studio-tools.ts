@@ -1181,10 +1181,17 @@ function describeBounds(value: unknown): string | undefined {
  * counted what the root actually holds. It does not claim each created value
  * was compared, because it was not.
  */
-function recordBuild(context: PlannerContext, args: JsonRecord, outcome: McpToolOutcome): void {
+function recordBuild(context: PlannerContext, args: JsonRecord, outcome: McpToolOutcome): string | undefined {
   const data = isRecord(outcome.data) ? outcome.data : {};
   const root = stringField(data, "path") ?? (typeof args.path === "string" ? args.path : undefined);
-  if (root === undefined) return;
+  if (root === undefined) return undefined;
+
+  // On a Rojo-linked place, a batch of new scripts is saved as files and Rojo
+  // makes the instances, so Studio never ran the batch: `saved.files` names
+  // what was written and `saved.sync` whether Studio has the scripts yet.
+  const saved = isRecord(data.saved) ? data.saved : undefined;
+  const files = Array.isArray(saved?.files) ? saved.files.filter((file): file is string => typeof file === "string") : undefined;
+  if (files !== undefined) return recordSavedBuild(context, root, files, stringField(saved, "sync"));
 
   if (data.removedRoot === true) {
     context.recordChange({
@@ -1201,7 +1208,7 @@ function recordBuild(context: PlannerContext, args: JsonRecord, outcome: McpTool
       detail: "Studio took the build root out of the place as the batch's only step.",
       metadata: [{ label: "Undo", value: data.undoable !== false ? "One Studio undo step" : "Not recorded in Studio's undo history" }],
     });
-    return;
+    return undefined;
   }
 
   const parts = (["created", "cloned", "updated", "removed"] as const)
@@ -1212,9 +1219,10 @@ function recordBuild(context: PlannerContext, args: JsonRecord, outcome: McpTool
     kind: "instance",
     target: root,
     instanceId: context.instanceId ?? undefined,
-    summary: parts.length > 0
+    summary: (parts.length > 0
       ? `Built in one undoable step: ${parts.join(", ")}.`
-      : "Applied a build batch that changed no instances.",
+      : "Applied a build batch that changed no instances.")
+      + (stringField(data, "persistence") === "studio_only" ? " The new scripts are in Studio only; they are not saved to the linked Rojo project." : ""),
   });
 
   const descendants = numberField(data, "descendants");
@@ -1239,6 +1247,54 @@ function recordBuild(context: PlannerContext, args: JsonRecord, outcome: McpTool
       },
     ],
   });
+  return undefined;
+}
+
+/**
+ * Record a build saved as files in the linked Rojo project. The MCP read the
+ * files back through Rojo's sourcemap before answering, so the files are
+ * known to make the planned instances; whether Studio has them yet is what
+ * `sync` says. Pending or diverged evidence leaves `passed` unset, as a
+ * pending script save does: nothing failed, but Studio has confirmed nothing.
+ * Returns the note for the model when Studio does not have the scripts yet.
+ */
+function recordSavedBuild(context: PlannerContext, root: string, files: string[], sync: string | undefined): string | undefined {
+  const shown = files.length <= 3 ? files.join(", ") : `${files.slice(0, 3).join(", ")} and ${files.length - 3} more`;
+  const saved = `Saved ${files.length} new file${files.length === 1 ? "" : "s"} to the Rojo project: ${shown}`;
+  context.recordChange({
+    kind: "instance",
+    target: root,
+    instanceId: context.instanceId ?? undefined,
+    summary: sync === "pending"
+      ? `${saved}; Rojo has not delivered the new scripts to Studio yet.`
+      : sync === "diverged"
+        ? `${saved}; the scripts in Studio at those paths hold something else.`
+        : `${saved}; Studio has the new scripts.`,
+  });
+  const undo = { label: "Undo", value: "Not in Studio's undo history; delete the files to take them back out" };
+  if (sync === "synced") {
+    context.recordEvidence({
+      kind: "verification",
+      changeKind: "instance",
+      title: root,
+      passed: true,
+      detail: "Rojo's sourcemap read the new files back as the planned instances, and Studio received every new script from Rojo.",
+      metadata: [undo],
+    });
+    return undefined;
+  }
+  context.recordEvidence({
+    kind: "verification",
+    changeKind: "instance",
+    title: root,
+    detail: sync === "diverged"
+      ? "The new files were saved, but the scripts in Studio at those paths hold something else."
+      : "The new files were saved; Rojo has not delivered the new scripts to Studio yet.",
+    metadata: [undo],
+  });
+  return sync === "diverged"
+    ? "Saved the new scripts to files, but the scripts in Studio at those paths hold something else. Read them before editing."
+    : "Saved the new scripts to files; Rojo has not delivered them to Studio yet, so they cannot be read or edited there until it does. Do not retry or build them in Studio.";
 }
 
 /** How the MCP's result opens its list of MeshParts drawn as their boxes; the metadata's label says it instead. */
@@ -2173,7 +2229,7 @@ export function createStudioToolRunner(context: PlannerContext, options: StudioT
     }
 
     if (outcome.ok && !refused && operation === "build_instances") {
-      recordBuild(context, args, outcome);
+      modelNote = recordBuild(context, args, outcome) ?? modelNote;
     }
 
     if (outcome.ok && !refused && operation === "animation") {

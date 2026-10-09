@@ -1,11 +1,29 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { checkFile, gitIgnored, locateScript, scriptFiles, type Ownership, type Persistence } from './ownership.js';
+import { parseInstancePath } from './instance-path.js';
+import {
+  containsScript, createNew, layoutNew, nameInDirectory, nodeAt, projectDirectory, projectNaming, removeNew,
+  type Naming, type NewEntry, type NewInstance, type PlannedTop,
+} from './new-files.js';
 import { probeRojoServer } from './rojo-server.js';
 import { RojoError, execRojo, loadSourcemap, rojoVersion, type RojoRunner, type SourcemapNode } from './sourcemap.js';
 
 export { RojoError } from './sourcemap.js';
 export type { Ownership, Persistence } from './ownership.js';
+export type { NewInstance, PlannedNode, PlannedTop } from './new-files.js';
+
+/**
+ * Where one new instance tree of a build belongs on a linked place: saved as
+ * files, made in Studio only (`scripts` says whether it holds any), or
+ * refused with why.
+ */
+export type NewPlacement =
+  | { persistence: 'studio_only'; scripts: boolean; reason?: string }
+  | { persistence: 'file'; entries: NewEntry[]; instances: NewInstance[] }
+  | { persistence: 'generated' | 'unsupported'; reason: string; relativeFile?: string };
+
+export type FilePlacement = Extract<NewPlacement, { persistence: 'file' }>;
 
 const DEFAULT_SERVE_PORT = 34872;
 const READ_CACHE_MS = 10_000;
@@ -152,5 +170,132 @@ export class RojoIntegration {
     const absolute = path.resolve(link.root, located.found);
     const ignored = await this.ignored(link.root, [absolute]);
     return checkFile(link.root, located.found, (real) => ignored.has(real) || ignored.has(absolute));
+  }
+
+  /**
+   * Where each new instance tree a build would add belongs. A tree with a
+   * script in it, going into an instance the project gives a folder, becomes
+   * files there; one going anywhere else stays in Studio, as before. Anything
+   * that would be ambiguous, collide, or need more than a name, class, and
+   * source to describe is refused rather than half-saved.
+   */
+  async placeNew(link: ProjectLink, tops: PlannedTop[]): Promise<NewPlacement[]> {
+    const tree = await loadSourcemap(link.projectFile, this.run, { nonScripts: true });
+    let naming: Naming | { reason: string } | undefined;
+    const claimed = new Set<string>();
+    const placements: NewPlacement[] = [];
+    for (const top of tops) {
+      const name = top.node.name;
+      if (!containsScript(top.node)) {
+        placements.push({ persistence: 'studio_only', scripts: false });
+        continue;
+      }
+      const segments = parseInstancePath(top.parentPath);
+      if (!segments) {
+        placements.push({ persistence: 'unsupported', reason: `${top.parentPath} could not be matched to the project` });
+        continue;
+      }
+      const located = projectDirectory(link.projectFile, segments);
+      if ('reason' in located) {
+        placements.push({ persistence: 'studio_only', scripts: true, reason: located.reason });
+        continue;
+      }
+      let dir: string;
+      try {
+        dir = fs.realpathSync.native(located.dir);
+      } catch {
+        placements.push({ persistence: 'unsupported', reason: `the folder for ${top.parentPath} is missing on disk` });
+        continue;
+      }
+      const relativeDir = path.relative(link.root, dir);
+      if (relativeDir === '..' || relativeDir.startsWith('..' + path.sep) || path.isAbsolute(relativeDir)) {
+        placements.push({ persistence: 'unsupported', reason: `the folder for ${top.parentPath} resolves outside the project folder` });
+        continue;
+      }
+      const shown = (file: string) => path.relative(link.root, file) || '.';
+      const refuse = (reason: string) => placements.push({ persistence: 'unsupported', reason });
+      if (!top.parentUnique) {
+        refuse(`another instance on the path to ${top.parentPath} in Studio has the same name, so where ${name} goes is ambiguous`);
+        continue;
+      }
+      const parentNode = nodeAt(tree, segments);
+      if (!parentNode) {
+        refuse(`Rojo's sourcemap does not list ${top.parentPath} exactly once, so ${shown(dir)} cannot be matched to it`);
+        continue;
+      }
+      if (top.nameTaken || (parentNode.children ?? []).some((child) => child.name === name)) {
+        refuse(`${top.parentPath} already has a child named ${name}; a second would make its path ambiguous`);
+        continue;
+      }
+      const existing = nameInDirectory(dir, name);
+      const key = path.join(dir, name.toLowerCase());
+      if (existing !== undefined || claimed.has(key)) {
+        refuse(`${shown(path.join(dir, existing ?? name))} would collide with the new ${name} (file names ignore case)`);
+        continue;
+      }
+      claimed.add(key);
+      naming ??= projectNaming(link.projectFile, tree);
+      if ('reason' in naming) {
+        refuse(naming.reason);
+        continue;
+      }
+      const entries: NewEntry[] = [];
+      const instances: NewInstance[] = [];
+      const reason = layoutNew(dir, segments, top.node, naming, entries, instances);
+      if (reason) {
+        refuse(reason);
+        continue;
+      }
+      const ignored = await this.ignored(link.root, entries.map((entry) => entry.path));
+      const generated = entries.find((entry) => ignored.has(entry.path) || path.relative(link.root, entry.path).split(path.sep).includes('_Index'));
+      if (generated) {
+        placements.push({
+          persistence: 'generated',
+          relativeFile: shown(generated.path),
+          reason: `${shown(generated.path)} would be package or build output, not source`,
+        });
+        continue;
+      }
+      placements.push({ persistence: 'file', entries, instances });
+    }
+    return placements;
+  }
+
+  /**
+   * Creates the planned files, then reads Rojo's sourcemap back to check it
+   * makes exactly the planned instances from them. Anything else (a glob the
+   * project ignores, a name Rojo reads differently) takes every new file back
+   * out and throws `rojo_unsupported`, so nothing is left half-saved. A write
+   * that fails rejects with the file system's error, also with nothing left.
+   * Resolves with the new files, relative to the project folder.
+   */
+  async saveNew(link: ProjectLink, placements: FilePlacement[]): Promise<string[]> {
+    const entries = placements.flatMap((placement) => placement.entries);
+    const instances = placements.flatMap((placement) => placement.instances);
+    const created = await createNew(entries);
+    // Script ownership is read from a cached sourcemap; it no longer matches the files.
+    this.cache.delete(link.projectFile);
+    let mismatch: string | undefined;
+    try {
+      const tree = await loadSourcemap(link.projectFile, this.run, { nonScripts: true });
+      for (const instance of instances) {
+        const where = instance.segments.join('.');
+        const node = nodeAt(tree, instance.segments);
+        if (!node) mismatch = `it lists no single ${where}`;
+        else if (node.className !== instance.className) mismatch = `it makes ${where} a ${node.className}, not a ${instance.className}`;
+        else if (instance.file && !(node.filePaths ?? []).some((file) => path.resolve(link.root, file) === instance.file)) {
+          mismatch = `it does not read ${where} from ${path.relative(link.root, instance.file)}`;
+        }
+        if (mismatch) break;
+      }
+    } catch (error) {
+      await removeNew(created);
+      throw error;
+    }
+    if (mismatch) {
+      await removeNew(created);
+      throw new RojoError('rojo_unsupported', `Rojo did not read the new files as planned (${mismatch}), so they were removed again`);
+    }
+    return entries.filter((entry) => entry.kind === 'file').map((entry) => path.relative(link.root, entry.path));
   }
 }

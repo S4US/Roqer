@@ -62,7 +62,7 @@ export const GATEWAY_SCHEMAS: Readonly<Record<string, ToolSchema>> = {
     ],
   },
   [LINK_ROJO_PROJECT_OPERATION]: {
-    description: "Use to link the current place to a Rojo project, so script edits save to the project's files instead of staying only in Studio. Opens the same project-file picker as the Rojo pill: the user chooses the *.project.json file, or cancels. It always acts on the run's own place -- there is no path or instance_id argument of any kind; never ask the user to type a path, and point them to the Rojo pill in the header as the other way to link. A report of linked means the place is already linked -- never follow this with manage_instance link_project, which always requires a project path you do not have.",
+    description: "Use to link the current place to a Rojo project, so script edits and new scripts save to the project's files instead of staying only in Studio. Opens the same project-file picker as the Rojo pill: the user chooses the *.project.json file, or cancels. It always acts on the run's own place -- there is no path or instance_id argument of any kind; never ask the user to type a path, and point them to the Rojo pill in the header as the other way to link. A report of linked means the place is already linked -- never follow this with manage_instance link_project, which always requires a project path you do not have.",
     parameters: [],
   },
 };

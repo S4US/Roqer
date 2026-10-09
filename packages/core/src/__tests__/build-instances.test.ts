@@ -46,7 +46,8 @@ class CFrame {
 }
 
 const PART_CLASSES = new Set(['Part', 'WedgePart']);
-const CREATABLE = new Set(['Model', 'Folder', 'Part', 'WedgePart', 'Script', 'StringValue']);
+const SCRIPT_CLASSES = new Set(['Script', 'LocalScript', 'ModuleScript']);
+const CREATABLE = new Set(['Model', 'Folder', 'Part', 'WedgePart', 'Script', 'LocalScript', 'ModuleScript', 'StringValue']);
 
 class FakeInstance {
   Name: string;
@@ -61,6 +62,9 @@ class FakeInstance {
   CanTouch = true;
   CanQuery = true;
   CastShadow = true;
+  Source = '';
+  RunContext = { Name: 'Legacy' };
+  Enabled = true;
   destroyed = false;
   pivot = new CFrame();
   scale = 1;
@@ -81,8 +85,14 @@ class FakeInstance {
   }
 
   IsA(name: string) {
-    return name === this.ClassName || (name === 'BasePart' && PART_CLASSES.has(this.ClassName));
+    return name === this.ClassName || (name === 'BasePart' && PART_CLASSES.has(this.ClassName))
+      || (name === 'LuaSourceContainer' && SCRIPT_CLASSES.has(this.ClassName))
+      || (name === 'BaseScript' && (this.ClassName === 'Script' || this.ClassName === 'LocalScript'));
   }
+  FindFirstChild(name: string) { return this.children.find((child) => child.Name === name); }
+  GetTags() { return [...this.tags]; }
+  /** Luau iterates the attribute table; roblox-ts's Map.size() is all the handler asks of it. */
+  GetAttributes() { const count = this.attributes.size; return { size: () => count }; }
   IsDescendantOf(ancestor: FakeInstance) {
     for (let current = this.parent; current; current = current.parent) if (current === ancestor) return true;
     return false;
@@ -106,6 +116,9 @@ class FakeInstance {
     copy.CanTouch = this.CanTouch;
     copy.CanQuery = this.CanQuery;
     copy.CastShadow = this.CastShadow;
+    copy.Source = this.Source;
+    copy.RunContext = this.RunContext;
+    copy.Enabled = this.Enabled;
     for (const tag of this.tags) copy.tags.add(tag);
     for (const [name, value] of this.attributes) copy.attributes.set(name, value);
     for (const child of this.children) child.Clone()!.Parent = copy;
@@ -201,6 +214,12 @@ function utilsFor(world: World) {
     resolveInstance: (instancePath: string) => find(world, instancePath),
     getInstancePath: pathOf,
     getInstanceReference: (instance: FakeInstance) => `ref:${pathOf(instance)}`,
+    hasUniquePath: (instance: FakeInstance) => {
+      for (let current: FakeInstance | undefined = instance; current && current.Parent; current = current.Parent) {
+        if (current.Parent.children.filter((sibling) => sibling.Name === current!.Name).length > 1) return false;
+      }
+      return true;
+    },
     convertPropertyValue: (_instance: unknown, _property: string, value: unknown) =>
       Array.isArray(value) && value.length === 3 ? new Vector3(value[0], value[1], value[2]) : value,
     resolveParentAndName: (instancePath: string) => {
@@ -875,6 +894,78 @@ describe('build_instances plugin handler', () => {
     expect(attempt([{ op: 'clone', id: 'x', source: 'game.Workspace.Map.Old', transforms: [{}, {}] }]).error)
       .toContain('give an id only to a single clone');
     expect(root.children.map((child) => child.Name)).toEqual(['Old']);
+  });
+
+  test('planOnly describes the new instances under each live parent and applies nothing', async () => {
+    const world = newWorld();
+    const template = new FakeInstance('Script', 'Template');
+    template.Source = 'print(1)';
+    template.Parent = world.storage;
+    new FakeInstance('Folder', 'Taken').Parent = world.storage;
+    const recording = newRecording();
+    const handlers = await loadBuildHandlers(world, recording);
+
+    const plan = handlers.buildInstances({
+      path: 'game.ServerStorage',
+      planOnly: true,
+      operations: [
+        { op: 'create', id: 'kit', className: 'Folder', name: 'Kit' },
+        { op: 'create', id: 'main', className: 'Script', name: 'Main', parent: '$kit', properties: { Enabled: false } },
+        { op: 'clone', source: 'game.ServerStorage.Template', parent: '$kit' },
+        { op: 'create', className: 'ModuleScript', name: 'Taken', tags: ['Shared'] },
+        { op: 'create', className: 'Part', name: 'Marker', properties: { Anchored: true } },
+      ],
+    });
+
+    expect(plan).toEqual({
+      planned: true,
+      path: 'game.ServerStorage',
+      createdRoot: false,
+      serviceRoot: true,
+      added: [
+        { parentPath: 'game.ServerStorage', parentUnique: true, nameTaken: false, node: { name: 'Kit', className: 'Folder', id: 'kit', children: [
+          { name: 'Main', className: 'Script', id: 'main', source: '', runContext: 'Legacy', disabled: true },
+          { name: 'Template', className: 'Script', source: 'print(1)', runContext: 'Legacy' },
+        ] } },
+        { parentPath: 'game.ServerStorage', parentUnique: true, nameTaken: true, node: { name: 'Taken', className: 'ModuleScript', source: '', extras: ['tags'] } },
+        { parentPath: 'game.ServerStorage', parentUnique: true, nameTaken: false, node: { name: 'Marker', className: 'Part', extras: ['properties'] } },
+      ],
+      liveChanges: 0,
+      created: 4,
+      cloned: 1,
+      updated: 0,
+      removed: 0,
+    });
+    expect(world.storage.children.map((child) => child.Name)).toEqual(['Template', 'Taken']);
+    expect(recording.beginRecording).not.toHaveBeenCalled();
+  });
+
+  test('planOnly reports a new root as one new tree, and edits or removals of live instances as liveChanges', async () => {
+    const world = newWorld();
+    const map = new FakeInstance('Model', 'Map');
+    map.Parent = world.workspace;
+    new FakeInstance('Part', 'Old').Parent = map;
+    new FakeInstance('Part', 'Kept').Parent = map;
+    const recording = newRecording();
+    const handlers = await loadBuildHandlers(world, recording);
+
+    const created = handlers.buildInstances({ path: 'game.Workspace.Npc', planOnly: true, operations: [{ op: 'create', className: 'Script', name: 'Brain' }] });
+    expect(created).toMatchObject({ planned: true, path: 'game.Workspace.Npc', createdRoot: true, liveChanges: 0, added: [
+      { parentPath: 'game.Workspace', node: { name: 'Npc', className: 'Model', children: [{ name: 'Brain', className: 'Script' }] } },
+    ] });
+
+    const edited = handlers.buildInstances({ path: 'game.Workspace.Map', planOnly: true, operations: [
+      { op: 'remove', target: 'game.Workspace.Map.Old' },
+      { op: 'set', target: 'game.Workspace.Map.Kept', name: 'Renamed' },
+    ] });
+    expect(edited).toMatchObject({ planned: true, createdRoot: false, added: [], liveChanges: 2 });
+
+    const removedRoot = handlers.buildInstances({ path: 'game.Workspace.Map', planOnly: true, operations: [{ op: 'remove', target: 'game.Workspace.Map' }] });
+    expect(removedRoot).toMatchObject({ planned: true, removedRoot: true, liveChanges: 1, added: [] });
+
+    expect(world.workspace.children.map((child) => child.Name)).toEqual(['Map']);
+    expect(map.children.map((child) => child.Name)).toEqual(['Old', 'Kept']);
+    expect(recording.beginRecording).not.toHaveBeenCalled();
   });
 
   test('a number stored as a 32-bit float still counts as the value written', async () => {

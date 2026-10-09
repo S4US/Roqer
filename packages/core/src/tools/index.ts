@@ -56,8 +56,8 @@ import type { Rig } from '../animation/rig.js';
 import { RIGS, rigFor } from '../animation/rigs.js';
 import { cachedRigMeshes, currentRigMeshes, modelRigMeshes, rigMeshCacheDirectory, storeRigMeshes, type BoxedMeshPart } from '../animation/rig-meshes.js';
 import { MAX_MESHES_PER_READ, meshesToRead, storeModelMesh } from '../animation/model-meshes.js';
-import { RojoError, RojoIntegration, type Ownership, type ProjectLink } from '../rojo/index.js';
-import { parseInstancePath } from '../rojo/instance-path.js';
+import { RojoError, RojoIntegration, type FilePlacement, type NewInstance, type Ownership, type PlannedTop, type ProjectLink } from '../rojo/index.js';
+import { formatInstancePath, parseInstancePath } from '../rojo/instance-path.js';
 import { compareAndWrite } from '../rojo/file-write.js';
 import { waitForStudio } from '../rojo/sync-wait.js';
 import { differingLines } from '../rojo/conflict.js';
@@ -155,6 +155,20 @@ const CREATOR_STORE_SORT_CATEGORIES = new Set<string>([
 /** A Rojo refusal reason followed by "Nothing was changed.", with a period added first if the reason lacks one. */
 function rojoNothingChanged(reason: string): string {
   return `${reason.endsWith('.') ? reason : `${reason}.`} Nothing was changed.`;
+}
+
+/** How many new scripts one build may save to a linked Rojo project; each is polled until Rojo delivers it. */
+const MAX_ROJO_NEW_SCRIPTS = 25;
+/** As many `$id` paths as a build reports from the plugin. */
+const MAX_REPORTED_BUILD_IDS = 50;
+
+/** A saved build's `ids`, as the plugin reports them for a build it applied itself. */
+function newInstanceIds(instances: NewInstance[]): Record<string, unknown> {
+  const named = instances.filter((instance) => instance.id !== undefined);
+  if (named.length === 0) return {};
+  const ids: Record<string, string> = {};
+  for (const instance of named.slice(0, MAX_REPORTED_BUILD_IDS)) ids[instance.id!] = formatInstancePath(instance.segments);
+  return { ids, ...(named.length > MAX_REPORTED_BUILD_IDS ? { idsOmitted: named.length - MAX_REPORTED_BUILD_IDS } : {}) };
 }
 
 /**
@@ -1912,8 +1926,112 @@ export class RobloxStudioTools {
     if (operations.length > MAX_BUILD_OPERATIONS) {
       throw new Error(`build_instances accepts at most ${MAX_BUILD_OPERATIONS} operations per call; split the build`);
     }
-    const response = await this._callSingle('/api/build-instances', { path, operations }, undefined, instance_id);
+    const response = await this._buildWrite({ path, operations }, instance_id);
     return { content: [{ type: 'text', text: JSON.stringify(response) }] };
+  }
+
+  /**
+   * One build. On a place with no linked Rojo project this is the plugin call
+   * it always was. On a linked place, a batch whose new instances include
+   * scripts going into a folder the project owns is saved as files there and
+   * delivered by Rojo, never made in Studio directly: making it in both would
+   * leave Studio with two copies once Rojo delivered the files.
+   */
+  private async _buildWrite(payload: Record<string, unknown>, instance_id?: string): Promise<Record<string, unknown>> {
+    const link = this._rojoDefaultPending ? await this._ensureRojoLink(instance_id) : this._rojoLinkFor(instance_id);
+    if (!link) return this._callSingle('/api/build-instances', payload, undefined, instance_id);
+    if ('error' in link) return link;
+
+    const plan = await this._callSingle('/api/build-instances', { ...payload, planOnly: true }, undefined, instance_id);
+    if (!plan || plan.planned !== true) return plan;
+    const tops = Array.isArray(plan.added) ? plan.added as PlannedTop[] : [];
+
+    let placements: Awaited<ReturnType<RojoIntegration['placeNew']>>;
+    try {
+      placements = await this.rojo.placeNew(link, tops);
+    } catch (error) {
+      if (error instanceof RojoError) return { error: rojoNothingChanged(error.message), errorCode: error.code };
+      throw error;
+    }
+    for (const placement of placements) {
+      if (placement.persistence === 'generated' || placement.persistence === 'unsupported') {
+        return {
+          error: rojoNothingChanged(placement.reason),
+          errorCode: placement.persistence === 'generated' ? 'rojo_generated' : 'rojo_unsupported',
+          ...(placement.relativeFile ? { file: placement.relativeFile } : {}),
+        };
+      }
+    }
+
+    const files = placements.filter((placement): placement is FilePlacement => placement.persistence === 'file');
+    if (files.length === 0) {
+      const applied = await this._callSingle('/api/build-instances', payload, undefined, instance_id);
+      const notes = [...new Set(placements.flatMap((placement) =>
+        placement.persistence === 'studio_only' && placement.scripts && placement.reason ? [placement.reason] : []))];
+      return applied?.error || notes.length === 0
+        ? applied
+        : { ...applied, persistence: 'studio_only', persistenceNote: `The new scripts are saved in Studio only: ${notes.join('; ')}.` };
+    }
+    if (files.length < placements.length || Number(plan.liveChanges) > 0) {
+      return {
+        error: rojoNothingChanged('This batch adds scripts that are saved to the linked Rojo project and also makes changes that stay in Studio only; '
+          + 'send the new scripts in a build_instances call of their own'),
+        errorCode: 'rojo_unsupported',
+      };
+    }
+    const instances = files.flatMap((placement) => placement.instances);
+    const scripts = instances.filter((instance) => instance.file !== undefined);
+    if (scripts.length > MAX_ROJO_NEW_SCRIPTS) {
+      return {
+        error: rojoNothingChanged(`A build can save at most ${MAX_ROJO_NEW_SCRIPTS} new scripts to the linked Rojo project at once; split it`),
+        errorCode: 'rojo_unsupported',
+      };
+    }
+
+    let saved: string[];
+    try {
+      saved = await this.rojo.saveNew(link, files);
+    } catch (error) {
+      if (error instanceof RojoError) return { error: rojoNothingChanged(error.message), errorCode: error.code };
+      const message = (error instanceof Error ? error.message : String(error)).replace(/\s*\n+\s*/g, ' ');
+      return { error: `Could not save the new files: ${message}. Nothing was changed in Studio.`, errorCode: 'rojo_write_failed' };
+    }
+
+    // Each script's revision joined in one string: complete only once every
+    // new script is in Studio, so a batch half delivered still reads as "not yet".
+    const ABSENT = '\u0000absent';
+    const expected = scripts.map((instance) => sourceRevision(instance.source ?? '')).join('|');
+    const sync = await waitForStudio(async () => {
+      const revisions = await Promise.all(scripts.map(async (instance) => {
+        const read = await this._callSingle('/api/get-script-source', { instancePath: formatInstancePath(instance.segments), startLine: 1, endLine: 1 }, undefined, instance_id)
+          .catch(() => undefined);
+        return typeof read?.revision === 'string' ? read.revision : undefined;
+      }));
+      return revisions.some((revision) => revision === undefined) ? undefined : revisions.join('|');
+    }, ABSENT, expected);
+    let hint: string | undefined;
+    if (sync === 'pending') {
+      const server = await this.rojo.probe(link);
+      hint = server.reachable
+        ? `The files are saved. Rojo answers on port ${link.port} but Studio has not received the new scripts yet; check the Rojo plugin is connected.`
+        : `The files are saved. No Rojo server answers on port ${link.port}; start rojo serve and connect the Rojo plugin to deliver them.`;
+    } else if (sync === 'diverged') {
+      hint = 'The files are saved, but the scripts in Studio at those paths hold something else. Read them before editing.';
+    }
+    return {
+      success: true,
+      path: plan.path,
+      createdRoot: plan.createdRoot === true,
+      created: plan.created,
+      cloned: plan.cloned,
+      updated: plan.updated,
+      removed: 0,
+      // Rojo made these instances from the files, so Studio's undo cannot take them back out.
+      undoable: false,
+      ...newInstanceIds(instances),
+      saved: { files: saved, sync },
+      ...(hint ? { hint } : {}),
+    };
   }
 
   /**

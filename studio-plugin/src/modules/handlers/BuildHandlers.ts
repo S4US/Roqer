@@ -2,7 +2,7 @@ import Utils from "../Utils";
 import Recording from "../Recording";
 import ScatterPlanner from "./ScatterPlanner";
 
-const { getInstancePath, resolveInstance, getInstanceReference, convertPropertyValue, resolveParentAndName, samePropertyValue } = Utils;
+const { getInstancePath, resolveInstance, getInstanceReference, convertPropertyValue, resolveParentAndName, samePropertyValue, hasUniquePath } = Utils;
 const { beginRecording, finishRecording } = Recording;
 
 /**
@@ -40,6 +40,8 @@ const MAX_REPORTED_CLASSES = 12;
 const MAX_TAG_LENGTH = 100;
 const MIN_SCALE = 0.05;
 const MAX_SCALE = 20;
+/** Properties a plan describes on its own, so setting them is not reported as an extra. */
+const PLANNED_PROPERTIES = new Set(["Name", "RunContext", "Enabled", "Disabled"]);
 
 type Step = Record<string, unknown>;
 
@@ -74,6 +76,12 @@ interface BuildState {
 	serviceRoot: boolean;
 	/** New instances attached straight to a live parent: what a service-root batch reports on. */
 	added: Instance[];
+	/** The live parent each of `added` goes into, for a plan made before anything is attached. */
+	attachedTo: Map<Instance, Instance>;
+	/** New instances given properties beyond a name, which a plan has to report. */
+	decorated: Set<Instance>;
+	/** Edits and removals of instances that were already live. */
+	liveChanges: number;
 }
 
 /**
@@ -111,13 +119,14 @@ function serviceRootRefusal(service: Instance, op: string): string {
  * step. Undefined when the step names something else, or the root is not one
  * a batch may have, so the usual checks answer it.
  */
-function removeRootAlone(path: string, root: Instance | undefined, step: Step): Record<string, unknown> | undefined {
+function removeRootAlone(path: string, root: Instance | undefined, step: Step, planOnly: boolean): Record<string, unknown> | undefined {
 	const target = step.target;
 	if (!typeIs(target, "string") || target === "") return undefined;
 	if (target !== path && (root === undefined || resolveInstance(target, undefined) !== root)) return undefined;
 	if (!root) return { error: `${path} does not exist, so there is no build root to remove. Nothing was changed.` };
 	if (root === game || root.Parent === game) return undefined;
 	const where = getInstancePath(root);
+	if (planOnly) return { planned: true, path: where, removedRoot: true, createdRoot: false, added: [], liveChanges: 1, created: 0, cloned: 0 };
 	const recordingId = beginRecording(`Remove ${root.Name}`);
 	// Parent = nil rather than Destroy, as every remove: undo puts it back.
 	const [removed, reason] = pcall(() => {
@@ -272,6 +281,8 @@ function decorateDetached(state: BuildState, instance: Instance, step: Step, ind
 		if (!typeIs(step.properties, "table")) fail(index, op, "properties must be an object");
 		const properties = step.properties as Record<string, unknown>;
 		for (const property of sortedKeys(properties)) {
+			// A plan reports a script's RunContext and Enabled itself, from the instance.
+			if (!PLANNED_PROPERTIES.has(property)) state.decorated.add(instance);
 			const resolved = resolveProperty(state, instance, property, properties[property], index, op);
 			const [success, result] = pcall(() => {
 				writable[property] = resolved;
@@ -297,6 +308,7 @@ function decorateDetached(state: BuildState, instance: Instance, step: Step, ind
 function attach(state: BuildState, instance: Instance, parent: Instance): void {
 	if (isLive(state, parent)) {
 		state.added.push(instance);
+		state.attachedTo.set(instance, parent);
 		state.actions.push({
 			apply: () => {
 				instance.Parent = parent;
@@ -463,6 +475,7 @@ function prepareSet(state: BuildState, step: Step, index: number): void {
 	}
 	if (isLive(state, target)) {
 		prepareLiveSet(state, target, step, index, op);
+		state.liveChanges += 1;
 	} else {
 		decorateDetached(state, target, step, index, op);
 		const properties = typeIs(step.properties, "table") ? (step.properties as Record<string, unknown>) : {};
@@ -499,6 +512,7 @@ function prepareRemove(state: BuildState, step: Step, index: number): void {
 		},
 	});
 	state.removedCount += 1;
+	state.liveChanges += 1;
 }
 
 /** Prepare a complete replacement while the previous scatter remains live. */
@@ -601,6 +615,60 @@ function prepareScatter(state: BuildState, step: Step, index: number): void {
 	attach(state, group, parent);
 	state.created += 1;
 	state.scatter = { requested: plan.requested, placed: plan.placements.size(), attempts: plan.attempts };
+}
+
+/**
+ * A new instance and everything under it as the batch would add it, for a
+ * caller that decides where the batch belongs before anything is applied (a
+ * linked Rojo project saves new scripts to files instead). Extras are what a
+ * name, class, and source cannot carry.
+ */
+function describeNew(state: BuildState, instance: Instance, idOf: Map<Instance, string>): Record<string, unknown> {
+	const node: Record<string, unknown> = { name: instance.Name, className: instance.ClassName };
+	const id = idOf.get(instance);
+	if (id !== undefined) node.id = id;
+	if (instance.IsA("LuaSourceContainer")) node.source = (instance as unknown as { Source: string }).Source;
+	if (instance.IsA("BaseScript")) {
+		node.runContext = instance.RunContext.Name;
+		if (!instance.Enabled) node.disabled = true;
+	}
+	const extras: string[] = [];
+	if (state.decorated.has(instance)) extras.push("properties");
+	if (instance.GetTags().size() > 0) extras.push("tags");
+	if (instance.GetAttributes().size() > 0) extras.push("attributes");
+	if (extras.size() > 0) node.extras = extras;
+	const children = instance.GetChildren();
+	if (children.size() > 0) node.children = children.map((child) => describeNew(state, child, idOf));
+	return node;
+}
+
+/** What the batch would do, with nothing applied: the new instances under each live parent, and how many live ones it edits or removes. */
+function describePlan(state: BuildState, path: string, createdRoot: boolean, rootParent: Instance | undefined): Record<string, unknown> {
+	const idOf = new Map<Instance, string>();
+	for (const [id, instance] of state.ids) idOf.set(instance, id);
+	const tops: Array<[Instance, Instance]> = [];
+	if (createdRoot && rootParent) tops.push([state.root, rootParent]);
+	else for (const instance of state.added) {
+		const parent = state.attachedTo.get(instance);
+		if (parent) tops.push([instance, parent]);
+	}
+	return {
+		planned: true,
+		path: createdRoot ? path : getInstancePath(state.root),
+		createdRoot,
+		...(state.serviceRoot ? { serviceRoot: true } : {}),
+		added: tops.map(([instance, parent]) => ({
+			parentPath: getInstancePath(parent),
+			parentUnique: hasUniquePath(parent),
+			nameTaken: parent.FindFirstChild(instance.Name) !== undefined,
+			node: describeNew(state, instance, idOf),
+		})),
+		liveChanges: state.liveChanges,
+		created: state.created,
+		cloned: state.cloned,
+		updated: state.updated,
+		removed: state.removedCount,
+	};
 }
 
 function destroyMade(state: BuildState): void {
@@ -708,13 +776,16 @@ function buildInstances(requestData: Record<string, unknown>) {
 		}
 	}
 
+	// planOnly prepares and describes the batch, then discards it: nothing is applied or recorded.
+	const planOnly = requestData.planOnly === true;
 	let root = resolveInstance(path as string, undefined);
 	const only = operations.size() === 1 ? operations[0] : undefined;
 	if (typeIs(only, "table") && only.op === "remove") {
-		const removal = removeRootAlone(path as string, root, only);
+		const removal = removeRootAlone(path as string, root, only, planOnly);
 		if (removal !== undefined) return removal;
 	}
 	let createdRoot = false;
+	let rootParent: Instance | undefined;
 	let serviceRoot = false;
 	const made = new Set<Instance>();
 	const actions: LiveAction[] = [];
@@ -754,6 +825,7 @@ function buildInstances(requestData: Record<string, unknown>) {
 		});
 		root = model;
 		createdRoot = true;
+		rootParent = parent;
 	}
 
 	const state: BuildState = {
@@ -774,6 +846,9 @@ function buildInstances(requestData: Record<string, unknown>) {
 		unsettled: new Set(),
 		serviceRoot,
 		added: [],
+		attachedTo: new Map(),
+		decorated: new Set(),
+		liveChanges: 0,
 	};
 
 	const [prepared, prepareError] = pcall(() => {
@@ -794,6 +869,11 @@ function buildInstances(requestData: Record<string, unknown>) {
 	if (!prepared) {
 		destroyMade(state);
 		return { error: `${tostring(prepareError)}. Nothing was changed.` };
+	}
+	if (planOnly) {
+		const plan = describePlan(state, path as string, createdRoot, rootParent);
+		destroyMade(state);
+		return plan;
 	}
 
 	const recordingId = beginRecording(`Build ${root.Name}`);

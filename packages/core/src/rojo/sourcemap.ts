@@ -100,12 +100,14 @@ export function validateSourcemap(value: unknown): SourcemapNode {
 /**
  * Rojo's own map from instances to files. Paths in it are relative to the
  * project folder; `--absolute` is avoided because Rojo printed Windows
- * verbatim paths there until rojo-rbx/rojo#1290.
+ * verbatim paths there until rojo-rbx/rojo#1290. `nonScripts` also lists
+ * instances with no script in them, such as an empty Folder.
  */
-export async function loadSourcemap(projectFile: string, run: RojoRunner): Promise<SourcemapNode> {
+export async function loadSourcemap(projectFile: string, run: RojoRunner, options: { nonScripts?: boolean } = {}): Promise<SourcemapNode> {
   let output: string;
   try {
-    output = await run(['sourcemap', path.basename(projectFile)], path.dirname(projectFile));
+    const args = ['sourcemap', path.basename(projectFile), ...(options.nonScripts ? ['--include-non-scripts'] : [])];
+    output = await run(args, path.dirname(projectFile));
   } catch (error) {
     rethrow(error, 'sourcemap');
   }

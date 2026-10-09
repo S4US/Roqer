@@ -8,8 +8,10 @@
 // connected place, and checks: an edit changes the file and syncs; a file
 // saved with CRLF line endings keeps them through an edit; a file changed
 // behind Roqer's back is a conflict that touches neither side; killing
-// `rojo serve` makes an edit "pending" without ever reaching Studio; and no
-// `.roqer-*.tmp` write-in-progress temp file is ever visible as an instance.
+// `rojo serve` makes an edit "pending" without ever reaching Studio; no
+// `.roqer-*.tmp` write-in-progress temp file is ever visible as an instance;
+// and new scripts built with build_instances are saved as files that Rojo
+// alone makes in Studio, one copy each.
 //
 // Never touches the user's own place: everything happens in a temp project
 // linked to a disposable baseplate.
@@ -260,6 +262,35 @@ await runTest('Rojo-linked place saves script edits to its file', async ({ track
       const result = await client.callTool('get_script_source', { instancePath: INSTANCE_PATH });
       return result.fileMatchesStudio === true && result.source?.includes(divergentMarker) ? result : undefined;
     });
+
+    // (f) New scripts built into the project folder are saved as files, and
+    // Rojo, not Roqer, makes them in Studio: exactly one copy each, with the
+    // source the build gave them, and the next edit is file-backed too.
+    const built = await client.callTool('build_instances', {
+      path: 'game.ServerScriptService',
+      operations: [
+        { op: 'create', id: 'kit', className: 'Folder', name: 'RoqerRojoKit' },
+        { op: 'create', className: 'ModuleScript', name: 'Made', parent: '$kit' },
+        { op: 'create', className: 'Script', name: 'Runner', parent: '$kit' },
+      ],
+    });
+    assert(built.success === true, `build_instances saves the new scripts (got ${JSON.stringify(built)})`);
+    assert(built.saved?.sync === 'synced', `the build reports sync: synced (got ${JSON.stringify(built.saved)})`);
+    assert(fs.existsSync(path.join(root, 'src', 'RoqerRojoKit', 'Made.luau'))
+      && fs.existsSync(path.join(root, 'src', 'RoqerRojoKit', 'Runner.server.luau')), 'the new files are on disk where Rojo reads them');
+    const copies = await client.callTool('execute_luau', {
+      code: 'local n = 0 for _, child in game.ServerScriptService:GetChildren() do if child.Name == "RoqerRojoKit" then n += 1 end end return n',
+      target: 'edit',
+    });
+    assert(String(copies.returnValue) === '1', `Studio holds exactly one RoqerRojoKit, not a second copy (got ${copies.returnValue})`);
+    const made = await client.callTool('get_script_source', { instancePath: 'game.ServerScriptService.RoqerRojoKit.Made' });
+    assert(made.persistence === 'file' && made.fileMatchesStudio === true, `the new script reads back file-backed (got ${made.persistence})`);
+    const madeEdit = await client.callTool('set_script_source', {
+      instancePath: 'game.ServerScriptService.RoqerRojoKit.Made',
+      source: 'return "made"\n',
+      expectedRevision: made.revision,
+    });
+    assert(madeEdit.saved?.sync === 'synced', `an edit to the new script is saved to its file (got ${JSON.stringify(madeEdit.saved)})`);
 
     // (d) Killing rojo serve makes an edit "pending"; Studio is never written.
     expectedServeExit = true;
