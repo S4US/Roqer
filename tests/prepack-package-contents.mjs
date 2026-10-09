@@ -14,6 +14,7 @@ import {
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { resolveWindowsNodeCli } from './lib/node-cli.mjs';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const prepackScript = path.join(repoRoot, 'scripts', 'prepack.mjs');
@@ -38,12 +39,38 @@ const licenseFiles = {
   'THIRD_PARTY_NOTICES.md': 'third-party-notices-text',
 };
 
-const fixtureRoot = mkdtempSync(path.join(os.tmpdir(), 'robloxstudio-mcp-prepack-'));
+// The disposable npm cache also holds npm's debug logs, and the fixture is
+// deleted on exit, so report a failed pack while its log still exists.
+function packFailure(name, result, cacheDir) {
+  let log = '';
+  try {
+    const logsDir = path.join(cacheDir, '_logs');
+    const latest = readdirSync(logsDir).filter((file) => file.endsWith('.log')).sort().at(-1);
+    if (latest) log = readFileSync(path.join(logsDir, latest), 'utf8').slice(-8000);
+  } catch {
+    // No log was written; the streams below are all there is.
+  }
+  return [
+    `${name} npm pack exited with status ${result.status}`,
+    `stderr:\n${result.stderr}`,
+    `stdout:\n${result.stdout}`,
+    log && `npm debug log (last 8000 characters):\n${log}`,
+  ].filter(Boolean).join('\n');
+}
+
+const npmCli = resolveWindowsNodeCli('npm', process.platform, process.env);
+assert.ok(process.platform !== 'win32' || npmCli,
+  'Cannot find npm-cli.js. Run npm run test:package-contents with an installed npm.');
+
+// Exercise cwd handling without allowing these characters to become shell syntax.
+// npm 10 cannot pack a cwd containing a bare percent sign (URI malformed).
+// The launcher regression exercises percent signs separately from npm itself.
+const fixtureRoot = mkdtempSync(path.join(os.tmpdir(), 'roqer prepack 中文 & !-'));
 const fixtureScriptsDir = path.join(fixtureRoot, 'scripts');
-mkdirSync(fixtureScriptsDir, { recursive: true });
-copyFileSync(prepackScript, path.join(fixtureScriptsDir, 'prepack.mjs'));
 
 try {
+  mkdirSync(fixtureScriptsDir, { recursive: true });
+  copyFileSync(prepackScript, path.join(fixtureScriptsDir, 'prepack.mjs'));
   const sourcePluginDir = path.join(fixtureRoot, 'studio-plugin');
   mkdirSync(path.join(sourcePluginDir, 'src'), { recursive: true });
   mkdirSync(path.join(sourcePluginDir, 'include'), { recursive: true });
@@ -72,19 +99,18 @@ try {
     );
     writeFileSync(path.join(destination, 'stale-source.ts'), 'left by an interrupted pack');
 
+    const npmCache = path.join(fixtureRoot, 'npm-cache');
     const result = spawnSync(
-      process.platform === 'win32' ? 'npm.cmd' : 'npm',
-      ['pack', '--dry-run', '--json', '--silent'],
+      npmCli ? process.execPath : 'npm',
+      [...(npmCli ? [npmCli] : []), 'pack', '--dry-run', '--json', '--silent', '--cache', npmCache],
       {
         cwd: packageDir,
         encoding: 'utf8',
+        windowsHide: true,
       },
     );
-    assert.equal(
-      result.status,
-      0,
-      `${packageDefinition.name} npm pack succeeds: ${result.stderr || result.stdout}`,
-    );
+    assert.ifError(result.error);
+    if (result.status !== 0) assert.fail(packFailure(packageDefinition.name, result, npmCache));
     const reportJson = result.stdout.match(/^\[[\s\S]*$/m)?.[0];
     assert.ok(reportJson, `npm pack returned a JSON report: ${result.stdout}`);
     const [packReport] = JSON.parse(reportJson);
