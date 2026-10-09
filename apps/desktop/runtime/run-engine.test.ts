@@ -324,9 +324,9 @@ test("on a Rojo-linked place a build that removes something stops for the user e
   const caller = makeCaller(async () => outcome());
   const risks: string[] = [];
   const linkedFor: string[] = [];
-  let session: RunSession | undefined;
   const removal = { path: "game.ServerScriptService", operations: [{ op: "remove", target: "game.ServerScriptService.Old" }] };
-  session = new RunSession({
+  // Naming `session` in its own emit is safe: nothing is emitted before execute().
+  const session: RunSession = new RunSession({
     caller,
     planner: planner(async (context) => {
       await context.call("build_instances", removal);
@@ -337,7 +337,7 @@ test("on a Rojo-linked place a build that removes something stops for the user e
     emit: (event) => {
       if (event.type === "tool-proposed") risks.push(event.proposal.risk);
       // The user declines; a removal that deletes project files never runs unasked.
-      if (event.type === "approval-requested") session?.resolveApproval(event.callId, "rejected");
+      if (event.type === "approval-requested") session.resolveApproval(event.callId, "rejected");
     },
   });
 
