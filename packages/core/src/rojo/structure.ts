@@ -226,7 +226,18 @@ async function sourcesAgree(context: StructureContext, live: PlannedLive): Promi
   const tree = await context.sourcemap();
   for (const script of live.scripts) {
     const segments = parseInstancePath(script.path);
-    const node = segments ? nodeAt(tree, segments) : undefined;
+    if (!segments) return { kind: 'refuse', error: `${script.path} cannot be matched to its file, so nothing was moved or removed` };
+    let node: SourcemapNode | undefined = tree;
+    for (const segment of segments) {
+      const matches: SourcemapNode[] = (node.children ?? []).filter((child) => child.name === segment);
+      // Two project instances by one name cannot be told apart, so neither can be compared with its file.
+      if (matches.length > 1) {
+        return { kind: 'refuse', error: `more than one instance in the project is named like ${script.path}, so Roqer cannot compare it with its file; rename one first` };
+      }
+      node = matches[0];
+      // Not in the project: only Studio holds it, and a removal takes it anyway.
+      if (!node) break;
+    }
     const files = (node?.filePaths ?? []).filter((file) => SCRIPT_FILE.test(file));
     // A script inside a model file has no file of its own to differ from.
     if (files.length !== 1) continue;

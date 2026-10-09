@@ -59,8 +59,17 @@ export async function applyFileOps(ops: FileOp[], root: string, backupRoot: stri
       } else if (op.kind === 'delete') {
         const backup = path.join(backupRoot, path.relative(root, op.path));
         await fsp.mkdir(path.dirname(backup), { recursive: true });
-        await fsp.cp(op.path, backup, { recursive: true, errorOnExist: true, force: false });
-        await fsp.rm(op.path, { recursive: true });
+        if (await exists(backup)) throw new Error(`${backup} already exists`);
+        try {
+          // One move out of the project: rojo serve 7.7 on Windows crashes when a
+          // recursive delete takes a folder's children before the folder itself.
+          await fsp.rename(op.path, backup);
+        } catch (error) {
+          // A backup on another drive cannot be renamed into; copy and delete instead.
+          if ((error as NodeJS.ErrnoException).code !== 'EXDEV') throw error;
+          await fsp.cp(op.path, backup, { recursive: true, errorOnExist: true, force: false });
+          await fsp.rm(op.path, { recursive: true });
+        }
         done.push({ kind: 'deleted', path: op.path, backup });
       } else {
         if (await exists(op.to) && op.from.toLowerCase() !== op.to.toLowerCase()) {
