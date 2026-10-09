@@ -28,6 +28,11 @@ type Done =
  */
 export class ProjectFilesError extends Error {
   readonly code: string;
+  /**
+   * Whether any change reached the files before it was undone: a running
+   * rojo serve may already have carried it, and its undo, into Studio.
+   */
+  applied = true;
   constructor(failure: unknown, readonly leftovers: string[], code?: string) {
     super(failure instanceof Error ? failure.message : String(failure));
     this.name = 'ProjectFilesError';
@@ -84,7 +89,9 @@ export async function applyFileOps(ops: FileOp[], root: string, backupRoot: stri
     // A delete that failed partway may have taken some of a folder: put it back from its copy too.
     const last = ops[done.length];
     const partial = last?.kind === 'delete' ? [{ kind: 'deleted' as const, path: last.path, backup: path.join(backupRoot, path.relative(root, last.path)) }] : [];
-    throw new ProjectFilesError(error, await undoFileOps([...done, ...partial]));
+    const failure = new ProjectFilesError(error, await undoFileOps([...done, ...partial]));
+    failure.applied = done.length > 0;
+    throw failure;
   }
 }
 

@@ -37,19 +37,41 @@ export function nameProblem(name: string): string | undefined {
   return undefined;
 }
 
-/** The instance names Rojo could give a directory entry: a project file in a folder is named by its own `name`. */
-function instanceNamesOf(dir: string, entry: fs.Dirent): string[] {
-  if (entry.isDirectory()) return [entry.name];
+/** A project file's own `name`, if it has one. */
+function projectName(file: string): string | undefined {
+  try {
+    const name = (JSON.parse(fs.readFileSync(file, 'utf8')) as { name?: unknown }).name;
+    return typeof name === 'string' ? name : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function isEntryDirectory(dir: string, entry: fs.Dirent): boolean {
+  return entry.isDirectory() || (entry.isSymbolicLink() && isDirectory(path.join(dir, entry.name)));
+}
+
+/**
+ * The name Rojo gives the instance a directory entry makes, or undefined for
+ * a file it does not read. A project file, or a folder holding
+ * default.project.json, is named by the project's own `name`.
+ */
+function rojoNameOf(dir: string, entry: fs.Dirent): string | undefined {
+  if (isEntryDirectory(dir, entry)) return projectName(path.join(dir, entry.name, 'default.project.json')) ?? entry.name;
   const lower = entry.name.toLowerCase();
   const ending = RECOGNIZED_ENDINGS.find((suffix) => lower.endsWith(suffix));
-  const stem = ending ? entry.name.slice(0, -ending.length) : entry.name;
-  if (!/\.project\.jsonc?$/.test(lower)) return [stem];
-  try {
-    const name = (JSON.parse(fs.readFileSync(path.join(dir, entry.name), 'utf8')) as { name?: unknown }).name;
-    return typeof name === 'string' ? [stem, name] : [stem];
-  } catch {
-    return [stem];
-  }
+  if (!ending) return undefined;
+  const stem = entry.name.slice(0, -ending.length);
+  return /\.project\.jsonc?$/.test(lower) ? projectName(path.join(dir, entry.name)) ?? stem : stem;
+}
+
+/** Every name a directory entry could clash with: its own, and the one Rojo gives it. */
+function instanceNamesOf(dir: string, entry: fs.Dirent): string[] {
+  const lower = entry.name.toLowerCase();
+  const ending = isEntryDirectory(dir, entry) ? undefined : RECOGNIZED_ENDINGS.find((suffix) => lower.endsWith(suffix));
+  const own = ending ? entry.name.slice(0, -ending.length) : entry.name;
+  const rojo = rojoNameOf(dir, entry);
+  return rojo === undefined || rojo === own ? [own] : [own, rojo];
 }
 
 function readEntries(dir: string): fs.Dirent[] {
@@ -130,8 +152,12 @@ interface Governing {
 
 /** What the instance at a path is, on disk. */
 export type Located =
-  /** A folder whose entries are the instance's children; `viaKey` when the project file names it. */
-  | ({ kind: 'folder'; dir: string; viaKey: boolean } & Governing)
+  /**
+   * A folder whose entries are the instance's children; `viaKey` when the
+   * project file names it, `nestedRoot` when a nested project file makes the
+   * instance itself (so the folder is that project's, not the instance's own).
+   */
+  | ({ kind: 'folder'; dir: string; viaKey: boolean; nestedRoot: boolean } & Governing)
   /** Files in `parentDir` that Rojo reads as this instance (a script, a model file, its meta file). */
   | ({ kind: 'entry'; parentDir: string; files: string[] } & Governing)
   /** A project file key with `$path` to a single file, or with no `$path` at all. */
@@ -154,15 +180,18 @@ export function locate(projectFile: string, segments: string[]): Located {
   let syncRules = false;
   let nested = 0;
   // Rojo applies each project file's own settings to the part of the tree it describes.
+  let index = 0;
+  // Where the walk last went into a project file: one entered at the very end makes the instance itself.
+  let enteredAt = -1;
   const enter = (file: string) => {
     const project = readProject(file);
     node = treeOf(project, file);
     base = path.dirname(file);
     governing = file;
     syncRules ||= project.syncRules !== undefined;
+    enteredAt = index;
   };
   enter(projectFile);
-  let index = 0;
   let viaKey = true;
   outer: for (;;) {
     // The node's own keys first: Rojo adds them to whatever its $path holds.
@@ -199,19 +228,35 @@ export function locate(projectFile: string, segments: string[]): Located {
         enter(inner);
         continue outer;
       }
-      if (index === segments.length) return { kind: 'folder', dir, viaKey, projectFile: governing, syncRules };
+      if (index === segments.length) {
+        return { kind: 'folder', dir, viaKey, nestedRoot: enteredAt === segments.length && segments.length > 0, projectFile: governing, syncRules };
+      }
       const name = segments[index];
-      const next = path.join(dir, name);
-      if (readEntries(dir).some((entry) => entry.name === name) && isDirectory(next)) {
-        dir = next;
+      // Entries by the name Rojo gives them; a file Rojo does not read is no instance at all.
+      const matches = readEntries(dir).filter((entry) => rojoNameOf(dir, entry) === name);
+      const folders = matches.filter((entry) => isEntryDirectory(dir, entry));
+      const files = matches.filter((entry) => !isEntryDirectory(dir, entry)).map((entry) => path.join(dir, entry.name));
+      const mains = files.filter((file) => !/\.meta\.jsonc?$/i.test(file));
+      if (folders.length + mains.length > 1) {
+        return { kind: 'absent', reason: `more than one file or folder in ${path.basename(dir)} makes ${label(index + 1)}, so which is meant is ambiguous` };
+      }
+      if (folders.length === 1) {
+        dir = path.join(dir, folders[0].name);
         index += 1;
         viaKey = false;
         continue;
       }
-      const files = entriesNamed(dir, name, { ignoreCase: false }).map((entry) => path.join(dir, entry));
-      if (files.length === 0) return { kind: 'absent', reason: `${name} is not in the Rojo project` };
+      if (mains.length === 0) return { kind: 'absent', reason: `${name} is not in the Rojo project` };
+      const main = mains[0];
+      if (/\.project\.jsonc?$/i.test(main)) {
+        // A project file in a folder is its own instance, made from that project's tree.
+        if (++nested > MAX_NESTED_PROJECTS) return { kind: 'absent', reason: `${label(index)} nests project files too deeply` };
+        index += 1;
+        viaKey = false;
+        enter(main);
+        continue outer;
+      }
       if (index === segments.length - 1) return { kind: 'entry', parentDir: dir, files, projectFile: governing, syncRules };
-      const main = files.find((file) => !/\.meta\.jsonc?$/i.test(file)) ?? files[0];
       const script = SCRIPT_FILE.test(path.basename(main));
       return {
         kind: 'inside',

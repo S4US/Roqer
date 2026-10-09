@@ -148,7 +148,7 @@ function removeRootAlone(path: string, root: Instance | undefined, step: Step, p
 	const where = getInstancePath(root);
 	if (planOnly) {
 		const live = describeLive({ op: "remove", target: root, properties: [], placement: false, tags: false, attributes: false });
-		return { planned: true, path: where, removedRoot: true, createdRoot: false, added: [], live: [live], liveChanges: 1, created: 0, cloned: 0 };
+		return { planned: true, path: where, removedRoot: true, createdRoot: false, added: [], live: [live], liveChanges: 1, created: 0, cloned: 0, updated: 0, removed: 1 };
 	}
 	const recordingId = beginRecording(`Remove ${root.Name}`);
 	// Parent = nil rather than Destroy, as every remove: undo puts it back.
@@ -498,10 +498,12 @@ function prepareLiveSet(state: BuildState, target: Instance, step: Step, index: 
 
 	const others: string[] = [];
 	for (const property of sortedKeys(properties)) if (property !== "Name") others.push(property);
+	// Only a name it does not have already renames it.
+	const requestedName = properties.Name !== undefined ? tostring(properties.Name) : undefined;
 	state.liveOps.push({
 		op: "set",
 		target,
-		name: properties.Name !== undefined ? tostring(properties.Name) : undefined,
+		name: requestedName !== undefined && requestedName !== target.Name ? requestedName : undefined,
 		properties: others,
 		placement: position !== undefined || rotation !== undefined,
 		tags: readTags(step.tags, index, op).size() > 0,
@@ -727,7 +729,12 @@ function describeLive(change: LiveOp): Record<string, unknown> {
 		...(revisions.omitted !== undefined ? { scriptsOmitted: revisions.omitted } : {}),
 		...(change.op === "set"
 			? {
-				...(change.name !== undefined ? { name: change.name } : {}),
+				...(change.name !== undefined
+					? {
+						name: change.name,
+						nameTaken: target.Parent !== undefined && target.Parent.GetChildren().some((child) => child !== target && child.Name === change.name),
+					}
+					: {}),
 				properties: change.properties,
 				placement: change.placement,
 				tags: change.tags,

@@ -2290,7 +2290,7 @@ test("a batch that removed its build root is recorded as that removal, with no r
 test("a build saved to Rojo files is recorded as those files, never as an undoable Studio step", async () => {
   const { context, changes, evidence } = contextWith([
     ok({ success: true, path: "game.ServerScriptService", created: 2, cloned: 0, updated: 0, removed: 0, undoable: false,
-      saved: { files: ["src/Combat/init.server.luau", "src/Combat/Config.luau"], sync: "synced" } }),
+      saved: { files: ["src/Combat/init.server.luau", "src/Combat/Config.luau"], sync: "synced", scripts: [{ path: "game.ServerScriptService.Combat", revision: "r1" }, { path: "game.ServerScriptService.Combat.Config", revision: "r2" }] } }),
   ]);
   const run = createStudioToolRunner(context);
 
@@ -2307,7 +2307,7 @@ test("a build saved to Rojo files is recorded as those files, never as an undoab
 test("a build saved to Rojo files that Studio has not received yet is neither passed nor failed", async () => {
   const { context, changes, evidence } = contextWith([
     ok({ success: true, path: "game.ServerScriptService", created: 1, cloned: 0, updated: 0, removed: 0, undoable: false,
-      saved: { files: ["src/Util.luau"], sync: "pending" }, hint: "The files are saved. No Rojo server answers on port 34872; start rojo serve and connect the Rojo plugin to deliver them." }),
+      saved: { files: ["src/Util.luau"], sync: "pending", scripts: [{ path: "game.ServerScriptService.Util", revision: "r1" }] }, hint: "The files are saved. No Rojo server answers on port 34872; start rojo serve and connect the Rojo plugin to deliver them." }),
   ]);
   const run = createStudioToolRunner(context);
 
@@ -2358,6 +2358,21 @@ test("a removal saved to Rojo files names the deleted files and the backup, and 
   assert.equal(evidence[0].passed, undefined);
   assert.deepEqual(evidence[0].metadata?.[0], { label: "Undo", value: "Not in Studio's undo history; copies of the deleted files are in C:/Temp/roqer-rojo-backups/game-1" });
   assert.match(result.text, /Ask the user to check Studio once Rojo is serving\./);
+});
+
+test("a pending saved model has nothing a later read can confirm, so the note asks the user to check Studio", async () => {
+  const { context, changes, evidence } = contextWith([
+    ok({ success: true, path: "game.ServerScriptService", created: 1, cloned: 0, updated: 0, removed: 0, undoable: false,
+      saved: { files: ["src/Door.rbxm"], sync: "pending" } }),
+  ]);
+  const run = createStudioToolRunner(context);
+
+  const result = await run("build_instances", { path: "game.ServerScriptService", operations: [{ op: "create", className: "Part", name: "Door" }] });
+
+  assert.equal(changes[0].summary, "Saved 1 new file to the Rojo project: src/Door.rbxm; Rojo has not delivered the new instances to Studio yet.");
+  assert.doesNotMatch(evidence[0].detail ?? "", /scripts/);
+  assert.match(result.text, /Ask the user to check Studio once Rojo is serving\./);
+  assert.doesNotMatch(result.text, /reading each new script/);
 });
 
 test("a rename saved to Rojo files by set_properties is recorded as that, not as an atomic Studio write", async () => {

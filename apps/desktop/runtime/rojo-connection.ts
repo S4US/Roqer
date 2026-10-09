@@ -116,12 +116,17 @@ export class RojoConnection {
   }
 
   /**
-   * Whether this bridge holds, or is making, a link for the place: what the
-   * run engine rates a file-deleting removal by. A link still being made
-   * counts, so a removal sent while it lands is never rated as Studio-only.
+   * Whether a removal on the place may delete Rojo project files: what the
+   * run engine rates such a removal by. It errs toward yes: any link this
+   * bridge holds or is making counts, since an unpublished place linked as
+   * `anon:` is reached as `place:` once published (the bridge follows the
+   * alias, this memory does not), and a call with no place of its own
+   * (`null`) may be routed to a linked one.
    */
-  isLinked(instanceId: string): boolean {
-    return this.memory.get(instanceId)?.kind === "linked" || this.inFlight.has(instanceId);
+  isLinked(instanceId: string | null): boolean {
+    if (instanceId !== null && (this.memory.get(instanceId)?.kind === "linked" || this.inFlight.has(instanceId))) return true;
+    for (const memory of this.memory.values()) if (memory.kind === "linked") return true;
+    return this.inFlight.size > 0;
   }
 
   /** The unknown-action rejection a bridge built before `link_project` existed gives back. */

@@ -2009,14 +2009,19 @@ export class RobloxStudioTools {
       const message = error.message.replace(/\s*\n+\s*/g, ' ').replace(/\.$/, '');
       const leftovers = error.leftovers.map((file) => path.relative(link.root, file));
       const failed = error.code === 'rojo_write_failed' ? `Could not change the project's files: ${message}` : message;
+      // Rojo serve may have carried the change, and then its undo, into Studio before it was undone.
+      const studio = error.applied
+        ? ' A running rojo serve may already have carried the change, and its undo, into Studio, which replaces those instances (their instanceRef too) and drops anything only Studio held under them; read them back before changing them again.'
+        : ' Nothing was changed.';
       return {
         kind: 'done',
         result: leftovers.length === 0
-          ? { error: `${failed}, so every file was put back. Nothing was changed.`, errorCode: error.code }
+          ? { error: `${failed}, so every file was put back.${studio}`, errorCode: error.code, ...(error.applied ? { studioMayHaveChanged: true } : {}) }
           : {
-            error: `${failed}, and ${leftovers.join(', ')} could not be put back; fix ${leftovers.length === 1 ? 'it' : 'them'} by hand. Nothing was changed in Studio.`,
+            error: `${failed}, and ${leftovers.join(', ')} could not be put back; fix ${leftovers.length === 1 ? 'it' : 'them'} by hand.${error.applied ? studio : ' Nothing was changed in Studio.'}`,
             errorCode: error.code,
             leftovers,
+            ...(error.applied ? { studioMayHaveChanged: true } : {}),
           },
       };
     }
@@ -2057,8 +2062,10 @@ export class RobloxStudioTools {
       return read.revision === check.revision ? 'done' : 'other';
     }
     const read = await this._callSingle('/api/instance-properties', { instancePath: check.path, excludeSource: true }, undefined, instance_id).catch(() => undefined);
-    const className = typeof read?.className === 'string' ? read.className : undefined;
-    if ('absent' in check) return className === undefined ? 'done' : 'before';
+    // A failed read says nothing either way; only Studio answering "not found" counts as gone.
+    if (!read) return 'before';
+    const className = typeof read.className === 'string' ? read.className : undefined;
+    if ('absent' in check) return className === undefined && typeof read.error === 'string' && read.error.startsWith('Instance not found') ? 'done' : 'before';
     if (className === undefined) return 'before';
     return className === check.className ? 'done' : 'other';
   }
@@ -2124,8 +2131,8 @@ export class RobloxStudioTools {
       ...(plan.removedRoot === true ? { removedRoot: true } : {}),
       created: plan.created,
       cloned: plan.cloned,
-      updated: plan.updated,
-      removed: plan.removed ?? 0,
+      updated: plan.updated ?? 0,
+      removed: plan.removed ?? (plan.removedRoot === true ? 1 : 0),
       // Rojo made these changes from the files, so Studio's undo cannot take them back.
       undoable: false,
       ...newInstanceIds(outcome.change.instances),

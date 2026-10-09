@@ -120,6 +120,10 @@ function setProperties(requestData: Record<string, unknown>) {
 		const moved = changes.find((change) => change.property === "Parent" && change.requested !== change.previous);
 		const others: string[] = [];
 		for (const change of changes) if (change.property !== "Name" && change.property !== "Parent") others.push(change.property);
+		// Whether the destination already has another child by the final name, which a saved rename would duplicate.
+		const destination = moved ? (moved.requested as Instance) : instance.Parent;
+		const finalName = renamed ? (renamed.requested as string) : instance.Name;
+		const nameTaken = destination !== undefined && destination.GetChildren().some((child) => child !== instance && child.Name === finalName);
 		return {
 			planned: true,
 			path: getInstancePath(instance),
@@ -131,6 +135,7 @@ function setProperties(requestData: Record<string, unknown>) {
 			...(revisions.omitted !== undefined ? { scriptsOmitted: revisions.omitted } : {}),
 			...(renamed ? { name: renamed.requested } : {}),
 			...(moved ? { parent: getInstancePath(moved.requested as Instance), parentUnique: hasUniquePath(moved.requested as Instance) } : {}),
+			...(renamed || moved ? { nameTaken } : {}),
 			properties: others,
 		};
 	}

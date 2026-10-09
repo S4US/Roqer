@@ -4,7 +4,7 @@ import * as path from 'path';
 import { applyFileOps, filesUnder, sizeOf, undoFileOps, ProjectFilesError, type FileOp } from './file-ops.js';
 import { formatInstancePath, parseInstancePath } from './instance-path.js';
 import { containsScript, descendantCount, layoutNew, nodeAt, projectNaming, type Layout, type NewInstance, type PlannedTop } from './new-files.js';
-import { entriesNamed, locate, nameInDirectory, nameProblem, projectDirectory, type Located } from './project-walk.js';
+import { entriesNamed, locate, nameInDirectory, nameProblem, projectDirectory, readProject, type Located } from './project-walk.js';
 import { sourceRevision } from './source-revision.js';
 import { RojoError, type SourcemapNode } from './sourcemap.js';
 import { toStudioText } from './text-format.js';
@@ -31,6 +31,8 @@ export interface PlannedLive {
   /** The new parent's path, for a move (set_properties only). */
   parent?: string;
   parentUnique?: boolean;
+  /** For a rename or move: whether the destination already has another child by the final name in Studio. */
+  nameTaken?: boolean;
   /** Every other property the change assigns. */
   properties?: string[];
   placement?: boolean;
@@ -179,30 +181,60 @@ async function planTop(context: StructureContext, top: PlannedTop, claimed: Set<
 
 /** The files (or folder) a Rojo-owned instance comes from, checked against the sourcemap; or what it is instead. */
 type Owned =
-  | { kind: 'owned'; entries: string[]; folder: boolean; parentDir: string; node: SourcemapNode; segments: string[] }
+  | { kind: 'owned'; entries: string[]; folder: boolean; parentDir: string; node: SourcemapNode; segments: string[]; projectFile: string }
   | { kind: 'not-owned'; note?: string }
   | { kind: 'refuse'; error: string; code?: string; file?: string };
 
+/** The one sourcemap node at `segments`; `ambiguous` when Rojo lists a name on the way more than once. */
+function walkSourcemap(tree: SourcemapNode, segments: string[]): SourcemapNode | 'ambiguous' | undefined {
+  let node: SourcemapNode = tree;
+  for (const segment of segments) {
+    const matches: SourcemapNode[] = (node.children ?? []).filter((child) => child.name === segment);
+    if (matches.length > 1) return 'ambiguous';
+    if (matches.length === 0) return undefined;
+    node = matches[0];
+  }
+  return node;
+}
+
 async function owned(context: StructureContext, live: PlannedLive, located: Located, segments: string[]): Promise<Owned> {
-  if (located.kind === 'absent') return { kind: 'not-owned' };
+  const tree = await context.sourcemap();
+  const node = walkSourcemap(tree, segments);
+  // Rojo makes two instances by one name on that path: which files are meant cannot be told.
+  if (node === 'ambiguous') return { kind: 'refuse', error: `the Rojo project makes more than one instance on the path ${live.path}, so its files are ambiguous` };
   if (located.kind === 'inside') {
     return MODEL_FILE.test(located.file)
       ? { kind: 'not-owned', note: `${live.path} is inside the model file ${shown(context, located.file)}, so changes to it are not saved to the Rojo project` }
       : { kind: 'not-owned' };
   }
+  // Not something Rojo makes (not in the project, or a file it ignores): the instance in Studio is not the project's.
+  if (!node || located.kind === 'absent') {
+    return node && located.kind === 'absent'
+      ? { kind: 'refuse', error: `${live.path} is in the Rojo project, but ${located.reason}` }
+      : { kind: 'not-owned' };
+  }
+  // The project makes this instance, but Studio has a second by its name: which one is meant cannot be told.
+  if (!live.uniquePath) return { kind: 'refuse', error: `another instance on the path to ${live.path} in Studio has the same name, so which one is meant is ambiguous` };
   if (located.kind === 'project' || (located.kind === 'folder' && located.viaKey)) {
     return { kind: 'refuse', error: `${live.path} is written out in the project file ${path.basename(context.projectFile)}; change it there` };
   }
-  const tree = await context.sourcemap();
-  const node = nodeAt(tree, segments);
-  // On disk but not something Rojo syncs (an ignored file): the instance in Studio is not the project's.
-  if (!node) return { kind: 'not-owned' };
-  if (!live.uniquePath) return { kind: 'refuse', error: `another instance on the path to ${live.path} in Studio has the same name, so its files are ambiguous` };
+  if (located.kind === 'folder' && located.nestedRoot) {
+    return { kind: 'refuse', error: `${live.path} is a nested Rojo project; rename or remove its folder or project file yourself` };
+  }
   if (node.className !== live.className) {
     return { kind: 'refuse', error: `Studio has a ${live.className} at ${live.path} but the project makes a ${node.className}` };
   }
   const entries = located.kind === 'folder' ? [located.dir] : located.files;
   const parentDir = located.kind === 'folder' ? path.dirname(located.dir) : located.parentDir;
+  if (located.kind === 'entry') {
+    // Exactly the files Rojo reads for this instance: one it reads as something else, or not at all, never goes with it.
+    const read = new Set((node.filePaths ?? []).map((file) => real(path.resolve(context.root, file))));
+    const strays = located.files.filter((file) => !read.has(real(file)));
+    if (strays.length > 0 || read.size !== located.files.length) {
+      const named = strays.length > 0 ? strays.map((file) => shown(context, file)).join(', ') : 'another file';
+      return { kind: 'refuse', error: `${named} is named like ${live.path} but Rojo does not read it as that instance; move it out of the way first` };
+    }
+  }
   for (const entry of entries) {
     if (!insideRoot(context, entry)) return { kind: 'refuse', error: `${shown(context, entry)} resolves outside the project folder` };
   }
@@ -210,7 +242,7 @@ async function owned(context: StructureContext, live: PlannedLive, located: Loca
   if (generated) {
     return { kind: 'refuse', code: 'rojo_generated', file: shown(context, generated), error: `${shown(context, generated)} is a package or build output, not source` };
   }
-  return { kind: 'owned', entries, folder: located.kind === 'folder', parentDir, node, segments };
+  return { kind: 'owned', entries, folder: located.kind === 'folder', parentDir, node, segments, projectFile: located.projectFile };
 }
 
 /**
@@ -258,6 +290,11 @@ async function sourcesAgree(context: StructureContext, live: PlannedLive): Promi
 }
 
 async function planRemove(context: StructureContext, live: PlannedLive, own: Extract<Owned, { kind: 'owned' }>): Promise<Part> {
+  // Whatever only Studio holds under it is in no file, so neither the backup nor Git could give it back.
+  const studioOnly = live.descendants - descendantCount(own.node);
+  if (studioOnly > 0) {
+    return { kind: 'refuse', error: `${live.path} holds ${studioOnly} instance(s) only Studio has, which the backup of its files would not keep; move or remove them first` };
+  }
   const conflict = await sourcesAgree(context, live);
   if (conflict) return conflict;
   if (own.folder) {
@@ -298,9 +335,22 @@ async function planMove(
   if (parentSegments.join('\u0000') !== own.segments.slice(0, -1).join('\u0000')) {
     const folder = projectDirectory(context.projectFile, parentSegments);
     if ('reason' in folder) return { kind: 'refuse', error: `${live.path} cannot move there, since the new parent has no project folder: ${folder.reason}` };
-    targetDir = fs.realpathSync.native(folder.dir);
+    targetDir = real(folder.dir);
     if (!insideRoot(context, targetDir)) return { kind: 'refuse', error: `the new parent's folder resolves outside the project folder` };
     if (live.parentUnique === false) return { kind: 'refuse', error: 'another instance on the path to the new parent in Studio has the same name, so where it goes is ambiguous' };
+    // emitLegacyScripts decides a .server or .client file's RunContext, which the sourcemap does not show: refuse a move that would change it.
+    const legacy = (projectFile: string) => readProject(projectFile).emitLegacyScripts !== false;
+    const hasRunScripts = (node: SourcemapNode): boolean => node.className === 'Script' || node.className === 'LocalScript' || (node.children ?? []).some(hasRunScripts);
+    if (legacy(own.projectFile) !== legacy(folder.projectFile) && hasRunScripts(own.node)) {
+      return { kind: 'refuse', error: `${live.path} would move into a project with a different emitLegacyScripts setting, which changes its scripts' RunContext; move it within its own project, or edit the project files yourself` };
+    }
+  }
+  if (live.nameTaken) {
+    return { kind: 'refuse', error: `${formatInstancePath(parentSegments)} already has a child named ${name} in Studio; a second would make its path ambiguous` };
+  }
+  const parentNode = walkSourcemap(await context.sourcemap(), parentSegments);
+  if (parentNode !== 'ambiguous' && parentNode && (parentNode.children ?? []).some((child) => child.name === name && child !== own.node)) {
+    return { kind: 'refuse', error: `${formatInstancePath(parentSegments)} already has a child named ${name} in the Rojo project; a second would make its path ambiguous` };
   }
   // Rojo makes the moved instance again from its files, so anything under it that only Studio holds would be dropped.
   if (live.descendants > descendantCount(own.node)) {
@@ -347,9 +397,12 @@ async function planMove(
 async function planLive(context: StructureContext, live: PlannedLive): Promise<Part> {
   const segments = parseInstancePath(live.path);
   if (!segments) return { kind: 'refuse', error: `${live.path} could not be matched to the project` };
-  const structural = live.op === 'remove' || live.name !== undefined || live.parent !== undefined;
   const parentSegments = live.parent !== undefined ? parseInstancePath(live.parent) : segments.slice(0, -1);
   if (!parentSegments) return { kind: 'refuse', error: `${live.parent} could not be matched to the project` };
+  // A name or parent it already has is no rename or move.
+  const renamed = live.name !== undefined && live.name !== segments.at(-1);
+  const moved = live.parent !== undefined && parentSegments.join('\u0000') !== segments.slice(0, -1).join('\u0000');
+  const structural = live.op === 'remove' || renamed || moved;
   let located: Located;
   try {
     located = locate(context.projectFile, segments);
@@ -362,7 +415,7 @@ async function planLive(context: StructureContext, live: PlannedLive): Promise<P
   if (own.kind === 'refuse') return structural ? { kind: 'refuse', error: own.error, ...(own.code ? { code: own.code } : {}), ...(own.file ? { file: own.file } : {}) } : { kind: 'studio' };
   if (own.kind === 'not-owned') {
     // Moved into a project folder, it is still not saved there: Rojo would take it out on its next sync.
-    if (live.parent !== undefined && !('reason' in projectDirectory(context.projectFile, parentSegments))) {
+    if (moved && !('reason' in projectDirectory(context.projectFile, parentSegments))) {
       return { kind: 'studio', note: `${live.path} is moved into a project folder but is not saved to the Rojo project` };
     }
     return { kind: 'studio', ...(own.note ? { note: own.note } : {}) };
@@ -375,7 +428,7 @@ async function planLive(context: StructureContext, live: PlannedLive): Promise<P
   if (others) {
     return { kind: 'refuse', error: `${live.path} comes from the Rojo project, where a rename or move is saved by moving its files but its other changes are not; rename or move it on its own` };
   }
-  return planMove(context, live, own, live.name ?? segments.at(-1)!, parentSegments);
+  return planMove(context, live, own, renamed ? live.name! : segments.at(-1)!, parentSegments);
 }
 
 /**
@@ -386,7 +439,16 @@ async function planLive(context: StructureContext, live: PlannedLive): Promise<P
 export async function planStructure(context: StructureContext, tops: PlannedTop[], lives: PlannedLive[]): Promise<Disposition> {
   const claimed = new Set<string>();
   const parts: Part[] = [];
-  for (const top of tops) parts.push(await planTop(context, top, claimed));
+  const removing = new Set(lives.filter((live) => live.op === 'remove').map((live) => live.path));
+  for (const top of tops) {
+    const part = await planTop(context, top, claimed);
+    const segments = parseInstancePath(top.parentPath);
+    const replaced = segments ? formatInstancePath([...segments, top.node.name]) : undefined;
+    // Replacing something in one batch (a scatter's replace) would delete and rewrite one file at once, which a save does not do yet.
+    parts.push(part.kind === 'refuse' && replaced !== undefined && removing.has(replaced)
+      ? { kind: 'refuse', error: `This batch removes ${replaced} and makes a new one in its place, which the Rojo project cannot take in one save; remove it in one call, then build the new one in another` }
+      : part);
+  }
   for (const live of lives) parts.push(await planLive(context, live));
   const refused = parts.find((part): part is Extract<Part, { kind: 'refuse' }> => part.kind === 'refuse');
   if (refused) return { kind: 'refuse', error: refused.error, code: refused.code ?? 'rojo_unsupported', ...(refused.file ? { file: refused.file } : {}) };

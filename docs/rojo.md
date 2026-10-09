@@ -211,10 +211,16 @@ The instance's files go: a script's file and its `Name.meta.json`, a model
 file, or the whole folder of a folder-backed instance. A folder goes only when
 Rojo syncs everything in it (a `.gitkeep` aside); one that also holds other
 files is refused, so nothing Rojo does not know about is deleted with it.
-Every removed file or folder is first copied to a backup folder outside the
-project, under your system's temp folder in `roqer-rojo-backups`, and the
-result names it in `saved.backup`. Studio's undo cannot bring a removal back;
-that copy, or Git, can. A removal of more than 64 MB is refused.
+Every removed file or folder is moved, in one rename, to a backup folder
+outside the project, under your system's temp folder in `roqer-rojo-backups`,
+and the result names it in `saved.backup`. (A single rename matters: Rojo
+7.7's server crashes on Windows when a folder's files are deleted before the
+folder itself. When the backup folder is on another drive than the project,
+the files are copied and then deleted instead, which can still trigger that
+crash.) Studio's undo cannot bring a removal back; that copy, or Git, can. A
+removal of more than 64 MB is refused, and so is a removal of anything that
+holds instances only Studio has, since no file, and so no backup, would
+keep them.
 
 ### Renames and moves
 
@@ -222,7 +228,7 @@ The instance's files are renamed, keeping their suffix: `Main.server.luau`
 and `Main.meta.json` become `Boot.server.luau` and `Boot.meta.json`, and a
 folder-backed instance's folder is renamed. A move puts them in the new
 parent's project folder. Rojo makes the renamed instance afresh, so its
-`instanceRef` no longer resolves; a `set_properties` result says so with`r
+`instanceRef` no longer resolves; a `set_properties` result says so with
 `instanceRefReplaced`.
 
 ### Checks before and after
@@ -234,9 +240,11 @@ since Rojo would make the instance again from the file without it.
 
 Once written, the files are read back through `rojo sourcemap`. If Rojo does
 not make exactly the planned result from them (for example, a
-`globIgnorePaths` pattern hides a new file, or a move into a folder governed
-by another project file turns a LocalScript into a Script), every change is
-undone and the call is refused. Otherwise the result has:
+`globIgnorePaths` pattern hides a new file), every change is undone and the
+call is refused. While `rojo serve` runs, it may already have carried the
+change, and then its undo, into Studio, which replaces those instances; such
+a refusal says so, sets `studioMayHaveChanged`, and does not claim nothing
+changed. Otherwise the result has:
 
 - `saved`: `files` (new files), `removed`, `renamed` (`{from, to}`) and
   `backup`, all relative to the project folder except `backup`; `sync` is
@@ -247,7 +255,9 @@ undone and the call is refused. Otherwise the result has:
 - `undoable: false`: Rojo made the change, so Studio's undo cannot take it
   back.
 
-While `sync` is `pending`, Studio does not have the change yet. Wait, or get
+Only Studio answering that an instance is not there counts as a removal
+delivered; a failed read leaves `sync` `pending`. While `sync` is
+`pending`, Studio does not have the change yet. Wait, or get
 Rojo serving and connected; do not make the change again.
 
 ### What stays in Studio
@@ -288,13 +298,25 @@ The whole call is refused, with nothing changed, when:
   case are refused too;
 - a rename or move also sets other properties, or would drop instances only
   Studio holds under it (Rojo remakes the instance from its files), or the
-  new parent has no project folder;
+  new parent has no project folder, or the new name is already taken in
+  Studio or the project;
+- a move would take a Script or LocalScript into a part of the project
+  governed by a different `emitLegacyScripts` setting, which would change its
+  class or RunContext;
+- a batch removes an instance the project owns and makes a new one by the
+  same name in its place (as a scatter's `replace` does): remove it in one
+  call, then build the new one in another;
+- a file Rojo reads as another instance shares the instance's name (such as
+  `Main.txt` beside `Main.server.luau`), so which files are meant is
+  ambiguous; a file Rojo does not read at all is left where it is;
 - the instance is written out in the project file itself (change it there),
-  or is named by its own project file rather than its file name;
+  or is a nested project itself (a `*.project.json` file, or a folder holding
+  `default.project.json`, named by the project's own `name`): rename or
+  remove those yourself;
 - the folder resolves outside the project folder (for example a `$path` of
   `../shared/src`, or a link out of it), as for edits to existing scripts;
 - a path is ambiguous: another instance on it in Studio shares its name with
-  a sibling, or Rojo's sourcemap does not list the parent exactly once, or
+  a sibling, or Rojo's project makes two instances by one name on it, or
   Studio and the project disagree on the instance's class;
 - the project file governing the folder sets `syncRules`, or one on the way
   to it does, so the file name Rojo expects cannot be known;
@@ -307,11 +329,13 @@ The whole call is refused, with nothing changed, when:
 If a change has to be undone and a file or folder cannot be put back (for
 example someone saved into a new folder meanwhile, or a program holds a file
 open), the error names it in `leftovers`, relative to the project folder, and
-says to fix it by hand; Studio was not changed.
+says to fix it by hand.
 
-In the Roqer app, a `build_instances` call that removes anything on a linked
-place always asks before it runs, in every mode but Full auto, since it may
-delete project files.
+In the Roqer app, a `build_instances` call that removes anything (or a
+scatter that replaces its previous group) asks before it runs, in every mode
+but Full auto, whenever the app holds any Rojo link, since it may delete
+project files. A place linked before it was published, or a call with no
+place of its own, counts as linked too.
 
 ## Conflicts and how to resolve them
 
@@ -436,10 +460,16 @@ after you linked still shows up):
   Studio, so its `instanceRef` stops resolving. A removal or rename Rojo has
   not delivered yet cannot be confirmed by a later read. The
   Roqer app asks before any `build_instances` removal on a linked place.
-- The desktop app knows a place is linked when it linked it (the Rojo pill,
-  or the agent's `link_rojo_project`). A link made another way, such as
+- The desktop app knows of links it made (the Rojo pill, or the agent's
+  `link_rojo_project`). While it holds none, a link made another way, such as
   `manage_instance link_project` called directly, does not make a removal ask
-  first in Auto approve; the removal still deletes files.
+  first in Auto approve; the removal still deletes files. While it holds any,
+  removals on every place ask first.
+- A change Rojo has to undo after a running `rojo serve` already delivered it
+  leaves Studio with fresh instances in place of the old ones.
+- A batch cannot remove something the project owns and make a new one by the
+  same name in one call, so a scatter's `replace` of a saved group needs the
+  old group removed first.
 - Links live in the MCP server's memory, so they are lost when that server
   process restarts; relink afterward (or pass `--rojo-project`, below, so a
   bare MCP client relinks itself). The desktop app is the exception: for a

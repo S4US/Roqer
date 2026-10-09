@@ -336,7 +336,9 @@ describe('new scripts on a Rojo-linked place', () => {
     const result = await build(tools);
     expect(result.errorCode).toBe('rojo_unsupported');
     expect(result.leftovers).toEqual([path.join('src', 'Kit')]);
-    expect(result.error).toMatch(/could not be put back; fix it by hand\. Nothing was changed in Studio\.$/);
+    // A running rojo serve may have carried the change and its undo into Studio, so no clean "nothing changed" is claimed.
+    expect(result.error).toMatch(/could not be put back; fix it by hand\. A running rojo serve may already have carried the change/);
+    expect(result.studioMayHaveChanged).toBe(true);
     expect(listing()).toEqual(['src/Kit/theirs.txt', 'src/Main.server.luau']);
   });
 
@@ -407,7 +409,8 @@ describe('new scripts on a Rojo-linked place', () => {
     });
     const result = await build(tools);
     expect(result.errorCode).toBe('rojo_unsupported');
-    expect(result.error).toBe('Rojo did not read the project files as planned (it lists no single ServerScriptService.Util), so every file was put back. Nothing was changed.');
+    expect(result.error).toMatch(/^Rojo did not read the project files as planned \(it lists no single ServerScriptService\.Util\), so every file was put back\. A running rojo serve may already have carried the change/);
+    expect(result.studioMayHaveChanged).toBe(true);
     expect(listing()).toEqual(['src/Main.server.luau']);
     expect(studioBuilds()).toEqual([]);
   });
@@ -516,7 +519,11 @@ describe('removals, renames and moves on a Rojo-linked place', () => {
     const cases: Array<[PlannedLive, RegExp, Record<string, string>?]> = [
       [live({ op: 'set', path: MAIN, className: 'Script', name: 'Boot', properties: ['Disabled'], scripts: [{ path: MAIN, revision: MAIN_REVISION }] }), /rename or move it on its own/],
       [live({ op: 'set', path: MAIN, className: 'Script', name: 'Boot', descendants: 2, scripts: [{ path: MAIN, revision: MAIN_REVISION }] }), /holds 2 instance\(s\) only Studio has/],
-      [live({ op: 'set', path: MAIN, className: 'Script', name: 'Taken', scripts: [{ path: MAIN, revision: MAIN_REVISION }] }), /Taken\.luau would collide with Taken/, { 'src/Taken.luau': 'return 1' }],
+      [live({ op: 'set', path: MAIN, className: 'Script', name: 'Taken', scripts: [{ path: MAIN, revision: MAIN_REVISION }] }), /already has a child named Taken in the Rojo project/, { 'src/Taken.luau': 'return 1' }],
+      // On disk only, as a stale meta file: still a collision.
+      [live({ op: 'set', path: MAIN, className: 'Script', name: 'Stale', scripts: [{ path: MAIN, revision: MAIN_REVISION }] }), /Stale\.meta\.json would collide with Stale/, { 'src/Stale.meta.json': '{}' }],
+      // Studio already holds a child by the new name that the project does not.
+      [live({ op: 'set', path: MAIN, className: 'Script', name: 'Boot', nameTaken: true, scripts: [{ path: MAIN, revision: MAIN_REVISION }] }), /already has a child named Boot in Studio/],
       [live({ op: 'set', path: MAIN, className: 'Script', name: 'init', scripts: [{ path: MAIN, revision: MAIN_REVISION }] }), /cannot be renamed to init/],
     ];
     for (const [planned, pattern, files] of cases) {
@@ -575,4 +582,60 @@ describe('removals, renames and moves on a Rojo-linked place', () => {
     expect(result.persistenceNote).toMatch(/Main comes from src.Main\.server\.luau, so property changes to it are not saved to the Rojo project/);
     expect(result.persistenceNote).toMatch(/Tree\.Leaf is inside the model file src.Tree\.rbxm/);
   });
+});
+
+describe('what a removal or rename must never take with it', () => {
+  test('a removal is refused when Studio holds instances under it the project does not', async () => {
+    const { tools, listing } = await setup({ live: [live({ op: 'remove', path: MAIN, className: 'Script', descendants: 2, scripts: [{ path: MAIN, revision: MAIN_REVISION }] })] });
+    const result = await build(tools);
+    expect(result.error).toMatch(/holds 2 instance\(s\) only Studio has, which the backup of its files would not keep/);
+    expect(listing()).toEqual(['src/Main.server.luau']);
+  });
+
+  test('a file named like the instance that Rojo does not read as it is never taken along', async () => {
+    // Rojo reads no file without a type ending, so it is no part of Main and stays.
+    const plain = await setup({ live: [removeMain()], files: { 'src/Main': 'notes' } });
+    const removed = await build(plain.tools);
+    expect(removed.saved.removed).toEqual([path.join('src', 'Main.server.luau')]);
+    expect(plain.listing()).toEqual(['src/Main']);
+    fs.rmSync(removed.saved.backup, { recursive: true, force: true });
+
+    // A .txt by the same name is a second instance to Rojo (a StringValue Main): refused rather than deleted with it.
+    const text = await setup({ live: [removeMain()], files: { 'src/Main.txt': 'notes' } });
+    const refused = await build(text.tools);
+    expect(refused.error).toMatch(/more than one file or folder in src makes ServerScriptService\.Main, so which is meant is ambiguous/);
+    expect(text.listing()).toEqual(['src/Main.server.luau', 'src/Main.txt']);
+  });
+
+  test('an instance the project makes twice by one name is refused, never guessed', async () => {
+    const { tools, listing } = await setup({
+      files: { 'src/Util.luau': 'return 1', 'src/Util.server.luau': 'print(1)' },
+      live: [live({ op: 'remove', path: 'game.ServerScriptService.Util', className: 'ModuleScript' })],
+    });
+    expect((await build(tools)).error).toMatch(/makes more than one instance on the path game\.ServerScriptService\.Util/);
+    expect(listing()).toEqual(['src/Main.server.luau', 'src/Util.luau', 'src/Util.server.luau']);
+  });
+
+  test('a set that repeats the current name is no rename', async () => {
+    const { tools, studioBuilds, listing } = await setup({
+      live: [live({ op: 'set', path: MAIN, className: 'Script', name: 'Main', properties: ['Disabled'] })],
+    });
+    const result = await build(tools);
+    expect(studioBuilds()).toHaveLength(1);
+    expect(result.persistenceNote).toMatch(/property changes to it are not saved/);
+    expect(listing()).toEqual(['src/Main.server.luau']);
+  });
+
+  test('a Studio read that fails never counts as the instance being gone', async () => {
+    const { tools, listing } = await setup({ live: [removeMain()] });
+    const original = (tools as unknown as { _callSingle: (endpoint: string, data: Record<string, unknown>) => Promise<unknown> })._callSingle;
+    (tools as unknown as { _callSingle: unknown })._callSingle = async (endpoint: string, data: Record<string, unknown>) => {
+      if (endpoint === '/api/instance-properties') throw new Error('Studio disconnected');
+      return original(endpoint, data);
+    };
+    const result = await build(tools);
+    expect(result.saved.sync).toBe('pending');
+    expect(listing()).toEqual([]);
+    fs.rmSync(result.saved.backup, { recursive: true, force: true });
+  }, 15_000);
 });

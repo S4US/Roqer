@@ -135,8 +135,10 @@ const PROFILER_FILE_ARGUMENTS: Readonly<Record<string, readonly string[]>> = {
 export function riskForTool(tool: string, args?: Record<string, unknown>, place: { rojoLinked?: boolean } = {}): ToolRisk {
   // On a place linked to a Rojo project, a build that removes something may
   // delete the project's files for it, which Studio's undo cannot bring back.
+  // A scatter's replace removes the previous group the same way.
   if (tool === "build_instances" && place.rojoLinked === true && Array.isArray(args?.operations)
-    && args.operations.some((step) => typeof step === "object" && step !== null && (step as { op?: unknown }).op === "remove")) {
+    && args.operations.some((step) => typeof step === "object" && step !== null
+      && ((step as { op?: unknown }).op === "remove" || ((step as { op?: unknown }).op === "scatter" && (step as { replace?: unknown }).replace === true)))) {
     return "irreversible";
   }
   // Reading a durable Roblox operation cannot publish or mutate anything. The

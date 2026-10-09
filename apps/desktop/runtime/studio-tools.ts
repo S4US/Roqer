@@ -1314,11 +1314,14 @@ function recordSavedChange(context: PlannerContext, target: string, saved: Saved
     ...(saved.removed.length > 0 ? [`Deleted ${listed(saved.removed)} from the Rojo project`] : []),
     ...(saved.renamed.length > 0 ? [`Renamed ${listed(saved.renamed.map((rename) => `${rename.from} to ${rename.to}`))} in the Rojo project`] : []),
   ];
+  // New scripts can be read back later; new models and removals or renames cannot.
+  const confirmable = saved.scripts.size > 0 && onlyNew;
+  const what = confirmable ? "the new scripts" : onlyNew ? "the new instances" : "the change";
   const suffix = saved.sync === "pending"
-    ? (onlyNew ? "; Rojo has not delivered the new scripts to Studio yet." : "; Rojo has not delivered the change to Studio yet.")
+    ? `; Rojo has not delivered ${what} to Studio yet.`
     : saved.sync === "diverged"
-      ? (onlyNew ? "; the scripts in Studio at those paths hold something else." : "; Studio holds something else at those paths.")
-      : (onlyNew ? "; Studio has the new scripts." : "; Studio has the change.");
+      ? (confirmable ? "; the scripts in Studio at those paths hold something else." : "; Studio holds something else at those paths.")
+      : `; Studio has ${what}.`;
   context.recordChange({
     kind: "instance",
     target,
@@ -1339,29 +1342,28 @@ function recordSavedChange(context: PlannerContext, target: string, saved: Saved
       changeKind: "instance",
       title: target,
       passed: true,
-      detail: onlyNew
+      detail: confirmable
         ? "Rojo's sourcemap read the new files back as the planned instances, and Studio received every new script from Rojo."
         : "Rojo's sourcemap read the project files back as planned, and Studio shows the change Rojo made from them.",
       metadata,
     });
     return undefined;
   }
-  const confirmable = saved.scripts.size > 0 && onlyNew;
   context.recordEvidence({
     kind: "verification",
     changeKind: "instance",
     title: target,
     detail: saved.sync === "diverged"
       ? "The files were saved, but Studio holds something else at those paths."
-      : onlyNew
+      : confirmable
         ? "The new files were saved; Rojo has not delivered the new scripts to Studio yet."
-        : "The files were changed; Rojo has not delivered the change to Studio yet, and Roqer cannot confirm a removal or rename from a later read.",
+        : `The files were changed; Rojo has not delivered ${what} to Studio yet, and Roqer cannot confirm it from a later read.`,
     metadata,
   });
   if (saved.sync === "diverged") return "Saved the change to the project's files, but Studio holds something else at those paths. Read them before changing them again.";
-  return onlyNew
+  return confirmable
     ? "Saved the new scripts to files; Rojo has not delivered them to Studio yet, so they cannot be read or edited there until it does. Do not retry or build them in Studio; once Rojo delivers them, reading each new script confirms the build."
-    : `Saved the change to the project's files; Rojo has not delivered it to Studio yet. Do not retry it or make it in Studio.${confirmable ? "" : " Ask the user to check Studio once Rojo is serving."}`;
+    : `Saved ${what} to the project's files; Rojo has not delivered it to Studio yet. Do not retry it or make it in Studio. Ask the user to check Studio once Rojo is serving.`;
 }
 
 /** A saved change Studio did not have yet, confirmed later by reading each new script back. */

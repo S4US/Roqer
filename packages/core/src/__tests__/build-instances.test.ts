@@ -1001,7 +1001,7 @@ describe('build_instances plugin handler', () => {
     expect(plain.live).toEqual([
       { op: 'set', path: 'game.Workspace.Map.Brain', className: 'Folder', uniquePath: true, descendants: 1,
         scripts: [{ path: 'game.Workspace.Map.Brain.Logic', revision: 'rev:return 1' }],
-        name: 'Mind', properties: [], placement: false, tags: false, attributes: false },
+        name: 'Mind', nameTaken: false, properties: [], placement: false, tags: false, attributes: false },
       { op: 'remove', path: 'game.Workspace.Map.Old', className: 'Part', uniquePath: true, descendants: 0, scripts: [] },
     ]);
     expect(plain.added.map((added: { node: Record<string, unknown> }) => added.node.rbxm)).toEqual([undefined, undefined, undefined]);

@@ -247,18 +247,25 @@ async function checkStructure(RojoIntegration) {
     await save('moving a module into a nested project folder moves its file', [], [
       live({ op: 'set', path: 'game.ReplicatedStorage.Lib.Extra', className: 'ModuleScript', parent: 'game.ServerScriptService', parentUnique: true, scripts: [{ path: 'game.ReplicatedStorage.Lib.Extra', revision: revisionOf('lib/Extra.luau') }] }),
     ], { renamed: ['lib/Extra.luau>srv/Extra.luau'] });
-    // A LocalScript moved under emitLegacyScripts false would come back a Script: Rojo's read-back catches it and it is moved back.
-    const plan = await rojo.planStructure(link, [], [
+    // A script moved across an emitLegacyScripts boundary would change class or RunContext: refused before any file moves.
+    const crossing = await refused('a script moved into a project with another emitLegacyScripts is refused', [], [
       live({ op: 'set', path: 'game.StarterPlayer.StarterPlayerScripts.Hud', className: 'LocalScript', parent: 'game.ReplicatedStorage.Modern', parentUnique: true, scripts: [{ path: 'game.StarterPlayer.StarterPlayerScripts.Hud', revision: revisionOf('client/Hud.client.luau') }] }),
     ]);
-    let undone;
-    try {
-      await rojo.applyStructure(link, plan.change);
-    } catch (error) {
-      undone = error;
-    }
-    assert(undone?.code === 'rojo_unsupported' && fs.existsSync(path.join(root, 'client', 'Hud.client.luau')) && !fs.existsSync(path.join(root, 'modern', 'Hud.client.luau')),
-      `a move Rojo reads as another class is moved back (got ${undone?.code}: ${undone?.message})`);
+    assert(/different emitLegacyScripts setting/.test(crossing.error) && fs.existsSync(path.join(root, 'client', 'Hud.client.luau')), '...and nothing moved');
+
+    // Nested projects in a folder are named by the project's own `name`, as Rojo names them.
+    write(root, 'srv/named/default.project.json', JSON.stringify({ name: 'Named', tree: { $path: 'inner' } }));
+    write(root, 'srv/named/inner/Kept.luau', 'return 1\n');
+    write(root, 'srv/Other.project.json', JSON.stringify({ name: 'Sibling', tree: { $path: 'sibling' } }));
+    write(root, 'srv/sibling/Leaf.luau', '-- Leaf\n');
+    await save('a new script in a folder project named by its `name`', [top('game.ServerScriptService.Named', script('Added', 'ModuleScript'))], [], { created: ['srv/named/inner/Added.luau'] });
+    await save('removing a script inside a project file named by its `name`', [], [
+      live({ op: 'remove', path: 'game.ServerScriptService.Sibling.Leaf', className: 'ModuleScript', scripts: [{ path: 'game.ServerScriptService.Sibling.Leaf', revision: revisionOf('srv/sibling/Leaf.luau') }] }),
+    ], { removed: ['srv/sibling/Leaf.luau'] });
+    const nestedRoot = await refused('removing a nested project itself is refused, never half-done', [], [
+      live({ op: 'remove', path: 'game.ServerScriptService.Named', className: 'Folder', descendants: 2 }),
+    ]);
+    assert(/nested Rojo project/.test(nestedRoot.error), `...as a nested project (got ${nestedRoot.error})`);
 
     const ignored = await rojo.planStructure(link, [top('game.ServerScriptService', script('SkippedThing', 'ModuleScript'))], []);
     let refusal;

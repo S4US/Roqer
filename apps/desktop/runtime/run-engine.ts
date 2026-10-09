@@ -230,7 +230,7 @@ export type RunEngineOptions = {
    * would save by deleting project files, which Studio's undo cannot bring
    * back, is rated irreversible. Absent means no link is known of.
    */
-  rojoLinked?: (instanceId: string) => boolean;
+  rojoLinked?: (instanceId: string | null) => boolean;
 };
 
 const RETRYABLE_ERROR_CODES: ReadonlySet<string> = new Set(["timeout", "request_failed", "bridge_restarted"]);
@@ -759,8 +759,9 @@ export class RunSession {
     const effectiveArgs = this.routeToRunInstance(tool, args);
 
     const callId = this.createId("call");
-    const instanceId = this.request.instanceId;
-    const risk = riskForTool(tool, effectiveArgs, { rojoLinked: instanceId !== null && this.rojoLinked?.(instanceId) === true });
+    // The place the call is addressed to; a run with none lets the server pick one, which may be linked.
+    const addressed = this.request.instanceId ?? (typeof effectiveArgs.instance_id === "string" ? effectiveArgs.instance_id : null);
+    const risk = riskForTool(tool, effectiveArgs, { rojoLinked: this.rojoLinked?.(addressed) === true });
     const proposal: ToolProposal = {
       callId,
       tool,

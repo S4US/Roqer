@@ -81,8 +81,9 @@ function defaults(instance: object) {
 
 describe('atomic set_properties', () => {
   test('planOnly describes a rename and a move, converted and checked, and writes nothing', async () => {
-    const parent = { Name: 'Shared' };
-    const state: Record<string, unknown> = { Name: 'Old', Parent: { Name: 'Before' }, Color: 'red' };
+    // The destination already holds a New, which a saved rename would duplicate.
+    const parent = { Name: 'Shared', GetChildren: () => [{ Name: 'New' }] };
+    const state: Record<string, unknown> = { Name: 'Old', Parent: { Name: 'Before', GetChildren: () => [] }, Color: 'red' };
     const writes: string[] = [];
     const instance: Record<string, unknown> = {
       ClassName: 'ModuleScript',
@@ -103,7 +104,7 @@ describe('atomic set_properties', () => {
     expect(plan).toEqual({
       planned: true, path: 'game.Target', instanceRef: 'stable-ref', className: 'ModuleScript', uniquePath: true, descendants: 0,
       scripts: [{ path: 'game.Target', revision: 'rev:1' }],
-      name: 'New', parent: 'game.Shared', parentUnique: true, properties: ['Color'],
+      name: 'New', parent: 'game.Shared', parentUnique: true, nameTaken: true, properties: ['Color'],
     });
     expect(writes).toEqual([]);
     expect(recording.beginRecording).not.toHaveBeenCalled();
