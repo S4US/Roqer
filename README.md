@@ -41,6 +41,7 @@ a sword, the Scarlet Requiem, with a combo, a flash step, and three special atta
 - **Models in Blender.** Turn on the optional Blender integration and the agent models what parts can't make (curved shapes, detailed props, vehicle bodies), checks each model with a preview render, and uploads it into your place. It can render UI icons too.
 - **Character animations.** Ask for a run, a wave or a dance and the agent makes an R15 animation. Roqer checks the motion before Studio sees it, and you can play it in 3D in the chat. The agent then publishes the animation as the place's owner, sets it on your players' characters, and checks in a playtest that it plays.
 - **Tests its own work.** Runs solo and multi-client playtests, reads server and client output, takes screenshots, and profiles performance.
+- **Rojo projects.** Link a Rojo-synced place and script edits save to your project files, so they show up in `git diff`.
 - **You stay in control.** Choose how much it may do on its own, from Read only to Full auto, and see every script change as a diff.
 - **Built for Roblox.** Bundled Roblox skills, Creator Store search and insertion, and Open Cloud uploads with your own key.
 - **Local.** No Roqer account or server. Chats are saved on your computer, and the conversation goes straight to your model provider.
