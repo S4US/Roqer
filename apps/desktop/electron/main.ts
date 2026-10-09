@@ -1974,6 +1974,7 @@ async function startRun(event: IpcMainInvokeEvent, payload: unknown): Promise<Ru
       images: attachmentContext.images,
       previewImage: previewToolImage,
       storeModelPreview: (glbBase64: string) => storeModelPreview(blenderJobsRoot(), glbBase64),
+      rojoLinked: (instanceId: string) => rojoConnection().isLinked(instanceId),
       // Each picture is held for as long as the run goes, so no clean-up
       // removes it before the chat that records the run is saved.
       storePicture: async (dataUrl: string) => {

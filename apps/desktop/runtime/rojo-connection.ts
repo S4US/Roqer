@@ -115,6 +115,15 @@ export class RojoConnection {
     this.readServePort = options.readServePort;
   }
 
+  /**
+   * Whether this bridge holds, or is making, a link for the place: what the
+   * run engine rates a file-deleting removal by. A link still being made
+   * counts, so a removal sent while it lands is never rated as Studio-only.
+   */
+  isLinked(instanceId: string): boolean {
+    return this.memory.get(instanceId)?.kind === "linked" || this.inFlight.has(instanceId);
+  }
+
   /** The unknown-action rejection a bridge built before `link_project` existed gives back. */
   private isOlderBridgeError(outcome: McpToolOutcome): boolean {
     const message = outcome.message ?? "";

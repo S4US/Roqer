@@ -102,14 +102,29 @@ function assert(condition, message) {
   console.log(`  ✓ ${message}`);
 }
 
+/** A real .rbxm of one instance of `className` named `name`, built by Rojo itself from a model project. */
+async function rbxmOf(className, children = {}) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'roqer-rojo-rbxm-'));
+  try {
+    write(dir, 'model.project.json', JSON.stringify({ name: 'Model', tree: { $className: className, ...children } }));
+    await execFileAsync(ROJO_BIN, ['build', 'model.project.json', '-o', 'out.rbxm'], { cwd: dir, timeout: 20_000, windowsHide: true });
+    return fs.readFileSync(path.join(dir, 'out.rbxm')).toString('base64');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
+
 /**
- * New scripts saved by build_instances on a linked place (RojoIntegration
- * placeNew/saveNew): every layout Roqer writes is read back by the real
- * `rojo sourcemap` inside saveNew, so a save that succeeds here is one Rojo
- * itself agrees with.
+ * Structural changes on a linked place (RojoIntegration planStructure and
+ * applyStructure): new scripts and models, removals, renames and moves. Every
+ * change is read back by the real `rojo sourcemap` inside applyStructure, so
+ * one that succeeds here is one Rojo itself agrees with, and one Rojo reads
+ * differently is undone.
  */
-async function checkNewFiles(RojoIntegration) {
+async function checkStructure(RojoIntegration) {
   const root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'roqer-rojo-new-')));
+  const { sourceRevision } = await import(pathToFileURL(path.join(REPO_ROOT, 'packages', 'core', 'dist', 'rojo', 'source-revision.js')).href);
+  const backups = [];
   try {
     write(root, 'srv/Existing.server.luau', 'print("existing")\n');
     write(root, 'lib/Existing.luau', 'return {}\n');
@@ -149,40 +164,106 @@ async function checkNewFiles(RojoIntegration) {
     const link = rojo.linkFor('fixture:new');
     const top = (parentPath, node) => ({ parentPath, parentUnique: true, nameTaken: false, node });
     const script = (name, className, children) => ({ name, className, source: `-- ${name}\n`, ...(className === 'ModuleScript' ? {} : { runContext: 'Legacy' }), ...(children ? { children } : {}) });
-    const save = async (label, tops, files) => {
-      const placements = await rojo.placeNew(link, tops);
-      const kinds = placements.map((placement) => placement.persistence).join(',');
-      assert(placements.every((placement) => placement.persistence === 'file'), `${label}: placed as files (got ${kinds}${placements[0]?.reason ? `: ${placements[0].reason}` : ''})`);
-      const saved = await rojo.saveNew(link, placements);
-      assert(JSON.stringify(saved.map((file) => file.split(path.sep).join('/'))) === JSON.stringify(files), `${label}: Rojo reads back ${files.join(', ')} (got ${saved.join(', ')})`);
+    const revisionOf = (file) => sourceRevision(fs.readFileSync(path.join(root, file), 'utf8'));
+    const live = (fields) => ({ uniquePath: true, descendants: 0, scripts: [], properties: [], ...fields });
+    const unixy = (file) => file.split(path.sep).join('/');
+    const sorted = (files) => [...files].map((file) => unixy(path.relative(root, file))).sort();
+    const save = async (label, tops, lives, expect) => {
+      const disposition = await rojo.planStructure(link, tops, lives);
+      assert(disposition.kind === 'files' && !disposition.needsSerialize, `${label}: planned as files (got ${disposition.kind}${disposition.error ? `: ${disposition.error}` : ''})`);
+      const backup = await rojo.applyStructure(link, disposition.change);
+      if (backup) backups.push(backup);
+      const got = {
+        created: sorted(disposition.change.created),
+        removed: sorted(disposition.change.removed),
+        renamed: disposition.change.renamed.map((rename) => `${unixy(path.relative(root, rename.from))}>${unixy(path.relative(root, rename.to))}`).sort(),
+      };
+      const wanted = { created: [...(expect.created ?? [])].sort(), removed: [...(expect.removed ?? [])].sort(), renamed: [...(expect.renamed ?? [])].sort() };
+      assert(JSON.stringify(got) === JSON.stringify(wanted), `${label}: Rojo reads it back as planned (${JSON.stringify(got)})`);
+      return backup;
+    };
+    const refused = async (label, tops, lives, kind = 'refuse') => {
+      const disposition = await rojo.planStructure(link, tops, lives);
+      assert(disposition.kind === kind, `${label} (got ${disposition.kind}${disposition.error ? `: ${disposition.error}` : ''})`);
+      return disposition;
     };
 
-    await save('a ModuleScript in a $path folder', [top('game.ServerScriptService', script('Util', 'ModuleScript'))], ['srv/Util.luau']);
+    // New scripts.
+    await save('a ModuleScript in a $path folder', [top('game.ServerScriptService', script('Util', 'ModuleScript'))], [], { created: ['srv/Util.luau'] });
     await save('a Folder of a Script with a child module', [top('game.ServerScriptService', {
       name: 'Combat', className: 'Folder', children: [script('Damage', 'Script', [script('Config', 'ModuleScript')])],
-    })], ['srv/Combat/Damage/init.server.luau', 'srv/Combat/Damage/Config.luau']);
-    await save('a Model of a Script', [top('game.ServerScriptService', { name: 'Npc', className: 'Model', children: [script('Brain', 'Script')] })],
-      ['srv/Npc/init.meta.json', 'srv/Npc/Brain.server.luau']);
-    await save('a LocalScript in a $className + $path folder', [top('game.StarterPlayer.StarterPlayerScripts', script('Hud', 'LocalScript'))], ['client/Hud.client.luau']);
-    await save('a ModuleScript through a nested project file', [top('game.ReplicatedStorage.Lib', script('Extra', 'ModuleScript'))], ['lib/Extra.luau']);
+    })], [], { created: ['srv/Combat/Damage/init.server.luau', 'srv/Combat/Damage/Config.luau'] });
+    await save('a Model of a Script', [top('game.ServerScriptService', { name: 'Npc', className: 'Model', children: [script('Brain', 'Script')] })], [],
+      { created: ['srv/Npc/Brain.server.luau'] });
+    assert(fs.existsSync(path.join(root, 'srv/Npc/init.meta.json')), 'the Model of a Script is a folder whose init.meta.json names its class');
+    await save('a LocalScript in a $className + $path folder', [top('game.StarterPlayer.StarterPlayerScripts', script('Hud', 'LocalScript'))], [], { created: ['client/Hud.client.luau'] });
+    await save('a ModuleScript through a nested project file', [top('game.ReplicatedStorage.Lib', script('Extra', 'ModuleScript'))], [], { created: ['lib/Extra.luau'] });
     // Rojo makes .client a Script here, which the read-back checks; a LocalScript would come back wrong.
     await save('a client Script under a nested project with emitLegacyScripts false',
-      [top('game.ReplicatedStorage.Modern', { ...script('Ui', 'Script'), runContext: 'Client' })], ['modern/Ui.client.luau']);
-    const modernLocal = await rojo.placeNew(link, [top('game.ReplicatedStorage.Modern', script('Hud', 'LocalScript'))]);
-    assert(modernLocal[0].persistence === 'unsupported', `a LocalScript under that nested project is refused (got ${modernLocal[0].persistence})`);
-    await save('a ModuleScript in a folder that holds its own default.project.json', [top('game.ServerStorage.Pkg', script('Extra', 'ModuleScript'))], ['pkg/src/Extra.luau']);
+      [top('game.ReplicatedStorage.Modern', { ...script('Ui', 'Script'), runContext: 'Client' })], [], { created: ['modern/Ui.client.luau'] });
+    await refused('a LocalScript under that nested project is refused', [top('game.ReplicatedStorage.Modern', script('Hud', 'LocalScript'))], []);
+    await save('a ModuleScript in a folder that holds its own default.project.json', [top('game.ServerStorage.Pkg', script('Extra', 'ModuleScript'))], [], { created: ['pkg/src/Extra.luau'] });
+    await refused('a node written out in the project file stays Studio-only', [top('game.ReplicatedStorage.Inline', script('Mod', 'ModuleScript'))], [], 'studio');
+    const generated = await refused('a gitignored folder is build output', [top('game.ServerStorage.Out', script('Gen', 'ModuleScript'))], []);
+    assert(generated.code === 'rojo_generated', `...refused as rojo_generated (got ${generated.code})`);
+    await refused('a name the project already has is refused', [top('game.ServerScriptService', script('Util', 'ModuleScript'))], []);
 
-    const inline = await rojo.placeNew(link, [top('game.ReplicatedStorage.Inline', script('Mod', 'ModuleScript'))]);
-    assert(inline[0].persistence === 'studio_only', `a node written out in the project file stays Studio-only (got ${inline[0].persistence})`);
-    const generated = await rojo.placeNew(link, [top('game.ServerStorage.Out', script('Gen', 'ModuleScript'))]);
-    assert(generated[0].persistence === 'generated', `a gitignored folder is build output (got ${generated[0].persistence}: ${generated[0].reason})`);
-    const taken = await rojo.placeNew(link, [top('game.ServerScriptService', script('Util', 'ModuleScript'))]);
-    assert(taken[0].persistence === 'unsupported', `a name the project already has is refused (got ${taken[0].persistence})`);
+    // New models, as real .rbxm files Rojo itself wrote.
+    await save('a script-free Model as one .rbxm', [top('game.ServerScriptService', {
+      name: 'Tree', className: 'Model', rbxm: await rbxmOf('Model', { Trunk: { $className: 'Part' } }), children: [{ name: 'Trunk', className: 'Part' }],
+    })], [], { created: ['srv/Tree.rbxm'] });
+    await save('a Tool of a LocalScript and a Part: a folder of a script file and a model file', [top('game.ServerScriptService', {
+      name: 'Gun', className: 'Tool', children: [{ name: 'Handle', className: 'Part', rbxm: await rbxmOf('Part') }, script('Fire', 'LocalScript')],
+    })], [], { created: ['srv/Gun/Fire.client.luau', 'srv/Gun/Handle.rbxm'] });
 
-    const ignored = await rojo.placeNew(link, [top('game.ServerScriptService', script('SkippedThing', 'ModuleScript'))]);
+    // Removals.
+    const backup = await save('removing a script deletes its file', [], [
+      live({ op: 'remove', path: 'game.ServerScriptService.Util', className: 'ModuleScript', scripts: [{ path: 'game.ServerScriptService.Util', revision: revisionOf('srv/Util.luau') }] }),
+    ], { removed: ['srv/Util.luau'] });
+    assert(fs.readFileSync(path.join(backup, 'srv', 'Util.luau'), 'utf8') === '-- Util\n', 'the removed file is kept in the backup folder');
+    await save('removing a folder of scripts deletes the folder', [], [
+      live({
+        op: 'remove', path: 'game.ServerScriptService.Combat', className: 'Folder', descendants: 2, scripts: [
+          { path: 'game.ServerScriptService.Combat.Damage', revision: revisionOf('srv/Combat/Damage/init.server.luau') },
+          { path: 'game.ServerScriptService.Combat.Damage.Config', revision: revisionOf('srv/Combat/Damage/Config.luau') },
+        ],
+      }),
+    ], { removed: ['srv/Combat'] });
+    await save('removing a model file deletes it', [], [live({ op: 'remove', path: 'game.ServerScriptService.Tree', className: 'Model', descendants: 1 })], { removed: ['srv/Tree.rbxm'] });
+    const conflict = await refused('a removal Studio holds different source for is a conflict', [], [
+      live({ op: 'remove', path: 'game.ServerScriptService.Existing', className: 'Script', scripts: [{ path: 'game.ServerScriptService.Existing', revision: 'sr1:0:0000000000000000' }] }),
+    ]);
+    assert(conflict.code === 'rojo_conflict', `...refused as rojo_conflict (got ${conflict.code})`);
+
+    // Renames and moves.
+    write(root, 'srv/Meta.server.luau', '-- Meta\n');
+    write(root, 'srv/Meta.meta.json', JSON.stringify({ properties: { Disabled: true } }));
+    await save('renaming a script renames its file and meta file', [], [
+      live({ op: 'set', path: 'game.ServerScriptService.Meta', className: 'Script', name: 'Renamed', scripts: [{ path: 'game.ServerScriptService.Meta', revision: revisionOf('srv/Meta.server.luau') }] }),
+    ], { renamed: ['srv/Meta.server.luau>srv/Renamed.server.luau', 'srv/Meta.meta.json>srv/Renamed.meta.json'] });
+    await save('renaming a folder-backed Model renames its folder', [], [
+      live({ op: 'set', path: 'game.ServerScriptService.Npc', className: 'Model', name: 'Bot', descendants: 1, scripts: [{ path: 'game.ServerScriptService.Npc.Brain', revision: revisionOf('srv/Npc/Brain.server.luau') }] }),
+    ], { renamed: ['srv/Npc>srv/Bot'] });
+    await save('moving a module into a nested project folder moves its file', [], [
+      live({ op: 'set', path: 'game.ReplicatedStorage.Lib.Extra', className: 'ModuleScript', parent: 'game.ServerScriptService', parentUnique: true, scripts: [{ path: 'game.ReplicatedStorage.Lib.Extra', revision: revisionOf('lib/Extra.luau') }] }),
+    ], { renamed: ['lib/Extra.luau>srv/Extra.luau'] });
+    // A LocalScript moved under emitLegacyScripts false would come back a Script: Rojo's read-back catches it and it is moved back.
+    const plan = await rojo.planStructure(link, [], [
+      live({ op: 'set', path: 'game.StarterPlayer.StarterPlayerScripts.Hud', className: 'LocalScript', parent: 'game.ReplicatedStorage.Modern', parentUnique: true, scripts: [{ path: 'game.StarterPlayer.StarterPlayerScripts.Hud', revision: revisionOf('client/Hud.client.luau') }] }),
+    ]);
+    let undone;
+    try {
+      await rojo.applyStructure(link, plan.change);
+    } catch (error) {
+      undone = error;
+    }
+    assert(undone?.code === 'rojo_unsupported' && fs.existsSync(path.join(root, 'client', 'Hud.client.luau')) && !fs.existsSync(path.join(root, 'modern', 'Hud.client.luau')),
+      `a move Rojo reads as another class is moved back (got ${undone?.code}: ${undone?.message})`);
+
+    const ignored = await rojo.planStructure(link, [top('game.ServerScriptService', script('SkippedThing', 'ModuleScript'))], []);
     let refusal;
     try {
-      await rojo.saveNew(link, ignored);
+      await rojo.applyStructure(link, ignored.change);
     } catch (error) {
       refusal = error;
     }
@@ -190,6 +271,7 @@ async function checkNewFiles(RojoIntegration) {
       `a file the project's globIgnorePaths hides is taken back out (got ${refusal?.code}: ${refusal?.message})`);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
+    for (const backup of backups) fs.rmSync(backup, { recursive: true, force: true });
   }
 }
 
@@ -247,7 +329,7 @@ async function main() {
       );
     }
 
-    await checkNewFiles(RojoIntegration);
+    await checkStructure(RojoIntegration);
 
     console.log('\n✅ rojo-sourcemap-fixture PASSED');
   } catch (error) {

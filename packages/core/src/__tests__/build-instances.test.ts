@@ -242,10 +242,13 @@ async function loadBuildHandlers(world: World, recording: Recording, scatterPlan
       }
       build.onResolve({ filter: /^\.\.\/Utils$/ }, () => ({ path: 'Utils', namespace: 'build-instances' }));
       build.onResolve({ filter: /^\.\.\/Recording$/ }, () => ({ path: 'Recording', namespace: 'build-instances' }));
+      build.onResolve({ filter: /^\.\.\/RojoPlan$/ }, () => ({ path: 'RojoPlan', namespace: 'build-instances' }));
       build.onLoad({ filter: /.*/, namespace: 'build-instances' }, (args) => ({
         contents: args.path === 'ScatterPlanner' ? 'export default globalThis.__SCATTER_PLANNER__;'
           : args.path === 'Utils'
           ? 'export default globalThis.__BUILD_UTILS__;'
+          : args.path === 'RojoPlan'
+          ? 'export default globalThis.__ROJO_PLAN__;'
           : 'export default globalThis.__BUILD_RECORDING__;',
         loader: 'js',
       }));
@@ -268,6 +271,17 @@ async function loadBuildHandlers(world: World, recording: Recording, scatterPlan
     __BUILD_UTILS__: utilsFor(world),
     __BUILD_RECORDING__: recording,
     __SCATTER_PLANNER__: scatterPlanner,
+    // The engine's serializer and the script reader, as a plan uses them: each instance's path and class stand in for its bytes.
+    __ROJO_PLAN__: {
+      scriptRevisions: (instance: FakeInstance) => ({
+        scripts: [instance, ...instance.GetDescendants()]
+          .filter((item) => item.IsA('LuaSourceContainer'))
+          .map((item) => ({ path: pathOf(item), revision: `rev:${item.Source}` })),
+      }),
+      serializeBase64: (instance: FakeInstance) => (instance.Name === 'Unserializable'
+        ? { error: 'SerializeInstancesAsync failed' }
+        : { base64: Buffer.from(`${instance.ClassName}:${instance.Name}:${instance.GetDescendants().length}`).toString('base64') }),
+    },
     game: world.game,
     Instance: function Instance(className: string) { return createInstance(className); },
     CFrame,
@@ -930,6 +944,7 @@ describe('build_instances plugin handler', () => {
         { parentPath: 'game.ServerStorage', parentUnique: true, nameTaken: true, node: { name: 'Taken', className: 'ModuleScript', source: '', extras: ['tags'] } },
         { parentPath: 'game.ServerStorage', parentUnique: true, nameTaken: false, node: { name: 'Marker', className: 'Part', extras: ['properties'] } },
       ],
+      live: [],
       liveChanges: 0,
       created: 4,
       cloned: 1,
@@ -960,6 +975,47 @@ describe('build_instances plugin handler', () => {
       { name: 'Scripts', className: 'Folder' },
     ]);
     expect(world.workspace.children).toEqual([]);
+  });
+
+  test('planOnly describes each live edit and removal with the scripts under it, and serializes script-free trees only when asked', async () => {
+    const world = newWorld();
+    const map = new FakeInstance('Model', 'Map');
+    map.Parent = world.workspace;
+    const brain = new FakeInstance('Folder', 'Brain');
+    brain.Parent = map;
+    const logic = new FakeInstance('ModuleScript', 'Logic');
+    logic.Source = 'return 1';
+    logic.Parent = brain;
+    new FakeInstance('Part', 'Old').Parent = map;
+    const recording = newRecording();
+    const handlers = await loadBuildHandlers(world, recording);
+    const operations = [
+      { op: 'set', target: 'game.Workspace.Map.Brain', name: 'Mind' },
+      { op: 'remove', target: 'game.Workspace.Map.Old' },
+      { op: 'create', className: 'Folder', name: 'Kit' },
+      { op: 'create', className: 'Script', name: 'Runner' },
+      { op: 'create', className: 'Part', name: 'Unserializable' },
+    ];
+
+    const plain = handlers.buildInstances({ path: 'game.Workspace.Map', planOnly: true, operations });
+    expect(plain.live).toEqual([
+      { op: 'set', path: 'game.Workspace.Map.Brain', className: 'Folder', uniquePath: true, descendants: 1,
+        scripts: [{ path: 'game.Workspace.Map.Brain.Logic', revision: 'rev:return 1' }],
+        name: 'Mind', properties: [], placement: false, tags: false, attributes: false },
+      { op: 'remove', path: 'game.Workspace.Map.Old', className: 'Part', uniquePath: true, descendants: 0, scripts: [] },
+    ]);
+    expect(plain.added.map((added: { node: Record<string, unknown> }) => added.node.rbxm)).toEqual([undefined, undefined, undefined]);
+
+    const serialized = handlers.buildInstances({ path: 'game.Workspace.Map', planOnly: true, serialize: true, operations });
+    expect(serialized.added.map((added: { node: Record<string, unknown> }) => [added.node.name, added.node.rbxm, added.node.rbxmError])).toEqual([
+      ['Kit', Buffer.from('Folder:Kit:0').toString('base64'), undefined],
+      // A script is never serialized: it is saved as a file of its own.
+      ['Runner', undefined, undefined],
+      ['Unserializable', undefined, 'SerializeInstancesAsync failed'],
+    ]);
+    expect(brain.Name).toBe('Brain');
+    expect(map.children.map((child) => child.Name)).toEqual(['Brain', 'Old']);
+    expect(recording.beginRecording).not.toHaveBeenCalled();
   });
 
   test('planOnly reports a new root as one new tree, and edits or removals of live instances as liveChanges', async () => {

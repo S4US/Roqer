@@ -48,7 +48,9 @@ export const TOOL_RISK: Readonly<Record<string, ToolRisk>> = {
   // -- Ordinary, recoverable project edits -------------------------------
   set_properties: "mutation",
   // Removes as well as builds, but only inside its own root, and the whole
-  // batch is one ChangeHistory step, so Studio's undo reverses it.
+  // batch is one ChangeHistory step, so Studio's undo reverses it. On a place
+  // linked to a Rojo project, `riskForTool` rates a removal irreversible: it
+  // may delete project files instead.
   build_instances: "mutation",
   // build and wire write one undoable ChangeHistory step each, and replace only
   // what the caller names by revision or current ID. `riskForTool` rates check
@@ -130,7 +132,13 @@ const PROFILER_FILE_ARGUMENTS: Readonly<Record<string, readonly string[]>> = {
  * added to the MCP server before this table catches up can never run
  * unattended.
  */
-export function riskForTool(tool: string, args?: Record<string, unknown>): ToolRisk {
+export function riskForTool(tool: string, args?: Record<string, unknown>, place: { rojoLinked?: boolean } = {}): ToolRisk {
+  // On a place linked to a Rojo project, a build that removes something may
+  // delete the project's files for it, which Studio's undo cannot bring back.
+  if (tool === "build_instances" && place.rojoLinked === true && Array.isArray(args?.operations)
+    && args.operations.some((step) => typeof step === "object" && step !== null && (step as { op?: unknown }).op === "remove")) {
+    return "irreversible";
+  }
   // Reading a durable Roblox operation cannot publish or mutate anything. The
   // upload action remains irreversible and keeps its normal confirmation.
   if (tool === "upload_asset" && args?.action === "status") return "read";

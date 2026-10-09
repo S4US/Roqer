@@ -320,6 +320,33 @@ test("each tool call carries its own budget rather than one flat timeout", async
   );
 });
 
+test("on a Rojo-linked place a build that removes something stops for the user even in Auto approve", async () => {
+  const caller = makeCaller(async () => outcome());
+  const risks: string[] = [];
+  const linkedFor: string[] = [];
+  let session: RunSession | undefined;
+  const removal = { path: "game.ServerScriptService", operations: [{ op: "remove", target: "game.ServerScriptService.Old" }] };
+  session = new RunSession({
+    caller,
+    planner: planner(async (context) => {
+      await context.call("build_instances", removal);
+      return "done";
+    }),
+    request: makeRequest({ approvalMode: "Auto approve", instanceId: "studio-1" }),
+    rojoLinked: (instanceId) => { linkedFor.push(instanceId); return true; },
+    emit: (event) => {
+      if (event.type === "tool-proposed") risks.push(event.proposal.risk);
+      // The user declines; a removal that deletes project files never runs unasked.
+      if (event.type === "approval-requested") session?.resolveApproval(event.callId, "rejected");
+    },
+  });
+
+  await session.execute();
+  assert.deepEqual(risks, ["irreversible"]);
+  assert.deepEqual(linkedFor, ["studio-1"]);
+  assert.equal(caller.calls.length, 0);
+});
+
 test("manual playtest teardown prevents duplicate run cleanup", async () => {
   const caller = makeCaller(async () => outcome());
   const session = new RunSession({

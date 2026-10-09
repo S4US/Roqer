@@ -1,7 +1,8 @@
 import Utils from "../Utils";
 import Recording from "../Recording";
+import RojoPlan from "../RojoPlan";
 
-const { getInstancePath, resolveInstance, getInstanceReference, convertPropertyValue, samePropertyValue } = Utils;
+const { getInstancePath, resolveInstance, getInstanceReference, convertPropertyValue, samePropertyValue, hasUniquePath } = Utils;
 const { beginRecording, finishRecording } = Recording;
 
 interface PropertyChange {
@@ -109,6 +110,29 @@ function setProperties(requestData: Record<string, unknown>) {
 		const prepared = result as { previous: unknown; requested: unknown };
 		changes.push({ property, previous: prepared.previous, requested: prepared.requested });
 		results.push({ property, success: true });
+	}
+
+	// planOnly describes the write with everything converted and checked, and
+	// applies nothing: a linked Rojo project may save a rename or move to files instead.
+	if (requestData.planOnly === true) {
+		const revisions = RojoPlan.scriptRevisions(instance);
+		const renamed = changes.find((change) => change.property === "Name" && change.requested !== change.previous);
+		const moved = changes.find((change) => change.property === "Parent" && change.requested !== change.previous);
+		const others: string[] = [];
+		for (const change of changes) if (change.property !== "Name" && change.property !== "Parent") others.push(change.property);
+		return {
+			planned: true,
+			path: getInstancePath(instance),
+			instanceRef: getInstanceReference(instance),
+			className: instance.ClassName,
+			uniquePath: hasUniquePath(instance),
+			descendants: instance.GetDescendants().size(),
+			scripts: revisions.scripts,
+			...(revisions.omitted !== undefined ? { scriptsOmitted: revisions.omitted } : {}),
+			...(renamed ? { name: renamed.requested } : {}),
+			...(moved ? { parent: getInstancePath(moved.requested as Instance), parentUnique: hasUniquePath(moved.requested as Instance) } : {}),
+			properties: others,
+		};
 	}
 
 	const recordingId = beginRecording("Set multiple properties");

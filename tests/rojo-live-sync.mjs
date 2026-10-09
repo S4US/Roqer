@@ -10,8 +10,10 @@
 // behind Roqer's back is a conflict that touches neither side; killing
 // `rojo serve` makes an edit "pending" without ever reaching Studio; no
 // `.roqer-*.tmp` write-in-progress temp file is ever visible as an instance;
-// and new scripts built with build_instances are saved as files that Rojo
-// alone makes in Studio, one copy each.
+// new scripts and models built with build_instances are saved as files that
+// Rojo alone makes in Studio, one copy each; a rename moves the file and a
+// Studio-only edit blocks it as a conflict; and a removal deletes the files,
+// keeping a copy.
 //
 // Never touches the user's own place: everything happens in a temp project
 // linked to a disposable baseplate.
@@ -291,6 +293,71 @@ await runTest('Rojo-linked place saves script edits to its file', async ({ track
       expectedRevision: made.revision,
     });
     assert(madeEdit.saved?.sync === 'synced', `an edit to the new script is saved to its file (got ${JSON.stringify(madeEdit.saved)})`);
+
+    const countIn = async (parentPath, name) => {
+      const counted = await client.callTool('execute_luau', {
+        code: `local n = 0 for _, child in ${parentPath}:GetChildren() do if child.Name == ${JSON.stringify(name)} then n += 1 end end return n`,
+        target: 'edit',
+      });
+      return String(counted.returnValue);
+    };
+
+    // (g) A new model is serialized by Studio, saved as one .rbxm, and made by Rojo.
+    const model = await client.callTool('build_instances', {
+      path: 'game.ServerScriptService',
+      operations: [
+        { op: 'create', id: 'model', className: 'Model', name: 'RoqerRojoModel' },
+        { op: 'create', className: 'Part', name: 'Block', parent: '$model', properties: { Anchored: true } },
+      ],
+    });
+    assert(model.success === true, `build_instances saves a new model (got ${JSON.stringify(model)})`);
+    assert(model.saved?.sync === 'synced', `the model reports sync: synced (got ${JSON.stringify(model.saved)})`);
+    assert(fs.existsSync(path.join(root, 'src', 'RoqerRojoModel.rbxm')), 'the model is saved as src/RoqerRojoModel.rbxm');
+    assert(await countIn('game.ServerScriptService', 'RoqerRojoModel') === '1', 'Studio holds exactly one RoqerRojoModel');
+    assert(await countIn('game.ServerScriptService.RoqerRojoModel', 'Block') === '1', 'the model Rojo made from the file has its Block');
+
+    // (h) A rename moves the file, and Rojo replaces the instance.
+    const renamed = await client.callTool('set_properties', {
+      instancePath: 'game.ServerScriptService.RoqerRojoKit.Made',
+      properties: { Name: 'Renamed' },
+    });
+    assert(renamed.saved?.sync === 'synced', `set_properties saves a rename (got ${JSON.stringify(renamed)})`);
+    assert(fs.existsSync(path.join(root, 'src', 'RoqerRojoKit', 'Renamed.luau')) && !fs.existsSync(path.join(root, 'src', 'RoqerRojoKit', 'Made.luau')),
+      'the file is renamed');
+    assert(await countIn('game.ServerScriptService.RoqerRojoKit', 'Made') === '0' && await countIn('game.ServerScriptService.RoqerRojoKit', 'Renamed') === '1',
+      'Studio has the renamed script and not the old one');
+    const renamedSource = await client.callTool('get_script_source', { instancePath: 'game.ServerScriptService.RoqerRojoKit.Renamed' });
+    assertContains(renamedSource.source, 'made', 'the renamed script kept its source');
+
+    // (i) A script edited in Studio but not in its file is a conflict: nothing moves.
+    await client.callTool('execute_luau', {
+      code: 'game.ServerScriptService.RoqerRojoKit.Renamed.Source = "return \\"studio only\\""',
+      target: 'edit',
+    });
+    const conflicted = await client.callTool('set_properties', {
+      instancePath: 'game.ServerScriptService.RoqerRojoKit.Renamed',
+      properties: { Name: 'Again' },
+    });
+    assert(conflicted.errorCode === 'rojo_conflict', `a rename over a Studio-only edit is a conflict (got ${JSON.stringify(conflicted)})`);
+    assert(fs.existsSync(path.join(root, 'src', 'RoqerRojoKit', 'Renamed.luau')), 'the conflicting rename moved no file');
+
+    // Resolve it the documented way: a file save Rojo delivers over the Studio-only edit.
+    fs.writeFileSync(path.join(root, 'src', 'RoqerRojoKit', 'Renamed.luau'), 'return "file wins"\n');
+    await waitUntil('Rojo to deliver the file over the Studio-only edit', 30_000, 500, async () => {
+      const read = await client.callTool('get_script_source', { instancePath: 'game.ServerScriptService.RoqerRojoKit.Renamed' });
+      return read.fileMatchesStudio === true ? read : undefined;
+    });
+
+    // (j) Removing the folder deletes its files, keeps a copy, and Rojo takes it out of Studio.
+    const removed = await client.callTool('build_instances', {
+      path: 'game.ServerScriptService.RoqerRojoKit',
+      operations: [{ op: 'remove', target: 'game.ServerScriptService.RoqerRojoKit' }],
+    });
+    assert(removed.saved?.sync === 'synced', `removing the folder is saved (got ${JSON.stringify(removed)})`);
+    assert(!fs.existsSync(path.join(root, 'src', 'RoqerRojoKit')), 'the folder is deleted');
+    assert(typeof removed.saved?.backup === 'string' && fs.existsSync(path.join(removed.saved.backup, 'src', 'RoqerRojoKit')), 'a copy of the folder is kept');
+    assert(await countIn('game.ServerScriptService', 'RoqerRojoKit') === '0', 'Rojo took the folder out of Studio');
+    fs.rmSync(removed.saved.backup, { recursive: true, force: true });
 
     // (d) Killing rojo serve makes an edit "pending"; Studio is never written.
     expectedServeExit = true;

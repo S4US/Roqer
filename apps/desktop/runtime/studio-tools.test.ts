@@ -2345,6 +2345,37 @@ test("a pending saved build is confirmed once every new script reads back as sav
     evidence[0].metadata?.find((entry) => entry.label === REVISION_AFTER_LABEL)?.value);
 });
 
+test("a removal saved to Rojo files names the deleted files and the backup, and cannot be confirmed by a later read", async () => {
+  const { context, changes, evidence } = contextWith([
+    ok({ success: true, path: "game.ServerScriptService.Old", removedRoot: true, created: 0, cloned: 0, updated: 0, removed: 1, undoable: false,
+      saved: { removed: ["src/Old.server.luau"], sync: "pending", backup: "C:/Temp/roqer-rojo-backups/game-1" } }),
+  ]);
+  const run = createStudioToolRunner(context);
+
+  const result = await run("build_instances", { path: "game.ServerScriptService.Old", operations: [{ op: "remove", target: "game.ServerScriptService.Old" }] });
+
+  assert.equal(changes[0].summary, "Deleted src/Old.server.luau from the Rojo project; Rojo has not delivered the change to Studio yet.");
+  assert.equal(evidence[0].passed, undefined);
+  assert.deepEqual(evidence[0].metadata?.[0], { label: "Undo", value: "Not in Studio's undo history; copies of the deleted files are in C:/Temp/roqer-rojo-backups/game-1" });
+  assert.match(result.text, /Ask the user to check Studio once Rojo is serving\./);
+});
+
+test("a rename saved to Rojo files by set_properties is recorded as that, not as an atomic Studio write", async () => {
+  const { context, changes, evidence } = contextWith([
+    ok({ success: true, instancePath: "game.ServerScriptService.Boot", instanceRefReplaced: true, undoable: false,
+      saved: { renamed: [{ from: "src/Main.server.luau", to: "src/Boot.server.luau" }], sync: "synced" } }),
+  ]);
+  const run = createStudioToolRunner(context);
+
+  await run("set_properties", { instancePath: "game.ServerScriptService.Main", properties: { Name: "Boot" } });
+
+  assert.equal(changes.length, 1);
+  assert.equal(changes[0].kind, "instance");
+  assert.equal(changes[0].target, "game.ServerScriptService.Boot");
+  assert.equal(changes[0].summary, "Renamed src/Main.server.luau to src/Boot.server.luau in the Rojo project; Studio has the change.");
+  assert.equal(evidence[0].passed, true);
+});
+
 test("a build whose new scripts stayed in Studio on a linked place says so", async () => {
   const { context, changes } = contextWith([
     ok({ path: "game.Workspace.Door", created: 1, cloned: 0, updated: 0, removed: 0, undoable: true,

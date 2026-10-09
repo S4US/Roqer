@@ -56,10 +56,13 @@ import type { Rig } from '../animation/rig.js';
 import { RIGS, rigFor } from '../animation/rigs.js';
 import { cachedRigMeshes, currentRigMeshes, modelRigMeshes, rigMeshCacheDirectory, storeRigMeshes, type BoxedMeshPart } from '../animation/rig-meshes.js';
 import { MAX_MESHES_PER_READ, meshesToRead, storeModelMesh } from '../animation/model-meshes.js';
-import { NewFilesError, RojoError, RojoIntegration, containsScript, type FilePlacement, type NewInstance, type Ownership, type PlannedTop, type ProjectLink } from '../rojo/index.js';
+import {
+  ProjectFilesError, RojoError, RojoIntegration,
+  type Disposition, type NewInstance, type Ownership, type PlannedLive, type PlannedTop, type ProjectChange, type ProjectLink, type StudioCheck,
+} from '../rojo/index.js';
 import { formatInstancePath, parseInstancePath } from '../rojo/instance-path.js';
 import { compareAndWrite } from '../rojo/file-write.js';
-import { waitForStudio } from '../rojo/sync-wait.js';
+import { waitForAll, waitForStudio, type CheckState } from '../rojo/sync-wait.js';
 import { differingLines } from '../rojo/conflict.js';
 import { sourceRevision } from '../rojo/source-revision.js';
 import { toStudioText } from '../rojo/text-format.js';
@@ -157,8 +160,14 @@ function rojoNothingChanged(reason: string): string {
   return `${reason.endsWith('.') ? reason : `${reason}.`} Nothing was changed.`;
 }
 
-/** How many new scripts one build may save to a linked Rojo project; each is polled until Rojo delivers it. */
-const MAX_ROJO_NEW_SCRIPTS = 25;
+/** How many scripts and instances one save to a linked Rojo project may wait on; each is polled until Rojo delivers it. */
+const MAX_ROJO_STUDIO_CHECKS = 50;
+/**
+ * Stands for live edits an older plugin's plan did not describe: a property
+ * edit of the place itself, which the project never saves, so the batch can
+ * be built in Studio but never mixed into a save to the project's files.
+ */
+const UNDESCRIBED_LIVE: PlannedLive = { op: 'set', path: 'game', className: 'DataModel', uniquePath: true, descendants: 0, scripts: [], properties: ['(undescribed)'] };
 /** As many `$id` paths as a build reports from the plugin. */
 const MAX_REPORTED_BUILD_IDS = 50;
 
@@ -1907,8 +1916,151 @@ export class RobloxStudioTools {
     if (!instancePath || !properties) {
       throw new Error('instancePath and properties are required for set_properties');
     }
-    const response = await this._callSingle('/api/set-properties', { instancePath, instanceRef, properties }, undefined, instance_id);
+    const response = await this._propertiesWrite({ instancePath, instanceRef, properties }, instance_id);
     return { content: [{ type: 'text', text: JSON.stringify(response) }] };
+  }
+
+  /**
+   * One property write. On a linked place, renaming or moving something the
+   * Rojo project owns renames or moves its files, and Rojo makes the change in
+   * Studio; every other write goes to Studio as it always did.
+   */
+  private async _propertiesWrite(payload: Record<string, unknown>, instance_id?: string): Promise<Record<string, unknown>> {
+    const link = this._rojoDefaultPending ? await this._ensureRojoLink(instance_id) : this._rojoLinkFor(instance_id);
+    if (!link) return this._callSingle('/api/set-properties', payload, undefined, instance_id);
+    if ('error' in link) return link;
+    const plan = await this._callSingle('/api/set-properties', { ...payload, planOnly: true }, undefined, instance_id);
+    if (!plan || plan.planned !== true) return plan;
+    // Only a rename or a move can change what the project holds.
+    if (plan.name === undefined && plan.parent === undefined) return this._callSingle('/api/set-properties', payload, undefined, instance_id);
+    const live: PlannedLive = { ...(plan as unknown as PlannedLive), op: 'set' };
+    const outcome = await this._planAndSave(link, [], [live], instance_id, () => this._callSingle('/api/set-properties', payload, undefined, instance_id));
+    if (outcome.kind !== 'saved') return outcome.result;
+    const moved = outcome.change.checks.find((check) => check.present);
+    return {
+      success: true,
+      instancePath: moved ? formatInstancePath(moved.segments) : plan.path,
+      // Rojo makes the renamed instance afresh, so its old reference no longer resolves.
+      instanceRefReplaced: true,
+      undoable: false,
+      saved: outcome.saved,
+      ...(outcome.hint ? { hint: outcome.hint } : {}),
+    };
+  }
+
+  /**
+   * Plans a structural change on a linked place and carries it out: applied in
+   * Studio by `applyInStudio` (with any note on what the project does not
+   * hold), refused, or saved to the project's files and waited on until Rojo
+   * makes it in Studio. Studio is never written for a saved change.
+   */
+  private async _planAndSave(
+    link: ProjectLink,
+    tops: PlannedTop[],
+    lives: PlannedLive[],
+    instance_id: string | undefined,
+    applyInStudio: () => Promise<Record<string, unknown>>,
+    replan?: () => Promise<{ tops: PlannedTop[]; lives: PlannedLive[] } | Record<string, unknown>>,
+  ): Promise<
+    | { kind: 'done'; result: Record<string, unknown> }
+    | { kind: 'saved'; change: ProjectChange; saved: Record<string, unknown>; hint?: string }
+  > {
+    let disposition: Disposition;
+    try {
+      disposition = await this.rojo.planStructure(link, tops, lives);
+      if (disposition.kind === 'files' && disposition.needsSerialize && replan) {
+        // The plan is made again with its new models serialized, now that they are known to go to files.
+        const again = await replan();
+        if (!('tops' in again)) return { kind: 'done', result: again };
+        disposition = await this.rojo.planStructure(link, again.tops as PlannedTop[], again.lives as PlannedLive[]);
+      }
+    } catch (error) {
+      if (error instanceof RojoError) return { kind: 'done', result: { error: rojoNothingChanged(error.message), errorCode: error.code } };
+      throw error;
+    }
+    if (disposition.kind === 'refuse') {
+      return { kind: 'done', result: { error: rojoNothingChanged(disposition.error), errorCode: disposition.code, ...(disposition.file ? { file: disposition.file } : {}) } };
+    }
+    if (disposition.kind === 'studio') {
+      const applied = await applyInStudio();
+      return {
+        kind: 'done',
+        result: applied?.error || disposition.notes.length === 0
+          ? applied
+          : { ...applied, persistence: 'studio_only', persistenceNote: `${disposition.notes.join('; ')}.` },
+      };
+    }
+    if (disposition.needsSerialize) {
+      return { kind: 'done', result: { error: rojoNothingChanged('The Studio plugin did not serialize the new models; update the Roqer Studio plugin'), errorCode: 'rojo_unsupported' } };
+    }
+    const change = disposition.change;
+    if (change.studio.length > MAX_ROJO_STUDIO_CHECKS) {
+      return {
+        kind: 'done',
+        result: { error: rojoNothingChanged(`This saves more than ${MAX_ROJO_STUDIO_CHECKS} scripts and instances to the linked Rojo project at once; split it`), errorCode: 'rojo_unsupported' },
+      };
+    }
+
+    let backup: string | undefined;
+    try {
+      backup = await this.rojo.applyStructure(link, change);
+    } catch (error) {
+      if (!(error instanceof ProjectFilesError)) throw error;
+      const message = error.message.replace(/\s*\n+\s*/g, ' ').replace(/\.$/, '');
+      const leftovers = error.leftovers.map((file) => path.relative(link.root, file));
+      const failed = error.code === 'rojo_write_failed' ? `Could not change the project's files: ${message}` : message;
+      return {
+        kind: 'done',
+        result: leftovers.length === 0
+          ? { error: `${failed}, so every file was put back. Nothing was changed.`, errorCode: error.code }
+          : {
+            error: `${failed}, and ${leftovers.join(', ')} could not be put back; fix ${leftovers.length === 1 ? 'it' : 'them'} by hand. Nothing was changed in Studio.`,
+            errorCode: error.code,
+            leftovers,
+          },
+      };
+    }
+
+    const sync = await waitForAll(() => Promise.all(change.studio.map((check) => this._studioCheckState(check, instance_id))));
+    let hint: string | undefined;
+    if (sync === 'pending') {
+      const server = await this.rojo.probe(link);
+      hint = server.reachable
+        ? `The files are saved. Rojo answers on port ${link.port} but Studio has not received the change yet; check the Rojo plugin is connected.`
+        : `The files are saved. No Rojo server answers on port ${link.port}; start rojo serve and connect the Rojo plugin to deliver the change.`;
+    } else if (sync === 'diverged') {
+      hint = 'The files are saved, but Studio holds something else at those paths. Read them before changing them again.';
+    }
+    const relative = (file: string) => path.relative(link.root, file);
+    const scripts = change.studio.filter((check): check is Extract<StudioCheck, { revision: string }> => 'revision' in check);
+    return {
+      kind: 'saved',
+      change,
+      ...(hint ? { hint } : {}),
+      saved: {
+        ...(change.created.length > 0 ? { files: change.created.map(relative) } : {}),
+        ...(change.removed.length > 0 ? { removed: change.removed.map(relative) } : {}),
+        ...(change.renamed.length > 0 ? { renamed: change.renamed.map((rename) => ({ from: relative(rename.from), to: relative(rename.to) })) } : {}),
+        sync,
+        // What a later read must show for the change to count as delivered.
+        ...(scripts.length > 0 ? { scripts: scripts.map((check) => ({ path: check.path, revision: check.revision })) } : {}),
+        ...(backup ? { backup } : {}),
+      },
+    };
+  }
+
+  /** Whether one expected change has reached Studio: by a script's revision, or by an instance being there (with its class) or gone. */
+  private async _studioCheckState(check: StudioCheck, instance_id?: string): Promise<CheckState> {
+    if ('revision' in check) {
+      const read = await this._callSingle('/api/get-script-source', { instancePath: check.path, startLine: 1, endLine: 1 }, undefined, instance_id).catch(() => undefined);
+      if (typeof read?.revision !== 'string') return 'before';
+      return read.revision === check.revision ? 'done' : 'other';
+    }
+    const read = await this._callSingle('/api/instance-properties', { instancePath: check.path, excludeSource: true }, undefined, instance_id).catch(() => undefined);
+    const className = typeof read?.className === 'string' ? read.className : undefined;
+    if ('absent' in check) return className === undefined ? 'done' : 'before';
+    if (className === undefined) return 'before';
+    return className === check.className ? 'done' : 'other';
   }
 
   /**
@@ -1932,116 +2084,53 @@ export class RobloxStudioTools {
 
   /**
    * One build. On a place with no linked Rojo project this is the plugin call
-   * it always was. On a linked place, a batch whose new instances include
-   * scripts going into a folder the project owns is saved as files there and
-   * delivered by Rojo, never made in Studio directly: making it in both would
-   * leave Studio with two copies once Rojo delivered the files.
+   * it always was. On a linked place the plugin first describes the batch
+   * without applying it; whatever of it the project owns, or would hold (a
+   * new tree under a project folder, a removal, rename or move of something it
+   * owns), is saved to the project's files and made in Studio by Rojo, never
+   * by Roqer as well, which would leave two copies or undo itself on Rojo's
+   * next sync. Everything else is built in Studio as before.
    */
   private async _buildWrite(payload: Record<string, unknown>, instance_id?: string): Promise<Record<string, unknown>> {
     const link = this._rojoDefaultPending ? await this._ensureRojoLink(instance_id) : this._rojoLinkFor(instance_id);
     if (!link) return this._callSingle('/api/build-instances', payload, undefined, instance_id);
     if ('error' in link) return link;
 
-    const plan = await this._callSingle('/api/build-instances', { ...payload, planOnly: true }, undefined, instance_id);
-    if (!plan || plan.planned !== true) return plan;
-    const tops = Array.isArray(plan.added) ? plan.added as PlannedTop[] : [];
-    // No new script anywhere: nothing for the project to hold, so the build is what it always was.
-    if (!tops.some((top) => containsScript(top.node))) return this._callSingle('/api/build-instances', payload, undefined, instance_id);
+    const describe = async (serialize: boolean) => {
+      const plan = await this._callSingle('/api/build-instances', { ...payload, planOnly: true, ...(serialize ? { serialize: true } : {}) }, undefined, instance_id);
+      if (!plan || plan.planned !== true) return { ok: false as const, plan };
+      // A plugin that does not describe live changes leaves them unclassifiable: kept out of the project, and so never mixed with a save.
+      const lives = Array.isArray(plan.live) ? plan.live as PlannedLive[] : [];
+      const unknownLive = !Array.isArray(plan.live) && Number(plan.liveChanges) > 0;
+      return { ok: true as const, plan, tops: Array.isArray(plan.added) ? plan.added as PlannedTop[] : [], lives, unknownLive };
+    };
+    const first = await describe(false);
+    if (!first.ok) return first.plan;
+    const { plan } = first;
+    if (first.tops.length === 0 && first.lives.length === 0) return this._callSingle('/api/build-instances', payload, undefined, instance_id);
 
-    let placements: Awaited<ReturnType<RojoIntegration['placeNew']>>;
-    try {
-      placements = await this.rojo.placeNew(link, tops);
-    } catch (error) {
-      if (error instanceof RojoError) return { error: rojoNothingChanged(error.message), errorCode: error.code };
-      throw error;
-    }
-    for (const placement of placements) {
-      if (placement.persistence === 'generated' || placement.persistence === 'unsupported') {
-        return {
-          error: rojoNothingChanged(placement.reason),
-          errorCode: placement.persistence === 'generated' ? 'rojo_generated' : 'rojo_unsupported',
-          ...(placement.relativeFile ? { file: placement.relativeFile } : {}),
-        };
-      }
-    }
-
-    const files = placements.filter((placement): placement is FilePlacement => placement.persistence === 'file');
-    if (files.length === 0) {
-      const applied = await this._callSingle('/api/build-instances', payload, undefined, instance_id);
-      const notes = [...new Set(placements.flatMap((placement) =>
-        placement.persistence === 'studio_only' && placement.scripts && placement.reason ? [placement.reason] : []))];
-      return applied?.error || notes.length === 0
-        ? applied
-        : { ...applied, persistence: 'studio_only', persistenceNote: `The new scripts are not saved to the Rojo project: ${notes.join('; ')}.` };
-    }
-    if (files.length < placements.length || Number(plan.liveChanges) > 0) {
-      return {
-        error: rojoNothingChanged('This batch adds scripts that are saved to the linked Rojo project and also makes changes that stay in Studio only; '
-          + 'send the new scripts in a build_instances call of their own'),
-        errorCode: 'rojo_unsupported',
-      };
-    }
-    const instances = files.flatMap((placement) => placement.instances);
-    const scripts = instances.filter((instance) => instance.file !== undefined);
-    if (scripts.length > MAX_ROJO_NEW_SCRIPTS) {
-      return {
-        error: rojoNothingChanged(`A build can save at most ${MAX_ROJO_NEW_SCRIPTS} new scripts to the linked Rojo project at once; split it`),
-        errorCode: 'rojo_unsupported',
-      };
-    }
-
-    let saved: string[];
-    try {
-      saved = await this.rojo.saveNew(link, files);
-    } catch (error) {
-      if (!(error instanceof NewFilesError)) throw error;
-      const message = error.message.replace(/\s*\n+\s*/g, ' ').replace(/\.$/, '');
-      const leftovers = error.leftovers.map((file) => path.relative(link.root, file));
-      const failed = error.code === 'rojo_write_failed' ? `Could not save the new files: ${message}` : message;
-      return leftovers.length === 0
-        ? { error: `${failed}, so the new files were taken back out. Nothing was changed.`, errorCode: error.code }
-        : {
-          error: `${failed}, and ${leftovers.join(', ')} could not be taken back out; delete ${leftovers.length === 1 ? 'it' : 'them'} by hand. Nothing was changed in Studio.`,
-          errorCode: error.code,
-          leftovers,
-        };
-    }
-
-    // Each script's revision joined in one string: complete only once every
-    // new script is in Studio, so a batch half delivered still reads as "not yet".
-    const ABSENT = '\u0000absent';
-    const expected = scripts.map((instance) => sourceRevision(instance.source ?? '')).join('|');
-    const sync = await waitForStudio(async () => {
-      const revisions = await Promise.all(scripts.map(async (instance) => {
-        const read = await this._callSingle('/api/get-script-source', { instancePath: formatInstancePath(instance.segments), startLine: 1, endLine: 1 }, undefined, instance_id)
-          .catch(() => undefined);
-        return typeof read?.revision === 'string' ? read.revision : undefined;
-      }));
-      return revisions.some((revision) => revision === undefined) ? undefined : revisions.join('|');
-    }, ABSENT, expected);
-    let hint: string | undefined;
-    if (sync === 'pending') {
-      const server = await this.rojo.probe(link);
-      hint = server.reachable
-        ? `The files are saved. Rojo answers on port ${link.port} but Studio has not received the new scripts yet; check the Rojo plugin is connected.`
-        : `The files are saved. No Rojo server answers on port ${link.port}; start rojo serve and connect the Rojo plugin to deliver them.`;
-    } else if (sync === 'diverged') {
-      hint = 'The files are saved, but the scripts in Studio at those paths hold something else. Read them before editing.';
-    }
+    const applyInStudio = () => this._callSingle('/api/build-instances', payload, undefined, instance_id);
+    // Live changes an older plugin did not describe count as Studio-only, so they are never mixed into a save.
+    const lives: PlannedLive[] = first.unknownLive ? [...first.lives, UNDESCRIBED_LIVE] : first.lives;
+    const outcome = await this._planAndSave(link, first.tops, lives, instance_id, applyInStudio, async () => {
+      const again = await describe(true);
+      return again.ok ? { tops: again.tops, lives: again.unknownLive ? [...again.lives, UNDESCRIBED_LIVE] : again.lives } : again.plan;
+    });
+    if (outcome.kind !== 'saved') return outcome.result;
     return {
       success: true,
       path: plan.path,
       createdRoot: plan.createdRoot === true,
+      ...(plan.removedRoot === true ? { removedRoot: true } : {}),
       created: plan.created,
       cloned: plan.cloned,
       updated: plan.updated,
-      removed: 0,
-      // Rojo made these instances from the files, so Studio's undo cannot take them back out.
+      removed: plan.removed ?? 0,
+      // Rojo made these changes from the files, so Studio's undo cannot take them back.
       undoable: false,
-      ...newInstanceIds(instances),
-      // The new scripts and the revision each should read back at, so a later read can confirm a pending delivery.
-      saved: { files: saved, sync, scripts: scripts.map((instance) => ({ path: formatInstancePath(instance.segments), revision: sourceRevision(instance.source ?? '') })) },
-      ...(hint ? { hint } : {}),
+      ...newInstanceIds(outcome.change.instances),
+      saved: outcome.saved,
+      ...(outcome.hint ? { hint: outcome.hint } : {}),
     };
   }
 

@@ -1,5 +1,6 @@
 import Utils from "../Utils";
 import Recording from "../Recording";
+import RojoPlan from "../RojoPlan";
 import ScatterPlanner from "./ScatterPlanner";
 
 const { getInstancePath, resolveInstance, getInstanceReference, convertPropertyValue, resolveParentAndName, samePropertyValue, hasUniquePath } = Utils;
@@ -42,6 +43,8 @@ const MIN_SCALE = 0.05;
 const MAX_SCALE = 20;
 /** The most script source, in total, a plan carries; a batch rarely copies more than a few scripts. */
 const MAX_PLANNED_SOURCE = 2_000_000;
+/** The most serialized model, in base64 characters, a plan carries. */
+const MAX_PLANNED_RBXM = 8_000_000;
 /** Properties a plan describes on its own, so setting them is not reported as an extra. */
 const PLANNED_PROPERTIES = new Set(["Name", "RunContext", "Enabled", "Disabled"]);
 
@@ -84,6 +87,21 @@ interface BuildState {
 	decorated: Set<Instance>;
 	/** Edits and removals of instances that were already live. */
 	liveChanges: number;
+	/** Those edits and removals, as a plan describes them. */
+	liveOps: LiveOp[];
+}
+
+/** One edit or removal of a live instance, recorded for a plan. */
+interface LiveOp {
+	op: "set" | "remove";
+	target: Instance;
+	/** The new name, when a set renames it. */
+	name?: string;
+	/** Every other property the set assigns. */
+	properties: string[];
+	placement: boolean;
+	tags: boolean;
+	attributes: boolean;
 }
 
 /**
@@ -128,7 +146,10 @@ function removeRootAlone(path: string, root: Instance | undefined, step: Step, p
 	if (!root) return { error: `${path} does not exist, so there is no build root to remove. Nothing was changed.` };
 	if (root === game || root.Parent === game) return undefined;
 	const where = getInstancePath(root);
-	if (planOnly) return { planned: true, path: where, removedRoot: true, createdRoot: false, added: [], liveChanges: 1, created: 0, cloned: 0 };
+	if (planOnly) {
+		const live = describeLive({ op: "remove", target: root, properties: [], placement: false, tags: false, attributes: false });
+		return { planned: true, path: where, removedRoot: true, createdRoot: false, added: [], live: [live], liveChanges: 1, created: 0, cloned: 0 };
+	}
 	const recordingId = beginRecording(`Remove ${root.Name}`);
 	// Parent = nil rather than Destroy, as every remove: undo puts it back.
 	const [removed, reason] = pcall(() => {
@@ -403,9 +424,12 @@ function prepareClone(state: BuildState, step: Step, index: number): void {
 			applyScale(instance, scale);
 		}
 		if (position || rotation) applyPivot(instance, placement(currentPivot(instance, index, op), position, rotation));
-		// A plan cannot describe a placement, or what a copied Model carries beyond its name and children.
+		// A plan cannot describe a placement, or the properties a copy carries
+		// beyond a name and children (a script's are reported; a Folder has none).
 		if (scale !== undefined || position || rotation) state.decorated.add(instance);
-		for (const model of [instance, ...instance.GetDescendants()]) if (model.IsA("Model")) state.decorated.add(model);
+		for (const copied of [instance, ...instance.GetDescendants()]) {
+			if (!copied.IsA("LuaSourceContainer") && !copied.IsA("Folder")) state.decorated.add(copied);
+		}
 		attach(state, instance, parent);
 		registerId(state, step, instance, index, op);
 		state.cloned += 1;
@@ -463,13 +487,26 @@ function prepareLiveSet(state: BuildState, target: Instance, step: Step, index: 
 			undo: () => target.RemoveTag(tag),
 		});
 	}
-	for (const [name, value] of readAttributes(step.attributes, index, op)) {
+	const attributes = readAttributes(step.attributes, index, op);
+	for (const [name, value] of attributes) {
 		const previous = target.GetAttribute(name);
 		state.actions.push({
 			apply: () => target.SetAttribute(name, value as AttributeValue),
 			undo: () => target.SetAttribute(name, previous),
 		});
 	}
+
+	const others: string[] = [];
+	for (const property of sortedKeys(properties)) if (property !== "Name") others.push(property);
+	state.liveOps.push({
+		op: "set",
+		target,
+		name: properties.Name !== undefined ? tostring(properties.Name) : undefined,
+		properties: others,
+		placement: position !== undefined || rotation !== undefined,
+		tags: readTags(step.tags, index, op).size() > 0,
+		attributes: attributes.size() > 0,
+	});
 }
 
 function prepareSet(state: BuildState, step: Step, index: number): void {
@@ -521,6 +558,7 @@ function prepareRemove(state: BuildState, step: Step, index: number): void {
 	});
 	state.removedCount += 1;
 	state.liveChanges += 1;
+	state.liveOps.push({ op: "remove", target, properties: [], placement: false, tags: false, attributes: false });
 }
 
 /** Prepare a complete replacement while the previous scatter remains live. */
@@ -629,12 +667,31 @@ function prepareScatter(state: BuildState, step: Step, index: number): void {
  * A new instance and everything under it as the batch would add it, for a
  * caller that decides where the batch belongs before anything is applied (a
  * linked Rojo project saves new scripts to files instead). Extras are what a
- * name, class, and source cannot carry.
+ * name, class, and source cannot carry. A tree with no script in it, at the
+ * top or directly under one that has scripts, also comes serialized as an
+ * .rbxm (or with why it could not be), since that is the file it would be.
  */
-function describeNew(state: BuildState, instance: Instance, idOf: Map<Instance, string>, budget: { source: number }): Record<string, unknown> {
+function describeNew(
+	state: BuildState,
+	instance: Instance,
+	idOf: Map<Instance, string>,
+	budget: { source: number; rbxm: number; serialize: boolean },
+	serializable: boolean,
+): Record<string, unknown> {
 	const node: Record<string, unknown> = { name: instance.Name, className: instance.ClassName };
 	const id = idOf.get(instance);
 	if (id !== undefined) node.id = id;
+	const hasScript = instance.IsA("LuaSourceContainer") || instance.FindFirstChildWhichIsA("LuaSourceContainer", true) !== undefined;
+	// Serializing costs time and payload, so only a plan asked for it does.
+	if (budget.serialize && serializable && !hasScript) {
+		const serialized = RojoPlan.serializeBase64(instance);
+		if ("error" in serialized) node.rbxmError = serialized.error;
+		else {
+			budget.rbxm -= serialized.base64.size();
+			if (budget.rbxm >= 0) node.rbxm = serialized.base64;
+			else node.rbxmError = "the batch's models are too large to plan; build fewer at once";
+		}
+	}
 	const extras: string[] = [];
 	if (instance.IsA("LuaSourceContainer")) {
 		const source = (instance as unknown as { Source: string }).Source;
@@ -652,15 +709,39 @@ function describeNew(state: BuildState, instance: Instance, idOf: Map<Instance, 
 	if (instance.GetAttributes().size() > 0) extras.push("attributes");
 	if (extras.size() > 0) node.extras = extras;
 	const children = instance.GetChildren();
-	if (children.size() > 0) node.children = children.map((child) => describeNew(state, child, idOf, budget));
+	if (children.size() > 0) node.children = children.map((child) => describeNew(state, child, idOf, budget, hasScript));
 	return node;
 }
 
+/** A live instance a plan edits or removes, with every script under it for the caller to compare against files. */
+function describeLive(change: LiveOp): Record<string, unknown> {
+	const target = change.target;
+	const revisions = RojoPlan.scriptRevisions(target);
+	return {
+		op: change.op,
+		path: getInstancePath(target),
+		className: target.ClassName,
+		uniquePath: hasUniquePath(target),
+		descendants: target.GetDescendants().size(),
+		scripts: revisions.scripts,
+		...(revisions.omitted !== undefined ? { scriptsOmitted: revisions.omitted } : {}),
+		...(change.op === "set"
+			? {
+				...(change.name !== undefined ? { name: change.name } : {}),
+				properties: change.properties,
+				placement: change.placement,
+				tags: change.tags,
+				attributes: change.attributes,
+			}
+			: {}),
+	};
+}
+
 /** What the batch would do, with nothing applied: the new instances under each live parent, and how many live ones it edits or removes. */
-function describePlan(state: BuildState, path: string, createdRoot: boolean, rootParent: Instance | undefined): Record<string, unknown> {
+function describePlan(state: BuildState, path: string, createdRoot: boolean, rootParent: Instance | undefined, serialize: boolean): Record<string, unknown> {
 	const idOf = new Map<Instance, string>();
 	for (const [id, instance] of state.ids) idOf.set(instance, id);
-	const budget = { source: MAX_PLANNED_SOURCE };
+	const budget = { source: MAX_PLANNED_SOURCE, rbxm: MAX_PLANNED_RBXM, serialize };
 	const tops: Array<[Instance, Instance]> = [];
 	if (createdRoot && rootParent) tops.push([state.root, rootParent]);
 	else for (const instance of state.added) {
@@ -676,8 +757,9 @@ function describePlan(state: BuildState, path: string, createdRoot: boolean, roo
 			parentPath: getInstancePath(parent),
 			parentUnique: hasUniquePath(parent),
 			nameTaken: parent.FindFirstChild(instance.Name) !== undefined,
-			node: describeNew(state, instance, idOf, budget),
+			node: describeNew(state, instance, idOf, budget, true),
 		})),
+		live: state.liveOps.map(describeLive),
 		liveChanges: state.liveChanges,
 		created: state.created,
 		cloned: state.cloned,
@@ -864,6 +946,7 @@ function buildInstances(requestData: Record<string, unknown>) {
 		attachedTo: new Map(),
 		decorated: new Set(),
 		liveChanges: 0,
+		liveOps: [],
 	};
 
 	const [prepared, prepareError] = pcall(() => {
@@ -886,7 +969,7 @@ function buildInstances(requestData: Record<string, unknown>) {
 		return { error: `${tostring(prepareError)}. Nothing was changed.` };
 	}
 	if (planOnly) {
-		const plan = describePlan(state, path as string, createdRoot, rootParent);
+		const plan = describePlan(state, path as string, createdRoot, rootParent, requestData.serialize === true);
 		destroyMade(state);
 		return plan;
 	}
