@@ -152,8 +152,47 @@ describe('compareAndWrite', () => {
     const outcome = await compareAndWrite(file, sourceRevision('old\n'), 'new\n');
     expect(attempted).toContain(lockPath);
     expect(outcome).toMatchObject({ ok: true, lockReleaseWarning: expect.stringContaining('test release failure') });
+    // The warning names the lease folder in full, so the recovery it describes can be followed.
+    expect(outcome.lockReleaseWarning).toContain(`Lease: ${lockPath}`);
     expect(fs.readFileSync(file, 'utf8')).toBe('new\n');
     expect(leftovers()).toEqual([]);
+  });
+  test('a refusal stays a refusal, with its revision and text, even if releasing the lock then fails', async () => {
+    const file = path.join(dir, 'Main.server.luau');
+    fs.writeFileSync(file, 'changed on disk\n');
+    const lockPath = sourceWriteLockPath(fs.realpathSync.native(file));
+    const rmdir = nativeFs.rmdirSync;
+    jest.spyOn(nativeFs, 'rmdirSync').mockImplementation(((directory: fs.PathLike, ...args: unknown[]) => {
+      if (String(directory) === lockPath) throw Object.assign(new Error('test release failure'), { code: 'EIO' });
+      return Reflect.apply(rmdir, nativeFs, [directory, ...args]);
+    }) as typeof nativeFs.rmdirSync);
+    const outcome = await compareAndWrite(file, sourceRevision('old\n'), 'new\n');
+    expect(outcome).toMatchObject({
+      ok: false,
+      actualRevision: sourceRevision('changed on disk\n'),
+      actual: 'changed on disk\n',
+      lockReleaseWarning: expect.stringMatching(/^Nothing was written, but releasing its write lock failed \(EMETADATARECOVERY\)/),
+    });
+    expect(fs.readFileSync(file, 'utf8')).toBe('changed on disk\n');
+  });
+  test('a lease whose removal Windows refuses for a moment is still released', async () => {
+    const file = path.join(dir, 'Main.server.luau');
+    fs.writeFileSync(file, 'old\n');
+    const lockPath = sourceWriteLockPath(fs.realpathSync.native(file));
+    const rmdir = nativeFs.rmdirSync;
+    let refusals = 0;
+    jest.spyOn(nativeFs, 'rmdirSync').mockImplementation(((directory: fs.PathLike, ...args: unknown[]) => {
+      // A virus scanner or indexer holding owner.json leaves the folder briefly not empty.
+      if (String(directory) === lockPath && refusals < 3) {
+        refusals += 1;
+        throw Object.assign(new Error('directory not empty'), { code: 'ENOTEMPTY' });
+      }
+      return Reflect.apply(rmdir, nativeFs, [directory, ...args]);
+    }) as typeof nativeFs.rmdirSync);
+    const outcome = await compareAndWrite(file, sourceRevision('old\n'), 'new\n');
+    expect(outcome).toEqual({ ok: true });
+    expect(refusals).toBe(3);
+    expect(fs.existsSync(lockPath)).toBe(false);
   });
   test('does not commit or delete a replacement lease directory', async () => {
     const file = path.join(dir, 'Main.server.luau');

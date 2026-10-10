@@ -6,7 +6,8 @@ import { randomUUID } from 'crypto';
 import lockfile from 'proper-lockfile';
 import { afterEach, beforeEach, describe, expect, jest, test } from '@jest/globals';
 import { acquireSourceWriteLock, sourceWriteLockPath, SOURCE_WRITE_LOCK_STALE_MS } from '../rojo/file-write-lock.js';
-import { newSourceWriteOwner, readSourceWriteOwner, sourceWriteOwnerStatus, type SourceWriteOwner } from '../rojo/file-write-owner.js';
+import childProcess from 'child_process';
+import { newSourceWriteOwner, observeSourceWriteProcess, readSourceWriteOwner, resetSourceWriteSelfIdentity, sourceWriteOwnerStatus, type SourceWriteOwner } from '../rojo/file-write-owner.js';
 import { stubWindowsProcessObserver } from './rojo-process-observer-fixture.js';
 
 let dir: string;
@@ -43,12 +44,77 @@ describe('Rojo write lease owner', () => {
     expect(sourceWriteOwnerStatus({ ...owner, host: 'another-host' }, { status: 'missing' })).toBe('unknown');
   });
   test('a stale but live owner remains exclusive and busy fails without waiting', async () => {
-    const owner = newSourceWriteOwner();
+    // Another live process: the parent, with the start identity the OS boundary reports for it.
+    const parent = observeSourceWriteProcess(process.ppid);
+    if (parent.status !== 'running') throw new Error('the parent process must be observable here');
+    const owner = { ...newSourceWriteOwner(), pid: process.ppid, startedAt: parent.startedAt };
     stale(owner);
     const started = Date.now();
-    await expect(acquireSourceWriteLock(file)).rejects.toMatchObject({ code: 'ELOCKED' });
+    await expect(acquireSourceWriteLock(file)).rejects.toMatchObject({ code: 'ELOCKED', message: expect.stringContaining(`Lease: ${lockPath}`) });
     expect(Date.now() - started).toBeLessThan(1000);
     expect(readSourceWriteOwner(lockPath)).toEqual(owner);
+  });
+  test('a lease this process left behind is taken back once stale, but one it still holds is not', async () => {
+    const held = await acquireSourceWriteLock(file);
+    const past = new Date(Date.now() - SOURCE_WRITE_LOCK_STALE_MS - 1000);
+    fs.utimesSync(lockPath, past, past);
+    await expect(acquireSourceWriteLock(file)).rejects.toMatchObject({ code: 'ELOCKED' });
+    await held.release();
+
+    // A request of ours that is over, whose removal failed: same process, token no longer held.
+    const orphan = newSourceWriteOwner();
+    stale(orphan);
+    const lease = await acquireSourceWriteLock(file);
+    expect(readSourceWriteOwner(lockPath)?.token).not.toBe(orphan.token);
+    await lease.release();
+    expect(fs.existsSync(lockPath)).toBe(false);
+  });
+  test('a stale lease folder left with no owner file is reclaimed', async () => {
+    stale();
+    const lease = await acquireSourceWriteLock(file);
+    await lease.release();
+    expect(fs.existsSync(lockPath)).toBe(false);
+  });
+  test('a release that meets another writer\'s guard waits it out instead of leaving the lease behind', async () => {
+    const lease = await acquireSourceWriteLock(file);
+    fs.mkdirSync(`${lockPath}.guard`);
+    setTimeout(() => fs.rmdirSync(`${lockPath}.guard`), 120);
+    await lease.release();
+    expect(fs.existsSync(lockPath)).toBe(false);
+  });
+  test('a release blocked past its retries keeps trying in the background', async () => {
+    const lease = await acquireSourceWriteLock(file);
+    fs.mkdirSync(`${lockPath}.guard`);
+    await expect(lease.release()).rejects.toMatchObject({ code: 'EMETADATARECOVERY' });
+    expect(fs.existsSync(lockPath)).toBe(true);
+    fs.rmdirSync(`${lockPath}.guard`);
+    // The first background attempt runs 2 s after the in-call retries end.
+    await new Promise((resolve) => setTimeout(resolve, 2_500));
+    expect(fs.existsSync(lockPath)).toBe(false);
+  }, 10_000);
+  test('an owner that could not verify its own start identity is reclaimed only once its process is gone', () => {
+    const owner = { ...newSourceWriteOwner(), startedAt: `${process.platform}:unverified` };
+    expect(readSourceWriteOwner((() => { stale(owner); return lockPath; })())).toEqual(owner);
+    expect(sourceWriteOwnerStatus(owner, { status: 'missing' })).toBe('gone');
+    // A running PID cannot be told from a reuse of it: fail closed.
+    expect(sourceWriteOwnerStatus(owner, { status: 'running', startedAt: 'anything' })).toBe('unknown');
+    expect(sourceWriteOwnerStatus(owner, { status: 'unknown' })).toBe('unknown');
+  });
+  test('a bridge that cannot observe its own process still gets a lease, marked unverified', async () => {
+    if (process.platform !== 'win32') return;
+    jest.restoreAllMocks();
+    jest.spyOn(os, 'homedir').mockReturnValue(path.join(dir, 'private-home'));
+    // PowerShell blocked by policy, or in Constrained Language Mode.
+    jest.spyOn(childProcess, 'execFileSync').mockImplementation((() => { throw new Error('blocked by group policy'); }) as typeof childProcess.execFileSync);
+    resetSourceWriteSelfIdentity();
+    try {
+      const lease = await acquireSourceWriteLock(file);
+      expect(readSourceWriteOwner(lockPath)?.startedAt).toBe('win32:unverified');
+      await lease.release();
+      expect(fs.existsSync(lockPath)).toBe(false);
+    } finally {
+      resetSourceWriteSelfIdentity();
+    }
   });
   test('a stale PID record with a different native start identity can be reclaimed', async () => {
     const owner = newSourceWriteOwner();
@@ -62,8 +128,8 @@ describe('Rojo write lease owner', () => {
     await lease.release();
     expect(fs.existsSync(lockPath)).toBe(false);
   });
-  test.each(['missing', 'broken', 'foreign'])('does not reclaim %s owner metadata', async (kind) => {
-    stale(kind === 'missing' ? undefined : kind === 'broken' ? '{invalid' : { ...newSourceWriteOwner(), host: `${process.platform}:another-host` });
+  test.each(['broken', 'foreign'])('does not reclaim %s owner metadata', async (kind) => {
+    stale(kind === 'broken' ? '{invalid' : { ...newSourceWriteOwner(), host: `${process.platform}:another-host` });
     const before = fs.existsSync(path.join(lockPath, 'owner.json')) ? fs.readFileSync(path.join(lockPath, 'owner.json')) : undefined;
     await expect(acquireSourceWriteLock(file)).rejects.toMatchObject({ code: 'ELOCKED' });
     expect(fs.existsSync(lockPath)).toBe(true);

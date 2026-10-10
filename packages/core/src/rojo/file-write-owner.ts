@@ -14,9 +14,20 @@ export interface SourceWriteOwner {
 export type ProcessIdentity = { status: 'running'; startedAt: string } | { status: 'missing' } | { status: 'unknown' };
 const hostIdentity = () => `${process.platform}:${os.hostname()}`;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u;
+/**
+ * The start identity of a writer that could not observe its own process (a
+ * Windows host whose PowerShell is blocked or in Constrained Language Mode).
+ * It still saves, but another writer takes over its stale lease only once its
+ * PID is gone; a live PID stays unverifiable, so that fails closed.
+ */
+const UNVERIFIED = `${process.platform}:unverified`;
+const isUnverified = (startedAt: string) => /^(win32|linux|darwin):unverified$/u.test(startedAt);
 const validStartedAt = (value: string) => /^win32:[1-9]\d*$/u.test(value) || /^linux:[0-9a-f-]{36}:\d+$/u.test(value) ||
-  /^darwin:[A-Z][a-z]{2} [A-Z][a-z]{2} +\d{1,2} \d{2}:\d{2}:\d{2} \d{4}$/u.test(value);
+  /^darwin:[A-Z][a-z]{2} [A-Z][a-z]{2} +\d{1,2} \d{2}:\d{2}:\d{2} \d{4}$/u.test(value) || isUnverified(value);
 let selfStartedAt: string | undefined;
+/** Until when a failed self observation is not retried, so a blocked PowerShell does not cost every save a spawn. */
+let selfUnverifiedUntil = 0;
+const SELF_RETRY_MS = 60_000;
 
 /** Windows FILETIME, Linux boot-id/start ticks, or macOS UTC ps start time. */
 export function observeSourceWriteProcess(pid: number): ProcessIdentity {
@@ -55,18 +66,43 @@ export function observeSourceWriteProcess(pid: number): ProcessIdentity {
   return { status: 'unknown' };
 }
 
-export function newSourceWriteOwner(): SourceWriteOwner {
+/** Forgets this process's observed identity; for tests that change what the OS boundary answers. */
+export function resetSourceWriteSelfIdentity(): void {
+  selfStartedAt = undefined;
+  selfUnverifiedUntil = 0;
+}
+
+/** This process's start identity as owner records carry it: observed once, or unverified when it cannot be. */
+function selfIdentity(): string {
+  if (selfStartedAt) return selfStartedAt;
+  if (Date.now() < selfUnverifiedUntil) return UNVERIFIED;
   const identity = observeSourceWriteProcess(process.pid);
-  if (identity.status !== 'running') throw new Error('Could not verify this bridge process identity; the Rojo file was not written.');
-  selfStartedAt = identity.startedAt;
-  return { version: 1, host: hostIdentity(), pid: process.pid, startedAt: selfStartedAt, token: randomUUID() };
+  if (identity.status === 'running') {
+    selfStartedAt = identity.startedAt;
+    return selfStartedAt;
+  }
+  // Coordinating with other writers needs this identity; saving alone does not.
+  selfUnverifiedUntil = Date.now() + SELF_RETRY_MS;
+  return UNVERIFIED;
+}
+
+export function newSourceWriteOwner(): SourceWriteOwner {
+  return { version: 1, host: hostIdentity(), pid: process.pid, startedAt: selfIdentity(), token: randomUUID() };
+}
+
+/** Whether an owner record names this very process (whatever request made it). */
+export function isOwnSourceWriteOwner(owner: SourceWriteOwner): boolean {
+  return owner.host === hostIdentity() && owner.pid === process.pid && owner.startedAt === selfIdentity();
 }
 
 export function sourceWriteOwnerStatus(owner: SourceWriteOwner, identity?: ProcessIdentity): 'gone' | 'alive' | 'unknown' {
   if (owner.host !== hostIdentity()) return 'unknown';
   const observed = identity ?? observeSourceWriteProcess(owner.pid);
   if (observed.status === 'unknown') return 'unknown';
-  return observed.status === 'missing' || observed.startedAt !== owner.startedAt ? 'gone' : 'alive';
+  if (observed.status === 'missing') return 'gone';
+  // An unverified owner whose PID is running cannot be told from a PID reuse: fail closed.
+  if (isUnverified(owner.startedAt)) return 'unknown';
+  return observed.startedAt !== owner.startedAt ? 'gone' : 'alive';
 }
 
 export const sameSourceWriteOwner = (a: SourceWriteOwner, b: SourceWriteOwner) =>

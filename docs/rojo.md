@@ -143,7 +143,10 @@ file-backed script, a successful edit adds `saved: { file, sync }`, where
 
 If the file was saved but releasing its write lease failed, `saved` also
 contains `lockReleaseWarning`. The edit did happen; read the result before
-retrying rather than treating the warning as an unapplied write.
+retrying rather than treating the warning as an unapplied write. A
+`rojo_conflict` refusal carries the same warning when its lease could not be
+released; the refusal, its revisions and its text stand. The warning names
+the lease folder, and Roqer keeps retrying the release for about a minute.
 
 Roqer never writes Studio directly to force a sync; it only waits briefly and
 reports what it saw. On a `studio_only` script, the edit writes Studio exactly
@@ -153,25 +156,33 @@ as it always did, and the result adds `persistence: "studio_only"` and a
 ## Conflicts and how to resolve them
 
 Roqer serializes writes to the same real source file across participating
-processes of the same OS user, including paths through symlinks or junctions. After the first
+processes that share a home folder (`HOME`/`USERPROFILE`), including paths through symlinks or junctions. After the first
 writer saves, a second writer with the same old revision is refused. Writes
 to different files can proceed independently. The shared leases live outside
 the project in `~/.roqer/rojo-write-locks/v1`, keyed by the actual file path;
 they do not depend on the bridge's port or managed-instance registry.
-A busy lease returns `rojo_write_failed` immediately, without a queued retry
-that could outlive a caller's timeout. Read/retry after the current writer
-finishes. A live owner refreshes the lease every 5 seconds. A lease older
-than 30 seconds is reclaimable only when its recorded OS process creation
-identity has exited or its PID now belongs to a different process. An alive
-but paused owner retains exclusivity. Missing, damaged, foreign-host, or
+A busy lease returns `rojo_write_failed` immediately, naming the lease
+folder, without a queued retry that could outlive a caller's timeout.
+Read/retry after the current writer finishes. A live owner refreshes the
+lease every 5 seconds. A lease older than 30 seconds is reclaimable only
+when its recorded OS process creation identity has exited or its PID now
+belongs to a different process, or when the bridge reclaiming it is the one
+that left it behind after its request ended. An alive but paused owner
+retains exclusivity. A stale lease folder with no owner file at all is what
+a failed removal leaves (owner files are written under the same guard that
+removal holds), so it is reclaimed too. Damaged, foreign-host, or
 unverifiable owner metadata refuses takeover.
 
 OS process identity observation can also be unavailable. Windows uses a
-hidden, system PowerShell query with a 2-second limit; if that query fails,
-the edit is refused before source writing. A failed observation is not
-cached and schedules no later write. After the OS observation service is
-available again, read/retry explicitly. A successful observation of the
-bridge's own creation identity is cached for that process.
+hidden, system PowerShell query with a 2-second limit, which fails every
+time where PowerShell is blocked by policy (AppLocker, WDAC) or runs in
+Constrained Language Mode. Saving does not depend on it: a bridge that
+cannot observe its own process still saves, under an owner record marked
+`unverified`, and tries the observation again after a minute. Another writer
+takes over a stale `unverified` lease only once that PID is gone; while it
+is running it cannot be told from a reuse of the PID, so takeover is
+refused. A successful observation of the bridge's own creation identity is
+cached for that process.
 
 The final identity/lease checks and rename run synchronously, without an
 event-loop yield or queued filesystem rename between them. Publication and
@@ -184,14 +195,17 @@ lease/guard directory under `~/.roqer/rojo-write-locks/v1`. Keep the source
 file. Do not remove these directories while a writer is alive.
 
 Ordinary owner-publication I/O failures clean up only the just-created,
-identity-verified metadata file and empty directory. A heartbeat failure
-that makes the lock library forget this request also releases its unchanged
-owned namespace, so a live bridge can retry. If I/O access is still broken
+identity-verified metadata file and empty directory. When releasing a lease
+fails (a heartbeat failure that makes the lock library forget this request,
+another writer's `.guard` held for a moment, or a delete Windows refuses
+briefly), Roqer retries the removal of its unchanged owned namespace for
+about 1.5 seconds, then in the background for about a minute, so a live
+bridge can retry. If I/O access is still broken
 or cleanup ownership cannot be established, the refusal or saved-write
 warning says recovery remains necessary.
 
 The file and its parent directories are checked against their identities
-from ownership resolution after the lease wait and before replacement.
+from ownership resolution after the lease is taken and before replacement.
 Replacing a file with equal text still requires a fresh read. If a parent
 directory is replaced, Roqer also refuses to clean temporary files through
 that new path; a temporary file in the moved original directory may remain.

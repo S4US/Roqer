@@ -2791,6 +2791,7 @@ export class RobloxStudioTools {
         fileRevision: written.actualRevision,
         studioRevision: plan.previousRevision,
         ...(typeof studio?.source === 'string' && !studio.truncated ? { differing: differingLines(written.actual, studio.source) } : {}),
+        ...(written.lockReleaseWarning ? { lockReleaseWarning: written.lockReleaseWarning } : {}),
       };
     }
 

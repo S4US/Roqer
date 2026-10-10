@@ -1,12 +1,23 @@
 import { randomBytes } from 'crypto';
 import { promises as fs, renameSync } from 'fs';
 import * as path from 'path';
-import { acquireSourceWriteLock } from './file-write-lock.js';
+import { acquireSourceWriteLock, sourceWriteLockPath } from './file-write-lock.js';
 import { sourceRevision } from './source-revision.js';
 import { assertSourceDirectories, assertSourceFileIdentity, assertSourceFileIdentitySync, captureSourceFileIdentity, type SourceFileIdentity } from './source-file-identity.js';
 import { detectFormat, toFileBytes, toStudioText } from './text-format.js';
 
-export type WriteOutcome = { ok: true; lockReleaseWarning?: string } | { ok: false; actualRevision: string; actual: string };
+export type WriteOutcome =
+  | { ok: true; lockReleaseWarning?: string }
+  | { ok: false; actualRevision: string; actual: string; lockReleaseWarning?: string };
+
+/** What a caller is told when the lease could not be released yet: the outcome stands, and where the lease is. */
+function releaseWarning(saved: boolean, error: unknown, lockPath: string): string {
+  const code = (error as NodeJS.ErrnoException)?.code;
+  const message = (error instanceof Error ? error.message : String(error)).replace(/\s+/g, ' ').slice(0, 300);
+  return `${saved ? 'The file was saved' : 'Nothing was written'}, but releasing its write lock failed${code ? ` (${code})` : ''}; `
+    + 'Roqer keeps retrying for about a minute. If later saves of this file still report the lease busy, confirm no Roqer bridge is writing it, then delete the lease folder. '
+    + `Lease: ${lockPath}. Detail: ${message}`;
+}
 
 /**
  * Replaces a source file only if it still holds the revision the caller
@@ -29,11 +40,9 @@ export async function compareAndWrite(file: string, expectedRevision: string, co
   const identity = approvedIdentity ?? captureSourceFileIdentity(await fs.realpath(file));
   const realFile = identity.file.path;
   const lease = await acquireSourceWriteLock(realFile);
-  let committed = false;
   let failed = false;
-  let outcome: WriteOutcome;
+  let outcome: WriteOutcome | undefined;
   let lockReleaseWarning: string | undefined;
-  let releaseFailure: unknown;
   try {
     await lease.assertHeld();
     outcome = await compareAndWriteLocked(realFile, expectedRevision, content, async (requireFileIdentity) => {
@@ -46,7 +55,6 @@ export async function compareAndWrite(file: string, expectedRevision: string, co
       lease.assertHeldSync();
       renameSync(temporary, realFile);
     }, () => assertSourceDirectories(identity));
-    committed = outcome.ok;
   } catch (error) {
     failed = true;
     throw error;
@@ -54,16 +62,13 @@ export async function compareAndWrite(file: string, expectedRevision: string, co
     try {
       await lease.release();
     } catch (error) {
-      if (committed) {
-        const message = error instanceof Error ? error.message : String(error);
-        lockReleaseWarning = `The file was saved, but releasing its write lock failed: ${message.replace(/\s+/g, ' ').slice(0, 200)}`;
-      } else if (!failed) {
-        releaseFailure = error;
-      }
+      // A saved edit stays saved and a refusal stays a refusal; only the lease
+      // is left to clean, which the lock keeps retrying. A failed write keeps
+      // its own error, the one the caller needs.
+      if (!failed && outcome) lockReleaseWarning = releaseWarning(outcome.ok, error, sourceWriteLockPath(realFile));
     }
   }
-  if (releaseFailure) throw releaseFailure;
-  return outcome.ok && lockReleaseWarning ? { ...outcome, lockReleaseWarning } : outcome;
+  return lockReleaseWarning ? { ...outcome!, lockReleaseWarning } : outcome!;
 }
 
 async function compareAndWriteLocked(file: string, expectedRevision: string, content: string, assertHeld: (requireFileIdentity: boolean) => Promise<void>, commit: (temporary: string) => void, assertCleanupDirectory: () => Promise<void>): Promise<WriteOutcome> {
