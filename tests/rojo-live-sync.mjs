@@ -1,8 +1,10 @@
 #!/usr/bin/env node
 // Live check of file-backed script edits on a Rojo-linked place
 // (packages/core/src/rojo/, packages/core/src/tools/index.ts _scriptWrite).
-// Needs a real `rojo serve` and a human to connect Studio's Rojo plugin to
-// it; run inside the managed Studio session through `npm run test:studio:rojo`.
+// Needs a real `rojo serve`. It loads the matching Rojo plugin release into the
+// test place and starts that plugin's own sync client (ROJO_MANUAL_CONNECT=1
+// waits for a person to connect the real plugin instead); run inside the
+// managed Studio session through `npm run test:studio:rojo`.
 //
 // Builds a disposable temp Rojo project with one script, links it to the
 // connected place, and checks: an edit changes the file and syncs; a file
