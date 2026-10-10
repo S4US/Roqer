@@ -37,6 +37,8 @@ studio-plugin/.Carbon.rbxm.lock
 .codex.json
 .codex/
 .agents
+# Google Jules agent journals
+.jules/
 
 # Development files (keep local only)
 CLAUDE.md
