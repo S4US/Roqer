@@ -110,6 +110,9 @@ function paintedRect(element: NormalizedUIElement): UIRect | null {
 
 class UITree {
   private readonly byRef = new Map<string, NormalizedUIElement>();
+  // Bolt optimization: Memoize ancestor chains per element to avoid repeated
+  // O(depth) tree traversals and array allocations during N^2 overlap checks.
+  private readonly chains = new Map<NormalizedUIElement, NormalizedUIElement[]>();
 
   constructor(readonly elements: readonly NormalizedUIElement[]) {
     for (const element of elements) if (element.ref) this.byRef.set(element.ref, element);
@@ -121,15 +124,20 @@ class UITree {
 
   /** The element and its ancestors, nearest first. */
   chain(element: NormalizedUIElement): NormalizedUIElement[] {
-    const chain: NormalizedUIElement[] = [];
-    for (let current: NormalizedUIElement | undefined = element; current && chain.length < 256; current = this.parent(current)) {
-      chain.push(current);
+    let chain = this.chains.get(element);
+    if (!chain) {
+      chain = [];
+      for (let current: NormalizedUIElement | undefined = element; current && chain.length < 256; current = this.parent(current)) {
+        chain.push(current);
+      }
+      this.chains.set(element, chain);
     }
     return chain;
   }
 
   isAncestor(ancestor: NormalizedUIElement, element: NormalizedUIElement): boolean {
-    return this.chain(element).slice(1).includes(ancestor);
+    if (ancestor === element) return false;
+    return this.chain(element).includes(ancestor);
   }
 
   /**
@@ -156,7 +164,11 @@ class UITree {
   }
 
   nearestScroller(element: NormalizedUIElement): NormalizedUIElement | undefined {
-    return this.chain(element).slice(1).find((node) => node.className === 'ScrollingFrame');
+    const chain = this.chain(element);
+    for (let i = 1; i < chain.length; i++) {
+      if (chain[i].className === 'ScrollingFrame') return chain[i];
+    }
+    return undefined;
   }
 }
 
@@ -170,25 +182,40 @@ function isShadowOf(other: NormalizedUIElement, text: NormalizedUIElement, other
 
 function overlapIssues(tree: UITree): UIAuditIssue[] {
   const issues: UIAuditIssue[] = [];
+  // Bolt optimization: Precompute per-element ink and painted bounds once
+  // to avoid recalculating textInk and paintedRect across the N^2 comparisons (~3x speedup).
+  const inks = new Map<NormalizedUIElement, UIRect | null>();
+  const rawPainted = new Map<NormalizedUIElement, UIRect | null>();
+  const paintedBoxes = new Map<NormalizedUIElement, UIRect | null>();
+
+  for (const el of tree.elements) {
+    const ink = textInk(el);
+    const pRect = paintedRect(el);
+    inks.set(el, ink);
+    rawPainted.set(el, pRect);
+    paintedBoxes.set(el, pRect ?? (el.effectiveVisible ? ink : null));
+  }
+
   for (const text of tree.elements) {
     if (!text.effectiveVisible) continue;
-    const fullInk = textInk(text);
+    const fullInk = inks.get(text) ?? null;
     const ink = fullInk && text.visibleRect ? intersect(fullInk, text.visibleRect) : null;
     if (!fullInk || !ink || areaOf(ink) < MIN_INK_AREA) continue;
     let covered: { by: NormalizedUIElement; share: number } | undefined;
     let straddled: { by: NormalizedUIElement; share: number; above: boolean | undefined } | undefined;
     for (const other of tree.elements) {
       if (other === text || tree.isAncestor(other, text) || tree.isAncestor(text, other)) continue;
-      const otherInk = textInk(other);
-      const painted = paintedRect(other) ?? (other.effectiveVisible ? otherInk : null);
+      const otherInk = inks.get(other) ?? null;
+      const painted = paintedBoxes.get(other) ?? null;
       if (!painted) continue;
-      if (otherInk && !paintedRect(other) && isShadowOf(other, text, otherInk, fullInk)) continue;
+      const otherPaintedRect = rawPainted.get(other) ?? null;
+      if (otherInk && !otherPaintedRect && isShadowOf(other, text, otherInk, fullInk)) continue;
       const share = areaOf(intersect(ink, painted)) / areaOf(ink);
       if (share < MIN_INK_SHARE) continue;
       const above = tree.drawsAbove(other, text);
       if (above === true) {
         if (!covered || share > covered.share) covered = { by: other, share };
-      } else if (paintedRect(other) && share < ON_ELEMENT_SHARE) {
+      } else if (otherPaintedRect && share < ON_ELEMENT_SHARE) {
         // Partly on and partly off a painted element collides whichever is on top.
         if (!straddled || share > straddled.share) straddled = { by: other, share, above };
       }
