@@ -1,4 +1,6 @@
 import { randomUUID } from 'crypto';
+import type { StudioIdentityTransition } from './rojo/identity-history.js';
+import type { RojoPlaytestAdmission } from './rojo/playtest-guard.js';
 import type {
   StudioQueuedRequest,
   StudioSession,
@@ -179,10 +181,17 @@ export class BridgeService implements StudioTransportQueue {
   private instances: Map<string, PluginInstance> = new Map();
   private instanceAliases: Map<string, InstanceAlias> = new Map();
   private instanceRegisteredListeners: Set<InstanceRegisteredListener> = new Set();
+  private instanceAliasListeners = new Set<(ids: string[], transition?: StudioIdentityTransition) => void>();
   private requestAvailableListeners = new Set<(physicalSessionId: string) => void>();
   private sessionClosedListeners = new Set<(session: StudioSession) => void>();
   private deliveryOwnersByPhysicalSession = new Map<string, Set<string>>();
   private requestTimeout = DEFAULT_REQUEST_TIMEOUT_MS;
+  private requestAdmission?: (endpoint: string, instanceId: string) => RojoPlaytestAdmission | Promise<RojoPlaytestAdmission> | undefined;
+
+  setRequestAdmission(admission: (endpoint: string, instanceId: string) => RojoPlaytestAdmission | Promise<RojoPlaytestAdmission> | undefined): () => void {
+    this.requestAdmission = admission;
+    return () => { if (this.requestAdmission === admission) this.requestAdmission = undefined; };
+  }
 
   /**
    * Payloads too large to travel in a request event.
@@ -213,6 +222,13 @@ export class BridgeService implements StudioTransportQueue {
       }
     }
     return () => this.instanceRegisteredListeners.delete(listener);
+  }
+
+  onInstanceAliases(listener: (ids: string[], transition?: StudioIdentityTransition) => void): () => void {
+    this.instanceAliasListeners.add(listener);
+    for (const instance of this.instances.values()) listener(this.getEquivalentInstanceIds(instance.instanceId), instance.role === 'edit'
+      ? { instanceId: instance.instanceId, physicalSessionId: instance.physicalSessionId } : undefined);
+    return () => { this.instanceAliasListeners.delete(listener); };
   }
 
   protected notifyInstanceRegistered(instance: PublicPluginInstance): void {
@@ -281,17 +297,29 @@ export class BridgeService implements StudioTransportQueue {
 
   private rememberInstanceAlias(aliasInstanceId: string, targetInstanceId: string) {
     if (aliasInstanceId === targetInstanceId) return;
+    const predecessors = [...this.instanceAliases.keys()].filter((id) => this.resolveInstanceAlias(id, false) === aliasInstanceId);
+    // A place may be saved back to a previously published id; avoid an alias cycle.
+    if (this.resolveInstanceAlias(targetInstanceId, false) === aliasInstanceId) this.instanceAliases.delete(targetInstanceId);
     this.instanceAliases.set(aliasInstanceId, {
       targetInstanceId,
       lastSeen: Date.now(),
     });
+    for (const id of predecessors) {
+      if (id !== targetInstanceId) this.instanceAliases.set(id, { targetInstanceId, lastSeen: Date.now() });
+    }
   }
 
-  private resolveInstanceAlias(instanceId: string): string {
-    const alias = this.instanceAliases.get(instanceId);
-    if (!alias) return instanceId;
-    alias.lastSeen = Date.now();
-    return alias.targetInstanceId;
+  private resolveInstanceAlias(instanceId: string, touch = true): string {
+    const seen = new Set<string>();
+    let resolved = instanceId;
+    while (!seen.has(resolved)) {
+      seen.add(resolved);
+      const alias = this.instanceAliases.get(resolved);
+      if (!alias) break;
+      if (touch) alias.lastSeen = Date.now();
+      resolved = alias.targetInstanceId;
+    }
+    return resolved;
   }
 
   private migratePendingRequests(fromInstanceId: string, toInstanceId: string) {
@@ -305,7 +333,7 @@ export class BridgeService implements StudioTransportQueue {
 
   private cleanupStaleAliases(now = Date.now()) {
     for (const [alias, entry] of this.instanceAliases.entries()) {
-      const targetIsLive = this.getInstances().some((inst) => inst.instanceId === entry.targetInstanceId);
+      const targetIsLive = this.getInstances().some((inst) => inst.instanceId === this.resolveInstanceAlias(entry.targetInstanceId, false));
       if (!targetIsLive && now - entry.lastSeen > INSTANCE_ALIAS_TTL_MS) {
         this.instanceAliases.delete(alias);
       }
@@ -313,10 +341,13 @@ export class BridgeService implements StudioTransportQueue {
   }
 
   private routingKeyForInstance(inst: PluginInstance): string {
-    return publishedInstanceId(inst.placeId) ?? this.resolveInstanceAlias(inst.instanceId);
+    return publishedInstanceId(inst.placeId) ?? inst.instanceId;
   }
 
   private matchingInstancesForInstanceId(instanceId: string): PluginInstance[] {
+    // A currently registered canonical identity outranks a former caller alias.
+    const direct = this.getInstances().filter(inst => inst.instanceId === instanceId);
+    if (direct.length > 0) return direct;
     const resolvedInstanceId = this.resolveInstanceAlias(instanceId);
     const ids = new Set<string>([instanceId, resolvedInstanceId]);
     const placeIds = new Set<number>();
@@ -352,12 +383,6 @@ export class BridgeService implements StudioTransportQueue {
     const pluginVersion = input.pluginVersion ?? '';
     const pluginVariant = input.pluginVariant ?? 'unknown';
     const serverVersion = input.serverVersion ?? '';
-
-    this.rememberInstanceAlias(rawInstanceId, instanceId);
-    if (prior && prior.instanceId !== instanceId) {
-      this.rememberInstanceAlias(prior.instanceId, instanceId);
-      this.migratePendingRequests(prior.instanceId, instanceId);
-    }
 
     // Client roles get lowest-unused-N, scoped per place. That keeps
     // target=client-1 intuitive when several Studio places are connected:
@@ -419,6 +444,21 @@ export class BridgeService implements StudioTransportQueue {
       connectedAt: prior?.connectedAt ?? Date.now(),
     };
     this.instances.set(pluginSessionId, registered);
+
+    // Rejected registrations never create a source identity transition.
+    this.instanceAliases.delete(instanceId);
+    this.rememberInstanceAlias(rawInstanceId, instanceId);
+    if (prior && prior.physicalSessionId === registered.physicalSessionId && prior.instanceId !== instanceId) {
+      this.rememberInstanceAlias(prior.instanceId, instanceId);
+      this.migratePendingRequests(prior.instanceId, instanceId);
+    }
+    const transition = assignedRole === 'edit' ? {
+      instanceId, physicalSessionId: registered.physicalSessionId,
+      ...(prior?.physicalSessionId === registered.physicalSessionId ? { previousInstanceId: prior.instanceId } : {}),
+    } : undefined;
+    for (const listener of this.instanceAliasListeners) {
+      try { listener(this.getEquivalentInstanceIds(instanceId), transition); } catch { /* Observers cannot reject accepted peers. */ }
+    }
 
     this.notifyInstanceRegistered(toPublic(registered));
     this.notifyRequestAvailable(registered.physicalSessionId);
@@ -595,8 +635,8 @@ export class BridgeService implements StudioTransportQueue {
       }
     }
 
-    for (const [alias, entry] of this.instanceAliases.entries()) {
-      if (ids.has(entry.targetInstanceId)) ids.add(alias);
+    for (const alias of this.instanceAliases.keys()) {
+      if (ids.has(this.resolveInstanceAlias(alias, false))) ids.add(alias);
     }
 
     return Array.from(ids);
@@ -715,6 +755,37 @@ export class BridgeService implements StudioTransportQueue {
     targetRole: string,
     timeoutMs = this.requestTimeout,
   ): Promise<any> {
+    const admission = this.requestAdmission?.(endpoint, targetInstanceId);
+    if (admission) {
+      const startedAt = Date.now();
+      const budget = Math.max(1, timeoutMs);
+      let expired = false;
+      const decision = await new Promise<RojoPlaytestAdmission>((resolve, reject) => {
+        const deadline = setTimeout(() => { expired = true; reject(timeoutError({})); }, budget);
+        Promise.resolve(admission).then(value => {
+          if (expired) { value.done?.(); return; }
+          clearTimeout(deadline); resolve(value);
+        }, error => { clearTimeout(deadline); reject(error); });
+      });
+      if (decision.refusal) return decision.refusal;
+      try {
+        const refusal = decision.recheck?.();
+        if (refusal) return refusal;
+        const remaining = budget - (Date.now() - startedAt);
+        if (remaining <= 0) throw timeoutError({});
+        // Metadata/aliases can change while the disk and Studio checks await.
+        const current = this.resolveTarget({ instance_id: targetInstanceId, target: targetRole });
+        if (!current.ok) throw new RoutingFailure(current.error);
+        if (current.mode !== 'single') throw new Error('Playtest start target is no longer a single Studio session.');
+        return await this.enqueueRequest(endpoint, data, current.targetInstanceId, current.targetRole, remaining);
+      }
+      finally { decision.done?.(); }
+    }
+    // No awaited optional hook: legacy requests enqueue in their original turn.
+    return this.enqueueRequest(endpoint, data, targetInstanceId, targetRole, timeoutMs);
+  }
+
+  private enqueueRequest(endpoint: string, data: unknown, targetInstanceId: string, targetRole: string, timeoutMs: number): Promise<unknown> {
     const requestId = randomUUID();
     const effectiveTimeoutMs = Math.max(1, timeoutMs);
 

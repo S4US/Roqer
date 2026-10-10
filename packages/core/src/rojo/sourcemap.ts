@@ -33,13 +33,17 @@ function oneLine(text: string): string {
   return text.replace(/\u001b\[[0-9;]*m/g, '').replace(/\s+/g, ' ').trim();
 }
 
-export const execRojo: RojoRunner = (args, cwd) => new Promise((resolve, reject) => {
+export function execRojoWithEnvironment(args: string[], cwd: string, environment?: NodeJS.ProcessEnv): Promise<string> {
+  return new Promise((resolve, reject) => {
   // No shell, so a project path is never parsed as a command line.
-  execFile('rojo', args, { cwd, timeout: 20_000, maxBuffer: 32 * 1024 * 1024, windowsHide: true }, (error, stdout, stderr) => {
+  execFile('rojo', args, { cwd, ...(environment === undefined ? {} : { env: environment }), timeout: 20_000, maxBuffer: 32 * 1024 * 1024, windowsHide: true }, (error, stdout, stderr) => {
     if (error) reject(Object.assign(error, { stderr: String(stderr) }));
     else resolve(String(stdout));
   });
-});
+  });
+}
+
+export const execRojo: RojoRunner = (args, cwd) => execRojoWithEnvironment(args, cwd);
 
 const ROKIT_SHIM_MESSAGE = /Failed to find tool ['"]rojo['"]/;
 

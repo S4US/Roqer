@@ -6,6 +6,7 @@ import {
   toPublic,
 } from './bridge-service.js';
 import { randomUUID } from 'crypto';
+import type { RojoDelegateRequest, RojoDelegateReply } from './rojo/primary-service.js';
 
 /**
  * How much longer a proxy waits than the primary does. Only the primary knows
@@ -25,13 +26,14 @@ export class ProxyBridgeService extends BridgeService {
 
   /** Which edition this server is, so the primary can refuse to forward for another. */
   private readonly pluginVariant?: string;
+  private rojoStartPreparation?: (endpoint: string) => Promise<Record<string, unknown> | undefined> | undefined;
 
-  constructor(primaryBaseUrl: string, authToken?: string, pluginVariant?: string) {
+  constructor(primaryBaseUrl: string, authToken?: string, pluginVariant?: string, clientId?: string) {
     super();
     this.primaryBaseUrl = primaryBaseUrl;
     this.authToken = authToken;
     this.pluginVariant = pluginVariant;
-    this.proxyInstanceId = randomUUID();
+    this.proxyInstanceId = clientId ?? randomUUID();
     // Mirror the primary's peer list locally so getInstances() / resolveTarget
     // see real data. Without this, anything that enumerates peers from a
     // proxy-mode subprocess (target=all fanout, get_connected_instances)
@@ -110,6 +112,31 @@ export class ProxyBridgeService extends BridgeService {
     }
   }
 
+  setRojoStartPreparation(prepare: (endpoint: string) => Promise<Record<string, unknown> | undefined> | undefined): void {
+    this.rojoStartPreparation = prepare;
+  }
+
+  async rojoCapabilities(): Promise<{ protocol: number; epoch: string } | undefined> {
+    const response = await fetch(`${this.primaryBaseUrl}/proxy-rojo`, {
+      headers: this.authHeaders(), signal: AbortSignal.timeout(5000),
+    });
+    if (response.status === 404) return undefined;
+    if (!response.ok) throw new Error('The primary source capability could not be confirmed.');
+    const capability = await response.json() as { protocol?: unknown; epoch?: unknown };
+    if (typeof capability.protocol !== 'number' || typeof capability.epoch !== 'string') throw new Error('Invalid primary source capability.');
+    return { protocol: capability.protocol, epoch: capability.epoch };
+  }
+
+  async rojoRequest(request: RojoDelegateRequest): Promise<RojoDelegateReply> {
+    const response = await fetch(`${this.primaryBaseUrl}/proxy-rojo`, {
+      method: 'POST', headers: this.authHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({ ...request, pluginVariant: this.pluginVariant ?? 'main' }),
+      signal: AbortSignal.timeout(120000),
+    });
+    if (!response.ok) throw new Error('The primary source operation could not be confirmed.');
+    return response.json() as Promise<RojoDelegateReply>;
+  }
+
   override async sendRequest(
     endpoint: string,
     data: any,
@@ -117,6 +144,11 @@ export class ProxyBridgeService extends BridgeService {
     targetRole: string,
     timeoutMs?: number,
   ): Promise<any> {
+    const preparation = this.rojoStartPreparation?.(endpoint);
+    if (preparation) {
+      const refusal = await preparation;
+      if (refusal) return refusal;
+    }
     const controller = new AbortController();
     const startedAt = Date.now();
     const waitMs = (timeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS) + PROXY_TIMEOUT_GRACE_MS;

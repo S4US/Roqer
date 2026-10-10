@@ -11,6 +11,9 @@ import { createToolHttpHandler, normalizeToolResult, publicToolErrorBody } from 
 import { tokensMatch } from './auth.js';
 import { StudioLaunchPreDispatchError } from './studio-instance-manager.js';
 import type { PluginVariant } from './install-plugin-helpers.js';
+import { RojoPlaytestGuard } from './rojo/playtest-guard.js';
+import { RojoPrimaryService, ROJO_DELEGATE_PROTOCOL } from './rojo/primary-service.js';
+import { rememberIdentities, currentStudioOwner } from './rojo/identity-history.js';
 import {
   SseStudioTransport,
   MAX_ACTIVE_EVENT_STREAMS,
@@ -288,6 +291,22 @@ export const TOOL_HANDLERS: Record<string, ToolHandler> = {
 export function createHttpServer(tools: RobloxStudioTools, bridge: BridgeService, allowedTools?: Set<string>, serverConfig?: StreamableHttpConfig, security?: HttpSecurityOptions): RobloxStudioHttpApp {
   // Express cannot know about the lifecycle controls attached below.
   const app = express() as unknown as RobloxStudioHttpApp;
+  const rojoGuard = new RojoPlaytestGuard({ equivalentIds: (id) => bridge.getEquivalentInstanceIds(id), liveInstanceIds: () => bridge.getInstances().map(peer => peer.instanceId),
+    currentStudioOwner: owner => currentStudioOwner(bridge.getInstances(), owner),
+    resolveInstanceId: id => { const target = bridge.resolveTarget({ instance_id: id, target: 'edit' }); return target.ok && target.mode === 'single' ? target.targetInstanceId : undefined; } });
+  const detachGuard = tools.attachRojoPlaytestGuard(rojoGuard);
+  const detachAdmission = bridge.setRequestAdmission((endpoint, instanceId) => rojoGuard.beforeRequest(endpoint, instanceId));
+  const rojoOwner = new RojoPrimaryService(bridge, (name, args) => TOOL_HANDLERS[name](tools, args), serverConfig?.pluginVariant ?? 'main', allowedTools);
+  const detachIdentities = bridge.onInstanceAliases((ids, transition) => {
+    rojoGuard.rememberInstanceIds(ids);
+    rojoOwner.rememberInstanceIds(ids);
+    rememberIdentities(tools.getLocalRojoScope().identities, ids);
+    if (transition) {
+      rojoGuard.rememberStudioOwner(transition);
+      rojoOwner.rememberStudioOwner(transition);
+      tools.getLocalRojoScope().rojo.followStudioIdentity(transition);
+    }
+  });
   const studioLifecycleCallable = !allowedTools || allowedTools.has('manage_instance');
   const studioLifecycleCapabilities = studioLifecycleCallable
     ? tools.getStudioLifecycleCapabilities()
@@ -392,7 +411,7 @@ export function createHttpServer(tools: RobloxStudioTools, bridge: BridgeService
   const authToken = security?.authToken;
   const authRequired = (path: string) =>
     path === '/mcp' || path.startsWith('/mcp/') ||
-    path === '/proxy' || path === '/instances' || path === '/unregister-instance-id';
+    path === '/proxy' || path === '/proxy-rojo' || path === '/instances' || path === '/unregister-instance-id';
   app.use((req, res, next) => {
     if (!authToken || !authRequired(req.path)) {
       next();
@@ -778,6 +797,24 @@ export function createHttpServer(tools: RobloxStudioTools, bridge: BridgeService
   });
 
 
+  app.get('/proxy-rojo', (_req, res) => {
+    res.json({ protocol: ROJO_DELEGATE_PROTOCOL, epoch: rojoOwner.epoch });
+  });
+
+  app.post('/proxy-rojo', async (req, res) => {
+    const expected = serverConfig?.pluginVariant ?? 'main';
+    if (req.body?.pluginVariant !== expected) {
+      res.status(409).json({ error: 'edition_mismatch', message: 'Source delegation requires the same MCP edition.' });
+      return;
+    }
+    const aborted = new AbortController();
+    const abort = () => { if (!res.writableEnded) aborted.abort(); };
+    req.once('aborted', abort);
+    res.once('close', abort);
+    try { res.json(await rojoOwner.handle(req.body, aborted.signal)); }
+    finally { req.off('aborted', abort); res.off('close', abort); }
+  });
+
   app.post('/proxy', async (req, res) => {
     const { endpoint, data, targetInstanceId, targetRole, proxyInstanceId, pluginVariant, timeoutMs } = req.body;
 
@@ -882,6 +919,10 @@ export function createHttpServer(tools: RobloxStudioTools, bridge: BridgeService
   app.trackMCPActivity = trackMCPActivity;
   app.closeMcpHandler = () => mcpHandler?.close();
   app.cleanup = async () => {
+    detachIdentities();
+    rojoOwner.close();
+    detachGuard();
+    detachAdmission();
     for (const handle of eventStreamHandles) handle.close();
     eventStreamHandles.clear();
     eventTransport.close();

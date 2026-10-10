@@ -60,7 +60,7 @@ async function loadPluginModule<T>(
 
 import { describe, expect, jest, test } from '@jest/globals';
 
-type Handlers = Record<'setScriptSource' | 'editScriptLines' | 'editScriptBatch' | 'insertScriptLines' | 'deleteScriptLines', (request: Record<string, unknown>) => Record<string, unknown>>;
+type Handlers = Record<'getScriptSource' | 'setScriptSource' | 'editScriptLines' | 'editScriptBatch' | 'insertScriptLines' | 'deleteScriptLines', (request: Record<string, unknown>) => Record<string, unknown>>;
 
 const luauString = {
   find: (source: string, needle: string, init = 1): [number | undefined, number | undefined] => {
@@ -105,6 +105,7 @@ async function load(currentSource: string, uniquePath = true) {
     __PLAN_RECORDING__: { beginRecording, finishRecording },
     __PLAN_REVISION__: (text: string) => `revision:${text}`,
     string: luauString,
+    math: { min: Math.min, max: Math.max },
     // editScriptBatch sorts its resolved edits with table.sort(t, (a, b) => a.start < b.start);
     // Luau's comparator is a strict less-than, so a tie (impossible here pre-sort
     // since starts are distinct) falls through to equal.
@@ -137,6 +138,11 @@ const cases: [keyof Handlers, Record<string, unknown>, string][] = [
 ];
 
 describe('planOnly computes the edit and applies nothing', () => {
+  test.each([true, false])('fresh getScriptSource reports real handler uniqueness=%s', async unique => {
+    const { handlers, applyScriptSource } = await load(source, unique);
+    expect(handlers.getScriptSource({ instancePath: base.instancePath, startLine: 1, endLine: 1 })).toMatchObject({ uniquePath: unique, instanceRef: 'instance:test:1', revision: `revision:${source}` });
+    expect(applyScriptSource).not.toHaveBeenCalled();
+  });
   test.each(cases)('%s', async (handler, request, expected) => {
     const { handlers, applyScriptSource, beginRecording, finishRecording } = await load(source);
     const result = handlers[handler]({ ...base, ...request });

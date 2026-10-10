@@ -89,6 +89,52 @@ would then have two places to come from. `manage_instance` with `{ "action":
 "unlink_project" }` removes a place's link. Links live only for as long as the
 MCP server keeps running; they do not survive a restart, so relink after one.
 
+## Starting a new playtest after an edit
+
+After this bridge saves a Rojo-owned source file, a new solo or multiplayer
+playtest checks the current disk revision against the intended edit-mode Studio
+script. A pending write returns `rojo_sync_pending`; an unavailable script,
+ambiguous path, or ownership check returns `rojo_sync_unknown`. Reconnect Rojo,
+wait for the source to match, and retry. The matching Roqer Studio plugin build
+must supply fresh path-uniqueness metadata. An older plugin that lacks it cannot
+confirm the start. Existing playtest status, stop, and add-player calls continue
+to work.
+
+The check runs at the primary bridge's dispatch boundary, including authenticated
+raw proxy starts. A different desktop run or MCP client cannot clear a pending
+edit by unlinking or exiting. Each MCP process still owns its own project links;
+the primary's stdio and HTTP clients share its local links. Source operations
+from follower processes are delegated to that primary while retaining their
+own binding state. A plain client keeps the existing synchronous dispatch path.
+
+Relative project paths use the caller's working directory. Delegation carries a
+bounded set of host variables for PATH, home/configuration locations and Git
+ownership checks, without forwarding provider keys, proxy credentials or
+arbitrary custom CLI variables. Git must be available in that caller context;
+a failed Git check cannot classify an ignored file as writable. The default
+project still has one link attempt per process: a reported failure leaves it
+unlinked, as before. Use an explicit link after repairing the configuration.
+
+Pending records last for the primary process's lifetime. They are not a durable
+commit journal across a bridge crash or restart; verify previously edited
+sources after restarting. A record can be retired only on the same confirmed
+Studio session, after both its file and script are gone and a fresh project map
+confirms removal or remapping. A missing owner or only one missing side keeps
+the result unknown. The barrier covers the existing MCP start endpoints,
+not manual F5 or arbitrary Luau execution. Controlled writes cannot interleave
+with validation and enqueue; a final disk check catches external saves during
+validation, without claiming an atomic transaction with arbitrary editors.
+
+Bindings also retain the accepted edit peer's physical session. A different
+Studio instance that reuses an old place ID cannot borrow its project or unlink
+its binding. Identity changes on the same accepted session follow that session;
+an unknown replacement session requires restarting the affected MCP client and
+explicitly relinking. Confirmed checkpoints replay only onto that same Studio
+session. The pending ledger uses this session identity too, so another place
+cannot clear its records by reusing a historical ID. Relinking a replacement
+session does not clear the old session's pending records. If that session cannot
+be recovered, restart the primary and verify the saved sources before starting.
+
 ## Which scripts are saved to files
 
 Roqer walks the real `rojo sourcemap` for the project, the same tree Rojo
@@ -205,18 +251,22 @@ after you linked still shows up):
   that saves it, so a save that races an edit made in that instant can still
   lose.
 - One Rojo project can be linked to one place at a time.
-- Without Git, or outside a Git repository, build output such as roblox-ts's
-  `out/` is treated as source unless it's under a Wally `_Index` folder; only
-  a Git-ignored path is recognized as generated.
+- The primary's existing local source path treats build output such as
+  roblox-ts's `out/` as source when Git is unavailable or the project is outside
+  a repository, unless it is under a Wally `_Index` folder. Delegated source
+  operations require working Git and reject configuration or repository errors;
+  a confirmed non-repository project still has no Git ignore classification.
 - If the project keys a service under a name other than its class name (for
   example `"SSS": {"$className": "ServerScriptService"}`), its sourcemap node
   is named `SSS`, but a built-in service's name in Studio is always its class
   name; the two cannot match, so scripts under it are reported `studio_only`.
-- Rojo delivers LF to Studio, with no BOM, whatever line endings or BOM the
-  file on disk has. Roqer compares the file and Studio ignoring line endings
-  and a BOM, and writes a saved file back in its own style: CRLF stays CRLF,
-  LF stays LF, and a BOM stays, across the whole file, not just the lines the
-  edit changed.
+- Roqer normalizes disk line endings and removes a disk BOM when calculating
+  its source revision, then preserves the file's format on writes: CRLF stays
+  CRLF, LF stays LF, and a BOM stays. Live testing with Rojo 7.6.1 found that
+  Studio can retain the BOM, leaving its revision different from Roqer's
+  normalized disk revision. This existing mismatch remains unresolved;
+  verification and guarded playtest starts cannot confirm that source as
+  synchronized. A file without a BOM avoids this specific mismatch.
 - A file with mixed line endings is written back entirely in whichever style
   (CRLF or LF) already has the most line breaks in it; a line in the other
   style, even one the edit never touched, comes back changed.

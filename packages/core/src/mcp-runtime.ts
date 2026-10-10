@@ -193,13 +193,13 @@ function publicRoutingError(error: RoutingFailure): Record<string, unknown> {
   };
 }
 
-export function publicToolErrorBody(name: string, error: unknown): Record<string, unknown> {
+export function publicToolErrorBody(name: string, error: unknown, options: { log?: boolean } = {}): Record<string, unknown> {
   if (error instanceof StudioLaunchPreDispatchError) {
     return compactPublicValue(error.toResponseBody()) as Record<string, unknown>;
   }
   if (error instanceof RoutingFailure) return publicRoutingError(error);
 
-  console.error(`[tool:${name}]`, error);
+  if (options.log !== false) console.error(`[tool:${name}]`, error);
   const message = error instanceof Error ? error.message : 'Tool execution failed.';
   return { error: 'tool_failed', message: message.slice(0, 500) };
 }
