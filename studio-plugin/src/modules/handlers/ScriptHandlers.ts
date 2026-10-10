@@ -89,6 +89,7 @@ function getScriptSource(requestData: Record<string, unknown>) {
 			instancePath: getInstancePath(instance),
 			instanceRef: getInstanceReference(instance),
 			className: instance.ClassName,
+			uniquePath: hasUniquePath(instance),
 			name: instance.Name,
 			source: sourceToReturn,
 			numberedSource: numberLines(selectedLines, returnedStartLine),

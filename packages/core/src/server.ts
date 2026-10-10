@@ -9,6 +9,7 @@ import { ProxyBridgeService } from './proxy-bridge-service.js';
 import type { ToolDefinition } from './tools/definitions.js';
 import type { PluginVariant } from './install-plugin-helpers.js';
 import { createToolServer } from './mcp-runtime.js';
+import { RojoProxyState } from './rojo/primary-client.js';
 
 export interface ServerConfig {
   name: string;
@@ -30,13 +31,15 @@ export class RobloxStudioMCPServer {
   private bridge: BridgeService;
   private allowedToolNames: Set<string>;
   private config: ServerConfig;
+  private readonly rojoClientState: RojoProxyState;
 
   constructor(config: ServerConfig) {
     this.config = config;
     this.allowedToolNames = new Set(config.tools.map(t => t.name));
+    this.rojoClientState = new RojoProxyState(config.pluginVariant === 'inspector' ? undefined : config.rojoProject);
 
     this.bridge = new BridgeService();
-    this.tools = new RobloxStudioTools(this.bridge, { rojoProject: config.rojoProject });
+    this.tools = new RobloxStudioTools(this.bridge, { rojoProject: this.rojoClientState.defaultProject, rojoClientState: this.rojoClientState });
   }
 
   async run() {
@@ -103,10 +106,10 @@ export class RobloxStudioMCPServer {
       // Fall back to proxy mode and forward all bridge calls through it.
       bridgeMode = 'proxy';
       primaryApp = undefined;
-      const proxyBridge = new ProxyBridgeService(`http://localhost:${basePort}`, auth.token, this.config.pluginVariant);
+      const proxyBridge = new ProxyBridgeService(`http://localhost:${basePort}`, auth.token, this.config.pluginVariant, this.rojoClientState.clientId);
       await proxyBridge.waitForInitialRefresh();
       this.bridge = proxyBridge;
-      this.tools = new RobloxStudioTools(this.bridge, { rojoProject: this.config.rojoProject });
+      this.tools = new RobloxStudioTools(this.bridge, { rojoProject: this.rojoClientState.defaultProject, rojoClientState: this.rojoClientState });
       console.error(`Port ${basePort} in use - entering proxy mode (forwarding to localhost:${basePort})`);
 
       // Periodically try to promote to primary if the port frees up.
@@ -122,11 +125,20 @@ export class RobloxStudioMCPServer {
       // timeout).
       const promotionIntervalMs = parseInt(process.env.ROBLOX_STUDIO_PROXY_PROMOTION_INTERVAL_MS || '5000');
       promotionInterval = setInterval(async () => {
+        // Source authority cannot be replaced by a fresh local map after losing its owner.
+        // Plain clients retain the original promotion behavior.
+        if (this.rojoClientState.intent || this.rojoClientState.uncertain) return;
         const candidateBridge = new BridgeService();
-        const candidateTools = new RobloxStudioTools(candidateBridge, { rojoProject: this.config.rojoProject });
+        const candidateTools = new RobloxStudioTools(candidateBridge, { rojoProject: this.rojoClientState.defaultProject, rojoClientState: this.rojoClientState });
         const candidateApp = createHttpServer(candidateTools, candidateBridge, this.allowedToolNames, this.config, security);
         try {
           const result = await listenWithRetry(candidateApp, host, basePort, 1);
+          // A link can begin while the asynchronous bind is in progress.
+          if (this.rojoClientState.intent || this.rojoClientState.uncertain || this.rojoClientState.busy || this.rojoClientState.checkpoint.bindings.length > 0) {
+            await new Promise<void>((resolve) => result.server.close(() => resolve()));
+            await candidateApp.cleanup();
+            return;
+          }
           // Bind succeeded — atomically swap to primary mode (synchronous from here).
           // Stop the proxy bridge's background refresh before dropping the reference
           // so its setInterval doesn't keep the object alive past the swap.
@@ -210,6 +222,7 @@ export class RobloxStudioMCPServer {
       if (promotionInterval) clearInterval(promotionInterval);
       primaryApp?.setMCPServerActive(false);
       this.bridge.clearAllPendingRequests();
+      await this.tools.releaseRojoClient().catch(() => {});
       if (this.bridge instanceof ProxyBridgeService) {
         this.bridge.stop();
       }

@@ -20,7 +20,7 @@ export type WriteOutcome = { ok: true } | { ok: false; actualRevision: string; a
  * deleted meanwhile, or locked on Windows); in every case the target is left
  * as it was and no temporary file remains.
  */
-export async function compareAndWrite(file: string, expectedRevision: string, content: string): Promise<WriteOutcome> {
+export async function compareAndWrite(file: string, expectedRevision: string, content: string, beforeCommit?: () => void): Promise<WriteOutcome> {
   const refuse = (bytes: Buffer): WriteOutcome => {
     const studioText = toStudioText(bytes);
     return { ok: false, actualRevision: sourceRevision(studioText), actual: studioText };
@@ -42,6 +42,7 @@ export async function compareAndWrite(file: string, expectedRevision: string, co
     // Checked again just before the rename: an editor may have saved meanwhile.
     const latest = await fs.readFile(file);
     if (sourceRevision(toStudioText(latest)) !== expectedRevision) return refuse(latest);
+    beforeCommit?.();
     await fs.rename(temp, file);
     renamed = true;
     return { ok: true };

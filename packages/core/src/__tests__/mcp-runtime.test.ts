@@ -10,7 +10,7 @@ import {
   serverInstructions,
 } from '../mcp-runtime.js';
 import { getReadOnlyTools, TOOL_DEFINITIONS } from '../tools/definitions.js';
-import type { RobloxStudioTools } from '../tools/index.js';
+import { RobloxStudioTools } from '../tools/index.js';
 
 type JsonObject = Record<string, unknown>;
 
@@ -377,11 +377,11 @@ describe('MCP v2 tool runtime', () => {
     ['2026-07-28', { mode: { pin: '2026-07-28' as const } }, false],
   ])('serves %s clients on the shared HTTP endpoint', async (_label, versionNegotiation, keepsTextProjection) => {
     const definition = TOOL_DEFINITIONS.find((tool) => tool.name === 'get_place_info')!;
-    const getPlaceInfo = jest.fn(async () => ({
+    const bridge = new BridgeService();
+    const tools = new RobloxStudioTools(bridge);
+    const getPlaceInfo = jest.spyOn(tools, 'getPlaceInfo').mockImplementation(async () => ({
       content: [{ type: 'text', text: JSON.stringify({ placeId: 123 }) }],
     }));
-    const tools = { getPlaceInfo } as unknown as RobloxStudioTools;
-    const bridge = new BridgeService();
     const app = createHttpServer(
       tools,
       bridge,

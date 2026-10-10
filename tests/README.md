@@ -406,6 +406,14 @@ The report and the GLBs go to `tmp/skinned-spike/`.
 
 ## Lifecycle and cleanup
 
+The core Rojo admission suites use temporary real files and actual loopback HTTP
+and proxy transports, with explicit simulated Studio observations. They cover
+per-process bindings, lost acknowledgments, guarded solo/multiplayer dispatch,
+alias changes, cancellation and retirement. `script-plan-only.test.ts` executes
+the actual plugin source in a JavaScript fixture; it confirms the read-response
+contract, not live Studio propagation. These checks supplement the required live
+Rojo and managed Studio gates above.
+
 - Most tests call `solo_playtest action=start` once at the top and `solo_playtest action=stop` in a
   `finally` block. The multiplayer lifecycle test uses `multiplayer_test_*`
   lifecycle tools and performs best-effort end-test cleanup in its `finally` block.

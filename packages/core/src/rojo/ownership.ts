@@ -103,13 +103,45 @@ export function scriptFiles(tree: SourcemapNode): string[] {
   return [...found];
 }
 
-/** The files Git ignores under root; empty when root is not in a Git repository. */
-export function gitIgnored(root: string, files: string[]): Promise<Set<string>> {
+async function confirmedOutsideGit(root: string, environment: NodeJS.ProcessEnv, callerDirectory?: string): Promise<boolean> {
+  // Exit 128 also covers broken configuration and unsafe/corrupt repositories.
+  if (['GIT_DIR', 'GIT_WORK_TREE', 'GIT_COMMON_DIR', 'GIT_INDEX_FILE'].some(key => environment[key] !== undefined)) return false;
+  let directory = path.resolve(root);
+  for (let depth = 0; depth < 256; depth += 1) {
+    try { fs.lstatSync(path.join(directory, '.git')); return false; }
+    catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') return false; }
+    const parent = path.dirname(directory);
+    if (parent === directory) {
+      return new Promise(resolve => {
+        // Validate configuration without printing or retaining its values.
+        execFile('git', ['-C', root, 'config', '--get', 'core.ignorecase'], {
+          env: environment, ...(callerDirectory === undefined ? {} : { cwd: callerDirectory }),
+          timeout: 10_000, maxBuffer: 64 * 1024, windowsHide: true,
+        }, error => resolve(!error || (error as { code?: unknown }).code === 1));
+      });
+    }
+    directory = parent;
+  }
+  return false;
+}
+
+/** The files Git ignores under root; delegation must confirm a non-repository failure. */
+export function gitIgnored(root: string, files: string[], environment?: NodeJS.ProcessEnv, callerDirectory?: string): Promise<Set<string>> {
   if (files.length === 0) return Promise.resolve(new Set());
-  return new Promise((resolve) => {
-    const child = execFile('git', ['-C', root, 'check-ignore', '--stdin', '-z'], { timeout: 10_000, maxBuffer: 8 * 1024 * 1024, windowsHide: true }, (error, stdout) => {
+  return new Promise((resolve, reject) => {
+    const child = execFile('git', ['-C', root, 'check-ignore', '--stdin', '-z'], { ...(environment === undefined ? {} : { env: environment }), ...(callerDirectory === undefined ? {} : { cwd: callerDirectory }), timeout: 10_000, maxBuffer: 8 * 1024 * 1024, windowsHide: true }, (error, stdout) => {
       // Exit 1 means none are ignored; 128 means not a repository. Either way, nothing is ignored.
-      if (error && (error as { code?: unknown }).code !== 1) return resolve(new Set());
+      if (error && (error as { code?: unknown }).code !== 1) {
+        if (environment !== undefined) {
+          const refusal = () => reject(new Error('The client Git environment could not verify ignored source files. No source operation ran.'));
+          if ((error as { code?: unknown }).code === 128) {
+            void confirmedOutsideGit(root, environment, callerDirectory).then(outside => outside ? resolve(new Set()) : refusal(), refusal);
+            return;
+          }
+          return refusal();
+        }
+        return resolve(new Set());
+      }
       resolve(new Set(String(stdout).split('\0').filter(Boolean).map((file) => path.resolve(root, file))));
     });
     // Git can exit (e.g. not a repository) before reading stdin; the write then fails with EPIPE.

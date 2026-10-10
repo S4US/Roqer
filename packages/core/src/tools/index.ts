@@ -63,6 +63,12 @@ import { waitForStudio } from '../rojo/sync-wait.js';
 import { differingLines } from '../rojo/conflict.js';
 import { sourceRevision } from '../rojo/source-revision.js';
 import { toStudioText } from '../rojo/text-format.js';
+import { createRojoClientScope, currentRojoCall, clientProjectPath, withRojoCall, type RojoClientScope } from '../rojo/client-context.js';
+import { RojoPlaytestGuard, type TrackedRojoWrite, type RojoWriteToken } from '../rojo/playtest-guard.js';
+import { randomUUID } from 'crypto';
+import { ProxyBridgeService } from '../proxy-bridge-service.js';
+import { RojoPrimaryClient, RojoProxyState } from '../rojo/primary-client.js';
+import { studioOwnerAt, currentStudioOwner, type StudioOwner } from '../rojo/identity-history.js';
 import * as fs from 'fs';
 import * as path from 'path';
 
@@ -1089,12 +1095,23 @@ export class RobloxStudioTools {
   private managedConnectionAssociations: Promise<void> = Promise.resolve();
 
   /** `--rojo-project`/ROQER_ROJO_PROJECT: links the resolved place to this project lazily, on first use. */
-  private readonly rojoDefaultProject: string | undefined;
+  private readonly localRojoScope: RojoClientScope;
+  private readonly rojoPrimaryClient?: RojoPrimaryClient;
+  private get rojoScope(): RojoClientScope { return currentRojoCall()?.scope ?? this.localRojoScope; }
+  private get rojoDefaultProject(): string | undefined { return this.rojoScope.defaultProject; }
   /** Whether the default-project link has been attempted (succeeded, failed, or skipped because another instance held the project) — at most once per server process. */
-  private rojoDefaultLinkAttempted = false;
+  private get rojoDefaultLinkAttempted(): boolean { return this.rojoScope.defaultAttempted; }
+  private set rojoDefaultLinkAttempted(value: boolean) { this.rojoScope.defaultAttempted = value; }
 
   /** Rojo projects linked to connected places; script writes to their files go through it. */
-  rojo = new RojoIntegration();
+  get rojo(): RojoIntegration { return this.rojoScope.rojo; }
+  set rojo(value: RojoIntegration) { this.rojoScope.rojo = value; }
+  private rojoPlaytestGuard?: RojoPlaytestGuard;
+  getLocalRojoScope(): RojoClientScope { return this.localRojoScope; }
+  attachRojoPlaytestGuard(guard: RojoPlaytestGuard): () => void {
+    this.rojoPlaytestGuard = guard;
+    return () => { if (this.rojoPlaytestGuard === guard) this.rojoPlaytestGuard = undefined; };
+  }
 
   /** The place a call is for, as routing resolves it, or undefined when it cannot be resolved here. */
   protected _resolveInstanceId(instance_id?: string): string | undefined {
@@ -1112,14 +1129,48 @@ export class RobloxStudioTools {
     if (!this.rojo.hasLinks()) return undefined;
     const resolved = this._resolveInstanceId(instance_id);
     if (resolved === undefined) return undefined;
-    const direct = this.rojo.linkFor(resolved);
-    if (direct) return direct;
-    for (const equivalent of this.bridge.getEquivalentInstanceIds(resolved)) {
-      if (equivalent === resolved) continue;
-      const link = this.rojo.linkFor(equivalent);
-      if (link) return link;
+    const owner = this._captureStudioOwner(resolved);
+    if (owner) {
+      for (const link of this.rojo.getLinks()) if (link.studioOwner?.physicalSessionId === owner.physicalSessionId) {
+        this._assertStudioOwner(link.studioOwner);
+        if (link.studioOwner.instanceId !== resolved) throw new RojoError('rojo_link_invalid', 'The source binding does not belong to this current Studio place. Explicitly relink the intended place.');
+        return link;
+      }
+      const unproven = this.rojo.linkFor(resolved);
+      if (unproven && !unproven.studioOwner && (this.rojoPlaytestGuard || currentRojoCall())) throw new RojoError('rojo_link_invalid', 'This source binding has no confirmed Studio owner. Restart this MCP client and explicitly relink.');
+      if (unproven?.studioOwner?.instanceId === resolved) throw new RojoError('rojo_link_invalid', 'This place is now connected through another Studio session. Restart this MCP client and explicitly relink; the old source binding was not reused.');
+      return unproven?.studioOwner ? undefined : unproven;
+    }
+    // Standalone file-backend fixtures have no Studio peer or dispatch boundary.
+    for (const id of [resolved, ...this.bridge.getEquivalentInstanceIds(resolved)]) {
+      const link = this.rojo.linkFor(id);
+      if (link && !link.studioOwner) return link;
     }
     return undefined;
+  }
+
+  private _rojoEquivalentIds(instanceId: string): string[] {
+    const owner = this._captureStudioOwner(instanceId);
+    return owner ? this.rojo.ownedKeys(owner) : this.bridge.getEquivalentInstanceIds(instanceId);
+  }
+
+  private _captureStudioOwner(instanceId: string): StudioOwner | undefined {
+    const peers = this.bridge.getInstances?.() ?? [];
+    const owner = studioOwnerAt(peers, instanceId);
+    if (owner) return owner;
+    if (peers.length === 0 && !this.rojoPlaytestGuard && !currentRojoCall()) return undefined;
+    throw new RojoError('rojo_link_invalid', 'The intended Studio source owner is not connected uniquely. Reconnect it or restart this MCP client and explicitly relink.');
+  }
+
+  private _assertStudioOwner(expected: StudioOwner): void {
+    const current = currentStudioOwner(this.bridge.getInstances(), expected);
+    if (current?.instanceId !== expected.instanceId) throw new RojoError('rojo_link_invalid', 'The Studio source owner changed or disconnected during validation. Retry after reconnecting the intended place; no binding or source file was changed.');
+  }
+
+  private _assertCallOwner(expected: StudioOwner | undefined, instance_id?: string): void {
+    if (!expected) return;
+    this._assertStudioOwner(expected);
+    if (this._resolveInstanceId(instance_id) !== expected.instanceId) throw new RojoError('rojo_link_invalid', 'The source call no longer resolves to its confirmed Studio owner. Read the intended place and retry.');
   }
 
   /**
@@ -1129,7 +1180,7 @@ export class RobloxStudioTools {
    * same as `_rojoLinkFor` always has been.
    */
   private get _rojoDefaultPending(): boolean {
-    return this.rojoDefaultProject !== undefined && !this.rojoDefaultLinkAttempted;
+    return this.rojoScope.linking || (this.rojoDefaultProject !== undefined && !this.rojoDefaultLinkAttempted);
   }
 
   /**
@@ -1142,15 +1193,18 @@ export class RobloxStudioTools {
    * project, the place is left to behave exactly as if unlinked.
    */
   private async _ensureRojoLink(instance_id?: string): Promise<ProjectLink | { error: string; errorCode: string } | undefined> {
+    if (this.rojoScope.linking) return { error: 'This client is still validating its Rojo project. Wait for that operation before retrying.', errorCode: 'rojo_link_in_progress' };
     const existing = this._rojoLinkFor(instance_id);
     if (existing) return existing;
     if (!this._rojoDefaultPending) return undefined;
     const resolved = this._resolveInstanceId(instance_id);
     if (resolved === undefined) return undefined;
     this.rojoDefaultLinkAttempted = true;
+    this.rojoScope.linking = true;
     try {
       // _rojoDefaultPending just confirmed this is set.
-      await this.rojo.link(resolved, this.rojoDefaultProject!);
+      const owner = this._captureStudioOwner(resolved);
+      await this.rojo.link(resolved, clientProjectPath(this.rojoDefaultProject!), this._rojoEquivalentIds(resolved), owner, () => this._assertCallOwner(owner, instance_id));
     } catch (error) {
       if (error instanceof RojoError) {
         // RojoIntegration#link throws this same rojo_link_invalid code, with
@@ -1161,17 +1215,23 @@ export class RobloxStudioTools {
         return { error: error.message, errorCode: error.code };
       }
       throw error;
+    } finally {
+      this.rojoScope.linking = false;
     }
     return this._rojoLinkFor(instance_id);
   }
 
-  constructor(bridge: BridgeService, options: { rojoProject?: string } = {}) {
+  constructor(bridge: BridgeService, options: { rojoProject?: string; rojoClientState?: RojoProxyState } = {}) {
+    this.localRojoScope = createRojoClientScope(options.rojoClientState?.clientId ?? randomUUID(), options.rojoProject);
     this.client = new StudioHttpClient(bridge);
     this.bridge = bridge;
     this.openCloudClient = new OpenCloudClient();
     this.cookieClient = new RobloxCookieClient();
     this.instanceManager = new StudioInstanceManager();
-    this.rojoDefaultProject = options.rojoProject;
+    if (bridge instanceof ProxyBridgeService) {
+      this.rojoPrimaryClient = new RojoPrimaryClient(bridge, options.rojoClientState ?? new RojoProxyState(options.rojoProject));
+      bridge.setRojoStartPreparation((endpoint) => this.rojoPrimaryClient!.prepareStart(endpoint));
+    }
     this.bridge.onInstanceRegistered((instance) => {
       const instanceManager = this.instanceManager;
       const association = this.managedConnectionAssociations.then(() =>
@@ -1198,6 +1258,8 @@ export class RobloxStudioTools {
   getStudioLifecycleCapabilities() {
     return this.instanceManager.getLifecycleCapabilities();
   }
+
+  async releaseRojoClient(): Promise<void> { await this.rojoPrimaryClient?.release(); }
 
   private _textResult(body: Record<string, unknown>) {
     return { content: [{ type: 'text', text: JSON.stringify(body) }] };
@@ -1311,6 +1373,7 @@ export class RobloxStudioTools {
         },
       });
     }
+    currentRojoCall()?.signal?.throwIfAborted();
     return this.client.request(endpoint, data, r.targetInstanceId, r.targetRole, timeoutMs);
   }
 
@@ -2660,6 +2723,10 @@ export class RobloxStudioTools {
 
 
   async getScriptSource(instancePath: string, startLine?: number, endLine?: number, instance_id?: string, instanceRef?: string) {
+    const delegated = this.rojoPrimaryClient?.invoke('get_script_source', { instancePath, instance_id, instanceRef,
+      ...((startLine !== undefined || endLine !== undefined) ? { line_range: `${startLine ?? ''}-${endLine ?? ''}` } : {}),
+    });
+    if (delegated) return delegated;
     if (!instancePath) {
       throw new Error('Instance path is required for get_script_source');
     }
@@ -2696,18 +2763,20 @@ export class RobloxStudioTools {
     const segments = parseInstancePath(String(response.instancePath ?? ''));
     if (!segments) return { persistence: 'unsupported' };
     try {
-      const owner = await this.rojo.resolve(link, segments, response.className as string | undefined, true, { fresh: false });
+      const owner = await this.rojo.resolve(link, segments, response.className as string | undefined, response.uniquePath !== false, { fresh: false });
       if (owner.persistence !== 'file' || !owner.file) {
         return { persistence: owner.persistence, ...(owner.relativeFile ? { file: owner.relativeFile } : {}), ...(owner.reason ? { persistenceNote: owner.reason } : {}) };
       }
-      const matches = sourceRevision(toStudioText(await fs.promises.readFile(owner.file))) === response.revision;
-      return { file: owner.relativeFile, persistence: 'file', fileMatchesStudio: matches };
+      const fileRevision = sourceRevision(toStudioText(await fs.promises.readFile(owner.file)));
+      return { file: owner.relativeFile, persistence: 'file', fileRevision, fileMatchesStudio: fileRevision === response.revision };
     } catch (error) {
       return { persistence: 'unknown', rojoError: error instanceof Error ? error.message : String(error) };
     }
   }
 
   async setScriptSource(instancePath: string, source: string, instance_id?: string, expectedRevision?: string, instanceRef?: string) {
+    const delegated = this.rojoPrimaryClient?.invoke('set_script_source', { instancePath, source, instance_id, expectedRevision, instanceRef });
+    if (delegated) return delegated;
     if (!instancePath || typeof source !== 'string' || typeof expectedRevision !== 'string') {
       throw new Error('Instance path, source code string, and expectedRevision are required for set_script_source');
     }
@@ -2730,6 +2799,38 @@ export class RobloxStudioTools {
     };
   }
 
+  private _trackedRojoWrite(link: ProjectLink, file: string, plan: Record<string, unknown>, instance_id?: string): TrackedRojoWrite {
+    const scope = this.rojoScope;
+    const active = currentRojoCall();
+    const context = { scope, cwd: active?.cwd ?? process.cwd(), environment: active?.environment };
+    const target = this._resolveInstanceId(instance_id) ?? link.instanceId;
+    const studioOwner = link.studioOwner;
+    const instancePath = String(plan.instancePath);
+    const instanceRef = typeof plan.instanceRef === 'string' ? plan.instanceRef : undefined;
+    const className = typeof plan.className === 'string' ? plan.className : undefined;
+    return {
+      instanceId: target, instancePath, instanceRef, className, file, studioOwner,
+      inspect: async () => {
+        const current = studioOwner && currentStudioOwner(this.bridge.getInstances(), studioOwner);
+        if (studioOwner && current?.instanceId !== studioOwner.instanceId) return { error: 'The tracked Studio source owner is unavailable. Reconnect that session before verifying.' };
+        const currentTarget = studioOwner?.instanceId ?? target;
+        const read = await this._callSingle('/api/get-script-source', { instancePath, instanceRef, startLine: 1, endLine: 1 }, 'edit', currentTarget);
+        if (!read?.error) return read;
+        // Invalid references alone are not a deletion: also check the original path.
+        if (instanceRef && String(read.error).startsWith('Instance reference is invalid or no longer live:')) {
+          const byPath = await this._callSingle('/api/get-script-source', { instancePath, startLine: 1, endLine: 1 }, 'edit', currentTarget);
+          if (String(byPath?.error).startsWith('Instance not found:')) return { missing: true };
+        } else if (!instanceRef && String(read.error).startsWith('Instance not found:')) return { missing: true };
+        return { error: String(read.error) };
+      },
+      resolve: (observation) => withRojoCall(context, async () => {
+        const segments = parseInstancePath(observation.instancePath ?? instancePath);
+        if (!segments) return { persistence: 'unsupported' as const, reason: 'The script path cannot be mapped safely.' };
+        return scope.rojo.resolve(link, segments, observation.className ?? className, observation.missing === true || observation.uniquePath === true, { fresh: true });
+      }),
+    };
+  }
+
   /**
    * One script write. On a place with no linked Rojo project this is the
    * plugin call it always was. On a linked place, a script the project owns is
@@ -2739,6 +2840,7 @@ export class RobloxStudioTools {
     const link = this._rojoDefaultPending ? await this._ensureRojoLink(instance_id) : this._rojoLinkFor(instance_id);
     if (!link) return this._callSingle(endpoint, payload, undefined, instance_id);
     if ('error' in link) return link;
+    const expectedOwner = link.studioOwner ? { ...link.studioOwner } : undefined;
 
     const plan = await this._callSingle(endpoint, { ...payload, planOnly: true }, undefined, instance_id);
     if (!plan || plan.planned !== true) return plan;
@@ -2755,6 +2857,7 @@ export class RobloxStudioTools {
     }
 
     if (owner.persistence === 'studio_only') {
+      this._assertCallOwner(expectedOwner, instance_id);
       const applied = await this._callSingle(endpoint, payload, undefined, instance_id);
       return applied?.error ? applied : { ...applied, persistence: 'studio_only', persistenceNote: owner.reason };
     }
@@ -2776,11 +2879,22 @@ export class RobloxStudioTools {
     }
 
     let written: Awaited<ReturnType<typeof compareAndWrite>>;
+    let reservation: RojoWriteToken | undefined;
     try {
-      written = await compareAndWrite(owner.file, plan.previousRevision, plan.source);
+      currentRojoCall()?.signal?.throwIfAborted();
+      if (this.rojoPlaytestGuard) reservation = this.rojoPlaytestGuard.beginWrite(this._trackedRojoWrite(link, owner.file, plan, instance_id));
+      written = await compareAndWrite(owner.file, plan.previousRevision, plan.source, () => {
+        currentRojoCall()?.signal?.throwIfAborted(); this._assertCallOwner(expectedOwner, instance_id);
+      });
+      if (reservation) this.rojoPlaytestGuard!.finishWrite(reservation, written.ok);
     } catch (error) {
+      if (reservation) {
+        const actual = await fs.promises.readFile(owner.file).then((bytes) => sourceRevision(toStudioText(bytes))).catch(() => undefined);
+        if (actual === plan.previousRevision) this.rojoPlaytestGuard!.abortWrite(reservation);
+        else this.rojoPlaytestGuard!.uncertainWrite(reservation);
+      }
       const message = (error instanceof Error ? error.message : String(error)).replace(/\s*\n+\s*/g, ' ');
-      return { error: `Could not write ${owner.relativeFile}: ${message}. Nothing was changed in Studio.`, errorCode: 'rojo_write_failed', file: owner.relativeFile };
+      return { error: `Could not write ${owner.relativeFile}: ${message}. Nothing was changed in Studio.`, errorCode: (error as { errorCode?: string }).errorCode ?? 'rojo_write_failed', file: owner.relativeFile };
     }
     if (!written.ok) {
       const studio = await this._callSingle('/api/get-script-source', { instancePath: plan.instancePath, instanceRef: plan.instanceRef }, undefined, instance_id).catch(() => undefined);
@@ -2820,6 +2934,8 @@ export class RobloxStudioTools {
 
 
   async editScriptLines(instancePath: string, oldString: string, newString: string, startLine?: number, instance_id?: string, instanceRef?: string) {
+    const delegated = this.rojoPrimaryClient?.invoke('edit_script_lines', { instancePath, old_string: oldString, new_string: newString, instance_id, instanceRef, ...(startLine === undefined ? {} : { line_range: String(startLine) }) });
+    if (delegated) return delegated;
     if (!instancePath || typeof oldString !== 'string' || typeof newString !== 'string') {
       throw new Error('Instance path, old_string, and new_string are required for edit_script_lines');
     }
@@ -2837,6 +2953,8 @@ export class RobloxStudioTools {
   }
 
   async editScriptBatch(instancePath: string, edits: unknown, instance_id?: string, expectedRevision?: string, instanceRef?: string) {
+    const delegated = this.rojoPrimaryClient?.invoke('edit_script_batch', { instancePath, edits, instance_id, expectedRevision, instanceRef });
+    if (delegated) return delegated;
     if (!instancePath || !Array.isArray(edits) || edits.length === 0) {
       throw new Error('Instance path and a non-empty edits array are required for edit_script_batch');
     }
@@ -2880,6 +2998,8 @@ export class RobloxStudioTools {
   }
 
   async insertScriptLines(instancePath: string, afterLine: number, newContent: string, instance_id?: string, instanceRef?: string, expectedRevision?: unknown) {
+    const delegated = this.rojoPrimaryClient?.invoke('insert_script_lines', { instancePath, afterLine, newContent, instance_id, instanceRef, expectedRevision });
+    if (delegated) return delegated;
     if (!instancePath || typeof newContent !== 'string') {
       throw new Error('Instance path and newContent are required for insert_script_lines');
     }
@@ -2896,6 +3016,8 @@ export class RobloxStudioTools {
   }
 
   async deleteScriptLines(instancePath: string, startLine: number, endLine: number, instance_id?: string, instanceRef?: string, expectedRevision?: unknown) {
+    const delegated = this.rojoPrimaryClient?.invoke('delete_script_lines', { instancePath, line_range: `${startLine}-${endLine}`, instance_id, instanceRef, expectedRevision });
+    if (delegated) return delegated;
     if (!instancePath || !startLine || !endLine) {
       throw new Error('Instance path, startLine, and endLine are required for delete_script_lines');
     }
@@ -4078,19 +4200,31 @@ export class RobloxStudioTools {
     }
 
     if (action === 'link_project' || action === 'unlink_project') {
+      const delegated = this.rojoPrimaryClient?.invoke('manage_instance', request);
+      if (delegated) return delegated;
       const instanceId = this._resolveInstanceId(instance_id);
       if (!instanceId) {
         return this._textResult({ error: 'Connect the place in Studio first, or pass its instance_id; nothing was linked.', errorCode: 'rojo_link_invalid' });
       }
-      if (action === 'unlink_project') return this._textResult({ unlinked: this.rojo.unlink(instanceId), instance_id: instanceId });
+      if (this.rojoScope.linking) return this._textResult({ error: 'This client is still validating its Rojo project. Wait for that operation before retrying.', errorCode: 'rojo_link_in_progress' });
+      const equivalents = this._rojoEquivalentIds(instanceId);
+      if (action === 'unlink_project') {
+        let unlinked = false;
+        for (const id of equivalents) unlinked = this.rojo.unlink(id) || unlinked;
+        return this._textResult({ unlinked, instance_id: instanceId });
+      }
       if (typeof request.project !== 'string' || request.project.length === 0) {
         return this._textResult({ error: 'link_project needs project, the path to the place\'s *.project.json.', errorCode: 'rojo_link_invalid' });
       }
+      this.rojoScope.linking = true;
       try {
-        return this._textResult({ linked: true, instance_id: instanceId, ...(await this.rojo.link(instanceId, request.project)) });
+        const owner = this._captureStudioOwner(instanceId);
+        return this._textResult({ linked: true, instance_id: instanceId, ...(await this.rojo.link(instanceId, clientProjectPath(request.project), equivalents, owner, () => this._assertCallOwner(owner, instance_id))) });
       } catch (error) {
         if (error instanceof RojoError) return this._textResult({ error: error.message, errorCode: error.code });
         throw error;
+      } finally {
+        this.rojoScope.linking = false;
       }
     }
 
@@ -4385,6 +4519,7 @@ export class RobloxStudioTools {
         throw new Error('solo_playtest action=start requires mode=play|run');
       }
       const body = this._parseTextResult(await this.startPlaytest(mode, undefined, instance_id, timeout));
+      if (typeof body.errorCode === 'string' && body.errorCode.startsWith('rojo_')) return this._textResult({ ...body, action });
       if (body.success === true && body.runtimeReady !== false) {
         return this._textResult({
           success: true,
@@ -4726,6 +4861,7 @@ export class RobloxStudioTools {
 
     if (action === 'start') {
       const body = this._parseTextResult(await this.multiplayerTestStart(numPlayers as number, testArgs, timeout, instance_id));
+      if (typeof body.errorCode === 'string' && body.errorCode.startsWith('rojo_')) return this._textResult({ ...body, action });
       const state = body.state && typeof body.state === 'object' ? body.state as Record<string, any> : {};
       const launched = body.success === true && body.ready === true;
       return this._textResult(launched ? {
@@ -5869,6 +6005,8 @@ export class RobloxStudioTools {
     },
     instance_id?: string
   ) {
+    const delegated = this.rojoPrimaryClient?.invoke('find_and_replace_in_scripts', { pattern, replacement, ...options, instance_id });
+    if (delegated) return delegated;
     if (!pattern) {
       throw new Error('pattern is required for find_and_replace_in_scripts');
     }
