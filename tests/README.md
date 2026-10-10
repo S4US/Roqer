@@ -56,7 +56,7 @@ independent auto-install, lifecycle, and parallel-isolation suites.
 | Change area | Required live command |
 |---|---|
 | Ordinary feature | `npm run test:e2e` |
-| Rojo linking, file-backed script edits, or structural saves (new scripts and models, removals, renames, moves) | Feature gate plus `npm run test:rojo` and `npm run test:studio:rojo` (needs `rojo` on PATH and someone to connect the Rojo plugin); `build_instances` or `set_properties` changes also need `npm run test:studio:runner` |
+| Rojo linking, file-backed script edits, or structural saves (new scripts and models, removals, renames, moves) | Feature gate plus `npm run test:rojo` and `npm run test:studio:rojo` (needs `rojo` on PATH; the live suite downloads the matching `Rojo.rbxm` release and starts its sync client itself, or set `ROJO_MANUAL_CONNECT=1` to connect the Rojo plugin by hand); `build_instances` or `set_properties` changes also need `npm run test:studio:runner` |
 | Paths, properties, tools, runtime, simulation, or multiplayer | `npm run test:studio:runner` (replaces the smaller feature gate) |
 | Installer, package artifacts, variants, or version repair | Feature gate plus `npm run test:e2e:auto-install` |
 | Studio launch, takeover, or startup-log lifecycle | Feature gate plus `npm run test:e2e:lifecycle` |

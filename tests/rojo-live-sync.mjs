@@ -124,6 +124,102 @@ function findTmpInstanceName(value) {
   return undefined;
 }
 
+/**
+ * The Rojo Studio plugin release matching the rojo CLI, downloaded once into
+ * the temp folder. Its sync client (ServeSession) is what the Rojo plugin
+ * itself runs, so starting it from a script syncs Studio exactly as clicking
+ * Connect would, with no one at the keyboard.
+ */
+async function rojoPluginRbxm() {
+  const { stdout } = await execFileAsync(ROJO_BIN, ['--version'], { timeout: 10_000, windowsHide: true });
+  const version = /(\d+\.\d+\.\d+)/.exec(String(stdout))?.[1];
+  if (!version) throw new Error(`could not read the rojo version from: ${stdout}`);
+  const file = path.join(os.tmpdir(), `roqer-rojo-plugin-${version}.rbxm`);
+  if (!fs.existsSync(file)) {
+    const response = await fetch(`https://github.com/rojo-rbx/rojo/releases/download/v${version}/Rojo.rbxm`);
+    if (!response.ok) throw new Error(`downloading the Rojo ${version} plugin failed: HTTP ${response.status}`);
+    const temp = `${file}.${process.pid}.part`;
+    fs.writeFileSync(temp, Buffer.from(await response.arrayBuffer()));
+    fs.renameSync(temp, file);
+  }
+  return file;
+}
+
+const ROJO_CLIENT_FOLDER = 'RoqerRojoLiveClient';
+
+/**
+ * Loads the Rojo plugin's modules into a folder in ServerStorage (which the
+ * probe project does not sync) and starts its ServeSession against the
+ * running `rojo serve`, accepting the initial sync as clicking Accept would.
+ * Set ROJO_MANUAL_CONNECT=1 to connect the real plugin by hand instead.
+ */
+async function connectRojoClient(client, servePort) {
+  const rbxm = await rojoPluginRbxm();
+  const folder = await client.callTool('execute_luau', {
+    code: `local folder = Instance.new("Folder") folder.Name = "${ROJO_CLIENT_FOLDER}" folder.Parent = game:GetService("ServerStorage") return folder:GetFullName()`,
+    target: 'edit',
+  });
+  if (folder?.success !== true) throw new Error(`could not make the Rojo client folder: ${JSON.stringify(folder)}`);
+  // Carried in small execute_luau calls rather than import_rbxm: under the managed runner this
+  // client is a proxy, and import_rbxm leaves a large file on the proxy, where the plugin cannot fetch it.
+  const base64 = fs.readFileSync(rbxm).toString('base64');
+  const CHUNK = 60_000;
+  for (let offset = 0; offset < base64.length; offset += CHUNK) {
+    const part = await client.callTool('execute_luau', {
+      code: `_G.RoqerRojoPluginBase64 = ${offset === 0 ? '""' : '(_G.RoqerRojoPluginBase64 or "")'} .. "${base64.slice(offset, offset + CHUNK)}" return #_G.RoqerRojoPluginBase64`,
+      target: 'edit',
+    });
+    if (part?.success !== true) throw new Error(`could not send the Rojo plugin to Studio: ${JSON.stringify(part)}`);
+  }
+  const imported = await client.callTool('execute_luau', {
+    target: 'edit',
+    code: `
+      local encoded = _G.RoqerRojoPluginBase64
+      _G.RoqerRojoPluginBase64 = nil
+      assert(#encoded == ${base64.length}, "the Rojo plugin arrived incomplete: " .. #encoded)
+      local bytes = game:GetService("EncodingService"):Base64Decode(buffer.fromstring(encoded))
+      local folder = game:GetService("ServerStorage"):FindFirstChild("${ROJO_CLIENT_FOLDER}")
+      for _, item in game:GetService("SerializationService"):DeserializeInstancesAsync(bytes) do item.Parent = folder end
+      return #folder:GetDescendants()
+    `,
+  }, 60_000);
+  if (imported?.success !== true) throw new Error(`could not load the Rojo plugin: ${JSON.stringify(imported)}`);
+  const started = await client.callTool('execute_luau', {
+    target: 'edit',
+    code: `
+      local folder = game:GetService("ServerStorage"):FindFirstChild("${ROJO_CLIENT_FOLDER}")
+      local serveSession
+      for _, item in folder:GetDescendants() do
+        if item.Name == "ServeSession" and item:IsA("ModuleScript") then serveSession = item break end
+      end
+      assert(serveSession, "the Rojo plugin has no ServeSession module")
+      local ServeSession = require(serveSession)
+      local ApiContext = require(serveSession.Parent.ApiContext)
+      local session = ServeSession.new({ apiContext = ApiContext.new("http://localhost:${servePort}"), twoWaySync = false })
+      session:setConfirmCallback(function() return "Accept" end)
+      session:start()
+      _G.RoqerRojoLiveSession = session
+      return "started"
+    `,
+  });
+  if (started?.success !== true) throw new Error(`could not start the Rojo sync client: ${JSON.stringify(started)}`);
+  console.log(`  Rojo's own sync client is connected to localhost:${servePort} (no manual connect needed)`);
+}
+
+async function disconnectRojoClient(client) {
+  await client.callTool('execute_luau', {
+    target: 'edit',
+    code: `
+      local session = _G.RoqerRojoLiveSession
+      _G.RoqerRojoLiveSession = nil
+      if session then pcall(function() session:stop() end) end
+      local folder = game:GetService("ServerStorage"):FindFirstChild("${ROJO_CLIENT_FOLDER}")
+      if folder then folder:Destroy() end
+      return "stopped"
+    `,
+  });
+}
+
 async function rojoOnPath() {
   try {
     await execFileAsync(ROJO_BIN, ['--version'], { timeout: 10_000, windowsHide: true });
@@ -151,6 +247,7 @@ await runTest('Rojo-linked place saves script edits to its file', async ({ track
   let watching = true;
   let expectedServeExit = false;
   let tmpInstanceSeen;
+  let rojoClientStarted = false;
 
   const watchForTmpInstance = (async () => {
     while (watching) {
@@ -185,7 +282,12 @@ await runTest('Rojo-linked place saves script edits to its file', async ({ track
       console.warn(`  (rojo serve exited early: code=${code} signal=${signal})\n${serveOutput.join('')}`);
     });
 
-    console.log(`\nConnect the Rojo plugin in Studio to localhost:${servePort}`);
+    if (process.env.ROJO_MANUAL_CONNECT === '1') {
+      console.log(`\nConnect the Rojo plugin in Studio to localhost:${servePort}`);
+    } else {
+      await connectRojoClient(client, servePort);
+      rojoClientStarted = true;
+    }
     await waitUntil('the probe script to be synced into Studio', 120_000, 1000, async () => {
       const result = await client.callTool('get_script_source', { instancePath: INSTANCE_PATH });
       return result.error ? undefined : result;
@@ -391,6 +493,7 @@ await runTest('Rojo-linked place saves script edits to its file', async ({ track
     if (linked) {
       await client.callTool('manage_instance', { action: 'unlink_project' }).catch(() => {});
     }
+    if (rojoClientStarted) await disconnectRojoClient(client).catch(() => {});
     fs.rmSync(root, { recursive: true, force: true });
   }
 }).then((ok) => process.exit(ok ? 0 : 1));
