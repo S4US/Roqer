@@ -1222,7 +1222,7 @@ function recordBuild(context: PlannerContext, args: JsonRecord, outcome: McpTool
     summary: (parts.length > 0
       ? `Built in one undoable step: ${parts.join(", ")}.`
       : "Applied a build batch that changed no instances.")
-      + (stringField(data, "persistence") === "studio_only" ? " The new scripts are in Studio only; they are not saved to the linked Rojo project." : ""),
+      + (stringField(data, "persistence") === "studio_only" ? " It is in Studio only, not saved to the linked Rojo project." : ""),
   });
 
   const descendants = numberField(data, "descendants");

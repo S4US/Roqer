@@ -274,7 +274,7 @@ describe('new scripts on a Rojo-linked place', () => {
     expect(listing()).toEqual(['src/Main.server.luau']);
   });
 
-  test('a build somewhere the project has no folder, with no scripts, is built in Studio with nothing added', async () => {
+  test('a build somewhere the project has no folder is built in Studio, saying why it is not saved', async () => {
     let rojoRuns = 0;
     const { tools, studioBuilds } = await setup({
       tops: [top('game.Workspace', { name: 'Marker', className: 'Part' })],
@@ -282,7 +282,9 @@ describe('new scripts on a Rojo-linked place', () => {
     tools.rojo = Object.assign(tools.rojo, { run: async () => { rojoRuns += 1; throw new Error('rojo is gone'); } });
     const result = await build(tools, 'game.Workspace');
     expect(studioBuilds()).toHaveLength(1);
-    expect(result.persistence).toBeUndefined();
+    // A model is no less someone's work than a script: the result says why the project does not hold it.
+    expect(result.persistence).toBe('studio_only');
+    expect(result.persistenceNote).toBe('new instances under game.Workspace are not saved to the Rojo project: Workspace is not in the Rojo project.');
     expect(result.undoable).toBe(true);
     // Only the project file was read; Rojo itself never ran.
     expect(rojoRuns).toBe(0);

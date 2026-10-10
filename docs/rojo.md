@@ -268,10 +268,11 @@ has no folder (a service the project does not map, an instance written out in
 the project file with no `$path`, an instance that exists only in Studio, or
 a script saved as a single file), and any change to an instance the project
 does not hold. When that leaves something unsaved that you may expect saved
-(new scripts, an edit to a property of something the project owns, a change
-to an instance inside a model file, or a Studio-only instance moved into a
-project folder), the result adds `persistence: "studio_only"` and a
-`persistenceNote` saying why. If the project file cannot be read, a new tree
+(any new instance, an edit to a property of something the project owns, a
+change to an instance inside a model file, or a Studio-only instance moved
+into a project folder), the result adds `persistence: "studio_only"` and a
+`persistenceNote` saying why, such as `new instances under game.Workspace are
+not saved to the Rojo project: Workspace is not in the Rojo project`. If the project file cannot be read, a new tree
 without scripts and a property edit are applied in Studio with such a note,
 and anything else is refused.
 

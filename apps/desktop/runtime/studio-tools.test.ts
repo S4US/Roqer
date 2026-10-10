@@ -2400,7 +2400,7 @@ test("a build whose new scripts stayed in Studio on a linked place says so", asy
 
   await run("build_instances", { path: "game.Workspace.Door", operations: [{ op: "create", className: "Script", name: "Open" }] });
 
-  assert.equal(changes[0].summary, "Built in one undoable step: 1 created. The new scripts are in Studio only; they are not saved to the linked Rojo project.");
+  assert.equal(changes[0].summary, "Built in one undoable step: 1 created. It is in Studio only, not saved to the linked Rojo project.");
 });
 
 test("a batch under a service root counts what it added, not the service", async () => {

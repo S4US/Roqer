@@ -124,8 +124,8 @@ async function planTop(context: StructureContext, top: PlannedTop, claimed: Set<
     return { kind: 'studio', note: `${error.message}, so ${name} is not saved to the Rojo project` };
   }
   if ('reason' in folder) {
-    // Not the project's to hold: built in Studio as always, saying so when it holds code someone may expect saved.
-    return scripts ? { kind: 'studio', note: `new scripts under ${top.parentPath} are not saved to the Rojo project: ${folder.reason}` } : { kind: 'studio' };
+    // Not the project's to hold: built in Studio as always, saying why it is not saved, so no one has to guess.
+    return { kind: 'studio', note: `new ${scripts ? 'scripts' : 'instances'} under ${top.parentPath} are not saved to the Rojo project: ${folder.reason}` };
   }
   let dir: string;
   try {
