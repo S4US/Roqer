@@ -1,11 +1,19 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { checkFile, gitIgnored, locateScript, scriptFiles, type Ownership, type Persistence } from './ownership.js';
+import type { PlannedTop } from './new-files.js';
 import { probeRojoServer } from './rojo-server.js';
 import { RojoError, execRojo, loadSourcemap, rojoVersion, type RojoRunner, type SourcemapNode } from './sourcemap.js';
+import {
+  applyStructure, backupFolder, planStructure,
+  type Disposition, type PlannedLive, type ProjectChange, type StructureContext,
+} from './structure.js';
 
 export { RojoError } from './sourcemap.js';
 export type { Ownership, Persistence } from './ownership.js';
+export { ProjectFilesError } from './file-ops.js';
+export type { NewInstance, PlannedNode, PlannedTop } from './new-files.js';
+export type { Disposition, PlannedLive, ProjectChange, StudioCheck } from './structure.js';
 
 const DEFAULT_SERVE_PORT = 34872;
 const READ_CACHE_MS = 10_000;
@@ -152,5 +160,45 @@ export class RojoIntegration {
     const absolute = path.resolve(link.root, located.found);
     const ignored = await this.ignored(link.root, [absolute]);
     return checkFile(link.root, located.found, (real) => ignored.has(real) || ignored.has(absolute));
+  }
+
+
+  private context(link: ProjectLink): StructureContext {
+    // One fresh read per plan or check, never the edits' cache: a structural change needs Rojo's current view.
+    let tree: Promise<SourcemapNode> | undefined;
+    return {
+      projectFile: link.projectFile,
+      root: link.root,
+      sourcemap: () => (tree ??= loadSourcemap(link.projectFile, this.run, { nonScripts: true })),
+      ignored: this.ignored,
+    };
+  }
+
+  /**
+   * Where a planned build or property write belongs on a linked place: saved
+   * to the project's files, applied in Studio, or refused. Reads only the
+   * project files until something lands in a project folder, so a change with
+   * nothing to do with the project never waits on Rojo.
+   */
+  planStructure(link: ProjectLink, tops: PlannedTop[], lives: PlannedLive[]): Promise<Disposition> {
+    return planStructure(this.context(link), tops, lives);
+  }
+
+  /**
+   * Saves a planned change to the project's files and checks Rojo reads them
+   * back as planned; rejects with ProjectFilesError, having undone it, when
+   * not. Resolves with the folder holding copies of what it removed, if any.
+   */
+  async applyStructure(link: ProjectLink, change: ProjectChange): Promise<{ backup?: string; lockReleaseWarning?: string }> {
+    const backup = backupFolder(link.projectName, this.now());
+    // Script ownership is read from a cached sourcemap; it no longer matches the files.
+    this.cache.delete(link.projectFile);
+    let applied: { lockReleaseWarning?: string };
+    try {
+      applied = await applyStructure(this.context(link), change, backup);
+    } finally {
+      this.cache.delete(link.projectFile);
+    }
+    return { ...(change.removed.length > 0 ? { backup } : {}), ...applied };
   }
 }

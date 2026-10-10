@@ -1,7 +1,8 @@
 import Utils from "../Utils";
 import Recording from "../Recording";
+import RojoPlan from "../RojoPlan";
 
-const { getInstancePath, resolveInstance, getInstanceReference, convertPropertyValue, samePropertyValue } = Utils;
+const { getInstancePath, resolveInstance, getInstanceReference, convertPropertyValue, samePropertyValue, hasUniquePath } = Utils;
 const { beginRecording, finishRecording } = Recording;
 
 interface PropertyChange {
@@ -109,6 +110,34 @@ function setProperties(requestData: Record<string, unknown>) {
 		const prepared = result as { previous: unknown; requested: unknown };
 		changes.push({ property, previous: prepared.previous, requested: prepared.requested });
 		results.push({ property, success: true });
+	}
+
+	// planOnly describes the write with everything converted and checked, and
+	// applies nothing: a linked Rojo project may save a rename or move to files instead.
+	if (requestData.planOnly === true) {
+		const revisions = RojoPlan.scriptRevisions(instance);
+		const renamed = changes.find((change) => change.property === "Name" && change.requested !== change.previous);
+		const moved = changes.find((change) => change.property === "Parent" && change.requested !== change.previous);
+		const others: string[] = [];
+		for (const change of changes) if (change.property !== "Name" && change.property !== "Parent") others.push(change.property);
+		// Whether the destination already has another child by the final name, which a saved rename would duplicate.
+		const destination = moved ? (moved.requested as Instance) : instance.Parent;
+		const finalName = renamed ? (renamed.requested as string) : instance.Name;
+		const nameTaken = destination !== undefined && destination.GetChildren().some((child) => child !== instance && child.Name === finalName);
+		return {
+			planned: true,
+			path: getInstancePath(instance),
+			instanceRef: getInstanceReference(instance),
+			className: instance.ClassName,
+			uniquePath: hasUniquePath(instance),
+			descendants: instance.GetDescendants().size(),
+			scripts: revisions.scripts,
+			...(revisions.omitted !== undefined ? { scriptsOmitted: revisions.omitted } : {}),
+			...(renamed ? { name: renamed.requested } : {}),
+			...(moved ? { parent: getInstancePath(moved.requested as Instance), parentUnique: hasUniquePath(moved.requested as Instance) } : {}),
+			...(renamed || moved ? { nameTaken } : {}),
+			properties: others,
+		};
 	}
 
 	const recordingId = beginRecording("Set multiple properties");

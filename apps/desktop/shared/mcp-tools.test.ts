@@ -89,6 +89,19 @@ test("mcp-tools - riskForTool returns table value for known tool", () => {
   assert.strictEqual(risk, "mutation");
 });
 
+test("mcp-tools - a build that removes something on a Rojo-linked place always asks, since it may delete project files", () => {
+  const removal = { path: "game.ServerScriptService", operations: [{ op: "create", className: "Folder" }, { op: "remove", target: "game.ServerScriptService.Old" }] };
+  const creation = { path: "game.ServerScriptService", operations: [{ op: "create", className: "Folder" }] };
+  assert.strictEqual(riskForTool("build_instances", removal, { rojoLinked: true }), "irreversible");
+  assert.strictEqual(riskForTool("build_instances", removal, { rojoLinked: false }), "mutation");
+  assert.strictEqual(riskForTool("build_instances", removal), "mutation");
+  assert.strictEqual(riskForTool("build_instances", creation, { rojoLinked: true }), "mutation");
+  // A scatter's replace removes the previous group, so it asks the same way.
+  const replace = { path: "game.Workspace.Map", operations: [{ op: "scatter", name: "Trees", replace: true }] };
+  assert.strictEqual(riskForTool("build_instances", replace, { rojoLinked: true }), "irreversible");
+  assert.strictEqual(riskForTool("build_instances", replace, { rojoLinked: false }), "mutation");
+});
+
 test("mcp-tools - checking upload status is read-only but uploading remains irreversible", () => {
   assert.strictEqual(riskForTool("upload_asset", { action: "status", operationId: "upload-123" }), "read");
   assert.strictEqual(riskForTool("upload_asset", { action: "upload" }), "irreversible");

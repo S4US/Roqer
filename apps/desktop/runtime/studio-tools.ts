@@ -1181,10 +1181,17 @@ function describeBounds(value: unknown): string | undefined {
  * counted what the root actually holds. It does not claim each created value
  * was compared, because it was not.
  */
-function recordBuild(context: PlannerContext, args: JsonRecord, outcome: McpToolOutcome): void {
+function recordBuild(context: PlannerContext, args: JsonRecord, outcome: McpToolOutcome): string | undefined {
   const data = isRecord(outcome.data) ? outcome.data : {};
   const root = stringField(data, "path") ?? (typeof args.path === "string" ? args.path : undefined);
-  if (root === undefined) return;
+  if (root === undefined) return undefined;
+
+  // On a Rojo-linked place, a batch that changes what the project holds is
+  // saved to its files and Rojo makes the change, so Studio never ran it:
+  // `saved` names what was written, removed or renamed, and `sync` whether
+  // Studio has it yet.
+  const saved = savedProjectChange(data);
+  if (saved !== undefined) return recordSavedChange(context, root, saved);
 
   if (data.removedRoot === true) {
     context.recordChange({
@@ -1201,7 +1208,7 @@ function recordBuild(context: PlannerContext, args: JsonRecord, outcome: McpTool
       detail: "Studio took the build root out of the place as the batch's only step.",
       metadata: [{ label: "Undo", value: data.undoable !== false ? "One Studio undo step" : "Not recorded in Studio's undo history" }],
     });
-    return;
+    return undefined;
   }
 
   const parts = (["created", "cloned", "updated", "removed"] as const)
@@ -1212,9 +1219,10 @@ function recordBuild(context: PlannerContext, args: JsonRecord, outcome: McpTool
     kind: "instance",
     target: root,
     instanceId: context.instanceId ?? undefined,
-    summary: parts.length > 0
+    summary: (parts.length > 0
       ? `Built in one undoable step: ${parts.join(", ")}.`
-      : "Applied a build batch that changed no instances.",
+      : "Applied a build batch that changed no instances.")
+      + (stringField(data, "persistence") === "studio_only" ? " It is in Studio only, not saved to the linked Rojo project." : ""),
   });
 
   const descendants = numberField(data, "descendants");
@@ -1239,8 +1247,134 @@ function recordBuild(context: PlannerContext, args: JsonRecord, outcome: McpTool
       },
     ],
   });
+  return undefined;
 }
 
+
+/** What a save to a linked Rojo project did, as a result's `saved` reports it. */
+type SavedProjectChange = {
+  files: string[];
+  removed: string[];
+  renamed: Array<{ from: string; to: string }>;
+  sync: string | undefined;
+  backup: string | undefined;
+  /** Each new script and the revision a read of it must show. */
+  scripts: Map<string, string>;
+};
+
+const stringsIn = (value: unknown): string[] => (Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === "string") : []);
+
+function savedProjectChange(data: JsonRecord): SavedProjectChange | undefined {
+  const saved = isRecord(data.saved) ? data.saved : undefined;
+  if (!saved || !(Array.isArray(saved.files) || Array.isArray(saved.removed) || Array.isArray(saved.renamed))) return undefined;
+  const renamed = (Array.isArray(saved.renamed) ? saved.renamed : []).flatMap((entry) => {
+    const from = stringField(entry, "from");
+    const to = stringField(entry, "to");
+    return from !== undefined && to !== undefined ? [{ from, to }] : [];
+  });
+  const scripts = new Map<string, string>();
+  for (const script of Array.isArray(saved.scripts) ? saved.scripts : []) {
+    const at = stringField(script, "path");
+    const revision = stringField(script, "revision");
+    if (at !== undefined && revision !== undefined) scripts.set(at, revision);
+  }
+  return {
+    files: stringsIn(saved.files),
+    removed: stringsIn(saved.removed),
+    renamed,
+    sync: stringField(saved, "sync"),
+    backup: stringField(saved, "backup"),
+    scripts,
+  };
+}
+
+/** Names one saved change's record and evidence apart from any other on the same target. */
+function savedChangeToken(saved: SavedProjectChange): string {
+  const paths = [...saved.files, ...saved.removed, ...saved.renamed.flatMap((rename) => [rename.from, rename.to])];
+  let hash = 5381;
+  for (const char of paths.join("\n")) hash = ((hash * 33) ^ char.charCodeAt(0)) >>> 0;
+  return `files:${paths.length}:${hash.toString(16)}`;
+}
+
+const listed = (items: string[]) => (items.length <= 3 ? items.join(", ") : `${items.slice(0, 3).join(", ")} and ${items.length - 3} more`);
+
+/**
+ * Record a change saved to the linked Rojo project's files. The MCP read the
+ * files back through Rojo's sourcemap before answering, so they are known to
+ * make the planned instances; whether Studio has them yet is what `sync`
+ * says. Pending or diverged evidence leaves `passed` unset, as a pending
+ * script save does: nothing failed, but Studio has confirmed nothing.
+ * Returns the note for the model when Studio does not have the change yet.
+ */
+function recordSavedChange(context: PlannerContext, target: string, saved: SavedProjectChange): string | undefined {
+  const token = savedChangeToken(saved);
+  const onlyNew = saved.removed.length === 0 && saved.renamed.length === 0;
+  const parts = [
+    ...(saved.files.length > 0 ? [`Saved ${saved.files.length} new file${saved.files.length === 1 ? "" : "s"} to the Rojo project: ${listed(saved.files)}`] : []),
+    ...(saved.removed.length > 0 ? [`Deleted ${listed(saved.removed)} from the Rojo project`] : []),
+    ...(saved.renamed.length > 0 ? [`Renamed ${listed(saved.renamed.map((rename) => `${rename.from} to ${rename.to}`))} in the Rojo project`] : []),
+  ];
+  // New scripts can be read back later; new models and removals or renames cannot.
+  const confirmable = saved.scripts.size > 0 && onlyNew;
+  const what = confirmable ? "the new scripts" : onlyNew ? "the new instances" : "the change";
+  const suffix = saved.sync === "pending"
+    ? `; Rojo has not delivered ${what} to Studio yet.`
+    : saved.sync === "diverged"
+      ? (confirmable ? "; the scripts in Studio at those paths hold something else." : "; Studio holds something else at those paths.")
+      : `; Studio has ${what}.`;
+  context.recordChange({
+    kind: "instance",
+    target,
+    instanceId: context.instanceId ?? undefined,
+    // Ties this change to its own evidence: another change on the same target must not verify it.
+    revisionAfter: token,
+    summary: `${parts.join("; ")}${suffix}`,
+  });
+  const undo = saved.removed.length > 0
+    ? `Not in Studio's undo history; copies of the deleted files are in ${saved.backup ?? "the backup folder the result names"}`
+    : saved.renamed.length > 0
+      ? "Not in Studio's undo history; rename the files back to undo it"
+      : "Not in Studio's undo history; delete the files to take them back out";
+  const metadata = [{ label: "Undo", value: undo }, { label: REVISION_AFTER_LABEL, value: token }];
+  if (saved.sync === "synced") {
+    context.recordEvidence({
+      kind: "verification",
+      changeKind: "instance",
+      title: target,
+      passed: true,
+      detail: confirmable
+        ? "Rojo's sourcemap read the new files back as the planned instances, and Studio received every new script from Rojo."
+        : "Rojo's sourcemap read the project files back as planned, and Studio shows the change Rojo made from them.",
+      metadata,
+    });
+    return undefined;
+  }
+  context.recordEvidence({
+    kind: "verification",
+    changeKind: "instance",
+    title: target,
+    detail: saved.sync === "diverged"
+      ? "The files were saved, but Studio holds something else at those paths."
+      : confirmable
+        ? "The new files were saved; Rojo has not delivered the new scripts to Studio yet."
+        : `The files were changed; Rojo has not delivered ${what} to Studio yet, and Roqer cannot confirm it from a later read.`,
+    metadata,
+  });
+  if (saved.sync === "diverged") return "Saved the change to the project's files, but Studio holds something else at those paths. Read them before changing them again.";
+  return confirmable
+    ? "Saved the new scripts to files; Rojo has not delivered them to Studio yet, so they cannot be read or edited there until it does. Do not retry or build them in Studio; once Rojo delivers them, reading each new script confirms the build."
+    : `Saved ${what} to the project's files; Rojo has not delivered it to Studio yet. Do not retry it or make it in Studio. Ask the user to check Studio once Rojo is serving.`;
+}
+
+/** A saved change Studio did not have yet, confirmed later by reading each new script back. */
+type PendingSavedBuild = { root: string; token: string; scripts: Map<string, string> };
+
+function pendingSavedBuild(root: string | undefined, data: JsonRecord): PendingSavedBuild | undefined {
+  const saved = savedProjectChange(data);
+  // Only new scripts can be confirmed by a later read; a removal or rename has nothing to read.
+  if (!saved || root === undefined || saved.sync === "synced" || saved.removed.length > 0 || saved.renamed.length > 0 || saved.scripts.size === 0) return undefined;
+  return { root, token: savedChangeToken(saved), scripts: saved.scripts };
+}
 /** How the MCP's result opens its list of MeshParts drawn as their boxes; the metadata's label says it instead. */
 const BOXES_PREFIX = "MeshParts drawn as their boxes: ";
 /** The most of that list a preview's metadata keeps; the journal keeps 500 characters of a value. */
@@ -1770,6 +1904,9 @@ type PreparedWrite = { args: JsonRecord; note?: string } | { result: StudioToolR
 export function createStudioToolRunner(context: PlannerContext, options: StudioToolRunnerOptions = {}): StudioToolRunner {
   const scriptReads = new Map<string, ScriptSnapshot>();
   const changedScripts = new Map<string, string | undefined>();
+  // Saved builds whose new scripts Rojo had not delivered to Studio yet: each
+  // script's path and the revision a read of it must show.
+  const pendingBuilds: PendingSavedBuild[] = [];
   const recordedAssetIds = new Set<string>();
   const blenderLineage = new BlenderLineage();
   // Whether a playtest this runner started is still running. Only this run's
@@ -2065,6 +2202,22 @@ export function createStudioToolRunner(context: PlannerContext, options: StudioT
         const expectedRevision = changedScripts.get(target);
         modelNote = recordVerification(target, expectedRevision, outcome, false);
       }
+      // A saved build Rojo had not delivered is confirmed once every new script reads back as built.
+      const revision = stringField(outcome.data, "revision") ?? stringField(outcome.data, "sourceRevision");
+      for (const build of [...pendingBuilds]) {
+        if (revision === undefined || build.scripts.get(target) !== revision) continue;
+        build.scripts.delete(target);
+        if (build.scripts.size > 0) continue;
+        pendingBuilds.splice(pendingBuilds.indexOf(build), 1);
+        context.recordEvidence({
+          kind: "verification",
+          changeKind: "instance",
+          title: build.root,
+          passed: true,
+          detail: "Studio has every new script the build saved to files, each read back with the source it was saved with.",
+          metadata: [{ label: REVISION_AFTER_LABEL, value: build.token }],
+        });
+      }
     }
 
     if (outcome.ok && target && SCRIPT_MUTATIONS.has(operation)) {
@@ -2152,7 +2305,16 @@ export function createStudioToolRunner(context: PlannerContext, options: StudioT
 
     const refused = STRUCTURED_MUTATIONS.has(operation) && pluginRefused(outcome);
 
-    if (outcome.ok && !refused && operation === "set_properties" && target) {
+    // A rename or move of something a linked Rojo project owns is saved by
+    // moving its files, and Rojo makes it in Studio: recorded as that, not as
+    // an atomic Studio write.
+    const savedProperties = outcome.ok && !refused && operation === "set_properties" && isRecord(outcome.data)
+      ? savedProjectChange(outcome.data)
+      : undefined;
+    if (savedProperties !== undefined) {
+      const moved = stringField(outcome.data, "instancePath") ?? target ?? "the instance";
+      modelNote = recordSavedChange(context, moved, savedProperties) ?? modelNote;
+    } else if (outcome.ok && !refused && operation === "set_properties" && target) {
       const properties = isRecord(args.properties) ? Object.keys(args.properties).sort() : [];
       context.recordChange({
         kind: "properties",
@@ -2173,7 +2335,10 @@ export function createStudioToolRunner(context: PlannerContext, options: StudioT
     }
 
     if (outcome.ok && !refused && operation === "build_instances") {
-      recordBuild(context, args, outcome);
+      modelNote = recordBuild(context, args, outcome) ?? modelNote;
+      const data = isRecord(outcome.data) ? outcome.data : {};
+      const pending = pendingSavedBuild(stringField(data, "path") ?? (typeof args.path === "string" ? args.path : undefined), data);
+      if (pending) pendingBuilds.push(pending);
     }
 
     if (outcome.ok && !refused && operation === "animation") {

@@ -25,9 +25,12 @@ async function loadPropertyHandlers(
     setup(build) {
       build.onResolve({ filter: /^\.\.\/Utils$/ }, () => ({ path: 'Utils', namespace: 'atomic-properties' }));
       build.onResolve({ filter: /^\.\.\/Recording$/ }, () => ({ path: 'Recording', namespace: 'atomic-properties' }));
+      build.onResolve({ filter: /^\.\.\/RojoPlan$/ }, () => ({ path: 'RojoPlan', namespace: 'atomic-properties' }));
       build.onLoad({ filter: /.*/, namespace: 'atomic-properties' }, (args) => ({
         contents: args.path === 'Utils'
           ? 'export default globalThis.__ATOMIC_PROPERTIES_UTILS__;'
+          : args.path === 'RojoPlan'
+          ? 'export default globalThis.__ATOMIC_PROPERTIES_ROJO_PLAN__;'
           : 'export default globalThis.__ATOMIC_PROPERTIES_RECORDING__;',
         loader: 'js',
       }));
@@ -49,6 +52,7 @@ async function loadPropertyHandlers(
     exports: commonJsModule.exports,
     __ATOMIC_PROPERTIES_UTILS__: utils,
     __ATOMIC_PROPERTIES_RECORDING__: recording,
+    __ATOMIC_PROPERTIES_ROJO_PLAN__: { scriptRevisions: () => ({ scripts: [{ path: 'game.Target', revision: 'rev:1' }] }) },
     pcall: robloxPcall,
     pairs: (value: Record<string, unknown>) => Object.entries(value),
     typeIs: (value: unknown, expected: string) => expected === 'table'
@@ -71,10 +75,41 @@ function defaults(instance: object) {
     // Utils.samePropertyValue's tolerances matter only for Roblox numeric and
     // color types; these tests write strings and instances, which must match.
     samePropertyValue: jest.fn((actual: unknown, requested: unknown) => actual === requested),
+    hasUniquePath: jest.fn(() => true),
   };
 }
 
 describe('atomic set_properties', () => {
+  test('planOnly describes a rename and a move, converted and checked, and writes nothing', async () => {
+    // The destination already holds a New, which a saved rename would duplicate.
+    const parent = { Name: 'Shared', GetChildren: () => [{ Name: 'New' }] };
+    const state: Record<string, unknown> = { Name: 'Old', Parent: { Name: 'Before', GetChildren: () => [] }, Color: 'red' };
+    const writes: string[] = [];
+    const instance: Record<string, unknown> = {
+      ClassName: 'ModuleScript',
+      // roblox-ts's size(), on an array from this realm rather than the handler's.
+      GetDescendants: () => Object.assign([], { size: () => 0 }),
+    };
+    for (const property of ['Name', 'Parent', 'Color'] as const) {
+      Object.defineProperty(instance, property, { get: () => state[property], set: (value) => { writes.push(property); state[property] = value; }, enumerable: true });
+    }
+    const utils = defaults(instance);
+    utils.resolveInstance = jest.fn((path: unknown, ref: unknown) => (ref === 'stable-ref' ? instance : path === 'game.Shared' ? parent : undefined));
+    const utilsWithPaths = Object.assign(utils, { getInstancePath: jest.fn((target: unknown) => (target === parent ? 'game.Shared' : 'game.Target')) });
+    const recording = { beginRecording: jest.fn(() => 'recording-id'), finishRecording: jest.fn() };
+    const handlers = await loadPropertyHandlers(utilsWithPaths, recording);
+
+    const plan = handlers.setProperties({ instanceRef: 'stable-ref', planOnly: true, properties: { Name: 'New', Parent: 'game.Shared', Color: 'blue' } });
+
+    expect(plan).toEqual({
+      planned: true, path: 'game.Target', instanceRef: 'stable-ref', className: 'ModuleScript', uniquePath: true, descendants: 0,
+      scripts: [{ path: 'game.Target', revision: 'rev:1' }],
+      name: 'New', parent: 'game.Shared', parentUnique: true, nameTaken: true, properties: ['Color'],
+    });
+    expect(writes).toEqual([]);
+    expect(recording.beginRecording).not.toHaveBeenCalled();
+  });
+
   test('preflights then applies every property deterministically with Parent last and commits only on success', async () => {
     const writes: string[] = [];
     const parent = { Name: 'NewParent' };

@@ -320,6 +320,59 @@ test("each tool call carries its own budget rather than one flat timeout", async
   );
 });
 
+test("on a Rojo-linked place a build that removes something stops for the user even in Auto approve", async () => {
+  const caller = makeCaller(async () => outcome());
+  const risks: string[] = [];
+  const linkedFor: Array<string | null> = [];
+  const removal = { path: "game.ServerScriptService", operations: [{ op: "remove", target: "game.ServerScriptService.Old" }] };
+  // Naming `session` in its own emit is safe: nothing is emitted before execute().
+  const session: RunSession = new RunSession({
+    caller,
+    planner: planner(async (context) => {
+      await context.call("build_instances", removal);
+      return "done";
+    }),
+    request: makeRequest({ approvalMode: "Auto approve", instanceId: "studio-1" }),
+    rojoLinked: (instanceId) => { linkedFor.push(instanceId); return true; },
+    emit: (event) => {
+      if (event.type === "tool-proposed") risks.push(event.proposal.risk);
+      // The user declines; a removal that deletes project files never runs unasked.
+      if (event.type === "approval-requested") session.resolveApproval(event.callId, "rejected");
+    },
+  });
+
+  await session.execute();
+  assert.deepEqual(risks, ["irreversible"]);
+  assert.deepEqual(linkedFor, ["studio-1"]);
+  assert.equal(caller.calls.length, 0);
+});
+
+test("a run with no place of its own asks the link state with the place the call names, or with none", async () => {
+  const caller = makeCaller(async () => outcome());
+  const asked: Array<string | null> = [];
+  const removal = (instanceId?: string) => ({
+    path: "game.ServerScriptService", operations: [{ op: "remove", target: "game.ServerScriptService.Old" }],
+    ...(instanceId ? { instance_id: instanceId } : {}),
+  });
+  const session: RunSession = new RunSession({
+    caller,
+    planner: planner(async (context) => {
+      await context.call("build_instances", removal("place:1"));
+      await context.call("build_instances", removal());
+      return "done";
+    }),
+    request: makeRequest({ approvalMode: "Auto approve", instanceId: null }),
+    rojoLinked: (instanceId) => { asked.push(instanceId); return true; },
+    emit: (event) => {
+      if (event.type === "approval-requested") session.resolveApproval(event.callId, "rejected");
+    },
+  });
+
+  await session.execute();
+  assert.deepEqual(asked, ["place:1", null]);
+  assert.equal(caller.calls.length, 0);
+});
+
 test("manual playtest teardown prevents duplicate run cleanup", async () => {
   const caller = makeCaller(async () => outcome());
   const session = new RunSession({

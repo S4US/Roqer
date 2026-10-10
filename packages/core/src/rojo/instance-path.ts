@@ -1,4 +1,23 @@
 const ESCAPES: Record<string, string> = { '\\': '\\', n: '\n', r: '\r', t: '\t', '"': '"' };
+const LUAU_KEYWORDS = new Set([
+  'and', 'break', 'continue', 'do', 'else', 'elseif', 'end', 'export',
+  'false', 'for', 'function', 'if', 'in', 'local', 'nil', 'not', 'or',
+  'repeat', 'return', 'then', 'true', 'type', 'until', 'while',
+]);
+
+/** The path the plugin would print (getInstancePath) for these name segments; parseInstancePath reverses it. */
+export function formatInstancePath(segments: string[]): string {
+  let text = 'game';
+  for (const segment of segments) {
+    if (/^[A-Za-z_][A-Za-z0-9_]*$/.test(segment) && !LUAU_KEYWORDS.has(segment)) {
+      text += `.${segment}`;
+    } else {
+      const escaped = segment.replace(/\\/g, '\\\\').replace(/\n/g, '\\n').replace(/\r/g, '\\r').replace(/\t/g, '\\t').replace(/"/g, '\\"');
+      text += `["${escaped}"]`;
+    }
+  }
+  return text;
+}
 
 /**
  * The name segments of a path the plugin printed (getInstancePath): `game`,

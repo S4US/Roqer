@@ -225,6 +225,12 @@ export type RunEngineOptions = {
   now?: () => string;
   /** Injectable for tests; defaults to a counter-based id generator. */
   createId?: (prefix: string) => string;
+  /**
+   * Whether the place is linked to a Rojo project now, so a removal the MCP
+   * would save by deleting project files, which Studio's undo cannot bring
+   * back, is rated irreversible. Absent means no link is known of.
+   */
+  rojoLinked?: (instanceId: string | null) => boolean;
 };
 
 const RETRYABLE_ERROR_CODES: ReadonlySet<string> = new Set(["timeout", "request_failed", "bridge_restarted"]);
@@ -355,6 +361,7 @@ export class RunSession {
   private readonly emitRaw: (event: RunEvent) => void;
   private readonly now: () => string;
   private readonly createId: (prefix: string) => string;
+  private readonly rojoLinked: RunEngineOptions["rojoLinked"];
 
   private readonly abortController = new AbortController();
   private readonly outputMeter = new OutputTokenMeter();
@@ -417,6 +424,7 @@ export class RunSession {
     this.emitRaw = options.emit;
     this.now = options.now ?? (() => new Date().toISOString());
     this.createId = options.createId ?? defaultIdGenerator();
+    this.rojoLinked = options.rojoLinked;
     this.runId = options.request.runId;
   }
 
@@ -751,7 +759,9 @@ export class RunSession {
     const effectiveArgs = this.routeToRunInstance(tool, args);
 
     const callId = this.createId("call");
-    const risk = riskForTool(tool, effectiveArgs);
+    // The place the call is addressed to; a run with none lets the server pick one, which may be linked.
+    const addressed = this.request.instanceId ?? (typeof effectiveArgs.instance_id === "string" ? effectiveArgs.instance_id : null);
+    const risk = riskForTool(tool, effectiveArgs, { rojoLinked: this.rojoLinked?.(addressed) === true });
     const proposal: ToolProposal = {
       callId,
       tool,

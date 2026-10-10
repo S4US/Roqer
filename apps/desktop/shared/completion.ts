@@ -104,12 +104,17 @@ export type GateInput = {
 function changeIsVerified(change: GateChange, evidence: readonly GateEvidence[]): boolean {
   // Property writes and builds are checked by Studio inside the call itself,
   // so their evidence is a verification of the same kind for the same target.
+  // A build saved to Rojo files carries its own token as revisionAfter, so
+  // another build on the same root cannot stand in for its evidence.
   if (change.kind === "properties" || change.kind === "instance") {
     return evidence.some((item) =>
       item.kind === "verification" &&
       item.changeKind === change.kind &&
       item.title === change.target &&
-      item.passed === true);
+      item.passed === true &&
+      (change.revisionAfter === undefined ||
+        item.metadata?.some((entry) =>
+          entry.label === REVISION_AFTER_LABEL && entry.value === change.revisionAfter) === true));
   }
   return evidence.some((item) =>
     item.kind === "verification" &&

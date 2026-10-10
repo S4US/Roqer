@@ -1,15 +1,21 @@
 #!/usr/bin/env node
 // Live check of file-backed script edits on a Rojo-linked place
 // (packages/core/src/rojo/, packages/core/src/tools/index.ts _scriptWrite).
-// Needs a real `rojo serve` and a human to connect Studio's Rojo plugin to
-// it; run inside the managed Studio session through `npm run test:studio:rojo`.
+// Needs a real `rojo serve`. It loads the matching Rojo plugin release into the
+// test place and starts that plugin's own sync client (ROJO_MANUAL_CONNECT=1
+// waits for a person to connect the real plugin instead); run inside the
+// managed Studio session through `npm run test:studio:rojo`.
 //
 // Builds a disposable temp Rojo project with one script, links it to the
 // connected place, and checks: an edit changes the file and syncs; a file
 // saved with CRLF line endings keeps them through an edit; a file changed
 // behind Roqer's back is a conflict that touches neither side; killing
-// `rojo serve` makes an edit "pending" without ever reaching Studio; and no
-// `.roqer-*.tmp` write-in-progress temp file is ever visible as an instance.
+// `rojo serve` makes an edit "pending" without ever reaching Studio; no
+// `.roqer-*.tmp` write-in-progress temp file is ever visible as an instance;
+// new scripts and models built with build_instances are saved as files that
+// Rojo alone makes in Studio, one copy each; a rename moves the file and a
+// Studio-only edit blocks it as a conflict; and a removal deletes the files,
+// keeping a copy.
 //
 // Never touches the user's own place: everything happens in a temp project
 // linked to a disposable baseplate.
@@ -120,6 +126,102 @@ function findTmpInstanceName(value) {
   return undefined;
 }
 
+/**
+ * The Rojo Studio plugin release matching the rojo CLI, downloaded once into
+ * the temp folder. Its sync client (ServeSession) is what the Rojo plugin
+ * itself runs, so starting it from a script syncs Studio exactly as clicking
+ * Connect would, with no one at the keyboard.
+ */
+async function rojoPluginRbxm() {
+  const { stdout } = await execFileAsync(ROJO_BIN, ['--version'], { timeout: 10_000, windowsHide: true });
+  const version = /(\d+\.\d+\.\d+)/.exec(String(stdout))?.[1];
+  if (!version) throw new Error(`could not read the rojo version from: ${stdout}`);
+  const file = path.join(os.tmpdir(), `roqer-rojo-plugin-${version}.rbxm`);
+  if (!fs.existsSync(file)) {
+    const response = await fetch(`https://github.com/rojo-rbx/rojo/releases/download/v${version}/Rojo.rbxm`);
+    if (!response.ok) throw new Error(`downloading the Rojo ${version} plugin failed: HTTP ${response.status}`);
+    const temp = `${file}.${process.pid}.part`;
+    fs.writeFileSync(temp, Buffer.from(await response.arrayBuffer()));
+    fs.renameSync(temp, file);
+  }
+  return file;
+}
+
+const ROJO_CLIENT_FOLDER = 'RoqerRojoLiveClient';
+
+/**
+ * Loads the Rojo plugin's modules into a folder in ServerStorage (which the
+ * probe project does not sync) and starts its ServeSession against the
+ * running `rojo serve`, accepting the initial sync as clicking Accept would.
+ * Set ROJO_MANUAL_CONNECT=1 to connect the real plugin by hand instead.
+ */
+async function connectRojoClient(client, servePort) {
+  const rbxm = await rojoPluginRbxm();
+  const folder = await client.callTool('execute_luau', {
+    code: `local folder = Instance.new("Folder") folder.Name = "${ROJO_CLIENT_FOLDER}" folder.Parent = game:GetService("ServerStorage") return folder:GetFullName()`,
+    target: 'edit',
+  });
+  if (folder?.success !== true) throw new Error(`could not make the Rojo client folder: ${JSON.stringify(folder)}`);
+  // Carried in small execute_luau calls rather than import_rbxm: under the managed runner this
+  // client is a proxy, and import_rbxm leaves a large file on the proxy, where the plugin cannot fetch it.
+  const base64 = fs.readFileSync(rbxm).toString('base64');
+  const CHUNK = 60_000;
+  for (let offset = 0; offset < base64.length; offset += CHUNK) {
+    const part = await client.callTool('execute_luau', {
+      code: `_G.RoqerRojoPluginBase64 = ${offset === 0 ? '""' : '(_G.RoqerRojoPluginBase64 or "")'} .. "${base64.slice(offset, offset + CHUNK)}" return #_G.RoqerRojoPluginBase64`,
+      target: 'edit',
+    });
+    if (part?.success !== true) throw new Error(`could not send the Rojo plugin to Studio: ${JSON.stringify(part)}`);
+  }
+  const imported = await client.callTool('execute_luau', {
+    target: 'edit',
+    code: `
+      local encoded = _G.RoqerRojoPluginBase64
+      _G.RoqerRojoPluginBase64 = nil
+      assert(#encoded == ${base64.length}, "the Rojo plugin arrived incomplete: " .. #encoded)
+      local bytes = game:GetService("EncodingService"):Base64Decode(buffer.fromstring(encoded))
+      local folder = game:GetService("ServerStorage"):FindFirstChild("${ROJO_CLIENT_FOLDER}")
+      for _, item in game:GetService("SerializationService"):DeserializeInstancesAsync(bytes) do item.Parent = folder end
+      return #folder:GetDescendants()
+    `,
+  }, 60_000);
+  if (imported?.success !== true) throw new Error(`could not load the Rojo plugin: ${JSON.stringify(imported)}`);
+  const started = await client.callTool('execute_luau', {
+    target: 'edit',
+    code: `
+      local folder = game:GetService("ServerStorage"):FindFirstChild("${ROJO_CLIENT_FOLDER}")
+      local serveSession
+      for _, item in folder:GetDescendants() do
+        if item.Name == "ServeSession" and item:IsA("ModuleScript") then serveSession = item break end
+      end
+      assert(serveSession, "the Rojo plugin has no ServeSession module")
+      local ServeSession = require(serveSession)
+      local ApiContext = require(serveSession.Parent.ApiContext)
+      local session = ServeSession.new({ apiContext = ApiContext.new("http://localhost:${servePort}"), twoWaySync = false })
+      session:setConfirmCallback(function() return "Accept" end)
+      session:start()
+      _G.RoqerRojoLiveSession = session
+      return "started"
+    `,
+  });
+  if (started?.success !== true) throw new Error(`could not start the Rojo sync client: ${JSON.stringify(started)}`);
+  console.log(`  Rojo's own sync client is connected to localhost:${servePort} (no manual connect needed)`);
+}
+
+async function disconnectRojoClient(client) {
+  await client.callTool('execute_luau', {
+    target: 'edit',
+    code: `
+      local session = _G.RoqerRojoLiveSession
+      _G.RoqerRojoLiveSession = nil
+      if session then pcall(function() session:stop() end) end
+      local folder = game:GetService("ServerStorage"):FindFirstChild("${ROJO_CLIENT_FOLDER}")
+      if folder then folder:Destroy() end
+      return "stopped"
+    `,
+  });
+}
+
 async function rojoOnPath() {
   try {
     await execFileAsync(ROJO_BIN, ['--version'], { timeout: 10_000, windowsHide: true });
@@ -147,6 +249,7 @@ await runTest('Rojo-linked place saves script edits to its file', async ({ track
   let watching = true;
   let expectedServeExit = false;
   let tmpInstanceSeen;
+  let rojoClientStarted = false;
 
   const watchForTmpInstance = (async () => {
     while (watching) {
@@ -181,7 +284,12 @@ await runTest('Rojo-linked place saves script edits to its file', async ({ track
       console.warn(`  (rojo serve exited early: code=${code} signal=${signal})\n${serveOutput.join('')}`);
     });
 
-    console.log(`\nConnect the Rojo plugin in Studio to localhost:${servePort}`);
+    if (process.env.ROJO_MANUAL_CONNECT === '1') {
+      console.log(`\nConnect the Rojo plugin in Studio to localhost:${servePort}`);
+    } else {
+      await connectRojoClient(client, servePort);
+      rojoClientStarted = true;
+    }
     await waitUntil('the probe script to be synced into Studio', 120_000, 1000, async () => {
       const result = await client.callTool('get_script_source', { instancePath: INSTANCE_PATH });
       return result.error ? undefined : result;
@@ -261,6 +369,100 @@ await runTest('Rojo-linked place saves script edits to its file', async ({ track
       return result.fileMatchesStudio === true && result.source?.includes(divergentMarker) ? result : undefined;
     });
 
+    // (f) New scripts built into the project folder are saved as files, and
+    // Rojo, not Roqer, makes them in Studio: exactly one copy each, with the
+    // source the build gave them, and the next edit is file-backed too.
+    const built = await client.callTool('build_instances', {
+      path: 'game.ServerScriptService',
+      operations: [
+        { op: 'create', id: 'kit', className: 'Folder', name: 'RoqerRojoKit' },
+        { op: 'create', className: 'ModuleScript', name: 'Made', parent: '$kit' },
+        { op: 'create', className: 'Script', name: 'Runner', parent: '$kit' },
+      ],
+    });
+    assert(built.success === true, `build_instances saves the new scripts (got ${JSON.stringify(built)})`);
+    assert(built.saved?.sync === 'synced', `the build reports sync: synced (got ${JSON.stringify(built.saved)})`);
+    assert(fs.existsSync(path.join(root, 'src', 'RoqerRojoKit', 'Made.luau'))
+      && fs.existsSync(path.join(root, 'src', 'RoqerRojoKit', 'Runner.server.luau')), 'the new files are on disk where Rojo reads them');
+    const copies = await client.callTool('execute_luau', {
+      code: 'local n = 0 for _, child in game.ServerScriptService:GetChildren() do if child.Name == "RoqerRojoKit" then n += 1 end end return n',
+      target: 'edit',
+    });
+    assert(String(copies.returnValue) === '1', `Studio holds exactly one RoqerRojoKit, not a second copy (got ${copies.returnValue})`);
+    const made = await client.callTool('get_script_source', { instancePath: 'game.ServerScriptService.RoqerRojoKit.Made' });
+    assert(made.persistence === 'file' && made.fileMatchesStudio === true, `the new script reads back file-backed (got ${made.persistence})`);
+    const madeEdit = await client.callTool('set_script_source', {
+      instancePath: 'game.ServerScriptService.RoqerRojoKit.Made',
+      source: 'return "made"\n',
+      expectedRevision: made.revision,
+    });
+    assert(madeEdit.saved?.sync === 'synced', `an edit to the new script is saved to its file (got ${JSON.stringify(madeEdit.saved)})`);
+
+    const countIn = async (parentPath, name) => {
+      const counted = await client.callTool('execute_luau', {
+        code: `local n = 0 for _, child in ${parentPath}:GetChildren() do if child.Name == ${JSON.stringify(name)} then n += 1 end end return n`,
+        target: 'edit',
+      });
+      return String(counted.returnValue);
+    };
+
+    // (g) A new model is serialized by Studio, saved as one .rbxm, and made by Rojo.
+    const model = await client.callTool('build_instances', {
+      path: 'game.ServerScriptService',
+      operations: [
+        { op: 'create', id: 'model', className: 'Model', name: 'RoqerRojoModel' },
+        { op: 'create', className: 'Part', name: 'Block', parent: '$model', properties: { Anchored: true } },
+      ],
+    });
+    assert(model.success === true, `build_instances saves a new model (got ${JSON.stringify(model)})`);
+    assert(model.saved?.sync === 'synced', `the model reports sync: synced (got ${JSON.stringify(model.saved)})`);
+    assert(fs.existsSync(path.join(root, 'src', 'RoqerRojoModel.rbxm')), 'the model is saved as src/RoqerRojoModel.rbxm');
+    assert(await countIn('game.ServerScriptService', 'RoqerRojoModel') === '1', 'Studio holds exactly one RoqerRojoModel');
+    assert(await countIn('game.ServerScriptService.RoqerRojoModel', 'Block') === '1', 'the model Rojo made from the file has its Block');
+
+    // (h) A rename moves the file, and Rojo replaces the instance.
+    const renamed = await client.callTool('set_properties', {
+      instancePath: 'game.ServerScriptService.RoqerRojoKit.Made',
+      properties: { Name: 'Renamed' },
+    });
+    assert(renamed.saved?.sync === 'synced', `set_properties saves a rename (got ${JSON.stringify(renamed)})`);
+    assert(fs.existsSync(path.join(root, 'src', 'RoqerRojoKit', 'Renamed.luau')) && !fs.existsSync(path.join(root, 'src', 'RoqerRojoKit', 'Made.luau')),
+      'the file is renamed');
+    assert(await countIn('game.ServerScriptService.RoqerRojoKit', 'Made') === '0' && await countIn('game.ServerScriptService.RoqerRojoKit', 'Renamed') === '1',
+      'Studio has the renamed script and not the old one');
+    const renamedSource = await client.callTool('get_script_source', { instancePath: 'game.ServerScriptService.RoqerRojoKit.Renamed' });
+    assertContains(renamedSource.source, 'made', 'the renamed script kept its source');
+
+    // (i) A script edited in Studio but not in its file is a conflict: nothing moves.
+    await client.callTool('execute_luau', {
+      code: 'game.ServerScriptService.RoqerRojoKit.Renamed.Source = "return \\"studio only\\""',
+      target: 'edit',
+    });
+    const conflicted = await client.callTool('set_properties', {
+      instancePath: 'game.ServerScriptService.RoqerRojoKit.Renamed',
+      properties: { Name: 'Again' },
+    });
+    assert(conflicted.errorCode === 'rojo_conflict', `a rename over a Studio-only edit is a conflict (got ${JSON.stringify(conflicted)})`);
+    assert(fs.existsSync(path.join(root, 'src', 'RoqerRojoKit', 'Renamed.luau')), 'the conflicting rename moved no file');
+
+    // Resolve it the documented way: a file save Rojo delivers over the Studio-only edit.
+    fs.writeFileSync(path.join(root, 'src', 'RoqerRojoKit', 'Renamed.luau'), 'return "file wins"\n');
+    await waitUntil('Rojo to deliver the file over the Studio-only edit', 30_000, 500, async () => {
+      const read = await client.callTool('get_script_source', { instancePath: 'game.ServerScriptService.RoqerRojoKit.Renamed' });
+      return read.fileMatchesStudio === true ? read : undefined;
+    });
+
+    // (j) Removing the folder deletes its files, keeps a copy, and Rojo takes it out of Studio.
+    const removed = await client.callTool('build_instances', {
+      path: 'game.ServerScriptService.RoqerRojoKit',
+      operations: [{ op: 'remove', target: 'game.ServerScriptService.RoqerRojoKit' }],
+    });
+    assert(removed.saved?.sync === 'synced', `removing the folder is saved (got ${JSON.stringify(removed)})`);
+    assert(!fs.existsSync(path.join(root, 'src', 'RoqerRojoKit')), 'the folder is deleted');
+    assert(typeof removed.saved?.backup === 'string' && fs.existsSync(path.join(removed.saved.backup, 'src', 'RoqerRojoKit')), 'a copy of the folder is kept');
+    assert(await countIn('game.ServerScriptService', 'RoqerRojoKit') === '0', 'Rojo took the folder out of Studio');
+    fs.rmSync(removed.saved.backup, { recursive: true, force: true });
+
     // (d) Killing rojo serve makes an edit "pending"; Studio is never written.
     expectedServeExit = true;
     await killReliably(serve);
@@ -293,6 +495,7 @@ await runTest('Rojo-linked place saves script edits to its file', async ({ track
     if (linked) {
       await client.callTool('manage_instance', { action: 'unlink_project' }).catch(() => {});
     }
+    if (rojoClientStarted) await disconnectRojoClient(client).catch(() => {});
     fs.rmSync(root, { recursive: true, force: true });
   }
 }).then((ok) => process.exit(ok ? 0 : 1));

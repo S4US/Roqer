@@ -103,6 +103,25 @@ test("an unpublished (anon) instance links for the session but is never remember
   });
 });
 
+test("isLinked errs toward a link: a published place's new id, or a call with no place, counts while any link is held", async () => {
+  await withStore(async (store) => {
+    const connection = new RojoConnection({
+      store,
+      callTool: async () => linkSuccess({ instance_id: "anon:abc" }),
+      probe: async () => ({ answering: true }),
+      readServePort: neverReadsPort(),
+    });
+    assert.equal(connection.isLinked("place:123"), false, "nothing is linked yet");
+    assert.equal(connection.isLinked(null), false);
+
+    await connection.link("anon:abc", "/projects/one/default.project.json");
+    assert.equal(connection.isLinked("anon:abc"), true);
+    // Published, the place is reached as place:123 while the bridge still holds the anon link.
+    assert.equal(connection.isLinked("place:123"), true);
+    assert.equal(connection.isLinked(null), true);
+  });
+});
+
 test("a rojo_* failure surfaces its message and is remembered as this instance's error", async () => {
   await withStore(async (store) => {
     const connection = new RojoConnection({
