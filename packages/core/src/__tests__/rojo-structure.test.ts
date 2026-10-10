@@ -9,8 +9,11 @@
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { afterEach, describe, expect, test } from '@jest/globals';
+import osModule from 'os';
+import { afterEach, beforeEach, describe, expect, jest, test } from '@jest/globals';
 import { BridgeService } from '../bridge-service.js';
+import { acquireSourceWriteLock } from '../rojo/file-write-lock.js';
+import { stubWindowsProcessObserver } from './rojo-process-observer-fixture.js';
 import { RojoIntegration, type PlannedLive, type PlannedNode, type PlannedTop } from '../rojo/index.js';
 import { parseInstancePath } from '../rojo/instance-path.js';
 import { sourceRevision } from '../rojo/source-revision.js';
@@ -21,7 +24,18 @@ type Node = { name: string; className: string; filePaths?: string[]; children?: 
 const body = (result: { content: { text?: string }[] }) => JSON.parse(result.content[0].text!);
 
 const roots: string[] = [];
-afterEach(() => { for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true }); });
+// Write locks live in a private home here, never the real ~/.roqer, and Windows process lookups are stubbed.
+let lockHome: string;
+beforeEach(() => {
+  lockHome = fs.mkdtempSync(path.join(os.tmpdir(), 'roqer structure home '));
+  jest.spyOn(osModule, 'homedir').mockReturnValue(lockHome);
+  stubWindowsProcessObserver();
+});
+afterEach(() => {
+  jest.restoreAllMocks();
+  for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true });
+  fs.rmSync(lockHome, { recursive: true, force: true });
+});
 
 const SCRIPT_FILE = /^(.*?)(\.server|\.client)?\.luau$/;
 
@@ -640,4 +654,37 @@ describe('what a removal or rename must never take with it', () => {
     expect(listing()).toEqual([]);
     fs.rmSync(result.saved.backup, { recursive: true, force: true });
   }, 15_000);
+});
+
+describe('other Roqer writers saving the same scripts', () => {
+  test('a removal waits for no one: a script another writer is saving refuses it, and nothing changes', async () => {
+    const { tools, root, listing } = await setup({ live: [removeMain()] });
+    const busy = await acquireSourceWriteLock(fs.realpathSync.native(path.join(root, 'src', 'Main.server.luau')));
+    try {
+      const result = await build(tools);
+      expect(result.errorCode).toBe('rojo_write_failed');
+      expect(result.error).toMatch(/lease is busy.*Nothing was changed\.$/);
+      expect(listing()).toEqual(['src/Main.server.luau']);
+    } finally {
+      await busy.release();
+    }
+  });
+
+  test('a script saved between the plan and the move is never moved unseen', async () => {
+    const { tools, root, listing } = await setup({
+      live: [live({ op: 'set', path: MAIN, className: 'Script', name: 'Boot', scripts: [{ path: MAIN, revision: MAIN_REVISION }] })],
+    });
+    // Another writer saves the file once the plan has compared it, before any file moves.
+    const plan = tools.rojo.planStructure.bind(tools.rojo);
+    tools.rojo.planStructure = async (...args) => {
+      const planned = await plan(...args);
+      fs.writeFileSync(path.join(root, 'src', 'Main.server.luau'), 'print("saved meanwhile")\n');
+      return planned;
+    };
+    const result = await build(tools);
+    expect(result.errorCode).toBe('rojo_conflict');
+    expect(result.error).toMatch(/changed since it was compared with the script in Studio, so nothing was moved or removed; read it and retry\. Nothing was changed\.$/);
+    expect(listing()).toEqual(['src/Main.server.luau']);
+    expect(fs.readFileSync(path.join(root, 'src', 'Main.server.luau'), 'utf8')).toBe('print("saved meanwhile")\n');
+  });
 });

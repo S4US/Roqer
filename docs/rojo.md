@@ -236,7 +236,13 @@ parent's project folder. Rojo makes the renamed instance afresh, so its
 Before a removal, rename or move, every script under the instance is compared
 with its file. If Studio holds different text for one (an unsaved edit
 included), the change is refused with `rojo_conflict` and nothing changes,
-since Rojo would make the instance again from the file without it.
+since Rojo would make the instance again from the file without it. Each of
+those script files is then locked with the same write lease script edits
+take (see [Conflicts](#conflicts-and-how-to-resolve-them)) and compared again
+before any file moves, so another Roqer writer's save that lands in between
+is refused with `rojo_conflict` rather than moved or removed unseen; a file
+another writer is saving right now refuses the change with
+`rojo_write_failed`, naming its lease folder.
 
 Once written, the files are read back through `rojo sourcemap`. If Rojo does
 not make exactly the planned result from them (for example, a

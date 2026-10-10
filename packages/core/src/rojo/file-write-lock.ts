@@ -130,6 +130,10 @@ export async function acquireSourceWriteLock(realFile: string): Promise<{
         remove(directory);
       },
     },
+  }).catch((error: NodeJS.ErrnoException) => {
+    // The library refuses a held, fresh lease with its own wording; say it as every other busy refusal does.
+    if (error?.code === 'ELOCKED') throw busy();
+    throw error;
   });
   liveTokens.add(owner.token);
   const removeOurs = () => {

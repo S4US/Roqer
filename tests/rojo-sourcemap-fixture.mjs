@@ -171,7 +171,7 @@ async function checkStructure(RojoIntegration) {
     const save = async (label, tops, lives, expect) => {
       const disposition = await rojo.planStructure(link, tops, lives);
       assert(disposition.kind === 'files' && !disposition.needsSerialize, `${label}: planned as files (got ${disposition.kind}${disposition.error ? `: ${disposition.error}` : ''})`);
-      const backup = await rojo.applyStructure(link, disposition.change);
+      const { backup } = await rojo.applyStructure(link, disposition.change);
       if (backup) backups.push(backup);
       const got = {
         created: sorted(disposition.change.created),

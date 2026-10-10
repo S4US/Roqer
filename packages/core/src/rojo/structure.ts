@@ -2,6 +2,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { applyFileOps, filesUnder, sizeOf, undoFileOps, ProjectFilesError, type FileOp } from './file-ops.js';
+import { acquireSourceWriteLock } from './file-write-lock.js';
 import { formatInstancePath, parseInstancePath } from './instance-path.js';
 import { containsScript, descendantCount, layoutNew, nodeAt, projectNaming, type Layout, type NewInstance, type PlannedTop } from './new-files.js';
 import { entriesNamed, locate, nameInDirectory, nameProblem, projectDirectory, readProject, type Located } from './project-walk.js';
@@ -44,8 +45,16 @@ export interface PlannedLive {
 export type SourcemapCheck = { segments: string[]; present: false } | { segments: string[]; present: true; className: string; file?: string };
 export type StudioCheck = { path: string; revision: string } | { path: string; className: string } | { path: string; absent: true };
 
+/** A script file a removal or move takes along, with the revision Studio held for it when they were compared. */
+export interface Guarded {
+  file: string;
+  revision: string;
+}
+
 export interface ProjectChange {
   ops: FileOp[];
+  /** Script files this change moves or removes: each is locked against other Roqer writers and compared again before anything happens. */
+  guarded: Guarded[];
   checks: SourcemapCheck[];
   studio: StudioCheck[];
   created: string[];
@@ -251,7 +260,7 @@ async function owned(context: StructureContext, live: PlannedLive, located: Loca
  * the file moves or goes and Rojo makes the instance again, so the change is
  * refused like a conflicting edit.
  */
-async function sourcesAgree(context: StructureContext, live: PlannedLive): Promise<Part | undefined> {
+async function sourcesAgree(context: StructureContext, live: PlannedLive, guarded: Guarded[]): Promise<Part | undefined> {
   if (live.scriptsOmitted) {
     return { kind: 'refuse', error: `${live.path} holds more scripts than Roqer checks against their files at once; change it in smaller parts` };
   }
@@ -275,6 +284,7 @@ async function sourcesAgree(context: StructureContext, live: PlannedLive): Promi
     if (files.length !== 1) continue;
     const file = path.resolve(context.root, files[0]);
     const revision = await fs.promises.readFile(file).then((bytes) => sourceRevision(toStudioText(bytes)), () => undefined);
+    if (revision === script.revision) guarded.push({ file, revision });
     if (revision !== script.revision) {
       return {
         kind: 'refuse',
@@ -295,7 +305,8 @@ async function planRemove(context: StructureContext, live: PlannedLive, own: Ext
   if (studioOnly > 0) {
     return { kind: 'refuse', error: `${live.path} holds ${studioOnly} instance(s) only Studio has, which the backup of its files would not keep; move or remove them first` };
   }
-  const conflict = await sourcesAgree(context, live);
+  const guarded: Guarded[] = [];
+  const conflict = await sourcesAgree(context, live, guarded);
   if (conflict) return conflict;
   if (own.folder) {
     // Only what Rojo itself reads may go with the folder (and the .gitkeep Rojo writes into an empty one).
@@ -315,6 +326,7 @@ async function planRemove(context: StructureContext, live: PlannedLive, own: Ext
     kind: 'files',
     change: {
       ops: own.entries.map((entry) => ({ kind: 'delete' as const, path: entry })),
+      guarded,
       checks: [{ segments: own.segments, present: false }],
       studio: [{ path: live.path, absent: true }],
       removed: own.entries,
@@ -356,7 +368,8 @@ async function planMove(
   if (live.descendants > descendantCount(own.node)) {
     return { kind: 'refuse', error: `${live.path} holds ${live.descendants - descendantCount(own.node)} instance(s) only Studio has; Rojo would drop them when it remakes ${live.path} from its moved files` };
   }
-  const conflict = await sourcesAgree(context, live);
+  const guarded: Guarded[] = [];
+  const conflict = await sourcesAgree(context, live, guarded);
   if (conflict) return conflict;
   const oldName = own.segments.at(-1)!;
   const renames: Array<{ from: string; to: string }> = [];
@@ -380,6 +393,7 @@ async function planMove(
     kind: 'files',
     change: {
       ops: renames.map((rename) => ({ kind: 'rename' as const, ...rename })),
+      guarded,
       checks: [
         ...(newPath.toLowerCase() === live.path.toLowerCase() ? [] : [{ segments: own.segments, present: false as const }]),
         { segments: newSegments, present: true, className: live.className, ...(main ? { file: main } : {}) },
@@ -464,9 +478,10 @@ export async function planStructure(context: StructureContext, tops: PlannedTop[
         + 'send the project changes in a call of their own',
     };
   }
-  const change: ProjectChange = { ops: [], checks: [], studio: [], created: [], removed: [], renamed: [], instances: [] };
+  const change: ProjectChange = { ops: [], guarded: [], checks: [], studio: [], created: [], removed: [], renamed: [], instances: [] };
   for (const part of files) {
     change.ops.push(...(part.change.ops ?? []));
+    change.guarded.push(...(part.change.guarded ?? []));
     change.checks.push(...(part.change.checks ?? []));
     change.studio.push(...(part.change.studio ?? []));
     change.created.push(...(part.change.created ?? []));
@@ -483,36 +498,78 @@ export function backupFolder(projectName: string, stamp: number): string {
   return path.join(os.tmpdir(), 'roqer-rojo-backups', `${safe}-${stamp}-${Math.random().toString(16).slice(2, 8)}`);
 }
 
+/** Releases every lease, returning a warning when one could not be released yet (the lock keeps retrying it). */
+async function releaseAll(leases: Array<Awaited<ReturnType<typeof acquireSourceWriteLock>>>): Promise<string | undefined> {
+  let warning: string | undefined;
+  for (const lease of leases.reverse()) {
+    try {
+      await lease.release();
+    } catch (error) {
+      warning ??= `releasing a script's write lock failed, and Roqer keeps retrying it: ${(error instanceof Error ? error.message : String(error)).replace(/\s+/g, ' ').slice(0, 300)}`;
+    }
+  }
+  return warning;
+}
+
 /**
  * Applies a change, then reads Rojo's sourcemap back and checks every
  * instance is where the change put it, with the expected class and file.
- * Anything else undoes the whole change and rejects with ProjectFilesError,
- * naming whatever could not be put back.
+ * Every script file it moves or removes is first locked against other Roqer
+ * writers and compared again with what Studio held, so a save that landed
+ * since the plan is never moved or removed unseen. Anything else undoes the
+ * whole change and rejects with ProjectFilesError, naming whatever could not
+ * be put back. Resolves with a warning when a lock could not be released yet.
  */
-export async function applyStructure(context: StructureContext, change: ProjectChange, backup: string): Promise<void> {
-  const done = await applyFileOps(change.ops, context.root, backup);
-  let mismatch: string | undefined;
+export async function applyStructure(context: StructureContext, change: ProjectChange, backup: string): Promise<{ lockReleaseWarning?: string }> {
+  const leases: Array<Awaited<ReturnType<typeof acquireSourceWriteLock>>> = [];
+  const untouched = (failure: unknown, code: string) => Object.assign(new ProjectFilesError(failure, [], code), { applied: false });
   try {
-    const tree = await context.sourcemap();
-    for (const check of change.checks) {
-      const where = check.segments.join('.');
-      const parent = nodeAt(tree, check.segments.slice(0, -1));
-      const matches = (parent?.children ?? []).filter((child) => child.name === check.segments.at(-1));
-      if (!check.present) {
-        if (matches.length > 0) mismatch = `it still lists ${where}`;
-      } else if (matches.length !== 1) {
-        mismatch = `it lists no single ${where}`;
-      } else if (matches[0].className !== check.className) {
-        mismatch = `it makes ${where} a ${matches[0].className}, not a ${check.className}`;
-      } else if (check.file && !(matches[0].filePaths ?? []).some((file) => real(path.resolve(context.root, file)) === real(check.file!))) {
-        mismatch = `it does not read ${where} from ${shown(context, check.file)}`;
-      }
-      if (mismatch) break;
+    // One order everywhere, so two changes over the same files cannot each hold what the other waits for.
+    for (const guarded of [...change.guarded].sort((a, b) => a.file.localeCompare(b.file))) {
+      leases.push(await acquireSourceWriteLock(real(guarded.file)));
     }
   } catch (error) {
-    throw new ProjectFilesError(error, await undoFileOps(done));
+    await releaseAll(leases);
+    throw untouched(error, 'rojo_write_failed');
   }
-  if (mismatch) {
-    throw new ProjectFilesError(`Rojo did not read the project files as planned (${mismatch})`, await undoFileOps(done), 'rojo_unsupported');
+  for (const guarded of change.guarded) {
+    const revision = await fs.promises.readFile(guarded.file).then((bytes) => sourceRevision(toStudioText(bytes)), () => undefined);
+    if (revision !== guarded.revision) {
+      await releaseAll(leases);
+      throw untouched(`${shown(context, guarded.file)} changed since it was compared with the script in Studio, so nothing was moved or removed; read it and retry`, 'rojo_conflict');
+    }
   }
+  let failure: unknown;
+  try {
+    const done = await applyFileOps(change.ops, context.root, backup);
+    let mismatch: string | undefined;
+    try {
+      const tree = await context.sourcemap();
+      for (const check of change.checks) {
+        const where = check.segments.join('.');
+        const parent = nodeAt(tree, check.segments.slice(0, -1));
+        const matches = (parent?.children ?? []).filter((child) => child.name === check.segments.at(-1));
+        if (!check.present) {
+          if (matches.length > 0) mismatch = `it still lists ${where}`;
+        } else if (matches.length !== 1) {
+          mismatch = `it lists no single ${where}`;
+        } else if (matches[0].className !== check.className) {
+          mismatch = `it makes ${where} a ${matches[0].className}, not a ${check.className}`;
+        } else if (check.file && !(matches[0].filePaths ?? []).some((file) => real(path.resolve(context.root, file)) === real(check.file!))) {
+          mismatch = `it does not read ${where} from ${shown(context, check.file)}`;
+        }
+        if (mismatch) break;
+      }
+    } catch (error) {
+      throw new ProjectFilesError(error, await undoFileOps(done));
+    }
+    if (mismatch) {
+      throw new ProjectFilesError(`Rojo did not read the project files as planned (${mismatch})`, await undoFileOps(done), 'rojo_unsupported');
+    }
+  } catch (error) {
+    failure = error;
+  }
+  const lockReleaseWarning = await releaseAll(leases);
+  if (failure) throw failure;
+  return lockReleaseWarning ? { lockReleaseWarning } : {};
 }

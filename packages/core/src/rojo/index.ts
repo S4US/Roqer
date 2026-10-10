@@ -189,15 +189,16 @@ export class RojoIntegration {
    * back as planned; rejects with ProjectFilesError, having undone it, when
    * not. Resolves with the folder holding copies of what it removed, if any.
    */
-  async applyStructure(link: ProjectLink, change: ProjectChange): Promise<string | undefined> {
+  async applyStructure(link: ProjectLink, change: ProjectChange): Promise<{ backup?: string; lockReleaseWarning?: string }> {
     const backup = backupFolder(link.projectName, this.now());
     // Script ownership is read from a cached sourcemap; it no longer matches the files.
     this.cache.delete(link.projectFile);
+    let applied: { lockReleaseWarning?: string };
     try {
-      await applyStructure(this.context(link), change, backup);
+      applied = await applyStructure(this.context(link), change, backup);
     } finally {
       this.cache.delete(link.projectFile);
     }
-    return change.removed.length > 0 ? backup : undefined;
+    return { ...(change.removed.length > 0 ? { backup } : {}), ...applied };
   }
 }

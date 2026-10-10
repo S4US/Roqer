@@ -2001,14 +2001,16 @@ export class RobloxStudioTools {
       };
     }
 
-    let backup: string | undefined;
+    let applied: { backup?: string; lockReleaseWarning?: string };
     try {
-      backup = await this.rojo.applyStructure(link, change);
+      applied = await this.rojo.applyStructure(link, change);
     } catch (error) {
       if (!(error instanceof ProjectFilesError)) throw error;
       const message = error.message.replace(/\s*\n+\s*/g, ' ').replace(/\.$/, '');
       const leftovers = error.leftovers.map((file) => path.relative(link.root, file));
       const failed = error.code === 'rojo_write_failed' ? `Could not change the project's files: ${message}` : message;
+      // Refused before any file changed: a busy write lock, or a script saved since it was compared.
+      if (!error.applied && leftovers.length === 0) return { kind: 'done', result: { error: rojoNothingChanged(failed), errorCode: error.code } };
       // Rojo serve may have carried the change, and then its undo, into Studio before it was undone.
       const studio = error.applied
         ? ' A running rojo serve may already have carried the change, and its undo, into Studio, which replaces those instances (their instanceRef too) and drops anything only Studio held under them; read them back before changing them again.'
@@ -2049,7 +2051,8 @@ export class RobloxStudioTools {
         sync,
         // What a later read must show for the change to count as delivered.
         ...(scripts.length > 0 ? { scripts: scripts.map((check) => ({ path: check.path, revision: check.revision })) } : {}),
-        ...(backup ? { backup } : {}),
+        ...(applied.backup ? { backup: applied.backup } : {}),
+        ...(applied.lockReleaseWarning ? { lockReleaseWarning: applied.lockReleaseWarning } : {}),
       },
     };
   }
