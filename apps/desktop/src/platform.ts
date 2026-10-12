@@ -9,7 +9,7 @@ import type {
   CustomConnectionSave, CustomConnectionsResult, CustomModelImportResult, CustomModelTestResult,
 } from "../shared/custom-providers";
 import type { OpenCloudCheckResult, OpenCloudSave, OpenCloudSettingsResult } from "../shared/open-cloud";
-import type { BlenderSettingsResult } from "../shared/blender";
+import type { BlenderDetail, BlenderSettingsResult } from "../shared/blender";
 import type { RojoResult } from "../shared/rojo";
 import type { ModelPreviewResult } from "../shared/model-preview";
 import type { EvidencePictureResult } from "../shared/evidence-picture";
@@ -140,6 +140,10 @@ export async function getBlenderSettings(): Promise<BlenderSettingsResult> {
 
 export async function setBlenderEnabled(enabled: boolean): Promise<BlenderSettingsResult> {
   return window.workbenchDesktop?.blender.setEnabled(enabled) ?? { ok: false, message: NO_DESKTOP_BLENDER };
+}
+
+export async function setBlenderDetail(detail: BlenderDetail): Promise<BlenderSettingsResult> {
+  return window.workbenchDesktop?.blender.setDetail(detail) ?? { ok: false, message: NO_DESKTOP_BLENDER };
 }
 
 export async function chooseBlender(): Promise<BlenderSettingsResult> {

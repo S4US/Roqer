@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 
-import type { BlenderSettingsView } from "../shared/blender";
+import { BLENDER_DETAILS, DEFAULT_BLENDER_DETAIL, type BlenderDetail, type BlenderSettingsView } from "../shared/blender";
 
 /**
  * Whether the Blender worker is on, and which Blender it runs.
@@ -15,9 +15,9 @@ import type { BlenderSettingsView } from "../shared/blender";
  * file has answered `--version` as Blender.
  */
 
-type StoredFile = Readonly<{ schemaVersion: 1; enabled: boolean; executable: string | null }>;
+type StoredFile = Readonly<{ schemaVersion: 1; enabled: boolean; executable: string | null; detail: BlenderDetail }>;
 
-const EMPTY: StoredFile = { schemaVersion: 1, enabled: false, executable: null };
+const EMPTY: StoredFile = { schemaVersion: 1, enabled: false, executable: null, detail: DEFAULT_BLENDER_DETAIL };
 const MAX_FILE_BYTES = 8 * 1024;
 const VERSION_TIMEOUT_MS = 20_000;
 
@@ -39,7 +39,9 @@ function parseStored(value: unknown): StoredFile | undefined {
   const record = value as Record<string, unknown>;
   if (record.schemaVersion !== 1 || typeof record.enabled !== "boolean") return undefined;
   if (record.executable !== null && !isBlenderExecutablePath(record.executable)) return undefined;
-  return { schemaVersion: 1, enabled: record.enabled, executable: record.executable as string | null };
+  // Files saved before detail existed have none: they keep the normal detail they always had.
+  const detail = BLENDER_DETAILS.includes(record.detail as BlenderDetail) ? record.detail as BlenderDetail : DEFAULT_BLENDER_DETAIL;
+  return { schemaVersion: 1, enabled: record.enabled, executable: record.executable as string | null, detail };
 }
 
 /** Where installers put Blender, newest version first. */
@@ -180,20 +182,36 @@ export class BlenderSettings {
   }
 
   private async view(file: StoredFile): Promise<BlenderSettingsView> {
+    const detail = file.detail;
     if (file.executable === null) {
-      return { enabled: false, executable: null, version: null, state: "missing", message: "Blender was not found. Install it from blender.org, or choose blender.exe." };
+      return { enabled: false, executable: null, version: null, state: "missing", message: "Blender was not found. Install it from blender.org, or choose blender.exe.", detail };
     }
     const version = await this.versionOf(file.executable);
     if (version === null) {
-      return { enabled: false, executable: file.executable, version: null, state: "broken", message: "That file did not answer as Blender. Choose blender.exe from a Blender install." };
+      return { enabled: false, executable: file.executable, version: null, state: "broken", message: "That file did not answer as Blender. Choose blender.exe from a Blender install.", detail };
     }
     return file.enabled
-      ? { enabled: true, executable: file.executable, version, state: "ready", message: `${version} runs modeling jobs the agent writes, after you approve each one.` }
-      : { enabled: false, executable: file.executable, version, state: "off", message: `${version} found. Turn it on to let the agent model assets with it.` };
+      ? { enabled: true, executable: file.executable, version, state: "ready", message: `${version} runs modeling jobs the agent writes, after you approve each one.`, detail }
+      : { enabled: false, executable: file.executable, version, state: "off", message: `${version} found. Turn it on to let the agent model assets with it.`, detail };
   }
 
   get(): Promise<BlenderSettingsView> {
     return this.enqueue(async () => this.view(await this.read()));
+  }
+
+  /** How finely the next job builds round parts. */
+  detail(): Promise<BlenderDetail> {
+    return this.enqueue(async () => (await this.read()).detail);
+  }
+
+  /** Changing the detail never turns Blender on or off, and applies to jobs started after it. */
+  setDetail(detail: unknown): Promise<BlenderSettingsView> {
+    return this.enqueue(async () => {
+      if (!BLENDER_DETAILS.includes(detail as BlenderDetail)) throw new BlenderSettingsError("Choose Normal or Good detail.");
+      const next = { ...(await this.read()), detail: detail as BlenderDetail };
+      await this.write(next);
+      return this.view(next);
+    });
   }
 
   /** Turning it on requires a Blender that answered; turning it off always works. */
@@ -216,7 +234,7 @@ export class BlenderSettings {
     return this.enqueue(async () => {
       if (!isBlenderExecutablePath(executable)) throw new BlenderSettingsError("Choose blender.exe from a Blender install.");
       this.versions.delete(executable);
-      const next: StoredFile = { schemaVersion: 1, enabled: false, executable };
+      const next: StoredFile = { ...(await this.read()), enabled: false, executable };
       await this.write(next);
       return this.view(next);
     });
@@ -229,7 +247,7 @@ export class BlenderSettings {
       const current = await this.read();
       if (found === null || found === current.executable) return this.view(current);
       this.versions.delete(found);
-      const next: StoredFile = { schemaVersion: 1, enabled: false, executable: found };
+      const next: StoredFile = { ...current, enabled: false, executable: found };
       await this.write(next);
       return this.view(next);
     });

@@ -37,7 +37,7 @@ export function blenderToolDefinition(): Readonly<{ name: typeof BLENDER_TOOL_NA
           type: "string",
           minLength: 1,
           maxLength: MAX_BLENDER_SCRIPT_CHARACTERS,
-          description: "The complete Python script, run in background Blender. bpy is imported, OUTPUT_DIR is defined, and roqer helpers place parts by their ends: roqer.box, roqer.box_between, roqer.cylinder_between, roqer.cone_between, roqer.join.",
+          description: "The complete Python script, run in background Blender. bpy is imported, OUTPUT_DIR is defined, and roqer helpers place parts by their ends: roqer.box, roqer.box_between, roqer.cylinder_between, roqer.cone_between, roqer.join. DETAIL is 1 at normal detail and 3 at good: the round helpers already use it, so multiply your own segment counts by it.",
         },
         continue_from: {
           type: "string",

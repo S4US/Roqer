@@ -27,7 +27,7 @@ test("a found Blender starts off, turns on once it has answered, and the choice 
     });
     assert.deepEqual(await settings.get(), {
       enabled: false, executable: BLENDER, version: "Blender 5.2.1 LTS", state: "off",
-      message: "Blender 5.2.1 LTS found. Turn it on to let the agent model assets with it.",
+      message: "Blender 5.2.1 LTS found. Turn it on to let the agent model assets with it.", detail: "normal",
     });
     assert.equal(await settings.ready(), undefined, "off means no worker");
     assert.equal((await settings.setEnabled(true)).state, "ready");
@@ -36,6 +36,32 @@ test("a found Blender starts off, turns on once it has answered, and the choice 
 
     const reopened = new BlenderSettings({ file, detect: async () => null, version: async () => "Blender 5.2.1 LTS" });
     assert.equal((await reopened.get()).state, "ready");
+  });
+});
+
+test("model detail defaults to normal, persists, and survives turning the worker on", async () => {
+  await withFile(async (file) => {
+    const version = async () => "Blender 5.2.1 LTS";
+    const settings = new BlenderSettings({ file, detect: async () => BLENDER, version });
+    assert.equal(await settings.detail(), "normal");
+
+    assert.equal((await settings.setDetail("good")).detail, "good");
+    assert.equal((await settings.setEnabled(true)).detail, "good", "turning the worker on keeps the detail");
+    assert.equal(await settings.detail(), "good");
+    await assert.rejects(settings.setDetail("ultra"), { message: "Choose Normal or Good detail." });
+    assert.equal(await settings.detail(), "good", "a refused detail changes nothing");
+
+    const reopened = new BlenderSettings({ file, detect: async () => null, version });
+    assert.equal(await reopened.detail(), "good");
+  });
+});
+
+test("a settings file saved before detail existed loads at normal detail", async () => {
+  await withFile(async (file) => {
+    await fs.writeFile(file, JSON.stringify({ schemaVersion: 1, enabled: true, executable: BLENDER }), "utf8");
+    const settings = new BlenderSettings({ file, detect: async () => null, version: async () => "Blender 5.2.1 LTS" });
+    assert.equal(await settings.detail(), "normal");
+    assert.equal((await settings.get()).enabled, true, "the rest of the file is kept");
   });
 });
 

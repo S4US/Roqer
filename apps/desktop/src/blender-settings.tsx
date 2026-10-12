@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 
 import type { BlenderSettingsResult, BlenderSettingsView } from "../shared/blender";
-import { chooseBlender, getBlenderSettings, redetectBlender, setBlenderEnabled } from "./platform";
+import { chooseBlender, getBlenderSettings, redetectBlender, setBlenderDetail, setBlenderEnabled } from "./platform";
 import { SettingsGroup, SettingsRow, SettingsSwitch } from "./settings-parts";
 
 /**
@@ -38,6 +38,12 @@ export function BlenderSettings() {
         {canEnable
           ? <SettingsSwitch label="Use Blender for modeling" checked={settings.enabled} disabled={busy} onChange={(enabled) => void apply(() => setBlenderEnabled(enabled))} />
           : <button className="small-button" disabled={busy} onClick={() => void apply(redetectBlender)}>Find again</button>}
+      </SettingsRow>
+      <SettingsRow title="Model detail" detail="Good makes round parts about three times finer, so they take longer and use more memory. It applies to jobs started after the change.">
+        <select value={settings.detail} disabled={busy} aria-label="Model detail" onChange={(event) => void apply(() => setBlenderDetail(event.target.value === "good" ? "good" : "normal"))}>
+          <option value="normal">Normal</option>
+          <option value="good">Good (3× detail)</option>
+        </select>
       </SettingsRow>
       <SettingsRow
         title={settings.version ?? "Blender app"}

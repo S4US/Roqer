@@ -37,7 +37,7 @@ import {
   type OpenCloudSave,
   type OpenCloudSettingsResult,
 } from "../shared/open-cloud";
-import { isBlenderSettingsResult, type BlenderSettingsResult } from "../shared/blender";
+import { isBlenderSettingsResult, type BlenderDetail, type BlenderSettingsResult } from "../shared/blender";
 import { isRojoResult, type RojoResult } from "../shared/rojo";
 import { isModelPreviewResult, type ModelPreviewResult } from "../shared/model-preview";
 import { isEvidencePictureResult, type EvidencePictureResult } from "../shared/evidence-picture";
@@ -200,6 +200,7 @@ async function blenderRequest(channel: string, ...args: unknown[]): Promise<Blen
 const blender = {
   get: () => blenderRequest("blender:get"),
   setEnabled: (enabled: boolean) => blenderRequest("blender:set-enabled", enabled),
+  setDetail: (detail: BlenderDetail) => blenderRequest("blender:set-detail", detail),
   choose: () => blenderRequest("blender:choose"),
   redetect: () => blenderRequest("blender:redetect"),
 };

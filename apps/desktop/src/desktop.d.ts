@@ -10,7 +10,7 @@ import type {
   CustomConnectionSave, CustomConnectionsResult, CustomModelImportResult, CustomModelTestResult,
 } from "../shared/custom-providers";
 import type { OpenCloudCheckResult, OpenCloudSave, OpenCloudSettingsResult } from "../shared/open-cloud";
-import type { BlenderSettingsResult } from "../shared/blender";
+import type { BlenderDetail, BlenderSettingsResult } from "../shared/blender";
 import type { RojoResult } from "../shared/rojo";
 import type { ModelPreviewResult } from "../shared/model-preview";
 import type { EvidencePictureResult } from "../shared/evidence-picture";
@@ -87,6 +87,7 @@ declare global {
       blender: {
         get(): Promise<BlenderSettingsResult>;
         setEnabled(enabled: boolean): Promise<BlenderSettingsResult>;
+        setDetail(detail: BlenderDetail): Promise<BlenderSettingsResult>;
         choose(): Promise<BlenderSettingsResult>;
         redetect(): Promise<BlenderSettingsResult>;
       };

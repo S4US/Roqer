@@ -162,6 +162,11 @@ def box_between(name, start, end, width, thickness, width_axis=(1, 0, 0), rgba=N
     return _object(name, bm, rgba)
 
 
+def _sides(vertices):
+    """The number of sides a round part is built with: the caller's, else 12 at normal detail and 36 at good."""
+    return 12 * DETAIL if vertices is None else vertices
+
+
 def _tube(name, start, end, radii, rgba, vertices):
     """A closed round solid from start to end with the given radius at each end; a radius of 0 is a point."""
     start, end = _vector(start, "start"), _vector(end, "end")
@@ -193,13 +198,16 @@ def _tube(name, start, end, radii, rgba, vertices):
     return _object(name, bm, rgba)
 
 
-def cylinder_between(name, start, end, radius, rgba=None, vertices=12):
-    """A cylinder whose end caps sit at start and end: a bar, a pipe, a column, an axle or a wheel."""
+def cylinder_between(name, start, end, radius, rgba=None, vertices=None):
+    """A cylinder whose end caps sit at start and end: a bar, a pipe, a column, an axle or a wheel.
+
+    vertices is the number of sides; left out it is 12 at normal detail and 36 at good.
+    """
     radius = _positive(radius, "radius")
-    return _tube(name, start, end, (radius, radius), rgba, vertices)
+    return _tube(name, start, end, (radius, radius), rgba, _sides(vertices))
 
 
-def cone_between(name, start, end, start_radius, end_radius=0.0, rgba=None, vertices=12):
+def cone_between(name, start, end, start_radius, end_radius=0.0, rgba=None, vertices=None):
     """A cone or taper from start to end: start_radius across at start, end_radius at end, 0 for a point.
 
     Each radius belongs to the end it is named for, so a boost flame runs from the exhaust
@@ -213,7 +221,7 @@ def cone_between(name, start, end, start_radius, end_radius=0.0, rgba=None, vert
         radii.append(float(value))
     if radii == [0.0, 0.0]:
         raise ValueError("start_radius and end_radius cannot both be 0")
-    return _tube(name, start, end, radii, rgba, vertices)
+    return _tube(name, start, end, radii, rgba, _sides(vertices))
 
 
 def vertex_color_material(name="VertexColour"):
@@ -1158,6 +1166,8 @@ job_dir = args[0]
 base_scene = args[1] if len(args) > 1 else ""
 OUTPUT_DIR = os.path.join(job_dir, "output")
 os.makedirs(OUTPUT_DIR, exist_ok=True)
+# How finely round parts are built: 1 at normal detail, 3 at good. Roqer passes it; a job without it is normal.
+DETAIL = int(args[2]) if len(args) > 2 and args[2].isdigit() and int(args[2]) >= 1 else 1
 try:
     if base_scene:
         bpy.ops.wm.open_mainfile(filepath=base_scene, load_ui=False)
@@ -1170,12 +1180,12 @@ except BaseException:
 script_path = os.path.join(job_dir, "script.py")
 with open(script_path, "r", encoding="utf-8") as handle:
     source = handle.read()
-helpers = {"__name__": "roqer", "_OUTPUT_DIR": OUTPUT_DIR}
+helpers = {"__name__": "roqer", "_OUTPUT_DIR": OUTPUT_DIR, "DETAIL": DETAIL}
 with open(os.path.join(job_dir, "roqer_helpers.py"), "r", encoding="utf-8") as handle:
     exec(compile(handle.read(), "roqer_helpers.py", "exec"), helpers)
 roqer = types.SimpleNamespace(**{name: value for name, value in helpers.items()
                                  if callable(value) and not name.startswith("_") and getattr(value, "__module__", None) == "roqer"})
-namespace = {"__name__": "__main__", "__file__": script_path, "OUTPUT_DIR": OUTPUT_DIR, "bpy": bpy, "roqer": roqer}
+namespace = {"__name__": "__main__", "__file__": script_path, "OUTPUT_DIR": OUTPUT_DIR, "DETAIL": DETAIL, "bpy": bpy, "roqer": roqer}
 try:
     exec(compile(source, script_path, "exec"), namespace)
 except BaseException:
@@ -1798,6 +1808,8 @@ export type BlenderWorkerOptions = Readonly<{
    * found, so one chat never builds on another's model.
    */
   scope?: string;
+  /** How many times finer than normal round parts are built: 1 at normal, 3 at good. */
+  detail?: number;
   spawn?: SpawnProcess;
   /** Stops a process and everything it started. */
   killTree?: (child: ChildProcess) => void;
@@ -2074,7 +2086,8 @@ export class BlenderWorker {
     const run = await this.runBlender(
       [
         "--background", "--factory-startup", "--python-exit-code", "1", "--python", path.join(jobDirectory, "roqer_runner.py"),
-        "--", jobDirectory, ...(base === undefined ? [] : [base.scene]),
+        // The base scene is an empty string when the job starts from nothing, so the detail is always third.
+        "--", jobDirectory, base === undefined ? "" : base.scene, String(this.options.detail ?? 1),
       ],
       jobDirectory,
       seconds * 1000,

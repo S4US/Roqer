@@ -30,7 +30,7 @@ import { linkRojoProject } from "../runtime/link-rojo-project";
 import { withLocalOperations, type LocalOperation } from "../runtime/local-operations";
 import { CAPTURE_MOMENTS_OPERATION, LINK_ROJO_PROJECT_OPERATION, UPLOAD_ASSETS_OPERATION } from "../shared/gateway-operations";
 import type { McpCallOptions, McpToolOutcome } from "../runtime/mcp-types";
-import { BLENDER_OPERATION, type BlenderSettingsResult, type BlenderSettingsView } from "../shared/blender";
+import { BLENDER_DETAIL_SCALE, BLENDER_OPERATION, type BlenderSettingsResult, type BlenderSettingsView } from "../shared/blender";
 import type { RojoPickOutcome, RojoResult } from "../shared/rojo";
 import type { ModelPreviewResult } from "../shared/model-preview";
 import type { EvidencePictureResult } from "../shared/evidence-picture";
@@ -713,10 +713,12 @@ async function runBlenderJob(args: Record<string, unknown>, options: McpCallOpti
     const message = "Blender is turned off in Roqer's Settings, so the job did not run. Ask the user to turn it on, or build the asset from parts instead.";
     return { ok: false, data: undefined, text: message, httpStatus: 200, errorCode: "blender_off", message, durationMs: 0 };
   }
+  const detail = await blenderSettings().detail();
   const worker = new BlenderWorker({
     executable,
     jobsRoot: blenderJobsRoot(),
     scope: createHash("sha256").update(chatId).digest("hex").slice(0, 32),
+    detail: BLENDER_DETAIL_SCALE[detail],
   });
   return worker.run(args, options);
 }
@@ -763,6 +765,11 @@ function setBlenderEnabled(event: IpcMainInvokeEvent, enabled: unknown): Promise
     return Promise.resolve({ ok: false, message: "This window may not change the Blender setting." });
   }
   return blenderResult(() => blenderSettings().setEnabled(enabled));
+}
+
+function setBlenderDetail(event: IpcMainInvokeEvent, detail: unknown): Promise<BlenderSettingsResult> {
+  if (!isTrusted(event.sender)) return Promise.resolve({ ok: false, message: "This window may not change the Blender setting." });
+  return blenderResult(() => blenderSettings().setDetail(detail));
 }
 
 /** The executable comes from the main process's own dialog, never from the renderer. */
@@ -2496,6 +2503,7 @@ app.whenReady().then(async () => {
   ipcMain.handle("open-cloud:check", checkOpenCloudSettings);
   ipcMain.handle("blender:get", getBlenderSettings);
   ipcMain.handle("blender:set-enabled", setBlenderEnabled);
+  ipcMain.handle("blender:set-detail", setBlenderDetail);
   ipcMain.handle("blender:choose", chooseBlender);
   ipcMain.handle("blender:redetect", redetectBlender);
   ipcMain.handle("rojo:get", getRojo);

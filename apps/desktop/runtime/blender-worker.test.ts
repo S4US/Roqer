@@ -715,6 +715,22 @@ function savingBlender(scene: unknown = SCENE, options: Readonly<{ exports?: boo
 const runnerCalls = (calls: ReadonlyArray<{ args: readonly string[] }>) =>
   calls.filter((call) => call.args.some((arg) => arg.endsWith("roqer_runner.py")));
 
+test("the runner is told the detail: 1 at normal, 3 at good, and normal when nothing is said", async () => {
+  await withJobs(async (jobsRoot) => {
+    const blender = savingBlender();
+    const detailOf = async (detail: number | undefined) => {
+      const worker = new BlenderWorker({ executable: EXECUTABLE, jobsRoot, detail, spawn: blender.spawn, killTree: blender.killTree, env: {} });
+      const run = await worker.run({ script: "import bpy\n# a round part" });
+      assert.equal(run.ok, true, run.text);
+      const runners = runnerCalls(blender.calls);
+      return argAfterDashes(runners[runners.length - 1].args, 2);
+    };
+    assert.equal(await detailOf(3), "3");
+    assert.equal(await detailOf(1), "1");
+    assert.equal(await detailOf(undefined), "1");
+  });
+});
+
 test("a job saves its scene, and a later job in the same chat starts from it instead of an empty one", async () => {
   // A detailed model used to have to fit one script, written in one model
   // turn: a go-kart ran nine minutes and failed whole. Now each stage is its
@@ -745,7 +761,7 @@ test("a job saves its scene, and a later job in the same chat starts from it ins
     assert.equal(second.continuedFrom, first.jobId);
     // The runner is handed the earlier scene to open in place of an empty one.
     const runners = runnerCalls(blender.calls);
-    assert.equal(runners[0].args.length, runners[0].args.indexOf("--") + 2, "the first job has no scene to start from");
+    assert.equal(argAfterDashes(runners[0].args, 1), "", "the first job has no scene to start from");
     assert.equal(argAfterDashes(runners[1].args, 1), first.scene.path);
     assert.match(body.text, new RegExp(`Scene saved as job ${second.jobId}, continuing job ${first.jobId}`));
   });
@@ -786,7 +802,7 @@ test("a scene is continued only by its own chat, and only when the job that save
     }
     const runs = other.calls.filter((call) => call.args.some((arg) => arg.endsWith("roqer_runner.py")));
     assert.equal(runs.length, 2);
-    for (const run of runs) assert.equal(argAfterDashes(run.args, 1), undefined, "no base scene is opened");
+    for (const run of runs) assert.equal(argAfterDashes(run.args, 1), "", "no base scene is opened");
     // If that script then fails, the answer still says it did not continue anything.
     const failingFresh = fakeBlender(async () => ({ output: "KeyError: 'Chassis'\nROQER_SCRIPT_FAILED\n", exitCode: 1 }));
     const chatD = new BlenderWorker({ executable: EXECUTABLE, jobsRoot, scope: "chat-d", spawn: failingFresh.spawn, killTree: failingFresh.killTree, env: {} });

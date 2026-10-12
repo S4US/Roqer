@@ -27,6 +27,16 @@ export function isBlenderJobId(value: unknown): value is string {
   return typeof value === "string" && new RegExp(BLENDER_JOB_ID_PATTERN).test(value);
 }
 
+/**
+ * How finely a job builds round parts. Good is three times the segments, so a
+ * cylinder or cone has about three times as many sides. The script reads the
+ * same number as `DETAIL`, for shapes it builds itself.
+ */
+export const BLENDER_DETAILS = ["normal", "good"] as const;
+export type BlenderDetail = (typeof BLENDER_DETAILS)[number];
+export const BLENDER_DETAIL_SCALE: Readonly<Record<BlenderDetail, number>> = { normal: 1, good: 3 };
+export const DEFAULT_BLENDER_DETAIL: BlenderDetail = "normal";
+
 /** How long one job's script may run, and the most a call may ask for. */
 export const DEFAULT_BLENDER_JOB_SECONDS = 120;
 export const MAX_BLENDER_JOB_SECONDS = 200;
@@ -49,6 +59,8 @@ export type BlenderSettingsView = Readonly<{
   state: BlenderState;
   /** One sentence for Settings. */
   message: string;
+  /** How finely new jobs build round parts. */
+  detail: BlenderDetail;
 }>;
 
 export type BlenderSettingsResult =
@@ -69,5 +81,6 @@ export function isBlenderSettingsResult(value: unknown): value is BlenderSetting
     (settings.executable === null || typeof settings.executable === "string") &&
     (settings.version === null || typeof settings.version === "string") &&
     STATES.includes(settings.state as BlenderState) &&
-    typeof settings.message === "string";
+    typeof settings.message === "string" &&
+    BLENDER_DETAILS.includes(settings.detail as BlenderDetail);
 }
