@@ -1,3 +1,4 @@
+import type { ChatRole } from "./chat-role";
 import type { ApprovalMode, PolicyReason, ToolRisk } from "./policy";
 import type { ConversationContext } from "./conversation";
 import type { CompletionVerification, CompletionIssueCode } from "./completion";
@@ -47,6 +48,10 @@ export type RunRequest = {
   provider: ProviderId;
   model: string | null;
   effort: ReasoningEffort;
+  /** What the chat is for, when the user gave it a role. */
+  role?: ChatRole;
+  /** The project files the user shared with this chat. */
+  sharedFileIds?: string[];
 };
 
 /**
@@ -350,6 +355,11 @@ export type RunEvent =
    * and when, and the planner records separately when the model saw it.
    */
   | (RunEventBase & { type: "steer"; text: string })
+  /**
+   * The planner took this many queued notes to give to the model. Notes are
+   * taken oldest first, so the count says which of them the model now has.
+   */
+  | (RunEventBase & { type: "steers-delivered"; count: number })
   | (RunEventBase & { type: "question-asked"; question: RunQuestion })
   | (RunEventBase & {
     type: "question-answered";
@@ -429,6 +439,8 @@ export type RunRecord = {
    * hear them. They are what the chat shows under the run once it has ended.
    */
   notes?: string[];
+  /** How many of `notes` reached the model; the rest arrived after the run ended. Absent on older records. */
+  notesDelivered?: number;
   /**
    * The tokens the run used. Optional for the same reason as `decisions`, and
    * because a provider may report none. Unlike the other optional fields, a
@@ -436,7 +448,28 @@ export type RunRecord = {
    * record is judged, since a measurement says nothing about the work.
    */
   usage?: RunUsage;
+  /**
+   * What the run said and did, in the order it happened: each piece of prose,
+   * and a marker for each tool call, note, and piece of evidence between them.
+   * The markers point into `toolCalls`, `notes`, and `evidence` by position,
+   * counted per kind. Optional, so records from before it still validate and
+   * render the way they always did.
+   */
+  transcript?: TranscriptEntry[];
 };
+
+export type TranscriptEntry = { text: string } | { step: "call" | "note" | "evidence" };
+
+/** Far more than a run produces; a bound so a damaged file cannot grow without limit. */
+export const MAX_TRANSCRIPT_ENTRIES = 20_000;
+
+function isTranscriptEntry(value: unknown): value is TranscriptEntry {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const entry = value as Record<string, unknown>;
+  // Exactly one of the two, so a damaged record cannot pose as prose.
+  if ("text" in entry) return typeof entry.text === "string" && !("step" in entry);
+  return entry.step === "call" || entry.step === "note" || entry.step === "evidence";
+}
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
@@ -799,6 +832,8 @@ export function isRunEvent(value: unknown): value is RunEvent {
       return isRunTaskList(value.tasks);
     case "steer":
       return isString(value.text) && value.text !== "" && value.text.length <= MAX_STEER_CHARS;
+    case "steers-delivered":
+      return Number.isInteger(value.count) && (value.count as number) > 0;
     case "question-asked":
       return isRunQuestion(value.question);
     case "question-answered":
@@ -836,5 +871,11 @@ export function isRunRecord(value: unknown): value is RunRecord {
       (Array.isArray(value.decisions) && value.decisions.every(isRunDecision))) &&
     (value.notes === undefined ||
       (Array.isArray(value.notes) && value.notes.length <= MAX_STEERS_PER_RUN && value.notes.every(isSteerNote))) &&
-    (value.usage === undefined || isRunUsage(value.usage));
+    (value.notesDelivered === undefined ||
+      (Number.isInteger(value.notesDelivered) && (value.notesDelivered as number) >= 0 &&
+        (value.notesDelivered as number) <= (Array.isArray(value.notes) ? value.notes.length : 0))) &&
+    (value.usage === undefined || isRunUsage(value.usage)) &&
+    (value.transcript === undefined ||
+      (Array.isArray(value.transcript) && value.transcript.length <= MAX_TRANSCRIPT_ENTRIES &&
+        value.transcript.every(isTranscriptEntry)));
 }

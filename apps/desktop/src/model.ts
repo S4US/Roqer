@@ -1,9 +1,11 @@
+import { CHAT_ROLES, isChatRole, type ChatRole, type RoleSetting } from "../shared/chat-role";
 import { isRunRecord, withoutMalformedUsage, type RunRecord } from "../shared/run-events";
 import { isPersistedAttachment } from "../shared/workspace-validation";
 import type { AttachmentClip } from "../shared/reference-clip";
 import {
   DEFAULT_PROVIDER_ID,
   enabledProviderOr,
+  isEnabledProvider,
   isReasoningEffort,
   type ProviderId,
   type ReasoningEffort,
@@ -49,6 +51,8 @@ export type ChatMessage = {
   attachments?: AssetAttachment[];
   /** Compacted record of the agent run that produced this message. */
   run?: RunRecord;
+  /** A note the user sent while a run was working, rather than a prompt that started one. */
+  note?: true;
 };
 
 export type Chat = {
@@ -71,6 +75,10 @@ export type Chat = {
    * the same game does not have to be pointed at it again.
    */
   studioInstanceId?: string;
+  /** What the chat is for. Absent is a general chat on the workspace's own model. */
+  role?: ChatRole;
+  /** The project files the user put in front of this chat, by id. */
+  sharedFileIds?: string[];
   messages: ChatMessage[];
   /**
    * The chat's earlier messages, folded into a record by a manual compact. Only
@@ -121,7 +129,46 @@ export type Preferences = {
   /** A custom model, as `<connection id>:<model id>`. The connection itself lives in the main process. */
   customModelId: string | null;
   reasoningEffort: ReasoningEffort;
+  /** The model and effort each chat role runs on, once chosen. */
+  roleSettings?: Partial<Record<ChatRole, RoleSetting>>;
 };
+
+/**
+ * The preferences a chat runs with: the workspace's own, with the provider,
+ * model and effort of the chat's role when it has one and that role has been
+ * set up. A role not set up yet starts from the workspace's choice.
+ */
+export function effectivePreferences(preferences: Preferences, role: ChatRole | null | undefined): Preferences {
+  if (role === null || role === undefined) return preferences;
+  const setting = preferences.roleSettings?.[role];
+  if (setting === undefined) return preferences;
+  return {
+    ...preferences,
+    provider: setting.provider,
+    ...(setting.model === null ? {} : modelPreference(setting.provider, setting.model)),
+    reasoningEffort: setting.effort,
+  };
+}
+
+/** A preference patch that records a model choice for a role rather than for the workspace. */
+export function rolePreference(preferences: Preferences, role: ChatRole, patch: Partial<Preferences>): Partial<Preferences> {
+  const current = effectivePreferences(preferences, role);
+  const next = { ...current, ...patch };
+  const setting: RoleSetting = { provider: next.provider, model: selectedModelId(next, next.provider), effort: next.reasoningEffort };
+  return { roleSettings: { ...preferences.roleSettings, [role]: setting } };
+}
+
+function parseRoleSettings(value: unknown): Partial<Record<ChatRole, RoleSetting>> | undefined {
+  if (!isRecord(value)) return undefined;
+  const settings: Partial<Record<ChatRole, RoleSetting>> = {};
+  for (const role of CHAT_ROLES) {
+    const entry = value[role];
+    if (!isRecord(entry) || !isEnabledProvider(entry.provider) || !isReasoningEffort(entry.effort)) continue;
+    if (entry.model !== null && (typeof entry.model !== "string" || entry.model === "")) continue;
+    settings[role] = { provider: entry.provider, model: entry.model as string | null, effort: entry.effort };
+  }
+  return Object.keys(settings).length > 0 ? settings : undefined;
+}
 
 /** The model the user last chose for a provider, if any. */
 export function selectedModelId(preferences: Preferences, provider: ProviderId): string | null {
@@ -246,7 +293,8 @@ function isMessage(value: unknown): value is ChatMessage {
     typeof value.text === "string" &&
     typeof value.createdAt === "string" &&
     (value.attachments === undefined || (Array.isArray(value.attachments) && value.attachments.every(isAttachment))) &&
-    (value.run === undefined || isRunRecord(value.run));
+    (value.run === undefined || isRunRecord(value.run)) &&
+    (value.note === undefined || (value.note === true && value.role === "user"));
 }
 
 /**
@@ -334,6 +382,10 @@ export function normalizeWorkspace(value: unknown, themeFallback: Theme = "dark"
         studioInstanceId: typeof chat.studioInstanceId === "string" && chat.studioInstanceId !== ""
           ? chat.studioInstanceId
           : undefined,
+        ...(isChatRole(chat.role) ? { role: chat.role } : {}),
+        ...(Array.isArray(chat.sharedFileIds) && chat.sharedFileIds.every((id) => typeof id === "string") && chat.sharedFileIds.length > 0
+          ? { sharedFileIds: (chat.sharedFileIds as string[]).slice(0, 200) }
+          : {}),
         messages,
         ...(compaction === undefined ? {} : { compaction }),
       }];
@@ -392,6 +444,7 @@ export function normalizeWorkspace(value: unknown, themeFallback: Theme = "dark"
     reasoningEffort: isReasoningEffort(rawPreferences.reasoningEffort)
       ? rawPreferences.reasoningEffort
       : "medium",
+    ...(parseRoleSettings(rawPreferences.roleSettings) === undefined ? {} : { roleSettings: parseRoleSettings(rawPreferences.roleSettings) }),
   };
 
   const requestedProjectId = typeof value.selectedProjectId === "string" ? value.selectedProjectId : "";
@@ -644,6 +697,34 @@ export function setChatCompaction(state: WorkspaceState, projectId: string, chat
         ...project,
         chats: project.chats.map((chat) => (chat.id === chatId ? { ...chat, compaction } : chat)),
       };
+    }),
+  };
+}
+
+/**
+ * The chat's last `count` notes, which the run ended before the model read,
+ * become ordinary messages again: the next run is told them as messages it
+ * missed instead of taking them as already received.
+ */
+export function undeliverNotes(state: WorkspaceState, projectId: string, chatId: string, count: number): WorkspaceState {
+  if (count <= 0) return state;
+  return {
+    ...state,
+    projects: state.projects.map((project) => project.id !== projectId ? project : {
+      ...project,
+      chats: project.chats.map((chat) => {
+        if (chat.id !== chatId) return chat;
+        let left = count;
+        const messages = [...chat.messages];
+        for (let index = messages.length - 1; index >= 0 && left > 0; index -= 1) {
+          if (messages[index].note !== true) continue;
+          const plain = { ...messages[index] };
+          delete plain.note;
+          messages[index] = plain;
+          left -= 1;
+        }
+        return { ...chat, messages };
+      }),
     }),
   };
 }

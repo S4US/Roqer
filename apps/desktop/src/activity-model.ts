@@ -108,7 +108,7 @@ function findingOf(step: ActivityStep, status: StepStatus): string | undefined {
   return step.note === "" ? undefined : step.note;
 }
 
-function leafNode(step: ActivityStep): ActivityNode {
+export function leafNode(step: ActivityStep): ActivityNode {
   const status = stepStatus(step);
   return {
     key: step.key,

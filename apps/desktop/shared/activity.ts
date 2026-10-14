@@ -62,6 +62,10 @@ const KIND_BY_TOOL: Readonly<Record<string, ToolActivityKind>> = {
   get_roblox_docs: "read",
   // Roqer's own operation: frames of a clip the user attached to the chat.
   read_reference_clip: "read",
+  // Roqer's own project data; reading actions are told apart in `activityKind`.
+  project_memory: "edit",
+  master_plan: "edit",
+  project_files: "edit",
 
   // -- Changing the project ----------------------------------------------
   set_properties: "edit",
@@ -111,6 +115,9 @@ export function activityKind(tool: string, target: string | null = null): ToolAc
   // An animation summary starts with its action; checking reads nothing but writes nothing either.
   if (tool === "animation" && target?.startsWith("check ")) return "read";
   if (tool === "animation" && target?.startsWith("verify ")) return "run";
+  if (tool === "project_memory" && target === "list") return "read";
+  if (tool === "master_plan" && target === "read") return "read";
+  if (tool === "project_files" && (target === "list" || target === "read" || target === "path")) return "read";
   return Object.prototype.hasOwnProperty.call(KIND_BY_TOOL, tool) ? KIND_BY_TOOL[tool] : "run";
 }
 
@@ -286,6 +293,32 @@ export function activityTarget(tool: string, summary: string): string | null {
   return value === "" ? null : value;
 }
 
+/** What a call to the project's notes or files did, in words. */
+function projectDataLabel(tool: string, target: string | null, past: boolean): string | null {
+  const action = target?.split(" ")[0] ?? "";
+  const file = target !== null && target.startsWith("save ") ? target.slice("save ".length) : null;
+  const labels: Record<string, readonly [string, string]> = {
+    "project_memory list": ["Reading the project memory", "Read the project memory"],
+    "project_memory add": ["Saving a project memory", "Saved a project memory"],
+    "project_memory update": ["Updating a project memory", "Updated a project memory"],
+    "project_memory remove": ["Removing a project memory", "Removed a project memory"],
+    "master_plan read": ["Reading the master plan", "Read the master plan"],
+    "master_plan write": ["Rewriting the master plan", "Rewrote the master plan"],
+    "master_plan edit": ["Editing the master plan", "Edited the master plan"],
+    "project_files list": ["Listing the project files", "Listed the project files"],
+    "project_files read": ["Reading a project file", "Read a project file"],
+    "project_files path": ["Finding a project file", "Found a project file"],
+    "project_files note": ["Noting what a project file is", "Noted what a project file is"],
+  };
+  if (tool === "project_files" && action === "save") {
+    return file === null
+      ? (past ? "Saved a file to the project" : "Saving a file to the project")
+      : (past ? `Saved ${file} to the project` : `Saving ${file} to the project`);
+  }
+  const label = labels[`${tool} ${action}`];
+  return label === undefined ? null : label[past ? 1 : 0];
+}
+
 /** One line of activity: a verb and what it acted on. */
 export function activityLabel(tool: string, target: string | null, past: boolean): string {
   const kind = activityKind(tool, target);
@@ -296,6 +329,10 @@ export function activityLabel(tool: string, target: string | null, past: boolean
   if (tool === "run_blender_script") return past ? "Modeled in Blender" : "Modeling in Blender";
   if (tool === "capture_moments") return past ? "Captured an effect at several moments" : "Capturing an effect at several moments";
   if (tool === "read_reference_clip") return past ? "Looked closer at the reference clip" : "Looking closer at the reference clip";
+  if (tool === "project_memory" || tool === "master_plan" || tool === "project_files") {
+    const label = projectDataLabel(tool, target, past);
+    if (label !== null) return label;
+  }
   if (tool === "animation") {
     if (target?.startsWith("build ")) return past ? "Built an animation" : "Building an animation";
     if (target?.startsWith("publish ")) return past ? "Published an animation" : "Publishing an animation";

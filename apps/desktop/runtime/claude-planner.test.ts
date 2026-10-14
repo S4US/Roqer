@@ -4,9 +4,15 @@ import http from "node:http";
 import path from "node:path";
 import test from "node:test";
 
+import os from "node:os";
+
 import {
-  CLAUDE_TOOL_CALL_TIMEOUT_MS, claudeContextUsage, claudeContextWindow, claudeResultUsage, ClaudeRunUsage, createClaudePlanner, streamedOutput, type ClaudeSession,
+  CLAUDE_TOOL_CALL_TIMEOUT_MS, claudeContextUsage, claudeContextWindow, claudeResultUsage, ClaudeRunUsage, claudeSessionFile,
+  compactClaudeChat, createClaudePlanner, streamedOutput, type ClaudeSession,
 } from "./claude-planner";
+import { ClaudeSessionRegistry } from "./claude-session-registry";
+import { ProjectNotesStore } from "./project-notes";
+import { projectDataOperations } from "./project-operations";
 import { timeoutForTool } from "../shared/mcp-tools";
 import type { RunUsage } from "../shared/run-events";
 import type { AgentDefinition } from "./agent-definition";
@@ -562,14 +568,26 @@ const PLANNER_DEFAULTS = {
   effort: "high" as const,
 };
 
-test("Claude waits for each queued note response and keeps tools available between results", { timeout: 3000 }, async () => {
+const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+/**
+ * A run of the planner against a fake Claude Code that records what it is sent,
+ * with notes queued by the test and the notes Claude Code echoed (read) counted.
+ */
+async function noteRun(
+  overrides: Partial<Parameters<typeof createClaudePlanner>[0]> = {},
+  contextOverrides: (notes: string[]) => Partial<PlannerContext> = () => ({}),
+) {
   const controller = new AbortController();
   const { context, recorded } = makeContext(controller);
   const notes: string[] = [];
+  const read: number[] = [];
   const statuses: string[] = [];
-  const inputs: Array<{ message: { content: Array<{ text: string }> } }> = [];
+  const inputs: Array<{ type: string; message: { role: string; content: Array<{ type: string; text: string }> } }> = [];
   const child = new FakeChildProcess();
+  const sessions = new ProviderSessionStore<ClaudeSession>();
   let target!: Awaited<ReturnType<typeof mcpTarget>>;
+  let launchArgs: string[] = [];
   let ready!: () => void;
   const launched = new Promise<void>((resolve) => { ready = resolve; });
   child.stdin.setEncoding("utf8");
@@ -578,61 +596,172 @@ test("Claude waits for each queued note response and keeps tools available betwe
   });
   const planner = createClaudePlanner({
     ...PLANNER_DEFAULTS,
+    notePollMs: 5,
+    chatId: "chat-1",
+    sessions,
     launcher: { launch: async (args) => {
+      launchArgs = args;
       target = await mcpTarget(args);
       ready();
       return child.asChild();
     } },
+    ...overrides,
   });
   let finished = false;
   const running = planner.run({
     ...context,
     takeSteers: () => notes.splice(0),
+    steersRead: (count) => read.push(count),
     status: (title) => statuses.push(title),
+    ...contextOverrides(notes),
+  }).finally(() => { finished = true; });
+  await launched;
+  await nextTick();
+  child.writeLine({ type: "system", subtype: "init", tools: PROVIDER_TOOLS });
+  /** Claude Code putting these messages in front of the model, echoed as one, the way it merges queued ones. */
+  const echo = (...indexes: number[]) => child.writeLine({
+    type: "user",
+    isReplay: true,
+    message: { role: "user", content: indexes.flatMap((index) => inputs[index].message.content) },
+  });
+  return {
+    controller, recorded, notes, read, statuses, inputs, child, running, echo,
+    target: () => target,
+    args: () => launchArgs,
+    finished: () => finished,
+    /** Whether the chat kept its process for the next message. */
+    kept: () => sessions.size === 1,
+    cleanup: async () => {
+      controller.abort();
+      await running.catch(() => undefined);
+      await sessions.closeAll();
+    },
+  };
+}
+
+test("Claude gets each note at its next step, and it counts as delivered once Claude Code echoes it", { timeout: 3000 }, async () => {
+  const run = await noteRun();
+  try {
+    assert.ok(run.args().includes("--replay-user-messages"), "echoes are how a run knows a note was read");
+    // The prompt's own echo is not a note.
+    run.echo(0);
+    run.notes.push("Make it green.");
+    assert.match(await callTool(run.target(), {
+      operation: "get_script_source", arguments: { instancePath: "game.ServerScriptService.Main" },
+    }), /rev-1/);
+    run.child.writeLine({ type: "assistant", message: { content: [{ type: "text", text: "Made it green." }] } });
+    // Written by the time the tool result went back, so Claude Code has it at the next step.
+    assert.equal(run.inputs.length, 2, "the note goes to Claude Code mid-turn");
+    assert.match(run.inputs[1].message.content[0].text, /Make it green/);
+    assert.deepEqual(run.statuses, ["Sent your note to Claude"]);
+    assert.deepEqual(run.read, [], "written is not read");
+
+    // Claude Code folds it in beside the tool result, and echoes it then.
+    run.echo(1);
+    await nextTick();
+    assert.deepEqual(run.read, [1]);
+    run.child.writeLine({ type: "result", subtype: "success", result: "Made it green." });
+    assert.equal(await run.running, "Made it green.");
+    assert.equal(run.kept(), true, "a run whose notes were all read keeps its process");
+  } finally {
+    await run.cleanup();
+  }
+});
+
+test("Claude hands over the explanation behind \"none of these\" with the answer, not after the turn", { timeout: 3000 }, async () => {
+  const run = await noteRun({}, (notes) => ({
     askUser: async () => {
       notes.push("Neither: make it green.");
       return QUESTION_ESCAPE_OPTION;
     },
-  }).finally(() => { finished = true; });
+  }));
   try {
-    await launched;
-    await nextTick();
-    child.writeLine({ type: "system", subtype: "init", tools: PROVIDER_TOOLS });
-    const questionResult = await callTool(target, { question: "Which color?", options: ["Red", "Blue"] }, "ask_user");
-    assert.match(questionResult, /End this turn now/);
-    assert.doesNotMatch(questionResult, /make it green/);
-    assert.equal(inputs.length, 1, "notes must wait for the current result");
-    assert.deepEqual(statuses, [], "a queued note has not been read or sent yet");
-
-    child.writeLine({ type: "result", subtype: "success", result: "Waiting for your explanation." });
-    await nextTick();
-    assert.equal(inputs.length, 2);
-    assert.match(inputs[1].message.content[0].text, /Neither: make it green/);
-    assert.equal(finished, false);
-    assert.equal(child.killed, false);
-    assert.deepEqual(statuses, ["Sent your note to Claude"]);
-    assert.match(await callTool(target, {
-      operation: "get_script_source", arguments: { instancePath: "game.ServerScriptService.Main" },
-    }), /rev-1/);
-
-    // A second note arrives immediately before the next result, with no poll
-    // interval in between. It must also receive its own completed turn.
-    notes.push("Also make it larger.");
-    child.writeLine({ type: "assistant", message: { content: [{ type: "text", text: "Made it green." }] } });
-    child.writeLine({ type: "result", subtype: "success", result: "Made it green." });
-    await nextTick();
-    assert.equal(inputs.length, 3);
-    assert.match(inputs[2].message.content[0].text, /Also make it larger/);
-    assert.equal(finished, false);
-    child.writeLine({ type: "result", subtype: "success", result: "Made it larger." });
-    const summary = await running;
-    assert.equal(summary, "Waiting for your explanation.\n\nMade it green.\n\nMade it larger.");
-    assert.equal(recorded.said.join(""), summary);
-    assert.equal(child.killed, true);
-    await assert.rejects(() => fetch(target.url));
+    run.echo(0);
+    const answer = await callTool(run.target(), { question: "Which color?", options: ["Red", "Blue"] }, "ask_user");
+    assert.match(answer, /Do not act on any of the offered options/);
+    assert.doesNotMatch(answer, /make it green/, "the explanation is the user's note, not the tool's result");
+    // Written before the result went back, so Claude Code has it at this very step.
+    assert.equal(run.inputs.length, 2);
+    assert.match(run.inputs[1].message.content[0].text, /Neither: make it green/);
+    run.echo(1);
+    run.child.writeLine({ type: "assistant", message: { content: [{ type: "text", text: "Made it green." }] } });
+    run.child.writeLine({ type: "result", subtype: "success", result: "Made it green." });
+    assert.equal(await run.running, "Made it green.");
+    assert.deepEqual(run.read, [1]);
   } finally {
-    controller.abort();
-    await running.catch(() => undefined);
+    await run.cleanup();
+  }
+});
+
+test("Claude waits for the turn Claude Code starts for a note, however long it takes to start", { timeout: 3000 }, async () => {
+  const run = await noteRun();
+  try {
+    run.echo(0);
+    run.child.writeLine({ type: "assistant", message: { content: [{ type: "text", text: "Made it green." }] } });
+    // A note sent while the model writes, with no tool call to carry it.
+    run.notes.push("Also make it larger.");
+    await sleep(25);
+    assert.equal(run.inputs.length, 2);
+    assert.match(run.inputs[1].message.content[0].text, /Also make it larger/);
+
+    // The turn ends before the model reads it. Claude Code starts a turn for
+    // it on its own, here later than the 2.5 s the run used to allow.
+    run.child.writeLine({ type: "result", subtype: "success", result: "Made it green." });
+    await sleep(150);
+    assert.equal(run.finished(), false, "the run waits for the note's turn, not a fixed pause");
+    // Another note sent during the wait joins the same turn.
+    run.notes.push("And blue.");
+    await sleep(25);
+    assert.equal(run.inputs.length, 3);
+    run.child.writeLine({ type: "system", subtype: "init", tools: PROVIDER_TOOLS });
+    run.echo(1, 2);
+    run.child.writeLine({ type: "assistant", message: { content: [{ type: "text", text: "Made it larger, in blue." }] } });
+    run.child.writeLine({ type: "result", subtype: "success", result: "Made it larger, in blue." });
+    const summary = await run.running;
+    assert.equal(summary, "Made it green.\n\nMade it larger, in blue.");
+    assert.equal(run.recorded.said.join(""), summary);
+    assert.deepEqual(run.read, [2], "both notes, from one merged echo");
+    assert.equal(run.kept(), true);
+  } finally {
+    await run.cleanup();
+  }
+});
+
+test("Claude ends a run whose note turn never starts without calling the note delivered, and closes the process", { timeout: 3000 }, async () => {
+  const run = await noteRun({ noteTurnTimeoutMs: 60 });
+  try {
+    run.echo(0);
+    run.notes.push("Use blue.");
+    await sleep(25);
+    run.child.writeLine({ type: "assistant", message: { content: [{ type: "text", text: "Done." }] } });
+    run.child.writeLine({ type: "result", subtype: "success", result: "Done." });
+    assert.equal(await run.running, "Done.");
+    assert.deepEqual(run.read, [], "the note was never read, so it is shown as not delivered");
+    // Kept, the process could answer the note later with no run to show it.
+    assert.equal(run.kept(), false);
+    assert.equal(run.child.killed, true);
+  } finally {
+    await run.cleanup();
+  }
+});
+
+test("Claude matches each echoed note by its text, so two identical notes need two echoes", { timeout: 3000 }, async () => {
+  const run = await noteRun({ noteTurnTimeoutMs: 60 });
+  try {
+    run.echo(0);
+    run.notes.push("Again.");
+    await sleep(25);
+    run.notes.push("Again.");
+    await sleep(25);
+    assert.equal(run.inputs.length, 3);
+    run.echo(1);
+    await nextTick();
+    assert.deepEqual(run.read, [1], "one echo reads one of the two");
+    run.child.writeLine({ type: "result", subtype: "success", result: "Done." });
+    assert.equal(await run.running, "Done.");
+    assert.equal(run.kept(), false, "the second was never read");
+  } finally {
+    await run.cleanup();
   }
 });
 
@@ -1178,10 +1307,11 @@ test("Claude reports a run's usage across its notes, and a kept process's next r
       const child = new FakeChildProcess();
       child.stdin.setEncoding("utf8");
       child.stdin.on("data", (chunk: string) => {
-        const messages = chunk.split("\n").filter(Boolean).length;
-        for (let index = 0; index < messages; index += 1) {
+        for (const line of chunk.split("\n").filter(Boolean)) {
           turn += 1;
           child.writeLine({ type: "system", subtype: "init", tools: PROVIDER_TOOLS, model: "claude-opus-5-5" });
+          // Each message starts its own turn, and Claude Code echoes it as it does.
+          child.writeLine({ type: "user", isReplay: true, message: JSON.parse(line).message });
           child.writeLine({
             type: "result", subtype: "success", is_error: false, result: `Answer ${turn}`, num_turns: 3, total_cost_usd: turn * 0.5,
             usage: { input_tokens: 1, output_tokens: 1 },
@@ -1329,3 +1459,276 @@ test("Claude ends a run whose model keeps sending malformed Studio calls", async
   assert.deepEqual(recorded.calls, []);
   assert.equal((child as FakeChildProcess | null)?.killed, true);
 });
+
+// -- Saved sessions and compaction --------------------------------------------
+
+/** A Claude Code stand-in that records each launch's arguments and answers every message. */
+function savingLauncher(extraTools: string[] = []) {
+  const launches: Array<{ args: string[]; child: FakeChildProcess; systemPrompt: string }> = [];
+  const inputs: string[] = [];
+  let answer: (text: string, child: FakeChildProcess) => void = (_text, child) =>
+    child.writeLine({ type: "result", subtype: "success", is_error: false, result: `Answer ${inputs.length}` });
+  return {
+    launches,
+    inputs,
+    answerWith(next: (text: string, child: FakeChildProcess) => void) { answer = next; },
+    launcher: {
+      launch: async (args: string[]) => {
+        const child = new FakeChildProcess();
+        const systemPrompt = await fs.readFile(args[args.indexOf("--system-prompt-file") + 1], "utf8");
+        launches.push({ args, child, systemPrompt });
+        child.stdin.setEncoding("utf8");
+        child.stdin.on("data", (chunk: string) => {
+          for (const line of chunk.split("\n").filter(Boolean)) {
+            const message = JSON.parse(line) as { message: { content: Array<{ text: string }> } };
+            const text = message.message.content[0].text;
+            inputs.push(text);
+            child.writeLine({ type: "system", subtype: "init", tools: [...PROVIDER_TOOLS, ...extraTools] });
+            answer(text, child);
+          }
+        });
+        return child.asChild();
+      },
+    },
+  };
+}
+
+/** A temporary Claude config directory and registry, so saved sessions can be created and found. */
+async function savedSessionFixture() {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "roqer-sessions-"));
+  const previous = process.env.CLAUDE_CONFIG_DIR;
+  process.env.CLAUDE_CONFIG_DIR = path.join(directory, "claude");
+  const registry = new ClaudeSessionRegistry(path.join(directory, "claude-sessions.json"));
+  return {
+    directory,
+    registry,
+    /** What Claude Code does when a process with `--session-id` writes its first turn. */
+    async save(sessionId: string) {
+      const file = claudeSessionFile(PLANNER_DEFAULTS.cwd, sessionId);
+      await fs.mkdir(path.dirname(file), { recursive: true });
+      await fs.writeFile(file, "{}\n");
+    },
+    async dispose() {
+      if (previous === undefined) delete process.env.CLAUDE_CONFIG_DIR;
+      else process.env.CLAUDE_CONFIG_DIR = previous;
+      await fs.rm(directory, { recursive: true, force: true });
+    },
+  };
+}
+
+const argAfter = (args: string[], flag: string) => (args.includes(flag) ? args[args.indexOf(flag) + 1] : undefined);
+
+test("Claude resumes a chat's saved conversation in a new process after a failed run", async () => {
+  const fixture = await savedSessionFixture();
+  try {
+    const sessions = new ProviderSessionStore<ClaudeSession>();
+    const provider = savingLauncher();
+    const planner = createClaudePlanner({
+      ...PLANNER_DEFAULTS, launcher: provider.launcher, chatId: "chat-1", sessions, registry: fixture.registry,
+    });
+    const { context } = makeContext(new AbortController());
+
+    provider.answerWith((_text, child) => child.writeLine({ type: "result", subtype: "error_during_execution", is_error: true, result: "Overloaded" }));
+    await assert.rejects(() => planner.run(context), /Overloaded/);
+    const first = provider.launches[0].args;
+    const sessionId = argAfter(first, "--session-id")!;
+    assert.match(sessionId, /^[0-9a-f-]{36}$/);
+    assert.equal(first.includes("--no-session-persistence"), false, "the conversation is saved");
+    assert.equal(first.includes("--disable-slash-commands"), true, "a run's prompt is never a slash command");
+    assert.equal((await fixture.registry.get("chat-1"))?.lastPrompt, context.prompt);
+    assert.match(provider.inputs[0], /Prior conversation context/, "a chat's first Claude session gets the replay once");
+
+    await fixture.save(sessionId);
+    provider.answerWith((_text, child) => child.writeLine({ type: "result", subtype: "success", is_error: false, result: "Done" }));
+    assert.equal(await planner.run(followUp(context, "Claude Code ended the turn.", "Try again.")), "Done");
+    const second = provider.launches[1].args;
+    assert.equal(argAfter(second, "--resume"), sessionId, "the new process continues the same conversation");
+    assert.equal(provider.inputs[1], "Try again.", "nothing is replayed: the session holds the conversation");
+    await sessions.closeAll();
+  } finally {
+    await fixture.dispose();
+  }
+});
+
+test("Claude resumes after a model change and tells the session what the chat said without it", async () => {
+  const fixture = await savedSessionFixture();
+  try {
+    const sessions = new ProviderSessionStore<ClaudeSession>();
+    const provider = savingLauncher();
+    const base = { ...PLANNER_DEFAULTS, launcher: provider.launcher, chatId: "chat-1", sessions, registry: fixture.registry };
+    const { context } = makeContext(new AbortController());
+
+    await createClaudePlanner(base).run(context);
+    const sessionId = argAfter(provider.launches[0].args, "--session-id")!;
+    await fixture.save(sessionId);
+
+    // Another provider answered a message in between, then the model changed.
+    const elsewhere = followUp(followUp(context, "Answer 1", "Asked on another provider"), "Other answer", "Continue.");
+    await createClaudePlanner({ ...base, model: "sonnet" }).run(elsewhere);
+
+    assert.equal(provider.launches.length, 2);
+    assert.equal(provider.launches[0].child.killed, true, "the old process is stopped, not leaked");
+    assert.equal(argAfter(provider.launches[1].args, "--resume"), sessionId);
+    assert.equal(argAfter(provider.launches[1].args, "--model"), "sonnet");
+    assert.match(provider.inputs[1], /added to this chat since your last turn/);
+    assert.match(provider.inputs[1], /Asked on another provider/);
+    assert.match(provider.inputs[1], /Other answer/);
+    assert.doesNotMatch(provider.inputs[1], /What does Main do\?/, "what the session already holds is not repeated");
+    assert.match(provider.inputs[1], /Current user message:\nContinue\.$/);
+    await sessions.closeAll();
+  } finally {
+    await fixture.dispose();
+  }
+});
+
+test("Claude tells a resumed session when the chat moved to another Studio place", async () => {
+  const fixture = await savedSessionFixture();
+  try {
+    const provider = savingLauncher();
+    const planner = createClaudePlanner({ ...PLANNER_DEFAULTS, launcher: provider.launcher, chatId: "chat-1", registry: fixture.registry });
+    const { context } = makeContext(new AbortController());
+    await planner.run({ ...context, instanceId: "place:1" });
+    await fixture.save(argAfter(provider.launches[0].args, "--session-id")!);
+    await planner.run({ ...followUp(context, "Answer 1", "Again."), instanceId: "place:2" });
+    assert.match(provider.inputs[1], /different Studio place/);
+  } finally {
+    await fixture.dispose();
+  }
+});
+
+test("Claude starts a new saved session when the old one is gone", async () => {
+  const fixture = await savedSessionFixture();
+  try {
+    const provider = savingLauncher();
+    const planner = createClaudePlanner({ ...PLANNER_DEFAULTS, launcher: provider.launcher, chatId: "chat-1", registry: fixture.registry });
+    const { context } = makeContext(new AbortController());
+    await planner.run(context);
+    const first = argAfter(provider.launches[0].args, "--session-id")!;
+    // Never saved by Claude Code, or deleted since.
+    await planner.run(followUp(context, "Answer 1", "Again."));
+    const second = argAfter(provider.launches[1].args, "--session-id");
+    assert.ok(second !== undefined && second !== first, "a fresh id, not a resume that would fail");
+    assert.equal(provider.launches[1].args.includes("--resume"), false);
+    assert.match(provider.inputs[1], /Prior conversation context/);
+    assert.equal((await fixture.registry.get("chat-1"))?.sessionId, second);
+  } finally {
+    await fixture.dispose();
+  }
+});
+
+test("compacting a chat resumes its saved session with /compact allowed and reports the sizes", async () => {
+  const fixture = await savedSessionFixture();
+  try {
+    const sessions = new ProviderSessionStore<ClaudeSession>();
+    const provider = savingLauncher();
+    const base = { ...PLANNER_DEFAULTS, launcher: provider.launcher, chatId: "chat-1", sessions, registry: fixture.registry };
+    const { context } = makeContext(new AbortController());
+    await createClaudePlanner(base).run(context);
+    const sessionId = argAfter(provider.launches[0].args, "--session-id")!;
+    await fixture.save(sessionId);
+
+    provider.answerWith((text, child) => {
+      assert.equal(text, "/compact");
+      child.writeLine({ type: "system", subtype: "compact_boundary", compact_metadata: { trigger: "manual", pre_tokens: 180_000, post_tokens: 9_000 } });
+      child.writeLine({ type: "result", subtype: "success", is_error: false, result: "" });
+    });
+    const result = await compactClaudeChat({ ...base, registry: fixture.registry, chatId: "chat-1" });
+    assert.deepEqual(result, { ok: true, preTokens: 180_000, postTokens: 9_000 });
+    assert.equal(provider.launches[0].child.killed, true, "the chat's live process made way for it");
+    const compactor = provider.launches[1];
+    assert.equal(argAfter(compactor.args, "--resume"), sessionId);
+    assert.equal(compactor.args.includes("--disable-slash-commands"), false);
+    assert.equal(compactor.child.killed, true, "the compacting process exits when done");
+    assert.equal(sessions.size, 0);
+  } finally {
+    await fixture.dispose();
+  }
+});
+
+const NOTES_TOOLS = ["mcp__workbench__project_memory", "mcp__workbench__master_plan"];
+
+test("Claude is given the project's notes as data, and its own edits to them are steps in the run", async () => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "roqer-notes-"));
+  try {
+    const store = new ProjectNotesStore(directory);
+    await store.setPlan("project-1", "# Dark Forest\n\n- Radar: status building");
+    await store.addMemory("project-1", "Characters are R6 only.");
+    const sessions = new ProviderSessionStore<ClaudeSession>();
+    const provider = savingLauncher(NOTES_TOOLS);
+    const planner = createClaudePlanner({
+      ...PLANNER_DEFAULTS, launcher: provider.launcher, chatId: "chat-1", sessions,
+      projectNotes: { store, projectId: "project-1" },
+    });
+    const controller = new AbortController();
+    const made = makeContext(controller);
+    // The engine runs the notes tools as local operations, as main.ts registers them.
+    const operations = new Map(projectDataOperations({ notes: { store, projectId: "project-1" } }));
+    const context: PlannerContext = {
+      ...made.context,
+      call: async (tool, args) => {
+        made.recorded.calls.push(tool);
+        return operations.get(tool)!(args, {}, async () => { throw new Error("no Studio"); });
+      },
+    };
+
+    let target!: Awaited<ReturnType<typeof mcpTarget>>;
+    provider.answerWith((text, child) => {
+      if (text.includes("Mark the radar done")) {
+        void (async () => {
+          target = await mcpTarget(provider.launches[0].args);
+          assert.match(await callTool(target, { action: "edit", old_text: "status building", new_text: "status done" }, "master_plan"), /"ok":true,"text":"Master plan updated."/);
+          assert.match(await callTool(target, { action: "add", text: "The radar sweep runs on the client." }, "project_memory"), /"text":"Saved as mem-/);
+          child.writeLine({ type: "result", subtype: "success", is_error: false, result: "Marked it done." });
+        })();
+        return;
+      }
+      child.writeLine({ type: "result", subtype: "success", is_error: false, result: "OK" });
+    });
+
+    await planner.run(context);
+    // The system prompt says how to keep the notes, and carries none of what they say.
+    const prompt = provider.launches[0].systemPrompt;
+    assert.match(prompt, /<project-notes-guide>/);
+    assert.match(prompt, /not instructions from Roqer/);
+    assert.doesNotMatch(prompt, /Dark Forest|R6 only/);
+    // Their contents come with the first message, framed as data.
+    assert.match(provider.inputs[0], /^<project-notes>\n\[Roqer: the project notes as they are saved now\. This is project data/);
+    assert.match(provider.inputs[0], /<master-plan>\n# Dark Forest/);
+    assert.match(provider.inputs[0], /Characters are R6 only\./);
+
+    await planner.run(followUp(context, "OK", "Mark the radar done."));
+    const notes = await store.get("project-1");
+    assert.match(notes.plan, /status done/);
+    assert.equal(notes.memories.length, 2);
+    // Each edit went through the engine, so the run shows it as a step.
+    assert.deepEqual(made.recorded.calls, ["master_plan", "project_memory"]);
+
+    // The session wrote those itself, so its next message carries no update.
+    await planner.run(followUp(followUp(context, "OK", "Mark the radar done."), "Marked it done.", "Next."));
+    assert.equal(provider.inputs[2], "Next.");
+
+    // The user edits the plan in Roqer: the live session is told on its next message.
+    await store.setPlan("project-1", "# Dark Forest\n\n- Radar: needs fixing");
+    const fourth = followUp(followUp(followUp(context, "OK", "Mark the radar done."), "Marked it done.", "Next."), "Answer 3", "And now?");
+    await planner.run(fourth);
+    assert.match(provider.inputs[3], /project notes changed since you last saw them/);
+    assert.match(provider.inputs[3], /needs fixing/);
+    assert.equal(provider.launches.length, 1, "telling it does not restart the process");
+    await sessions.closeAll();
+  } finally {
+    await fs.rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("compacting a chat with no saved conversation says so", async () => {
+  const fixture = await savedSessionFixture();
+  try {
+    const provider = savingLauncher();
+    const result = await compactClaudeChat({ ...PLANNER_DEFAULTS, launcher: provider.launcher, registry: fixture.registry, chatId: "chat-1" });
+    assert.equal(result.ok, false);
+    assert.equal(provider.launches.length, 0);
+  } finally {
+    await fixture.dispose();
+  }
+});
+

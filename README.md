@@ -41,6 +41,7 @@ a sword, the Scarlet Requiem, with a combo, a flash step, and three special atta
 - **Works in your place.** Reads and edits instances, properties, and scripts. A script edit is refused if the script changed after the agent read it, so it won't overwrite your own changes.
 - **Models in Blender.** Turn on the optional Blender integration and the agent models what parts can't make (curved shapes, detailed props, vehicle bodies), checks each model with a preview render, and uploads it into your place. It can render UI icons too.
 - **Character animations.** Ask for a run, a wave or a dance and the agent makes an R15 animation. Roqer checks the motion before Studio sees it, and you can play it in 3D in the chat. The agent then publishes the animation as the place's owner, sets it on your players' characters, and checks in a playtest that it plays.
+- **A project, not just chats.** Give chats roles (Scripter, Modeller, Planner), each on its own model and effort. Every chat shares the project's master plan, memory and files: drag a design doc or a model in, check any model in 3D, then send it to Studio. Claude chats keep their conversation between runs.
 - **Tests its own work.** Runs solo and multi-client playtests, reads server and client output, takes screenshots, and profiles performance.
 - **Rojo projects.** Link a Rojo-synced place and script edits, new scripts and models, removals, and renames save to your project files, so they show up in `git diff`.
 - **You stay in control.** Choose how much it may do on its own, from Read only to Full auto, and see every script change as a diff.
@@ -80,6 +81,7 @@ claude mcp add robloxstudio -- node C:\path\to\Roqer\packages\robloxstudio-mcp\d
 
 - [Building from source](docs/building-from-source.md)
 - [Configuration](docs/configuration.md)
+- [Projects: roles, notes, files and long chats](docs/projects.md)
 - [3D modeling with Blender](docs/blender.md)
 - [Character animation](docs/animation.md)
 - [The Studio MCP server](docs/mcp-server.md)
@@ -92,7 +94,7 @@ claude mcp add robloxstudio -- node C:\path\to\Roqer\packages\robloxstudio-mcp\d
 What Roqer is working toward. Plans can change; [open an issue](https://github.com/S4US/Roqer/issues) to suggest something.
 
 - MacOS support
-- Model-written compact summaries. Manual compact (https://github.com/S4US/Roqer/issues/63) writes its record from what the chat recorded; a model could write a fuller one.
+- Model-written compact summaries for every provider. Claude chats with a saved conversation compact with Claude Code's own `/compact`; the others still compact (https://github.com/S4US/Roqer/issues/63) with a record written from what the chat recorded.
 - Add custom MCP connections
 - Web search. An optional switch that lets the model search the web during a run, with each search shown in the run's activity.
 

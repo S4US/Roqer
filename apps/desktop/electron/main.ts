@@ -24,7 +24,7 @@ import {
   isKnownInstance, resolvePickedProject,
   rojoForget, rojoGet, rojoLinkRecent, rojoOpenFolder, rojoRetry, rojoUnlink, shouldRelinkRojo,
 } from "../runtime/rojo-ipc";
-import { readModelPreview, storeModelPreview } from "../runtime/model-preview";
+import { modelPreviewSource, readModelPreview, storeModelPreview } from "../runtime/model-preview";
 import { captureMoments } from "../runtime/capture-moments";
 import { uploadAssets } from "../runtime/upload-assets";
 import { linkRojoProject } from "../runtime/link-rojo-project";
@@ -65,7 +65,14 @@ import {
 } from "../runtime/client-installer";
 import { ClientVersionReader } from "../runtime/client-version";
 import { resolveCodexExecutable } from "../runtime/codex-executable";
-import { createClaudePlanner, type ClaudeSession } from "../runtime/claude-planner";
+import { claudeSessionFile, compactClaudeChat, createClaudePlanner, type ClaudeSession } from "../runtime/claude-planner";
+import { ClaudeSessionRegistry } from "../runtime/claude-session-registry";
+import { ProjectNotesError, ProjectNotesStore, type ProjectNotes } from "../runtime/project-notes";
+import { ProjectFilesError, ProjectFilesStore } from "../runtime/project-files";
+import { displayNameFor, SendLedger, SendLedgerError, sendModelToStudio } from "../runtime/send-to-studio";
+import { projectDataOperations } from "../runtime/project-operations";
+import { canSendToStudio, chooseSendPlace, MAX_VIEWABLE_FILE_BYTES, type ProjectFile, type SendToStudioResult } from "../shared/project-files";
+import { isChatRole } from "../shared/chat-role";
 import { AntigravityClient, ANTIGRAVITY_SIGN_IN_HOSTS } from "../runtime/antigravity-cli";
 import { resolveAntigravityExecutable } from "../runtime/antigravity-executable";
 import { AntigravityLimitsTracker } from "../runtime/antigravity-limits";
@@ -694,6 +701,45 @@ function startMcpServer(): void {
 // -- Local Blender worker --------------------------------------------------
 
 let blenderSettingsStore: BlenderSettings | null = null;
+let claudeSessionRegistryStore: ClaudeSessionRegistry | null = null;
+let projectNotesStore: ProjectNotesStore | null = null;
+let projectFilesStore: ProjectFilesStore | null = null;
+
+/** Each project's shared files. */
+function projectFiles(): ProjectFilesStore {
+  projectFilesStore ??= new ProjectFilesStore(path.join(app.getPath("userData"), "project-files"));
+  return projectFilesStore;
+}
+
+/** What a run's `project_files` calls may use: the project's files, and the folders a save may copy from. */
+function projectFilesContext(request: Pick<RunStartRequest, "projectId" | "chatId" | "sharedFileIds">) {
+  return {
+    store: projectFiles(),
+    projectId: request.projectId,
+    chatId: request.chatId,
+    shared: request.sharedFileIds ?? [],
+    saveRoots: [blenderJobsRoot(), projectFiles().directory],
+  };
+}
+
+/** Tell every window a project's files changed, so an open Files panel refreshes. */
+function announceFilesChanged(projectId: string): void {
+  for (const window of BrowserWindow.getAllWindows()) {
+    if (!window.webContents.isDestroyed()) window.webContents.send("files:changed", projectId);
+  }
+}
+
+/** Which saved Claude Code session holds each chat's conversation. */
+function claudeSessionRegistry(): ClaudeSessionRegistry {
+  claudeSessionRegistryStore ??= new ClaudeSessionRegistry(path.join(app.getPath("userData"), "claude-sessions.json"));
+  return claudeSessionRegistryStore;
+}
+
+/** Each project's memory and master plan. */
+function projectNotes(): ProjectNotesStore {
+  projectNotesStore ??= new ProjectNotesStore(path.join(app.getPath("userData"), "project-notes"));
+  return projectNotesStore;
+}
 
 /** Whether the Blender worker is on, and which Blender it runs. */
 function blenderSettings(): BlenderSettings {
@@ -718,6 +764,7 @@ async function runBlenderJob(args: Record<string, unknown>, options: McpCallOpti
     executable,
     jobsRoot: blenderJobsRoot(),
     scope: createHash("sha256").update(chatId).digest("hex").slice(0, 32),
+    inspectRoots: [blenderJobsRoot(), projectFiles().directory],
   });
   return worker.run(args, options);
 }
@@ -1449,6 +1496,334 @@ async function submitProviderCode(event: IpcMainInvokeEvent, payload: unknown): 
   }
 }
 
+// -- Project notes and conversation compaction --------------------------------
+
+type NotesResult = { ok: true; notes: ProjectNotes } | { ok: false; message: string };
+
+async function notesCall(event: IpcMainInvokeEvent, operation: () => Promise<ProjectNotes>): Promise<NotesResult> {
+  if (!isTrusted(event.sender)) return { ok: false, message: "This window may not read project notes." };
+  try {
+    return { ok: true, notes: await operation() };
+  } catch (error) {
+    return { ok: false, message: error instanceof ProjectNotesError ? error.message : "The project notes could not be read or saved." };
+  }
+}
+
+const stringArgument = (value: unknown, name: string): string => {
+  if (typeof value !== "string") throw new ProjectNotesError(`${name} must be text.`);
+  return value;
+};
+
+type FilesResult<T> = { ok: true; value: T } | { ok: false; message: string };
+
+async function filesCall<T>(event: IpcMainInvokeEvent, operation: () => Promise<T>): Promise<FilesResult<T>> {
+  if (!isTrusted(event.sender)) return { ok: false, message: "This window may not use project files." };
+  try {
+    return { ok: true, value: await operation() };
+  } catch (error) {
+    return { ok: false, message: error instanceof ProjectFilesError || error instanceof ProjectNotesError ? error.message : "The project files could not be read or saved." };
+  }
+}
+
+/** Where a one-click send finds its model: a project file, or a Blender result's 3D preview. */
+type ModelSource = { projectId: string; fileId: string } | { previewId: string };
+
+async function resolveModelSource(source: unknown): Promise<{ filePath: string; name: string; projectFile?: { projectId: string; fileId: string } }> {
+  if (!isRecord(source)) throw new ProjectFilesError("Choose a model to send.");
+  if (typeof source.previewId === "string") {
+    const found = await modelPreviewSource(blenderJobsRoot(), source.previewId);
+    if (found === null) throw new ProjectFilesError("This Blender result has been cleared from Roqer's job folders. Ask the modeller to export it again.");
+    return found;
+  }
+  const projectId = stringArgument(source.projectId, "Project");
+  const fileId = stringArgument(source.fileId, "The file");
+  const { file, filePath } = await projectFiles().path(projectId, fileId);
+  if (file.kind !== "model") throw new ProjectFilesError(`${file.name} is not a model file.`);
+  if (!canSendToStudio(file.name)) throw new ProjectFilesError(`Roblox takes models as .fbx or .glb; export ${file.name} as one of those to send it.`);
+  return { filePath, name: file.name, projectFile: { projectId, fileId } };
+}
+
+/** Sends to Studio in progress, by the id the window gave each, so one can be stopped. */
+const studioSends = new Map<string, { controller: AbortController; done: Promise<unknown> }>();
+let studioSendLedger: SendLedger | null = null;
+
+/** Which model files were sent to Roblox, so sending one again never uploads a second copy. */
+function sendLedger(): SendLedger {
+  studioSendLedger ??= new SendLedger(path.join(app.getPath("userData"), "studio-sends.json"));
+  return studioSendLedger;
+}
+
+/**
+ * Upload a model and insert it into the chat's place, after the window asked
+ * the user to confirm. The place is checked against what the bridge reports
+ * now, before anything is uploaded.
+ */
+async function sendToStudio(event: IpcMainInvokeEvent, payload: unknown): Promise<SendToStudioResult> {
+  if (!isTrusted(event.sender)) return { ok: false, message: "This window may not control Studio." };
+  if (shuttingDown) return { ok: false, message: "Roqer is closing. Nothing was uploaded." };
+  if (!isRecord(payload) || typeof payload.sendId !== "string" || !/^[A-Za-z0-9_-]{1,100}$/.test(payload.sendId)) {
+    return { ok: false, message: "Choose a model to send." };
+  }
+  const place = isRecord(payload.place) && (payload.place.instanceId === null || typeof payload.place.instanceId === "string") &&
+    typeof payload.place.chosen === "boolean"
+    ? { instanceId: payload.place.instanceId as string | null, chosen: payload.place.chosen }
+    : null;
+  if (place === null) return { ok: false, message: "Choose the place to send to." };
+  const sendId = payload.sendId;
+  if (studioSends.has(sendId)) return { ok: false, message: "That model is already being sent." };
+  let client: McpClient;
+  try {
+    client = clientFor(typeof payload.endpoint === "string" && payload.endpoint !== "" ? payload.endpoint : DEFAULT_MCP_ENDPOINT);
+  } catch (error) {
+    return { ok: false, message: error instanceof McpEndpointError ? error.message : "The MCP endpoint could not be used." };
+  }
+  const controller = new AbortController();
+  const done = (async (): Promise<SendToStudioResult> => {
+    try {
+      const source = await resolveModelSource(payload.source as ModelSource);
+      const health = await client.health();
+      if (!health.reachable || !health.pluginConnected) {
+        return { ok: false, message: `Studio is not connected: ${health.message}. Nothing was uploaded.` };
+      }
+      const chosen = chooseSendPlace(health.instances, place);
+      if (!chosen.ok) return chosen;
+      const result = await sendModelToStudio(
+        (tool, args, options) => client.callTool(tool, args, options),
+        { filePath: source.filePath, displayName: displayNameFor(source.name), instanceId: chosen.instanceId },
+        sendLedger(),
+        { signal: controller.signal },
+      );
+      if (result.assetId !== undefined && source.projectFile !== undefined) {
+        await projectFiles().update(source.projectFile.projectId, source.projectFile.fileId, {
+          assetId: result.assetId, uploadedAt: new Date().toISOString(),
+        }).catch(() => undefined);
+        announceFilesChanged(source.projectFile.projectId);
+      }
+      return result;
+    } catch (error) {
+      return {
+        ok: false,
+        message: error instanceof ProjectFilesError || error instanceof SendLedgerError
+          ? error.message
+          : error instanceof Error ? error.message : "The model could not be sent to Studio.",
+      };
+    }
+  })();
+  studioSends.set(sendId, { controller, done });
+  try {
+    return await done;
+  } finally {
+    studioSends.delete(sendId);
+  }
+}
+
+/** Stop a send. One already uploading finishes that call and records it, then stops. */
+function cancelStudioSend(event: IpcMainInvokeEvent, sendId: unknown): void {
+  if (!isTrusted(event.sender) || typeof sendId !== "string") return;
+  studioSends.get(sendId)?.controller.abort();
+}
+
+/** Quitting stops every send, and waits for each to record what Roblox already took. */
+async function drainStudioSends(): Promise<void> {
+  for (const send of studioSends.values()) send.controller.abort();
+  await Promise.allSettled([...studioSends.values()].map((send) => send.done));
+}
+
+function registerProjectFiles(): void {
+  ipcMain.handle("files:list", (event, projectId: unknown) =>
+    filesCall(event, () => projectFiles().list(stringArgument(projectId, "Project"))));
+  ipcMain.handle("files:add", (event, projectId: unknown, paths: unknown, chatId: unknown) => filesCall(event, async () => {
+    const id = stringArgument(projectId, "Project");
+    if (!Array.isArray(paths) || paths.length === 0 || paths.length > 50 || !paths.every((entry) => typeof entry === "string" && path.isAbsolute(entry))) {
+      throw new ProjectFilesError("Drop up to 50 files at a time.");
+    }
+    const added: ProjectFile[] = [];
+    for (const source of paths as string[]) {
+      added.push(await projectFiles().add(id, source, { addedBy: "user", ...(typeof chatId === "string" ? { chatId } : {}) }));
+    }
+    announceFilesChanged(id);
+    return added;
+  }));
+  ipcMain.handle("files:pick", (event, projectId: unknown, chatId: unknown) => filesCall(event, async () => {
+    const id = stringArgument(projectId, "Project");
+    const window = BrowserWindow.fromWebContents(event.sender);
+    const options = { title: "Add files to the project", properties: ["openFile", "multiSelections"] as Array<"openFile" | "multiSelections"> };
+    const picked = window === null ? await dialog.showOpenDialog(options) : await dialog.showOpenDialog(window, options);
+    if (picked.canceled) return [];
+    const added: ProjectFile[] = [];
+    for (const source of picked.filePaths.slice(0, 50)) {
+      added.push(await projectFiles().add(id, source, { addedBy: "user", ...(typeof chatId === "string" ? { chatId } : {}) }));
+    }
+    announceFilesChanged(id);
+    return added;
+  }));
+  ipcMain.handle("files:remove", (event, projectId: unknown, fileId: unknown) => filesCall(event, async () => {
+    const id = stringArgument(projectId, "Project");
+    await projectFiles().remove(id, stringArgument(fileId, "The file"));
+    announceFilesChanged(id);
+    return true;
+  }));
+  ipcMain.handle("files:note", (event, projectId: unknown, fileId: unknown, note: unknown) => filesCall(event, async () => {
+    const id = stringArgument(projectId, "Project");
+    const file = await projectFiles().update(id, stringArgument(fileId, "The file"), { note: stringArgument(note, "The note") });
+    announceFilesChanged(id);
+    return file;
+  }));
+  ipcMain.handle("files:read", (event, projectId: unknown, fileId: unknown) => filesCall(event, async () => {
+    const { file, filePath } = await projectFiles().path(stringArgument(projectId, "Project"), stringArgument(fileId, "The file"));
+    if (file.size > MAX_VIEWABLE_FILE_BYTES) throw new ProjectFilesError(`${file.name} is too large to open in Roqer.`);
+    return new Uint8Array(await fs.promises.readFile(filePath));
+  }));
+  ipcMain.handle("files:reveal", (event, projectId: unknown, fileId: unknown) => filesCall(event, async () => {
+    const { filePath } = await projectFiles().path(stringArgument(projectId, "Project"), stringArgument(fileId, "The file"));
+    shell.showItemInFolder(filePath);
+    return true;
+  }));
+  /** Keep a Blender result in the project: the job's own export, which job folders do not keep for long. */
+  ipcMain.handle("files:save-preview", (event, projectId: unknown, previewId: unknown, chatId: unknown) => filesCall(event, async () => {
+    const id = stringArgument(projectId, "Project");
+    const found = await modelPreviewSource(blenderJobsRoot(), previewId);
+    if (found === null) throw new ProjectFilesError("This Blender result has been cleared from Roqer's job folders. Ask the modeller to export it again.");
+    const file = await projectFiles().add(id, found.filePath, { name: found.name, addedBy: "user", ...(typeof chatId === "string" ? { chatId } : {}) });
+    announceFilesChanged(id);
+    return file;
+  }));
+  ipcMain.handle("studio:send-model", sendToStudio);
+  ipcMain.handle("studio:cancel-send", cancelStudioSend);
+}
+
+function registerProjectNotes(): void {
+  ipcMain.handle("notes:get", (event, projectId: unknown) =>
+    notesCall(event, () => projectNotes().get(stringArgument(projectId, "Project"))));
+  ipcMain.handle("notes:set-plan", (event, projectId: unknown, plan: unknown) =>
+    notesCall(event, () => projectNotes().setPlan(stringArgument(projectId, "Project"), stringArgument(plan, "The plan"))));
+  ipcMain.handle("notes:add-memory", (event, projectId: unknown, text: unknown) =>
+    notesCall(event, () => projectNotes().addMemory(stringArgument(projectId, "Project"), stringArgument(text, "The memory"))));
+  ipcMain.handle("notes:update-memory", (event, projectId: unknown, id: unknown, text: unknown) =>
+    notesCall(event, () => projectNotes().updateMemory(
+      stringArgument(projectId, "Project"), stringArgument(id, "The memory id"), stringArgument(text, "The memory"),
+    )));
+  ipcMain.handle("notes:remove-memory", (event, projectId: unknown, id: unknown) =>
+    notesCall(event, () => projectNotes().removeMemory(stringArgument(projectId, "Project"), stringArgument(id, "The memory id"))));
+  ipcMain.handle("chat:compact-model", compactChat);
+}
+
+// -- Deleted chats and projects ------------------------------------------------
+
+/** How long a deleted chat's run gets to stop before its saved conversation is removed anyway. */
+const DELETED_RUN_STOP_MS = 15_000;
+
+/**
+ * Remove what Roqer keeps for chats the user deleted, outside the workspace
+ * file: each chat's provider processes, its saved Claude session entry, and
+ * the transcript Claude Code wrote for it.
+ *
+ * The window cancels a deleted chat's run first; it is given a moment to stop,
+ * so the process it is using is gone before its transcript is removed and
+ * cannot write it again.
+ */
+async function forgetChats(chatIds: readonly string[]): Promise<void> {
+  const deadline = Date.now() + DELETED_RUN_STOP_MS;
+  for (const chatId of chatIds) {
+    while (runHolds.chatBusy(chatId) && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 100));
+    claudeSessions.drop(chatId);
+    antigravitySessions.drop(chatId);
+    codexThreads.drop(chatId);
+    customConversations.drop(chatId);
+    const saved = await claudeSessionRegistry().get(chatId);
+    await claudeSessionRegistry().forget(chatId);
+    if (saved !== undefined) {
+      await fs.promises.rm(claudeSessionFile(app.getPath("userData"), saved.sessionId), { force: true })
+        .catch((error) => console.error("Roqer could not remove a deleted chat's Claude transcript", error));
+    }
+  }
+}
+
+const isIdList = (value: unknown): value is string[] =>
+  Array.isArray(value) && value.length <= 10_000 && value.every((id) => typeof id === "string" && id !== "" && id.length <= 1_000);
+
+function registerDeletionCleanup(): void {
+  ipcMain.handle("workspace:forget-chats", async (event, chatIds: unknown) => {
+    if (!isTrusted(event.sender) || !isIdList(chatIds)) return false;
+    await forgetChats(chatIds);
+    return true;
+  });
+  /** A deleted project: its chats, as above, and its files and notes. */
+  ipcMain.handle("workspace:forget-project", async (event, projectId: unknown, chatIds: unknown) => {
+    if (!isTrusted(event.sender) || typeof projectId !== "string" || !/^[A-Za-z0-9_-]{1,128}$/.test(projectId) || !isIdList(chatIds)) return false;
+    await forgetChats(chatIds);
+    await Promise.all([projectFiles().removeProject(projectId), projectNotes().removeProject(projectId)]);
+    announceFilesChanged(projectId);
+    return true;
+  });
+}
+
+/** Chats being compacted, so a second click does not start another and a run waits for it. */
+const compactingChats = new Map<string, Promise<unknown>>();
+/** Stops every compaction in progress when Roqer quits, so none outlives it. */
+const compactionStop = new AbortController();
+
+/**
+ * Compact a chat's saved Claude conversation with Claude Code's own `/compact`:
+ * Claude writes the summary the session keeps. `noSession` says the chat has no
+ * saved Claude conversation, so the window compacts it with its own record instead.
+ */
+async function compactChat(event: IpcMainInvokeEvent, payload: unknown): Promise<ModelCompaction> {
+  if (!isTrusted(event.sender)) return { ok: false, message: "This window may not compact a chat." };
+  if (!isRecord(payload) || typeof payload.chatId !== "string" || typeof payload.projectId !== "string") {
+    return { ok: false, message: "Choose a chat to compact." };
+  }
+  const { chatId, projectId } = payload;
+  if (runHolds.chatBusy(chatId)) return { ok: false, message: "Wait for the run in this chat to finish, then compact." };
+  if (compactingChats.has(chatId)) return { ok: false, message: "This chat is already being compacted." };
+  const compaction = compactChatNow(chatId, projectId);
+  compactingChats.set(chatId, compaction);
+  try {
+    return await compaction;
+  } finally {
+    compactingChats.delete(chatId);
+  }
+}
+
+type ModelCompaction = { ok: boolean; message: string; noSession?: true };
+
+async function compactChatNow(chatId: string, projectId: string): Promise<ModelCompaction> {
+  try {
+    const saved = await claudeSessionRegistry().get(chatId);
+    if (saved === undefined) return { ok: false, message: "This chat has no saved Claude conversation.", noSession: true };
+    const agentRuntime = await clientAgentRuntime();
+    const client = claudeProvider();
+    const model = saved.model ?? "opus";
+    const result = await compactClaudeChat({
+      launcher: client,
+      getStatus: () => client.getStatus(),
+      cwd: app.getPath("userData"),
+      model,
+      effort: "medium",
+      supportsEffort: false,
+      agent: agentRuntime.definition,
+      skillLibrary: agentRuntime.skillLibrary,
+      chatId,
+      sessions: claudeSessions,
+      registry: claudeSessionRegistry(),
+      projectNotes: { store: projectNotes(), projectId },
+      signal: compactionStop.signal,
+    });
+    if (!result.ok) return result;
+    const tokens = (count: number | null) => count === null ? null : `${Math.round(count / 1000).toLocaleString("en-US")}k`;
+    const before = tokens(result.preTokens);
+    const after = tokens(result.postTokens);
+    return {
+      ok: true,
+      message: before !== null && after !== null
+        ? `Compacted this chat's conversation from about ${before} to ${after} tokens. Claude keeps a summary of everything before.`
+        : "Compacted this chat's conversation. Claude keeps a summary of everything before.",
+    };
+  } catch (error) {
+    return { ok: false, message: error instanceof Error ? error.message : "The conversation could not be compacted." };
+  }
+}
+
 // -- Custom model connections ------------------------------------------------
 //
 // Configuration only: none of these runs anything in Studio. A run on a custom
@@ -1611,6 +1986,10 @@ function plannerFor(
       skillLibrary: agentRuntime.skillLibrary,
       chatId: request.chatId,
       sessions: claudeSessions,
+      registry: claudeSessionRegistry(),
+      projectNotes: { store: projectNotes(), projectId: request.projectId },
+      projectFiles: projectFilesContext(request),
+      ...(request.role === undefined ? {} : { role: request.role }),
       blender,
       referenceClips,
     });
@@ -1783,7 +2162,7 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
 
 function parseStartRequest(value: unknown): RunStartRequest | null {
   if (!isRecord(value)) return null;
-  const { projectId, chatId, prompt, conversation, approvalMode, autoPlaytest, endpoint, instanceId, provider, model, effort, startId, attachmentIds } = value;
+  const { projectId, chatId, prompt, conversation, approvalMode, autoPlaytest, endpoint, instanceId, provider, model, effort, startId, attachmentIds, role, sharedFileIds } = value;
   if (typeof projectId !== "string" || projectId === "" || projectId.length > 1_000) return null;
   if (typeof chatId !== "string" || chatId === "" || chatId.length > 1_000) return null;
   if (typeof prompt !== "string" || prompt.trim() === "" || prompt.length > 64_000) return null;
@@ -1797,7 +2176,12 @@ function parseStartRequest(value: unknown): RunStartRequest | null {
   if (!isEnabledProvider(provider)) return null;
   if (model !== null && (typeof model !== "string" || model === "" || model.length > 100)) return null;
   if (!isReasoningEffort(effort)) return null;
+  if (role !== undefined && !isChatRole(role)) return null;
+  if (sharedFileIds !== undefined && (!Array.isArray(sharedFileIds) || sharedFileIds.length > 200 ||
+    !sharedFileIds.every((id) => typeof id === "string" && /^[A-Za-z0-9_-]{1,128}$/.test(id)))) return null;
   return {
+    ...(role === undefined ? {} : { role }),
+    ...(sharedFileIds === undefined ? {} : { sharedFileIds: sharedFileIds as string[] }),
     projectId,
     chatId,
     prompt,
@@ -1862,6 +2246,13 @@ async function startRun(event: IpcMainInvokeEvent, payload: unknown): Promise<Ru
     await initializeStorage();
     if (cancelled()) return stopped;
     if (store().status().required) return { ok: false, message: "Recover your saved chats before starting a run." };
+    // A run reopens the chat's conversation, which compaction is rewriting.
+    // The run's hold already keeps a new compaction out; one that began
+    // before it is waited for.
+    for (let compaction = compactingChats.get(request.chatId); compaction !== undefined; compaction = compactingChats.get(request.chatId)) {
+      await compaction.catch(() => undefined);
+    }
+    if (cancelled()) return stopped;
     // The vendor sign-in and the model catalog are independent reads that can
     // each wait on a provider process, so they run together. Their answers
     // are still taken in this order. The smoke run is driven by its own local
@@ -1998,6 +2389,14 @@ async function startRun(event: IpcMainInvokeEvent, payload: unknown): Promise<Ru
         ...(clips
           ? [[REFERENCE_CLIP_OPERATION, (args, options) => readReferenceClip(args, options, chatClips(request.chatId), composeClipSheet)] as [string, LocalOperation]]
           : []),
+        // Only Claude chats are offered the project's notes and files.
+        ...(request.provider === "claude"
+          ? projectDataOperations({
+            notes: { store: projectNotes(), projectId: request.projectId },
+            files: projectFilesContext(request),
+            filesChanged: () => announceFilesChanged(request.projectId),
+          })
+          : []),
       ])),
       bridge: bridgeRecoveryFor(client.endpoint),
       planner,
@@ -2068,17 +2467,20 @@ async function startRun(event: IpcMainInvokeEvent, payload: unknown): Promise<Ru
 }
 
 /**
- * Forget the provider conversations a chat keeps, after the user compacts it.
+ * Forget the provider conversations a chat keeps, after the user compacts it
+ * with the window's own record.
  *
  * The next run then starts from the compacted transcript instead of a provider
  * that still holds everything. Refused while a run is starting or working on
  * the chat: that run owns the conversation until it ends, and would put the
  * full history back.
  */
-function compactChatSessions(event: IpcMainInvokeEvent, chatId: unknown): boolean {
+async function compactChatSessions(event: IpcMainInvokeEvent, chatId: unknown): Promise<boolean> {
   if (!isTrusted(event.sender) || typeof chatId !== "string" || chatId === "" || chatId.length > 1_000) return false;
-  if (runHolds.chatBusy(chatId)) return false;
+  if (runHolds.chatBusy(chatId) || compactingChats.has(chatId)) return false;
   claudeSessions.drop(chatId);
+  // A saved Claude conversation would be resumed with everything in it.
+  await claudeSessionRegistry().forget(chatId);
   antigravitySessions.drop(chatId);
   codexThreads.drop(chatId);
   customConversations.drop(chatId);
@@ -2558,6 +2960,9 @@ app.whenReady().then(async () => {
   ipcMain.handle("rojo:open-folder", openRojoFolder);
   ipcMain.handle("previews:model", loadModelPreview);
   ipcMain.handle("previews:picture", loadEvidencePicture);
+  registerProjectNotes();
+  registerProjectFiles();
+  registerDeletionCleanup();
   ipcMain.handle("run:start", startRun);
   ipcMain.handle("chat:compact", compactChatSessions);
   ipcMain.handle("run:respond", respondToRun);
@@ -2616,6 +3021,8 @@ app.on("before-quit", () => {
   void clipDecoder.close(true);
   clientInstalls.stop();
   void claudeSessions.closeAll();
+  compactionStop.abort();
+  for (const send of studioSends.values()) send.controller.abort();
   void antigravitySessions.closeAll();
   void codexThreads.closeAll();
   void customConversations.closeAll();
@@ -2630,7 +3037,7 @@ app.on("will-quit", (event) => {
   if (waitingForShutdownBeforeQuit) return;
   waitingForShutdownBeforeQuit = true;
   void (async () => {
-    await Promise.allSettled([drainStateWrites(), drainRunExecutions()]);
+    await Promise.allSettled([drainStateWrites(), drainRunExecutions(), drainStudioSends()]);
     await runJournal().drain();
     // Last, so a run still writing its journal keeps the bridge it is using.
     await mcpServer?.stop();

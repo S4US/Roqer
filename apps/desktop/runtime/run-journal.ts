@@ -165,6 +165,7 @@ function applyEvent(snapshot: Snapshot, event: RunEvent): void {
       if (notes.length < MAX_STEERS_PER_RUN) snapshot.notes = [...notes, event.text];
       break;
     }
+    case "steers-delivered": break;
     case "question-asked":
       snapshot.pendingQuestions = { ...snapshot.pendingQuestions, [event.question.callId]: event.question.question };
       break;

@@ -10,8 +10,8 @@ import {
 } from "../shared/run-events";
 import {
   activitySteps, applyRunEvent, createRunView, describeActivityState, describeOutcome, evidenceImages, previewsNotShown,
-  recordAppliedAndVerified, recordGateIssues, recordHasWarnings, recordOnlyAnswered, recordSteps,
-  runAppliedAndVerified, runGateIssues, runHasWarnings, runOnlyAnswered, toRunRecord, usageLabel,
+  recordAppliedAndVerified, recordGateIssues, recordHasWarnings, recordOnlyAnswered, recordSteps, recordTranscriptSegments,
+  runAppliedAndVerified, runGateIssues, runHasWarnings, runOnlyAnswered, toRunRecord, transcriptSegments, usageLabel,
   type RunView,
 } from "./run-view";
 import { completedRunDurationLabel } from "./activity-model";
@@ -406,7 +406,7 @@ test("a note the user added mid-run is a timeline entry at the moment it was sai
     { type: "run-completed", outcome: "completed", summary: "done" },
   ));
   const notes = view.timeline.filter((entry) => entry.type === "note");
-  assert.deepEqual(notes, [{ type: "note", key: "note-3", label: "You added a note", detail: "Also make it blue." }]);
+  assert.deepEqual(notes, [{ type: "note", key: "note-3", label: "You added a note", detail: "Also make it blue.", steer: true }]);
   // Between the proposal and the end, where it happened.
   assert.deepEqual(view.timeline.map((entry) => entry.type), ["tool", "note"]);
 });
@@ -958,4 +958,61 @@ test("a saved run names a 3D preview only by an id the main process serves", () 
   for (const id of ["../a1b2c3d4-0", "C:\\Users\\me\\cart.glb", "a1b2c3d4-10", "", 3]) {
     assert.ok(!isRunRecord(withModel(id)), String(id));
   }
+});
+
+test("prose and steps are read in the order they happened, live and recorded", () => {
+  const events = stream(
+    started,
+    { type: "message-delta", text: "Let me look." },
+    { type: "tool-proposed", proposal: proposal("c1") },
+    { type: "tool-result", callId: "c1", tool: "get_place_info", ok: true, durationMs: 5, summary: "1 place" },
+    { type: "steer", text: "Make it blue." },
+    { type: "tool-proposed", proposal: proposal("c2") },
+    { type: "tool-result", callId: "c2", tool: "get_place_info", ok: false, durationMs: 5, summary: "Failed" },
+    { type: "message-delta", text: "\n\nFound " },
+    { type: "message-delta", text: "it." },
+    { type: "run-completed", outcome: "completed", summary: "Found it." },
+  );
+  const live = fold(events.slice(0, 8));
+  const streaming = fold(events.slice(8, 9), live);
+  // A delta that continues a stretch of prose leaves the timeline as it was.
+  assert.equal(streaming.timeline, live.timeline);
+
+  const view = fold(events);
+  const segments = transcriptSegments(view);
+  assert.deepEqual(segments.map((segment) => segment.type), ["text", "steps", "text"]);
+  const [first, steps, last] = segments;
+  assert.ok(first.type === "text" && last.type === "text" && steps.type === "steps");
+  assert.equal(view.text.slice(first.start, first.end ?? undefined), "Let me look.");
+  assert.equal(view.text.slice(last.start, last.end ?? undefined), "\n\nFound it.");
+  assert.deepEqual(steps.steps.map((step) => step.kind === "note" ? step.label : step.state), ["done", "You added a note", "failed"]);
+  assert.equal(activitySteps(view).length, 3, "prose is not a step");
+
+  const record = toRunRecord(view)!;
+  assert.ok(isRunRecord(record));
+  assert.deepEqual(record.transcript, [
+    { text: "Let me look." }, { step: "call" }, { step: "note" }, { step: "call" }, { text: "\n\nFound it." },
+  ]);
+  const recorded = recordTranscriptSegments(record)!;
+  assert.deepEqual(recorded.map((segment) => segment.type === "text" ? segment.text : segment.steps.map((step) => step.key)),
+    ["Let me look.", ["call-0", "note-0", "call-1"], "\n\nFound it."]);
+  assert.equal(recordTranscriptSegments({ ...record, transcript: undefined }), null, "older records keep their old layout");
+});
+
+test("a note sent mid-sentence does not split the reply's prose", () => {
+  const view = fold(stream(
+    started,
+    { type: "message-delta", text: "Here is the fix:\n\n```lua\nlocal a = 1\n" },
+    { type: "steer", text: "Use blue." },
+    { type: "message-delta", text: "print(a)\n```\n\nThat should work." },
+    { type: "run-completed", outcome: "completed", summary: "Done." },
+  ));
+  const segments = transcriptSegments(view);
+  assert.deepEqual(segments.map((segment) => segment.type), ["text", "steps"], "one stretch of prose, the note after it");
+  const record = toRunRecord(view)!;
+  assert.deepEqual(record.transcript, [{ text: view.text }, { step: "note" }]);
+  assert.equal(record.notesDelivered, 0, "the run ended before the model read the note");
+  assert.ok(isRunRecord(record));
+  assert.equal(isRunRecord({ ...record, notesDelivered: 2 }), false, "more delivered than sent is not a record");
+  assert.equal(isRunRecord({ ...record, transcript: [{ text: 5, step: "note" }] }), false, "an entry is prose or a step, not both");
 });

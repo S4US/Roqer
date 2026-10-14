@@ -129,7 +129,11 @@ test("the blender tool takes a script and becomes one engine operation", () => {
   assert.throws(() => parseBlenderToolInput("import bpy"), /requires an object/);
   const definition = blenderToolDefinition();
   assert.equal(definition.name, "blender");
-  assert.deepEqual((definition.inputSchema as { required: string[] }).required, ["script"]);
+  // A look at a file takes inspect_file instead, so the schema requires neither and parsing decides.
+  assert.equal((definition.inputSchema as { required?: string[] }).required, undefined);
+  assert.deepEqual(parseBlenderToolInput({ inspect_file: "C:/m/tree.fbx", views: [{ yaw: 90 }] }),
+    { operation: BLENDER_OPERATION, args: { inspect_file: "C:/m/tree.fbx", views: [{ yaw: 90, pitch: 20, zoom: 1 }] } });
+  assert.throws(() => parseBlenderToolInput({ script: "import bpy", inspect_file: "C:/m/tree.fbx" }), /not both/);
   assert.match(definition.description, /OUTPUT_DIR/);
   assert.match(definition.description, /upload_asset/);
 });

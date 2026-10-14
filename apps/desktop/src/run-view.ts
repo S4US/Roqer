@@ -10,7 +10,7 @@ import type { RunTask } from "../shared/tasks";
 import {
   MAX_INLINE_EVIDENCE_IMAGES, MAX_RECORDED_EVIDENCE_IMAGES, RUN_EVENT_SCHEMA_VERSION,
   type RunChange, type RunEvent, type RunEvidence, type RunFailure,
-  type RunOutcome, type RunRecord, type RunUsage, type ToolProposal,
+  type RunOutcome, type RunRecord, type RunUsage, type ToolProposal, type TranscriptEntry,
 } from "../shared/run-events";
 import { compactTokenCount } from "./context-usage";
 import { keptPreviewIds, pictureCategory, type PictureCategory } from "./preview-layout";
@@ -58,8 +58,14 @@ export type PendingApproval = {
  */
 export type TimelineEntry =
   | { type: "tool"; key: string; callId: string }
-  | { type: "note"; key: string; label: string; detail?: string }
-  | { type: "evidence"; key: string; evidenceId: string };
+  | { type: "note"; key: string; label: string; detail?: string; steer?: true }
+  | { type: "evidence"; key: string; evidenceId: string }
+  /**
+   * Where a stretch of the reply begins, as an offset into `text`. Only the
+   * start is recorded, so the timeline does not change while the stretch
+   * streams: a new entry appears only when prose follows something else.
+   */
+  | { type: "text"; key: string; start: number };
 
 /** One rendered line of the activity layer, resolved and ready to display. */
 export type ActivityStep = {
@@ -119,6 +125,8 @@ export type RunView = {
   decisions: RunDecision[];
   /** Every note the user added, so the record can keep them. */
   notes: string[];
+  /** How many of `notes`, oldest first, have been handed to the model. */
+  notesDelivered: number;
   changes: RunChange[];
   evidence: RunEvidence[];
   failures: RunFailure[];
@@ -159,6 +167,7 @@ export function createRunView(runId: string, prompt: string, approvalMode: Appro
     pendingQuestion: null,
     decisions: [],
     notes: [],
+    notesDelivered: 0,
     changes: [],
     evidence: [],
     failures: [],
@@ -217,8 +226,19 @@ export function applyRunEvent(view: RunView, event: RunEvent): RunView {
       return { ...base, outputTokens: { tokens: event.tokens, exact: event.exact } };
     case "context-usage":
       return { ...base, contextUsage: { usedTokens: event.usedTokens, windowTokens: event.windowTokens } };
-    case "message-delta":
-      return { ...base, text: base.text + event.text };
+    case "message-delta": {
+      // A note the person typed mid-sentence does not cut the prose in two
+      // (a code block would be split open); it shows after the stretch.
+      let lastText = base.timeline.length - 1;
+      while (lastText >= 0 && base.timeline[lastText].type === "note" && (base.timeline[lastText] as { steer?: true }).steer === true) lastText -= 1;
+      return {
+        ...base,
+        text: base.text + event.text,
+        timeline: base.timeline[lastText]?.type === "text"
+          ? base.timeline
+          : [...base.timeline, { type: "text", key: `text-${event.seq}`, start: base.text.length }],
+      };
+    }
     case "tool-proposed":
       return {
         ...base,
@@ -289,8 +309,10 @@ export function applyRunEvent(view: RunView, event: RunEvent): RunView {
       return {
         ...base,
         notes: [...base.notes, event.text],
-        timeline: [...base.timeline, { type: "note", key: `note-${event.seq}`, label: "You added a note", detail: event.text }],
+        timeline: [...base.timeline, { type: "note", key: `note-${event.seq}`, label: "You added a note", detail: event.text, steer: true }],
       };
+    case "steers-delivered":
+      return { ...base, notesDelivered: Math.min(base.notes.length, base.notesDelivered + event.count) };
     case "question-asked":
       return {
         ...base,
@@ -388,6 +410,8 @@ export function activitySteps(view: Pick<RunView, "timeline" | "activities" | "e
   const steps: ActivityStep[] = [];
 
   for (const entry of view.timeline) {
+    // Prose is not a step; `transcriptSegments` places it between them.
+    if (entry.type === "text") continue;
     if (entry.type === "note") {
       steps.push({ key: entry.key, kind: "note", state: "done", label: entry.label, note: entry.detail });
       continue;
@@ -517,8 +541,96 @@ export function previewsNotShown(evidence: readonly RunEvidence[], category?: Pi
  * the prose, which is kept as the message text — is dropped, so chat history
  * does not grow with every run.
  */
+/**
+ * A run read in order: what the model said, and the steps it took between.
+ * Text segments are offsets into the run's `text` (a recorded run's segments
+ * carry their own text), so a streaming stretch can be sliced at render time.
+ */
+export type TranscriptSegment =
+  | { type: "text"; key: string; start: number; end: number | null }
+  | { type: "steps"; key: string; steps: ActivityStep[] };
+
+export function transcriptSegments(view: Pick<RunView, "timeline" | "activities" | "evidence">): TranscriptSegment[] {
+  const segments: TranscriptSegment[] = [];
+  let pending: TimelineEntry[] = [];
+  const flush = () => {
+    if (pending.length === 0) return;
+    const steps = activitySteps({ timeline: pending, activities: view.activities, evidence: view.evidence });
+    if (steps.length > 0) segments.push({ type: "steps", key: `steps-${pending[0].key}`, steps });
+    pending = [];
+  };
+  for (const entry of view.timeline) {
+    if (entry.type !== "text") { pending.push(entry); continue; }
+    flush();
+    const previous = [...segments].reverse().find((segment) => segment.type === "text");
+    if (previous?.type === "text") previous.end = entry.start;
+    segments.push({ type: "text", key: entry.key, start: entry.start, end: null });
+  }
+  flush();
+  return segments;
+}
+
+/** The order of a run's prose and steps, kept with its record. */
+function recordTranscript(view: RunView): TranscriptEntry[] | undefined {
+  if (view.text.trim() === "") return undefined;
+  const byCallId = new Map(view.activities.map((activity) => [activity.callId, activity]));
+  const entries: TranscriptEntry[] = [];
+  const texts = view.timeline.filter((entry) => entry.type === "text");
+  view.timeline.forEach((entry) => {
+    if (entry.type === "text") {
+      const next = texts[texts.indexOf(entry) + 1];
+      const text = view.text.slice(entry.start, next?.type === "text" ? next.start : undefined);
+      if (text.trim() !== "") entries.push({ text });
+    } else if (entry.type === "tool") {
+      const state = byCallId.get(entry.callId)?.state;
+      // The record keeps settled calls only, as `toolCalls` does.
+      if (state === "done" || state === "failed") entries.push({ step: "call" });
+    } else if (entry.type === "evidence") {
+      entries.push({ step: "evidence" });
+    } else if (entry.steer) {
+      entries.push({ step: "note" });
+    }
+  });
+  return entries;
+}
+
+/**
+ * A recorded run's transcript as segments, or null for a record written
+ * before transcripts were kept. Steps the transcript does not place are shown
+ * at the end rather than dropped.
+ */
+export function recordTranscriptSegments(record: RunRecord): Array<
+  { type: "text"; key: string; text: string } | { type: "steps"; key: string; steps: ActivityStep[] }
+> | null {
+  if (record.transcript === undefined) return null;
+  const steps = recordSteps(record);
+  const pools = {
+    call: steps.filter((step) => step.key.startsWith("call-")),
+    note: steps.filter((step) => step.key.startsWith("note-")),
+    evidence: steps.filter((step) => step.key.startsWith("evidence-")),
+  };
+  const used = new Set<string>();
+  const segments: Array<{ type: "text"; key: string; text: string } | { type: "steps"; key: string; steps: ActivityStep[] }> = [];
+  record.transcript.forEach((entry, index) => {
+    if ("text" in entry) {
+      segments.push({ type: "text", key: `text-${index}`, text: entry.text });
+      return;
+    }
+    const step = pools[entry.step].shift();
+    if (step === undefined) return;
+    used.add(step.key);
+    const last = segments[segments.length - 1];
+    if (last?.type === "steps") last.steps.push(step);
+    else segments.push({ type: "steps", key: `steps-${index}`, steps: [step] });
+  });
+  const rest = steps.filter((step) => !used.has(step.key));
+  if (rest.length > 0) segments.push({ type: "steps", key: "steps-rest", steps: rest });
+  return segments;
+}
+
 export function toRunRecord(view: RunView): RunRecord | null {
   if (view.outcome === null) return null;
+  const transcript = recordTranscript(view);
   return {
     schemaVersion: RUN_EVENT_SCHEMA_VERSION,
     runId: view.runId,
@@ -545,8 +657,9 @@ export function toRunRecord(view: RunView): RunRecord | null {
     ...(view.tasks.length > 0 ? { tasks: view.tasks } : {}),
     ...(view.verification ? { verification: view.verification } : {}),
     ...(view.decisions.length > 0 ? { decisions: view.decisions } : {}),
-    ...(view.notes.length > 0 ? { notes: view.notes } : {}),
+    ...(view.notes.length > 0 ? { notes: view.notes, notesDelivered: view.notesDelivered } : {}),
     ...(view.usage !== null ? { usage: view.usage } : {}),
+    ...(transcript !== undefined ? { transcript } : {}),
   };
 }
 

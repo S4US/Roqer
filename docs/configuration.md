@@ -83,6 +83,12 @@ Claude subscription through Claude Code, their Google account through the
 Antigravity CLI (`agy`), or a model endpoint they configure in Settings. One
 run can be active across the app at a time, against one Studio place.
 
+Claude Code is started without `ANTHROPIC_API_KEY` and `ANTHROPIC_AUTH_TOKEN`,
+even when they are set in your environment. Claude Code prefers those to the
+subscription sign-in, so with one set a run would bill that key instead of your
+plan. A Claude chat keeps its Claude Code conversation between runs; see
+[Long Claude chats](projects.md) for what is kept and where.
+
 The ring in the composer's corner shows how full the model's context window
 was at its latest response in the chat, as the provider reported it: Claude
 Code and Codex report both the tokens in use and the window's size, and a

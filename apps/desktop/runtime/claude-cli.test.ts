@@ -454,3 +454,10 @@ test("Claude Code starts without the bridge secret and never moves a Roqer tool 
   // Claude Code's documented off switch for backgrounding long MCP calls, which CLAUDE_AUTO_BACKGROUND_TASKS turns on.
   assert.equal(environment.CLAUDE_CODE_MCP_AUTO_BACKGROUND_MS, "0");
 });
+
+test("Claude Code starts without API credentials, so the subscription login is the one it uses", () => {
+  const environment = claudeChildEnvironment({ PATH: "C:\\bin", ANTHROPIC_API_KEY: "sk-ant-key", ANTHROPIC_AUTH_TOKEN: "token" });
+  assert.equal(environment.ANTHROPIC_API_KEY, undefined);
+  assert.equal(environment.ANTHROPIC_AUTH_TOKEN, undefined);
+  assert.equal(environment.PATH, "C:\\bin");
+});

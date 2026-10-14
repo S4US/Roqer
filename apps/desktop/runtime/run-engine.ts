@@ -171,9 +171,14 @@ export type PlannerContext = {
   /**
    * Notes the user added since the planner last asked, oldest first, and
    * cleared by the asking. A planner calls this at a turn boundary and puts
-   * what it gets in front of the model as the user's words.
+   * what it gets in front of the model as the user's words. They count as
+   * delivered when taken, unless the planner passes `confirmLater`: one that
+   * can tell when the model actually read them says so with `steersRead`,
+   * so a note the run ended before reading is not shown as delivered.
    */
-  takeSteers(): string[];
+  takeSteers(options?: { confirmLater?: boolean }): string[];
+  /** How many notes taken with `confirmLater` the model has now read. */
+  steersRead?(count: number): void;
   /**
    * Ask the user one bounded question and wait. Resolves with the chosen
    * option's text; rejects if the run is cancelled or the budget is spent.
@@ -532,7 +537,14 @@ export class RunSession {
       decisions: () => this.recordedDecisions,
       ...(this.previewImage === undefined ? {} : { previewImage: this.previewImage }),
       ...(this.storeModelPreview === undefined ? {} : { storeModelPreview: this.storeModelPreview }),
-      takeSteers: () => this.pendingSteers.splice(0),
+      takeSteers: (options) => {
+        const taken = this.pendingSteers.splice(0);
+        if (taken.length > 0 && options?.confirmLater !== true) this.emit({ type: "steers-delivered", count: taken.length });
+        return taken;
+      },
+      steersRead: (count) => {
+        if (count > 0) this.emit({ type: "steers-delivered", count });
+      },
       askUser: (question, options) => this.askUser(question, options),
       // "completed" because the question is what the gate would say about a run
       // that ends well from here; a run heading for failure has no use for it.

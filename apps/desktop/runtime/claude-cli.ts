@@ -201,10 +201,16 @@ type PendingLogin = {
  *   calls are allowed to run that long (an approval waits on the user, a
  *   capture or a Blender job takes minutes), and a run whose call went to the
  *   background could end with the call still running.
+ * - API credentials in the environment stay out. Claude Code prefers them to
+ *   the subscription login, so with ANTHROPIC_API_KEY set `auth status`
+ *   reports `api_key` even after a successful `--claudeai` sign-in, the row
+ *   never connects, and a run would bill the key instead of the plan.
  */
 export function claudeChildEnvironment(environment: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   const child: NodeJS.ProcessEnv = { ...environment, CLAUDE_CODE_MCP_AUTO_BACKGROUND_MS: "0" };
   delete child.ROBLOX_STUDIO_AUTH_TOKEN;
+  delete child.ANTHROPIC_API_KEY;
+  delete child.ANTHROPIC_AUTH_TOKEN;
   return child;
 }
 
