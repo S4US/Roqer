@@ -1631,3 +1631,50 @@ test("compacting a chat with no saved conversation says so", async () => {
     await fixture.dispose();
   }
 });
+
+test("Claude takes a note sent while it waited after a turn, instead of ending the run without it", { timeout: 3000 }, async () => {
+  const controller = new AbortController();
+  const { context } = makeContext(controller);
+  const notes: string[] = [];
+  const inputs: Array<{ message: { content: Array<{ text: string }> } }> = [];
+  const child = new FakeChildProcess();
+  let ready!: () => void;
+  const launched = new Promise<void>((resolve) => { ready = resolve; });
+  child.stdin.setEncoding("utf8");
+  child.stdin.on("data", (chunk: string) => {
+    for (const line of chunk.trim().split("\n")) inputs.push(JSON.parse(line));
+  });
+  const planner = createClaudePlanner({
+    ...PLANNER_DEFAULTS,
+    notePollMs: 5,
+    noteFollowUpMs: 40,
+    launcher: { launch: async (args) => {
+      await mcpTarget(args);
+      ready();
+      return child.asChild();
+    } },
+  });
+  let finished = false;
+  const running = planner.run({ ...context, takeSteers: () => notes.splice(0) }).finally(() => { finished = true; });
+  try {
+    await launched;
+    await nextTick();
+    child.writeLine({ type: "system", subtype: "init", tools: PROVIDER_TOOLS });
+    notes.push("Use blue.");
+    await sleep(25);
+    child.writeLine({ type: "assistant", message: { content: [{ type: "text", text: "Done, in blue." }] } });
+    child.writeLine({ type: "result", subtype: "success", result: "Done, in blue." });
+    await sleep(10);
+    // The turn is over and Claude Code started nothing: a note now arrives.
+    notes.push("Also make it bigger.");
+    await sleep(60);
+    assert.equal(finished, false, "the late note keeps the run going");
+    assert.ok(inputs.some((input) => input.message.content.some((part) => part.text.includes("Also make it bigger."))));
+    child.writeLine({ type: "assistant", message: { content: [{ type: "text", text: "Made it bigger." }] } });
+    child.writeLine({ type: "result", subtype: "success", result: "Made it bigger." });
+    assert.equal(await running, "Done, in blue.\n\nMade it bigger.");
+  } finally {
+    controller.abort();
+    await running.catch(() => undefined);
+  }
+});

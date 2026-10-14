@@ -998,3 +998,21 @@ test("prose and steps are read in the order they happened, live and recorded", (
     ["Let me look.", ["call-0", "note-0", "call-1"], "\n\nFound it."]);
   assert.equal(recordTranscriptSegments({ ...record, transcript: undefined }), null, "older records keep their old layout");
 });
+
+test("a note sent mid-sentence does not split the reply's prose", () => {
+  const view = fold(stream(
+    started,
+    { type: "message-delta", text: "Here is the fix:\n\n```lua\nlocal a = 1\n" },
+    { type: "steer", text: "Use blue." },
+    { type: "message-delta", text: "print(a)\n```\n\nThat should work." },
+    { type: "run-completed", outcome: "completed", summary: "Done." },
+  ));
+  const segments = transcriptSegments(view);
+  assert.deepEqual(segments.map((segment) => segment.type), ["text", "steps"], "one stretch of prose, the note after it");
+  const record = toRunRecord(view)!;
+  assert.deepEqual(record.transcript, [{ text: view.text }, { step: "note" }]);
+  assert.equal(record.notesDelivered, 0, "the run ended before the model read the note");
+  assert.ok(isRunRecord(record));
+  assert.equal(isRunRecord({ ...record, notesDelivered: 2 }), false, "more delivered than sent is not a record");
+  assert.equal(isRunRecord({ ...record, transcript: [{ text: 5, step: "note" }] }), false, "an entry is prose or a step, not both");
+});

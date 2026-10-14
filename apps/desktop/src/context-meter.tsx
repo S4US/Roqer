@@ -31,11 +31,12 @@ export function ContextMeter({ view, modelName, onNewChat, compacted, compactedU
   const filled = reported ? (view.percent ?? 0) / 100 : 0;
   // Shared by both panel states: a chat with no reading can still be compacted.
   const compactRow = (close: () => void) => <div className="context-compact">
-    <span>{modelWritten
-      ? "Claude compacts by itself when the context fills. Compact now to have Claude summarize the conversation so far and free up room. Every message stays on screen."
-      : compacted > 0
+    <span>{[
+      modelWritten ? "Claude compacts by itself when the context fills. Compact now to have Claude summarize the conversation so far and free up room. Every message stays on screen." : null,
+      compacted > 0
         ? `${compacted} earlier ${compacted === 1 ? "message is" : "messages are"} summarized for the model.${compactedUsage === null ? "" : ` ${compactedUsage}`}`
-        : "Summarize older messages to free up room."}</span>
+        : modelWritten ? null : "Summarize older messages to free up room.",
+    ].filter((line) => line !== null).join(" ")}</span>
     <button type="button" disabled={!canCompact || compacting} onClick={() => { close(); onCompact(); }}>{compacting ? "Compacting…" : "Compact chat"}</button>
   </div>;
   return <ComposerMenu

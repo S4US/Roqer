@@ -3,7 +3,10 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { ProjectFilesStore, runProjectFilesTool, sharedFilesNotice } from "./project-files";
+import { ProjectFilesStore, runProjectFilesTool, safeName, sharedFilesNotice } from "./project-files";
+import { BlenderWorker } from "./blender-worker";
+import { modelPreviewSource } from "./model-preview";
+import { canSendToStudio } from "../shared/project-files";
 import { displayNameFor, sendModelToStudio } from "./send-to-studio";
 import { parseBlenderViews } from "./blender-tool";
 import { riskForTool } from "../shared/mcp-tools";
@@ -139,4 +142,68 @@ test("every workbench tool, all turned on at once, fits the server", async () =>
   });
   assert.ok(names.includes("project_files"));
   assert.ok(names.length <= MAX_WORKBENCH_TOOLS, `${names.length} tools`);
+});
+
+test("a long name is cut in its stem, keeps its extension, and cleans to itself", async () => {
+  const long = `${"a".repeat(179)} tail.glb`;
+  const cleaned = safeName(long);
+  assert.ok(cleaned.endsWith(".glb") && cleaned.length <= 180, cleaned);
+  assert.equal(safeName(cleaned), cleaned, "the stored name is the name on disk");
+  assert.equal(safeName("plan. "), "plan");
+
+  const { store, outside } = await scratch();
+  const source = path.join(outside, "x.glb");
+  await fs.writeFile(source, "glb");
+  const file = await store.add("p", source, { name: long, addedBy: "user" });
+  assert.equal(file.kind, "model");
+  assert.equal(await fs.readFile((await store.path("p", file.id)).filePath, "utf8"), "glb");
+});
+
+test("reading a large text file reads only its start", async () => {
+  const { store, outside } = await scratch();
+  const source = path.join(outside, "log.txt");
+  await fs.writeFile(source, "x".repeat(400_000));
+  const file = await store.add("p", source, { addedBy: "user" });
+  const read = await runProjectFilesTool({ store, projectId: "p", shared: [], saveRoots: [] }, { action: "read", id: file.id });
+  assert.match(read.text, /the first 60,000 characters of/);
+  assert.ok(read.text.length < 61_000);
+});
+
+test("only models Roblox takes are sent, and a preview of another export sends its own GLB", async () => {
+  assert.equal(canSendToStudio("tree.fbx"), true);
+  assert.equal(canSendToStudio("tree.GLB"), true);
+  assert.equal(canSendToStudio("tree.obj"), false);
+  assert.equal(canSendToStudio("tree.gltf"), false);
+
+  const jobsRoot = await fs.mkdtemp(path.join(os.tmpdir(), "roqer-jobs-"));
+  const job = path.join(jobsRoot, "2026-job-abcdef12");
+  await fs.mkdir(path.join(job, "output"), { recursive: true });
+  await fs.writeFile(path.join(job, "output", "tree.obj"), "obj");
+  await fs.writeFile(path.join(job, "model-preview-0.glb"), "glb");
+  await fs.writeFile(path.join(job, "model-preview-0.json"), JSON.stringify({ name: "tree.obj" }));
+  assert.deepEqual(await modelPreviewSource(jobsRoot, "abcdef12-0"), { filePath: path.join(job, "model-preview-0.glb"), name: "model-abcdef12.glb" });
+  await fs.writeFile(path.join(job, "output", "tree.fbx"), "fbx");
+  await fs.writeFile(path.join(job, "model-preview-0.json"), JSON.stringify({ name: "tree.fbx" }));
+  assert.deepEqual(await modelPreviewSource(jobsRoot, "abcdef12-0"), { filePath: path.join(job, "output", "tree.fbx"), name: "tree.fbx" });
+});
+
+test("a look at a file stays inside Roqer's own folders and never opens a network path", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "roqer-look-"));
+  const jobsRoot = path.join(root, "jobs");
+  const filesRoot = path.join(root, "files");
+  const elsewhere = path.join(root, "elsewhere");
+  await Promise.all([jobsRoot, filesRoot, elsewhere].map((folder) => fs.mkdir(folder, { recursive: true })));
+  await fs.writeFile(path.join(elsewhere, "secret.glb"), "glb");
+  await fs.writeFile(path.join(filesRoot, "split.gltf"), JSON.stringify({ buffers: [{ uri: "split.bin" }] }));
+  // Never started: every refusal comes before Blender would run.
+  const worker = new BlenderWorker({ executable: process.execPath, jobsRoot, inspectRoots: [jobsRoot, filesRoot] });
+  const refused = async (file: string) => {
+    const outcome = await worker.run({ inspect_file: file });
+    assert.equal(outcome.ok, false);
+    return outcome.text;
+  };
+  assert.match(await refused(path.join(elsewhere, "secret.glb")), /not in them/);
+  assert.match(await refused(path.join(filesRoot, "..", "elsewhere", "secret.glb")), /not in them/);
+  assert.match(await refused("\\\\attacker.example\\share\\x.glb"), /not in them/);
+  assert.match(await refused(path.join(filesRoot, "split.gltf")), /single \.glb/);
 });

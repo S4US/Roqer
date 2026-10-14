@@ -78,10 +78,19 @@ export class ProjectNotesStore {
     const cached = this.cache.get(projectId);
     if (cached) return cached;
     let notes: ProjectNotes;
+    const file = this.file(projectId);
     try {
-      notes = parseStored(JSON.parse(await fs.readFile(this.file(projectId), "utf8")) as unknown);
+      notes = parseStored(JSON.parse(await fs.readFile(file, "utf8")) as unknown);
     } catch (error) {
       if (error instanceof ProjectNotesError) throw error;
+      if (error instanceof SyntaxError) {
+        // Damaged beyond reading: kept aside rather than written over.
+        await fs.rename(file, `${file}.damaged-${Date.now()}`).catch(() => undefined);
+      } else if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+        // Locked or unreadable for now (an indexer or antivirus on Windows):
+        // nothing is cached, so no write can replace the notes with nothing.
+        throw new ProjectNotesError("The project notes could not be read just now. Nothing was changed; try again.");
+      }
       notes = { ...EMPTY };
     }
     this.cache.set(projectId, notes);

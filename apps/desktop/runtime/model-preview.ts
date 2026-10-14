@@ -2,6 +2,8 @@ import { randomBytes } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 
+import { canSendToStudio } from "../shared/project-files";
+
 import {
   isModelPreviewId, MAX_MODEL_PREVIEW_BYTES, modelPreviewId, type ModelPreviewResult,
 } from "../shared/model-preview";
@@ -40,7 +42,8 @@ export async function modelPreviewSource(jobsRoot: string, id: unknown): Promise
   try {
     const record: unknown = JSON.parse(await fs.readFile(path.join(directory, modelPreviewSourceFileName(index)), "utf8"));
     const name = isRecord(record) && typeof record.name === "string" ? path.basename(record.name) : undefined;
-    if (name !== undefined && name !== "" && name !== "." && name !== "..") {
+    // An export Roblox would refuse (an .obj, a .gltf) is sent as the preview's own GLB.
+    if (name !== undefined && name !== "" && name !== "." && name !== ".." && canSendToStudio(name)) {
       const filePath = path.join(directory, "output", name);
       if ((await fs.stat(filePath).catch(() => undefined))?.isFile() === true) return { filePath, name };
     }

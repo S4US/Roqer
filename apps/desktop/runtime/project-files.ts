@@ -32,11 +32,23 @@ function safeId(value: string, what: string): string {
   return value;
 }
 
-/** A name for the copy: the original's base name, with nothing that could leave its folder. */
-function safeName(name: string): string {
-  const base = Array.from(path.basename(name), (character) => (character.charCodeAt(0) < 32 || '<>:"/\\|?*'.includes(character) ? "_" : character))
+const MAX_NAME_CHARS = 180;
+
+/**
+ * A name for the copy: the original's base name, with nothing that could leave
+ * its folder. A long name is cut in its stem so the extension, which decides
+ * the file's kind, survives. Applying it twice changes nothing.
+ */
+export function safeName(name: string): string {
+  let base = Array.from(path.basename(name), (character) => (character.charCodeAt(0) < 32 || '<>:"/\\|?*'.includes(character) ? "_" : character))
     .join("").trim();
-  return (base === "" || base === "." || base === "..") ? "file" : base.slice(0, 180);
+  if (base.length > MAX_NAME_CHARS) {
+    const ext = path.extname(base).slice(0, 20);
+    base = `${base.slice(0, MAX_NAME_CHARS - ext.length).trimEnd()}${ext}`;
+  }
+  // Windows drops trailing dots and spaces from a file name, so none are kept.
+  base = base.replace(/[. ]+$/, "");
+  return (base === "" || base === "." || base === "..") ? "file" : base;
 }
 
 export class ProjectFilesStore {
@@ -243,9 +255,18 @@ export async function runProjectFilesTool(
         return { text: `${file.name} is a 3D model. Look at it with the blender tool: inspect_file "${filePath}", with views for the angles you need.`, changed: false };
       }
       if (file.kind === "other") return { text: `${file.name} is not a text file. Its path: ${filePath}`, changed: false };
-      const content = await fs.readFile(filePath, "utf8");
-      const cut = content.length > MAX_READ_CHARS;
-      return { text: `${file.name}${cut ? ` (the first ${MAX_READ_CHARS.toLocaleString("en-US")} of ${content.length.toLocaleString("en-US")} characters)` : ""}:\n\n${cut ? content.slice(0, MAX_READ_CHARS) : content}`, changed: false };
+      // Only the start is read: a text file can be hundreds of megabytes.
+      const handle = await fs.open(filePath, "r");
+      let content: string;
+      try {
+        const buffer = Buffer.alloc(Math.min(file.size, MAX_READ_CHARS * 4));
+        const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
+        content = buffer.subarray(0, bytesRead).toString("utf8");
+      } finally {
+        await handle.close();
+      }
+      const cut = content.length > MAX_READ_CHARS || file.size > MAX_READ_CHARS * 4;
+      return { text: `${file.name}${cut ? ` (the first ${MAX_READ_CHARS.toLocaleString("en-US")} characters of ${sizeLabel(file.size)})` : ""}:\n\n${content.slice(0, MAX_READ_CHARS)}`, changed: false };
     }
     case "save": {
       const source = text(args.path, "path: the absolute path of the file to save");

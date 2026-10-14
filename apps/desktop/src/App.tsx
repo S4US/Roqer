@@ -8,17 +8,17 @@ import {
 } from "lucide-react";
 import { ProjectNotesPanel } from "./project-notes-panel";
 import {
-  carriesOsFiles, carriesProjectFile, droppedProjectFile, FileKindIcon, ProjectFileViewer, ProjectFilesPanel,
+  carriesOsFiles, carriesProjectFile, dragProjectFile, droppedProjectFile, FileKindIcon, ProjectFileViewer, ProjectFilesPanel,
 } from "./project-files-panel";
 import { ModelActionsContext, type ModelActions } from "./model-actions";
 import { CHAT_ROLE_BLURB, CHAT_ROLE_LABEL, CHAT_ROLES, isChatRole, type ChatRole } from "../shared/chat-role";
-import type { ProjectFile } from "../shared/project-files";
+import { canSendToStudio, type ProjectFile } from "../shared/project-files";
 import { Fragment, memo, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { ClipTrimDialog } from "./clip-trim-dialog";
 import { VIDEO_EXTENSIONS, type ClipSelection } from "../shared/reference-clip";
 import {
-  appendMessage, createChat, createId, createInitialWorkspace, createProject,
+  appendMessage, createChat, createId, createInitialWorkspace, createProject, undeliverNotes,
   deleteChat, deleteProject, effectivePreferences, modelPreference, normalizeWorkspace, renameChat, rolePreference,
   renameProject, selectedModelId, setChatCompaction, setChatStudioInstance, chatStudioTarget, chatsByActivity, withdrawMessage,
   type AssetAttachment, type ChatMessage, type WorkspaceState,
@@ -145,6 +145,9 @@ const MAX_IMAGES_PER_MESSAGE = 4;
 const isImageAttachment = (attachment: AssetAttachment): boolean =>
   attachment.mediaType !== undefined && ATTACHABLE_IMAGE_TYPES.has(attachment.mediaType);
 
+/** Shared-file chips shown above the composer before the rest fold away. */
+const SHARED_CHIPS_SHOWN = 4;
+
 /** A manual compact keeps the last exchange word for word, so the next run starts from what was just said. */
 const COMPACT_KEEPS_MESSAGES = 2;
 
@@ -167,6 +170,7 @@ function toConversationMessages(messages: readonly ChatMessage[]): ConversationM
       ...(digest === undefined || digestIsEmpty(digest) ? {} : { run: digest }),
       ...(role === "user" && pictures + files > 0 ? { attachments: { pictures, files } } : {}),
       ...(note === true && role === "user" ? { note: true as const } : {}),
+      ...(role === "assistant" && run?.planner === "claude-code" ? { claude: true as const } : {}),
     };
   });
 }
@@ -248,6 +252,7 @@ function App() {
   const [contextReadings, setContextReadings] = useState<ReadonlyMap<string, ContextReading>>(() => new Map());
   // What the last compact said, kept with its chat so it never shows on another one.
   const [compactNotice, setCompactNotice] = useState<{ chatId: string; text: string } | null>(null);
+  const [showAllShared, setShowAllShared] = useState(false);
   const [runStarting, setRunStarting] = useState(false);
   /** The callId of a pending question being answered in the composer, if any. */
   const [explainingQuestion, setExplainingQuestion] = useState<string | null>(null);
@@ -639,7 +644,8 @@ function App() {
 
     const target = runTarget.current;
     if (target) {
-      setWorkspace((current) => appendMessage(current, target.projectId, target.chatId, {
+      const undelivered = runView.notes.length - runView.notesDelivered;
+      setWorkspace((current) => appendMessage(undeliverNotes(current, target.projectId, target.chatId, undelivered), target.projectId, target.chatId, {
         id: createId("message"),
         role: "assistant",
         text: runView.text.trim() || runView.summary,
@@ -680,37 +686,43 @@ function App() {
     if (!selectedChat || !selectedProject || !canCompact) return;
     const projectId = selectedProject.id;
     const chatId = selectedChat.id;
-    if (modelCompact) {
-      setCompactingChatId(chatId);
-      setCompactNotice({ chatId, text: "Claude is summarizing this chat's conversation; this can take a minute. A message you send now waits until it finishes." });
-      try {
+    // Held until the whole compact is done, the record fallback included, so a
+    // message queued meanwhile is sent with the compacted conversation.
+    setCompactingChatId(chatId);
+    try {
+      if (modelCompact) {
+        setCompactNotice({ chatId, text: "Claude is summarizing this chat's conversation; this can take a minute. A message you send now waits until it finishes." });
         const result = await compactChat(projectId, chatId);
         if (result.noSession !== true) {
           setCompactNotice({ chatId, text: result.message });
           return;
         }
-      } finally {
-        setCompactingChatId(null);
+        setCompactNotice(null);
+        // No saved Claude conversation: the window's own record stands in.
+        if (compactTo <= compactedFrom) return;
       }
-      setCompactNotice(null);
-      // No saved Claude conversation: the window's own record stands in.
-      if (compactTo <= compactedFrom) return;
+      if (hasDesktopRuntime() && !(await compactChatSessions(chatId))) return;
+      const summary = compactChatSummary(
+        selectedChat.compaction?.summary ?? "",
+        toConversationMessages(selectedChat.messages.slice(compactedFrom, compactTo)),
+      );
+      // The figures are the provider's last report for this chat, taken as the
+      // compact happens. A chat with no report yet records none.
+      const reading = contextReadings.get(chatId);
+      const usage: { usedTokens?: number; windowTokens?: number | null } = reading === undefined
+        ? {}
+        : { usedTokens: reading.usedTokens, windowTokens: reading.windowTokens };
+      setWorkspace((current) => setChatCompaction(current, projectId, chatId, { folded: compactTo, summary, ...usage }));
+      const note = compactUsageNote(usage.usedTokens, usage.windowTokens);
+      setCompactNotice(note === null ? null : { chatId, text: `Compacted. ${note}` });
+    } finally {
+      setCompactingChatId(null);
     }
-    if (hasDesktopRuntime() && !(await compactChatSessions(chatId))) return;
-    const summary = compactChatSummary(
-      selectedChat.compaction?.summary ?? "",
-      toConversationMessages(selectedChat.messages.slice(compactedFrom, compactTo)),
-    );
-    // The figures are the provider's last report for this chat, taken as the
-    // compact happens. A chat with no report yet records none.
-    const reading = contextReadings.get(chatId);
-    const usage: { usedTokens?: number; windowTokens?: number | null } = reading === undefined
-      ? {}
-      : { usedTokens: reading.usedTokens, windowTokens: reading.windowTokens };
-    setWorkspace((current) => setChatCompaction(current, projectId, chatId, { folded: compactTo, summary, ...usage }));
-    const note = compactUsageNote(usage.usedTokens, usage.windowTokens);
-    setCompactNotice(note === null ? null : { chatId, text: `Compacted. ${note}` });
   };
+  // The project files shared with the selected chat that still exist, in the order shared.
+  const sharedFiles = selectedChat?.sharedFileIds === undefined || projectFileList === null
+    ? []
+    : selectedChat.sharedFileIds.flatMap((id) => projectFileList.filter((file) => file.id === id));
   const runBelongsToSelectedChat = runTarget.current?.projectId === workspace.selectedProjectId &&
     runTarget.current?.chatId === workspace.selectedChatId;
   const showRunControls = runBelongsToSelectedChat && (runStarting || runView !== null);
@@ -1820,10 +1832,14 @@ function App() {
             {draggingImage && <div className="composer-drop-hint">Drop a picture or video to attach it, or a model or document to share it with this chat</div>}
             {selectedChat?.sharedFileIds !== undefined && projectFileList !== null && <div className="shared-files" aria-label="Project files shared with this chat">
               <span className="shared-files-label">Shared:</span>
-              {selectedChat.sharedFileIds.flatMap((id) => projectFileList.filter((file) => file.id === id)).map((file) => <span key={file.id} className={`shared-chip kind-${file.kind}`}>
+              {/* A long list folds after a few, so it never crowds the message out. */}
+              {(showAllShared ? sharedFiles : sharedFiles.slice(0, SHARED_CHIPS_SHOWN)).map((file) => <span key={file.id} className={`shared-chip kind-${file.kind}`} draggable onDragStart={(event) => dragProjectFile(event, workspace.selectedProjectId, file)} title="Drag onto another chat to share it there">
                 <button type="button" onClick={() => setViewingShared(file)} title={file.kind === "model" ? "View in 3D" : "Open"}><FileKindIcon file={file} size={13} /> {file.name}</button>
                 <button type="button" className="shared-chip-remove" onClick={() => shareFile(workspace.selectedProjectId, selectedChat.id, file.id, false)} aria-label={`Stop sharing ${file.name} with this chat`}><X size={12} /></button>
               </span>)}
+              {sharedFiles.length > SHARED_CHIPS_SHOWN && <button type="button" className="shared-files-more" aria-expanded={showAllShared} onClick={() => setShowAllShared((shown) => !shown)}>
+                {showAllShared ? "Show fewer" : `+${sharedFiles.length - SHARED_CHIPS_SHOWN} more`}
+              </button>}
               <button type="button" className="shared-files-more" onClick={() => setShowFiles(true)}>Files…</button>
             </div>}
             {sendAfterCompact !== null && sendAfterCompact === workspace.selectedChatId && <div className="attachment-notice compact-queued" role="status">
@@ -1936,7 +1952,7 @@ function App() {
         projectId={workspace.selectedProjectId}
         file={viewingShared}
         onClose={() => setViewingShared(null)}
-        actions={viewingShared.kind === "model" && <button type="button" className="files-action primary" disabled={sendingFile !== null} onClick={() => void sendFileToStudio(viewingShared)}>
+        actions={viewingShared.kind === "model" && canSendToStudio(viewingShared.name) && <button type="button" className="files-action primary" disabled={sendingFile !== null} onClick={() => void sendFileToStudio(viewingShared)}>
           {sendingFile === viewingShared.id ? <Loader2 size={14} className="spin" /> : <ArrowUp size={14} />} Send to Studio
         </button>}
       />}
@@ -2996,6 +3012,9 @@ function RunRecordView({ record, text, latest, onOpenInStudio }: { record: RunRe
       issues={recordGateIssues(record)}
     />}
     <CompletionLine metadata={outcomeNote} usage={record.usage} />
+    {/* Notes the run ended before reading stay visible, so they can be sent again. */}
+    {record.notes !== undefined && record.notesDelivered !== undefined && record.notesDelivered < record.notes.length &&
+      <RunNotes notes={record.notes} delivered={record.notesDelivered} running={false} />}
   </>;
 }
 

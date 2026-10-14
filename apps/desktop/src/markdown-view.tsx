@@ -86,11 +86,19 @@ export function StreamingMarkdown({ text, className = "" }: { text: string; clas
   const [shown, setShown] = useState(text);
   const latest = useRef(text);
   latest.current = text;
+  // A throttle, not a debounce: a new delta does not push the render back, so
+  // text that streams without a pause still updates a few times a second.
+  const timer = useRef<number | null>(null);
   useEffect(() => {
-    if (shown === text) return;
-    const timer = window.setTimeout(() => setShown(latest.current), STREAMING_RENDER_MS);
-    return () => window.clearTimeout(timer);
+    if (shown === text || timer.current !== null) return;
+    timer.current = window.setTimeout(() => {
+      timer.current = null;
+      setShown(latest.current);
+    }, STREAMING_RENDER_MS);
   }, [text, shown]);
+  useEffect(() => () => {
+    if (timer.current !== null) window.clearTimeout(timer.current);
+  }, []);
   return <Markdown text={shown} className={className} />;
 }
 

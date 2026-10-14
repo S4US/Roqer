@@ -87,6 +87,9 @@ export function ModelViewer({ evidence, onShowPicture, compact = false, autoplay
   useEffect(() => {
     let disposed = false;
     let release = () => undefined as void;
+    // Object URLs a loader made for embedded textures. FBXLoader never revokes
+    // its own, so they are revoked here when the view goes.
+    const blobs: string[] = [];
     setStatus("loading");
     setMoved(false);
     setPlayback(null);
@@ -125,7 +128,10 @@ export function ModelViewer({ evidence, onShowPicture, compact = false, autoplay
       // Nothing the file names may be fetched: the main process already refused
       // any file that points outside itself, and this is the second line.
       const manager = new THREE.LoadingManager();
-      manager.setURLModifier((url) => (url.startsWith("data:") || url.startsWith("blob:") ? url : "data:,"));
+      manager.setURLModifier((url) => {
+        if (url.startsWith("blob:")) blobs.push(url);
+        return url.startsWith("data:") || url.startsWith("blob:") ? url : "data:,";
+      });
       const bytes = result.bytes;
       const buffer = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
       let model: import("three").Object3D;
@@ -420,6 +426,7 @@ export function ModelViewer({ evidence, onShowPicture, compact = false, autoplay
     return () => {
       disposed = true;
       release();
+      for (const url of blobs) URL.revokeObjectURL(url);
     };
   }, [id, compact, autoplay, load]);
 

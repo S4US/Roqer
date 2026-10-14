@@ -182,7 +182,11 @@ export function messagesSince(context: ConversationContext, lastPrompt: string):
     // Notes sent during that run went to the session as they were sent, and
     // the reply to that prompt is the session's own.
     while (context.messages[next]?.note === true) next += 1;
-    if (context.messages[next]?.role === "assistant") next += 1;
+    const reply = context.messages[next];
+    // The same words sent again later and answered by another provider are not
+    // where the session left off; keep looking further back.
+    if (reply?.role === "assistant" && reply.run !== undefined && reply.claude !== true) continue;
+    if (reply?.role === "assistant") next += 1;
     return context.messages.slice(next);
   }
   return null;

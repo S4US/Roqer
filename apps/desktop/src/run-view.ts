@@ -227,11 +227,14 @@ export function applyRunEvent(view: RunView, event: RunEvent): RunView {
     case "context-usage":
       return { ...base, contextUsage: { usedTokens: event.usedTokens, windowTokens: event.windowTokens } };
     case "message-delta": {
-      const last = base.timeline[base.timeline.length - 1];
+      // A note the person typed mid-sentence does not cut the prose in two
+      // (a code block would be split open); it shows after the stretch.
+      let lastText = base.timeline.length - 1;
+      while (lastText >= 0 && base.timeline[lastText].type === "note" && (base.timeline[lastText] as { steer?: true }).steer === true) lastText -= 1;
       return {
         ...base,
         text: base.text + event.text,
-        timeline: last?.type === "text"
+        timeline: base.timeline[lastText]?.type === "text"
           ? base.timeline
           : [...base.timeline, { type: "text", key: `text-${event.seq}`, start: base.text.length }],
       };
@@ -654,7 +657,7 @@ export function toRunRecord(view: RunView): RunRecord | null {
     ...(view.tasks.length > 0 ? { tasks: view.tasks } : {}),
     ...(view.verification ? { verification: view.verification } : {}),
     ...(view.decisions.length > 0 ? { decisions: view.decisions } : {}),
-    ...(view.notes.length > 0 ? { notes: view.notes } : {}),
+    ...(view.notes.length > 0 ? { notes: view.notes, notesDelivered: view.notesDelivered } : {}),
     ...(view.usage !== null ? { usage: view.usage } : {}),
     ...(transcript !== undefined ? { transcript } : {}),
   };

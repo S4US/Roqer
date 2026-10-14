@@ -930,15 +930,18 @@ export function createClaudePlanner(options: ClaudePlannerOptions): Planner {
           // A result ends one user turn, not the stream-json session. Keep
           // notes in the host queue until this boundary so Claude cannot
           // merge them unpredictably into a turn that is already running.
-          const steers = context.takeSteers();
-          if (steers.length > 0) {
+          // Notes waiting now go as a new turn instead of ending the run.
+          const continueWithNotes = (): boolean => {
+            const steers = context.takeSteers();
+            if (steers.length === 0) return false;
             streaming = false;
             prose.beginSegment();
             turnProseStart = prose.text().length;
             context.status("Sent your note to Claude", steers.length === 1 ? steers[0] : `${steers.length} notes sent.`);
             session?.writeUserMessage(steers.map((text) => ({ type: "text", text: steerText(text) })));
-            return;
-          }
+            return true;
+          };
+          if (continueWithNotes()) return;
           const ended = () => finish(prose.text().trim() || summary.trim() || "Claude finished the turn.");
           if (notesThisTurn) {
             // A note written late in the turn may not have reached the model;
@@ -946,6 +949,8 @@ export function createClaudePlanner(options: ClaudePlannerOptions): Planner {
             notesThisTurn = false;
             followUp = setTimeout(() => {
               followUp = null;
+              // A note the user sent during the wait is taken, not left undelivered.
+              if (!settled && continueWithNotes()) return;
               ended();
             }, options.noteFollowUpMs ?? NOTE_FOLLOW_UP_MS);
             return;
@@ -1091,7 +1096,10 @@ export function createClaudePlanner(options: ClaudePlannerOptions): Planner {
   };
 }
 
-export type ClaudeCompaction = { ok: true; preTokens: number | null; postTokens: number | null } | { ok: false; message: string };
+/** `noSession`: the chat has no saved Claude conversation to compact, so the caller compacts it another way. */
+export type ClaudeCompaction =
+  | { ok: true; preTokens: number | null; postTokens: number | null }
+  | { ok: false; message: string; noSession?: true };
 
 /** How long a compaction may take; summarizing a full context is one long model call. */
 const COMPACT_TIMEOUT_MS = 10 * 60_000;
@@ -1107,11 +1115,14 @@ const COMPACT_TIMEOUT_MS = 10 * 60_000;
  * session. The caller makes sure no run is using the chat.
  */
 export async function compactClaudeChat(
-  options: ClaudePlannerOptions & { chatId: string; registry: ClaudeSessionRegistry },
+  options: ClaudePlannerOptions & { chatId: string; registry: ClaudeSessionRegistry; signal?: AbortSignal },
 ): Promise<ClaudeCompaction> {
   const saved = await options.registry.get(options.chatId);
   if (saved === undefined || !(await savedSessionExists(options.cwd, saved.sessionId))) {
-    return { ok: false, message: "This chat has no saved Claude conversation to compact yet. Send a message first." };
+    // Claude Code clears old transcripts itself; a record of one it no longer
+    // has is forgotten, as a run would.
+    if (saved !== undefined) await options.registry.forget(options.chatId);
+    return { ok: false, message: "This chat has no saved Claude conversation to compact.", noSession: true };
   }
   const account = await options.getStatus();
   if (account.kind !== "signed-in") return { ok: false, message: account.message };
@@ -1123,6 +1134,8 @@ export async function compactClaudeChat(
     ? null
     : await options.projectNotes.store.get(options.projectNotes.projectId).catch(() => null);
   const controller = new AbortController();
+  // Stopping (Roqer quitting) closes the compaction's process with it.
+  options.signal?.addEventListener("abort", () => controller.abort(), { once: true });
   const session = await ClaudeSession.open(
     { ...options, model: saved.model ?? options.model }, "compact", false, controller.signal,
     { id: saved.sessionId, resume: true }, notes, true,
@@ -1137,6 +1150,7 @@ export async function compactClaudeChat(
         clearTimeout(timer);
         resolve(result);
       };
+      controller.signal.addEventListener("abort", () => done({ ok: false, message: "Compacting was stopped. The conversation is unchanged." }), { once: true });
       session.bind({
         invoke: async () => ({ ok: false, text: "No Roqer run is active. End this turn." }),
         message: (message) => {

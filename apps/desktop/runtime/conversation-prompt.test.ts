@@ -231,3 +231,21 @@ test("a resumed session is told about messages after its last prompt and labelle
   assert.match(prompt, /Current user message:\nContinue\.$/);
   assert.equal(messagesSince(context, "Never sent."), null);
 });
+
+test("a prompt repeated on another provider is not where the saved Claude session left off", () => {
+  const ran = { outcome: "completed", unfinished: [], changes: [], unverified: [], decisions: [] } as unknown as NonNullable<Parameters<typeof messagesSince>[0]["messages"][number]["run"]>;
+  const context = {
+    truncated: false,
+    messages: [
+      { role: "user" as const, text: "yes" },
+      { role: "assistant" as const, text: "Claude did it.", run: ran, claude: true as const },
+      { role: "user" as const, text: "also make the door red" },
+      { role: "assistant" as const, text: "Codex made it red.", run: ran },
+      { role: "user" as const, text: "yes" },
+      { role: "assistant" as const, text: "Codex did it.", run: ran },
+    ],
+  };
+  // Claude saw only the first "yes": everything after its reply is new to it.
+  assert.deepEqual(messagesSince(context, "yes")?.map((message) => message.text),
+    ["also make the door red", "Codex made it red.", "yes", "Codex did it."]);
+});

@@ -55,6 +55,9 @@ export class ClaudeSessionRegistry {
     return result;
   }
 
+  /** Maps read while the file could not be, which are never written back over it. */
+  private readonly unreadable = new WeakSet<Map<string, ClaudeChatSession>>();
+
   private async load(): Promise<Map<string, ClaudeChatSession>> {
     if (this.entries) return this.entries;
     const entries = new Map<string, ClaudeChatSession>();
@@ -66,15 +69,21 @@ export class ClaudeSessionRegistry {
           if (entry) entries.set(chatId, entry);
         }
       }
-    } catch {
+    } catch (error) {
       // Missing or damaged: every chat starts a new session, which is what it
-      // did before sessions were kept at all.
+      // did before sessions were kept at all. Unreadable just now (locked):
+      // this run starts a new session, and the file is left for the next read.
+      if (!(error instanceof SyntaxError) && (error as NodeJS.ErrnoException).code !== "ENOENT") {
+        this.unreadable.add(entries);
+        return entries;
+      }
     }
     this.entries = entries;
     return entries;
   }
 
   private async save(entries: Map<string, ClaudeChatSession>): Promise<void> {
+    if (this.unreadable.has(entries)) return;
     const temporary = `${this.file}.${process.pid}.${randomUUID()}.tmp`;
     try {
       await fs.mkdir(path.dirname(this.file), { recursive: true });

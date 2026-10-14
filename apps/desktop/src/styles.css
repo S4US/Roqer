@@ -1632,6 +1632,9 @@ a.small-button:focus-visible { outline: 2px solid var(--accent); outline-offset:
 .shared-chip-remove { display: grid; place-items: center; padding: 3px 7px 3px 3px; color: var(--muted); background: none; border: 0; cursor: pointer; }
 .shared-chip-remove:hover { color: var(--ink); }
 .shared-files-more { padding: 3px 8px; color: var(--accent); background: none; border: 0; font-size: 12px; cursor: pointer; }
+/* A file row dragged out of the panel: the panel fades and lets the drop through. */
+.modal-backdrop.files-dragging-out { background: transparent; -webkit-backdrop-filter: none; backdrop-filter: none; pointer-events: none; }
+.modal-backdrop.files-dragging-out .files-modal { opacity: .12; pointer-events: none; transition: opacity .12s ease; }
 .chat-row.chat-drop-target { outline: 2px dashed var(--accent); outline-offset: -2px; border-radius: 8px; }
 .chat-role-tag { flex: 0 0 auto; padding: 1px 6px; color: var(--muted); border: 1px solid var(--border); border-radius: 999px; font-size: 10px; font-weight: var(--weight-medium); }
 .chat-role-tag.role-scripter, .role-picker.role-scripter select { color: #4f9dff; border-color: color-mix(in srgb, #4f9dff 45%, transparent); }

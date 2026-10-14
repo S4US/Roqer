@@ -40,6 +40,17 @@ function extension(name: string): string {
   return dot < 0 ? "" : name.slice(dot).toLowerCase();
 }
 
+/**
+ * Model files Roblox's asset upload takes, so Send to Studio offers them.
+ * A .gltf usually needs its separate buffers and textures, and .obj is not
+ * accepted at all; both are viewed and inspected, and exported as GLB to send.
+ */
+export const SENDABLE_MODEL_EXTENSIONS = [".fbx", ".glb"] as const;
+
+export function canSendToStudio(name: string): boolean {
+  return (SENDABLE_MODEL_EXTENSIONS as readonly string[]).includes(extension(name));
+}
+
 export function projectFileKind(name: string): ProjectFileKind {
   const ext = extension(name);
   if ((MODEL_FILE_EXTENSIONS as readonly string[]).includes(ext)) return "model";

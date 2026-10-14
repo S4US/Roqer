@@ -69,7 +69,7 @@ import { ClaudeSessionRegistry } from "../runtime/claude-session-registry";
 import { ProjectNotesError, ProjectNotesStore, type ProjectNotes } from "../runtime/project-notes";
 import { ProjectFilesError, ProjectFilesStore } from "../runtime/project-files";
 import { displayNameFor, sendModelToStudio } from "../runtime/send-to-studio";
-import { MAX_VIEWABLE_FILE_BYTES, type ProjectFile, type SendToStudioResult } from "../shared/project-files";
+import { canSendToStudio, MAX_VIEWABLE_FILE_BYTES, type ProjectFile, type SendToStudioResult } from "../shared/project-files";
 import { isChatRole } from "../shared/chat-role";
 import { AntigravityClient, ANTIGRAVITY_SIGN_IN_HOSTS } from "../runtime/antigravity-cli";
 import { resolveAntigravityExecutable } from "../runtime/antigravity-executable";
@@ -141,6 +141,8 @@ const trustedSenders = new Set<number>();
 const runSessions = new Map<string, RunSession>();
 /** The chat each live run belongs to, so a compact never touches a conversation a run owns. */
 const runChats = new Map<string, string>();
+/** Chats a run is getting ready in, before it is in `runChats`; compaction refuses them too. */
+const startingChats = new Set<string>();
 const runExecutions = new Set<Promise<unknown>>();
 const pendingRuns = new PendingRuns();
 /** Calls the person back to the window while a run waits on them. Null while there is no window. */
@@ -753,6 +755,7 @@ async function runBlenderJob(args: Record<string, unknown>, options: McpCallOpti
     executable,
     jobsRoot: blenderJobsRoot(),
     scope: createHash("sha256").update(chatId).digest("hex").slice(0, 32),
+    inspectRoots: [blenderJobsRoot(), projectFiles().directory],
   });
   return worker.run(args, options);
 }
@@ -1527,6 +1530,7 @@ async function resolveModelSource(source: unknown): Promise<{ filePath: string; 
   const fileId = stringArgument(source.fileId, "The file");
   const { file, filePath } = await projectFiles().path(projectId, fileId);
   if (file.kind !== "model") throw new ProjectFilesError(`${file.name} is not a model file.`);
+  if (!canSendToStudio(file.name)) throw new ProjectFilesError(`Roblox takes models as .fbx or .glb; export ${file.name} as one of those to send it.`);
   return { filePath, name: file.name, projectFile: { projectId, fileId } };
 }
 
@@ -1638,6 +1642,8 @@ function registerProjectNotes(): void {
 
 /** Chats being compacted, so a second click does not start another and a run waits for it. */
 const compactingChats = new Map<string, Promise<unknown>>();
+/** Stops every compaction in progress when Roqer quits, so none outlives it. */
+const compactionStop = new AbortController();
 
 /**
  * Compact a chat's saved Claude conversation with Claude Code's own `/compact`:
@@ -1650,7 +1656,7 @@ async function compactChat(event: IpcMainInvokeEvent, payload: unknown): Promise
     return { ok: false, message: "Choose a chat to compact." };
   }
   const { chatId, projectId } = payload;
-  if ([...runChats.values()].includes(chatId)) return { ok: false, message: "Wait for the run in this chat to finish, then compact." };
+  if ([...runChats.values()].includes(chatId) || startingChats.has(chatId)) return { ok: false, message: "Wait for the run in this chat to finish, then compact." };
   if (compactingChats.has(chatId)) return { ok: false, message: "This chat is already being compacted." };
   const compaction = compactChatNow(chatId, projectId);
   compactingChats.set(chatId, compaction);
@@ -1683,6 +1689,7 @@ async function compactChatNow(chatId: string, projectId: string): Promise<ModelC
       sessions: claudeSessions,
       registry: claudeSessionRegistry(),
       projectNotes: { store: projectNotes(), projectId },
+      signal: compactionStop.signal,
     });
     if (!result.ok) return result;
     const tokens = (count: number | null) => count === null ? null : `${Math.round(count / 1000).toLocaleString("en-US")}k`;
@@ -2108,12 +2115,19 @@ async function startRun(event: IpcMainInvokeEvent, payload: unknown): Promise<Ru
   const stopped: RunStartResult = { ok: false, message: "Run startup was cancelled." };
   let journalId: string | undefined;
   let executionStarted = false;
+  let reserved = false;
   try {
     await initializeStorage();
     if (cancelled()) return stopped;
     if (store().status().required) return { ok: false, message: "Recover your saved chats before starting a run." };
     // A run reopens the chat's conversation, which compaction is rewriting.
-    await compactingChats.get(request.chatId)?.catch(() => undefined);
+    // From the moment none is, the chat is reserved, so no compaction starts
+    // while this run is still getting ready.
+    for (let compaction = compactingChats.get(request.chatId); compaction !== undefined; compaction = compactingChats.get(request.chatId)) {
+      await compaction.catch(() => undefined);
+    }
+    startingChats.add(request.chatId);
+    reserved = true;
     if (cancelled()) return stopped;
     // The vendor sign-in and the model catalog are independent reads that can
     // each wait on a provider process, so they run together. Their answers
@@ -2296,6 +2310,8 @@ async function startRun(event: IpcMainInvokeEvent, payload: unknown): Promise<Ru
     return { ok: false, message: cancelled() ? "Run startup was cancelled." : error instanceof Error ? error.message : "The run could not start." };
   } finally {
     pending.finish();
+    // A started run holds the chat through `runChats` from here on.
+    if (reserved) startingChats.delete(request.chatId);
     if (!executionStarted) {
       attachments.release(request.attachmentIds ?? []);
       if (journalId) {
@@ -2316,7 +2332,7 @@ async function startRun(event: IpcMainInvokeEvent, payload: unknown): Promise<Ru
  */
 async function compactChatSessions(event: IpcMainInvokeEvent, chatId: unknown): Promise<boolean> {
   if (!isTrusted(event.sender) || typeof chatId !== "string" || chatId === "" || chatId.length > 1_000) return false;
-  if ([...runChats.values()].includes(chatId) || compactingChats.has(chatId)) return false;
+  if ([...runChats.values()].includes(chatId) || startingChats.has(chatId) || compactingChats.has(chatId)) return false;
   claudeSessions.drop(chatId);
   // A saved Claude conversation would be resumed with everything in it.
   await claudeSessionRegistry().forget(chatId);
@@ -2859,6 +2875,7 @@ app.on("before-quit", () => {
   void clipDecoder.close(true);
   clientInstalls.stop();
   void claudeSessions.closeAll();
+  compactionStop.abort();
   void antigravitySessions.closeAll();
   void codexThreads.closeAll();
   void customConversations.closeAll();

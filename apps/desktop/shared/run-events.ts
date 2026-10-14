@@ -439,6 +439,8 @@ export type RunRecord = {
    * hear them. They are what the chat shows under the run once it has ended.
    */
   notes?: string[];
+  /** How many of `notes` reached the model; the rest arrived after the run ended. Absent on older records. */
+  notesDelivered?: number;
   /**
    * The tokens the run used. Optional for the same reason as `decisions`, and
    * because a provider may report none. Unlike the other optional fields, a
@@ -464,8 +466,9 @@ export const MAX_TRANSCRIPT_ENTRIES = 20_000;
 function isTranscriptEntry(value: unknown): value is TranscriptEntry {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
   const entry = value as Record<string, unknown>;
-  return typeof entry.text === "string" ||
-    entry.step === "call" || entry.step === "note" || entry.step === "evidence";
+  // Exactly one of the two, so a damaged record cannot pose as prose.
+  if ("text" in entry) return typeof entry.text === "string" && !("step" in entry);
+  return entry.step === "call" || entry.step === "note" || entry.step === "evidence";
 }
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -868,6 +871,9 @@ export function isRunRecord(value: unknown): value is RunRecord {
       (Array.isArray(value.decisions) && value.decisions.every(isRunDecision))) &&
     (value.notes === undefined ||
       (Array.isArray(value.notes) && value.notes.length <= MAX_STEERS_PER_RUN && value.notes.every(isSteerNote))) &&
+    (value.notesDelivered === undefined ||
+      (Number.isInteger(value.notesDelivered) && (value.notesDelivered as number) >= 0 &&
+        (value.notesDelivered as number) <= (Array.isArray(value.notes) ? value.notes.length : 0))) &&
     (value.usage === undefined || isRunUsage(value.usage)) &&
     (value.transcript === undefined ||
       (Array.isArray(value.transcript) && value.transcript.length <= MAX_TRANSCRIPT_ENTRIES &&

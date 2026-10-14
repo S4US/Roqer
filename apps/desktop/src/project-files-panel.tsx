@@ -5,7 +5,7 @@ import {
 import { ModelViewer, type LoadedModel } from "./model-viewer";
 import { projectFilesApi } from "./platform";
 import {
-  imageMediaType, MAX_FILE_NOTE_CHARS, modelFormat, PROJECT_FILE_DRAG_TYPE, type ProjectFile, type ProjectFilesResult,
+  canSendToStudio, imageMediaType, MAX_FILE_NOTE_CHARS, modelFormat, PROJECT_FILE_DRAG_TYPE, type ProjectFile, type ProjectFilesResult,
 } from "../shared/project-files";
 import type { RunEvidence } from "../shared/run-events";
 
@@ -158,6 +158,10 @@ export function ProjectFilesPanel({ projectId, projectName, chat, files, onShare
     }
   };
 
+  // While a row is dragged out, the panel steps aside so a chat in the sidebar
+  // or the composer underneath can take the drop.
+  const [draggingOut, setDraggingOut] = useState(false);
+
   const added = (list: ProjectFile[]) => {
     if (list.length === 0) return;
     setNotice(`Added ${list.length === 1 ? list[0].name : `${list.length} files`}${chat === null ? "" : ` and shared with “${chat.title}”`}.`);
@@ -167,7 +171,7 @@ export function ProjectFilesPanel({ projectId, projectName, chat, files, onShare
   const shown = (files ?? []).filter((file) => filter === "all" || (filter === "shared" ? chat?.sharedFileIds.includes(file.id) : file.kind === filter))
     .slice().sort((a, b) => b.addedAt.localeCompare(a.addedAt));
 
-  const sendButton = (file: ProjectFile) => file.kind === "model" && <button
+  const sendButton = (file: ProjectFile) => file.kind === "model" && canSendToStudio(file.name) && <button
     type="button"
     className="files-action primary"
     disabled={sending !== null}
@@ -175,7 +179,7 @@ export function ProjectFilesPanel({ projectId, projectName, chat, files, onShare
     title="Upload to Roblox and insert into the place in Studio"
   >{sending === file.id ? <Loader2 size={14} className="spin" /> : <Send size={14} />} {file.assetId === undefined ? "Send to Studio" : "Send again"}</button>;
 
-  return <div className="modal-backdrop" role="presentation" onMouseDown={onClose}>
+  return <div className={`modal-backdrop${draggingOut ? " files-dragging-out" : ""}`} role="presentation" onMouseDown={onClose}>
     <div
       className={`notes-modal files-modal${dropping ? " dropping" : ""}`}
       role="dialog"
@@ -220,7 +224,17 @@ export function ProjectFilesPanel({ projectId, projectName, chat, files, onShare
           : <ul className="files-list">
             {shown.map((file) => {
               const shared = chat?.sharedFileIds.includes(file.id) ?? false;
-              return <li key={file.id} className="files-row" draggable onDragStart={(event) => dragProjectFile(event, projectId, file)}>
+              return <li
+                key={file.id}
+                className="files-row"
+                draggable
+                onDragStart={(event) => {
+                  dragProjectFile(event, projectId, file);
+                  // After the drag has begun: changing the source as it starts can cancel it.
+                  window.requestAnimationFrame(() => setDraggingOut(true));
+                }}
+                onDragEnd={() => setDraggingOut(false)}
+              >
                 <span className={`files-icon kind-${file.kind}`}><FileKindIcon file={file} size={16} /></span>
                 <div className="files-main">
                   <button type="button" className="files-name" onClick={() => setViewing(file)} title={file.kind === "model" ? "View in 3D" : "Open"}>{file.name}</button>

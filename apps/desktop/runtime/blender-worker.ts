@@ -47,6 +47,24 @@ import { modelPreviewId } from "../shared/model-preview";
  */
 
 const MODEL_EXTENSIONS = new Set([".glb", ".gltf", ".fbx", ".obj"]);
+
+function isWithin(root: string, target: string): boolean {
+  const relative = path.relative(path.resolve(root), target);
+  return relative !== "" && !relative.startsWith("..") && !path.isAbsolute(relative);
+}
+
+/** Whether a .gltf carries its buffers and images inside it, as data URIs. */
+async function gltfIsSelfContained(file: string): Promise<boolean> {
+  try {
+    const stat = await fs.stat(file);
+    if (stat.size > 64 * 1024 * 1024) return false;
+    const document = JSON.parse(await fs.readFile(file, "utf8")) as { buffers?: Array<{ uri?: unknown }>; images?: Array<{ uri?: unknown }> };
+    const uris = [...(document.buffers ?? []), ...(document.images ?? [])].map((entry) => entry?.uri);
+    return uris.every((uri) => uri === undefined || (typeof uri === "string" && uri.startsWith("data:")));
+  } catch {
+    return false;
+  }
+}
 const MAX_INSPECTED_MODELS = 3;
 /** Up to this many rendered images are attached one by one; more are tiled into one review sheet. */
 const MAX_RENDERED_IMAGES = 4;
@@ -1868,6 +1886,12 @@ export type BlenderWorkerOptions = Readonly<{
   now?: () => number;
   /** The Studio installs a job's textures are previewed in when it asks; found on this computer by default. */
   studioContentDirectories?: () => Promise<string[]>;
+  /**
+   * The folders `inspect_file` may look in: Roqer's own job and project-file
+   * folders. A look needs no approval, so it never reaches anywhere else on
+   * the computer or the network. The jobs folder when not given.
+   */
+  inspectRoots?: readonly string[];
 }>;
 
 type ProcessResult = Readonly<{
@@ -2073,6 +2097,29 @@ export class BlenderWorker {
   }
 
   /** Run a script the engine has already approved. Never throws for the script's own failures. */
+  /**
+   * Why a file cannot be looked at, or null when it can. The path is checked
+   * as written before anything touches it, so a network path is never opened,
+   * and again once resolved, so a link cannot lead outside.
+   */
+  private async inspectRefusal(file: string): Promise<string | null> {
+    const roots = this.options.inspectRoots ?? [this.options.jobsRoot];
+    const outside = "inspect_file looks at models in this project's files or Blender jobs; " +
+      `${file} is not in them. Ask the user to add it to the project files, then use the path project_files gives.`;
+    if (!path.isAbsolute(file) || file.startsWith("\\\\") || file.startsWith("//")) return outside;
+    if (!roots.some((root) => isWithin(root, path.resolve(file)))) return outside;
+    if (!MODEL_EXTENSIONS.has(path.extname(file).toLowerCase())) return "inspect_file must be a .glb, .gltf, .fbx or .obj file.";
+    const stat = await fs.stat(file).catch(() => undefined);
+    if (stat === undefined || !stat.isFile()) return `inspect_file must be the absolute path of a model file; ${file} is not one Roqer can read.`;
+    const real = await fs.realpath(file).catch(() => null);
+    const realRoots = await Promise.all(roots.map((root) => fs.realpath(root).catch(() => root)));
+    if (real === null || !realRoots.some((root) => isWithin(root, real))) return outside;
+    if (path.extname(file).toLowerCase() === ".gltf" && !(await gltfIsSelfContained(file))) {
+      return `${path.basename(file)} keeps its buffers or textures in separate files, which a look copies without. Export it as a single .glb and look at that.`;
+    }
+    return null;
+  }
+
   async run(args: Record<string, unknown>, call: McpCallOptions = {}): Promise<McpToolOutcome> {
     const started = this.now();
     const inspectFile = typeof args.inspect_file === "string" ? args.inspect_file : undefined;
@@ -2083,13 +2130,8 @@ export class BlenderWorker {
       return failure(error instanceof Error ? error.message : "views were not valid.", "invalid_arguments", started, this.now);
     }
     if (inspectFile !== undefined) {
-      const stat = path.isAbsolute(inspectFile) ? await fs.stat(inspectFile).catch(() => undefined) : undefined;
-      if (stat === undefined || !stat.isFile()) {
-        return failure(`inspect_file must be the absolute path of a model file; ${inspectFile} is not one Roqer can read.`, "invalid_arguments", started, this.now);
-      }
-      if (!MODEL_EXTENSIONS.has(path.extname(inspectFile).toLowerCase())) {
-        return failure("inspect_file must be a .glb, .gltf, .fbx or .obj file.", "invalid_arguments", started, this.now);
-      }
+      const refused = await this.inspectRefusal(inspectFile);
+      if (refused !== null) return failure(refused, "invalid_arguments", started, this.now);
     }
     const script = inspectFile === undefined ? args.script : "";
     if (typeof script !== "string" || (inspectFile === undefined && script.trim() === "")) {

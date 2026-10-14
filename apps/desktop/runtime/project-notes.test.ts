@@ -52,3 +52,16 @@ test("the notes version changes with what the agent would be told, not with time
   assert.equal(notesVersion(base), notesVersion({ ...base, planUpdatedAt: "t2" }));
   assert.notEqual(notesVersion(base), notesVersion({ ...base, plan: "Q" }));
 });
+
+test("notes that cannot be read are never replaced with nothing", () => withStore(async (store, directory) => {
+  // Damaged: kept aside, and the project starts fresh.
+  await fs.writeFile(path.join(directory, "p1.json"), "{ not json");
+  assert.deepEqual(await store.get("p1"), { memories: [], plan: "", planUpdatedAt: null });
+  assert.ok((await fs.readdir(directory)).some((name) => name.startsWith("p1.json.damaged-")));
+
+  // Unreadable for now (here a folder where the file should be): refused, and
+  // a write does not go through on an empty read.
+  await fs.mkdir(path.join(directory, "p2.json"));
+  await assert.rejects(() => store.get("p2"), /could not be read just now/);
+  await assert.rejects(() => store.addMemory("p2", "One."), /could not be read just now/);
+}));
