@@ -532,7 +532,11 @@ export class RunSession {
       decisions: () => this.recordedDecisions,
       ...(this.previewImage === undefined ? {} : { previewImage: this.previewImage }),
       ...(this.storeModelPreview === undefined ? {} : { storeModelPreview: this.storeModelPreview }),
-      takeSteers: () => this.pendingSteers.splice(0),
+      takeSteers: () => {
+        const taken = this.pendingSteers.splice(0);
+        if (taken.length > 0) this.emit({ type: "steers-delivered", count: taken.length });
+        return taken;
+      },
       askUser: (question, options) => this.askUser(question, options),
       // "completed" because the question is what the gate would say about a run
       // that ends well from here; a run heading for failure has no use for it.

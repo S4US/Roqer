@@ -15,6 +15,8 @@ import type { RojoResult } from "../shared/rojo";
 import type { ModelPreviewResult } from "../shared/model-preview";
 import type { EvidencePictureResult } from "../shared/evidence-picture";
 import type { ClipSelection } from "../shared/reference-clip";
+import type { ProjectNotesResult } from "../shared/project-notes";
+import type { ProjectFile, ProjectFilesResult, SendToStudioResult } from "../shared/project-files";
 
 type ProviderConnector = {
   status(): Promise<ProviderStatus>;
@@ -108,8 +110,28 @@ declare global {
         cancelStart(startId: string): Promise<void>;
         subscribe(listener: (event: RunEvent) => void): () => void;
       };
+      notes: {
+        get(projectId: string): Promise<ProjectNotesResult>;
+        setPlan(projectId: string, plan: string): Promise<ProjectNotesResult>;
+        addMemory(projectId: string, text: string): Promise<ProjectNotesResult>;
+        updateMemory(projectId: string, id: string, text: string): Promise<ProjectNotesResult>;
+        removeMemory(projectId: string, id: string): Promise<ProjectNotesResult>;
+      };
+      files: {
+        list(projectId: string): Promise<ProjectFilesResult<ProjectFile[]>>;
+        addDropped(projectId: string, dropped: File[], chatId: string | null): Promise<ProjectFilesResult<ProjectFile[]>>;
+        pick(projectId: string, chatId: string | null): Promise<ProjectFilesResult<ProjectFile[]>>;
+        remove(projectId: string, fileId: string): Promise<ProjectFilesResult<true>>;
+        note(projectId: string, fileId: string, note: string): Promise<ProjectFilesResult<ProjectFile>>;
+        read(projectId: string, fileId: string): Promise<ProjectFilesResult<Uint8Array>>;
+        reveal(projectId: string, fileId: string): Promise<ProjectFilesResult<true>>;
+        savePreview(projectId: string, previewId: string, chatId: string | null): Promise<ProjectFilesResult<ProjectFile>>;
+        sendToStudio(source: { projectId: string; fileId: string } | { previewId: string }, endpoint: string, instanceId: string | null): Promise<SendToStudioResult>;
+        subscribe(listener: (projectId: string) => void): () => void;
+      };
       chats: {
         compact(chatId: string): Promise<boolean>;
+        compactModel(projectId: string, chatId: string): Promise<{ ok: boolean; message: string; noSession?: true }>;
       };
       app: {
         getDataPath(): Promise<string>;

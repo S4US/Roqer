@@ -59,12 +59,22 @@ const AXES = ["x", "y", "z"] as const;
  * moves on. A preview that has expired, or a window that cannot draw 3D, shows
  * the still picture instead and says why.
  */
-export function ModelViewer({ evidence, onShowPicture, compact = false, autoplay }: {
+/** A model file's bytes and the format to read them as, or why there are none. */
+export type LoadedModel =
+  | { ok: true; bytes: Uint8Array; format: "glb" | "gltf" | "fbx" | "obj" }
+  | { ok: false; reason: "expired" | "failed" };
+
+export function ModelViewer({ evidence, onShowPicture, compact = false, autoplay, load }: {
   evidence: RunEvidence;
   onShowPicture: () => void;
   compact?: boolean;
   /** Whether an animation starts playing; by default, unless the reader asks for less motion. */
   autoplay?: boolean;
+  /**
+   * Where the model comes from when it is not a Blender result's preview: a
+   * project file. Keep it stable between renders; a new one reloads the view.
+   */
+  load?: () => Promise<LoadedModel>;
 }) {
   const host = useRef<HTMLDivElement>(null);
   const gizmo = useRef<SVGSVGElement>(null);
@@ -82,7 +92,7 @@ export function ModelViewer({ evidence, onShowPicture, compact = false, autoplay
     setPlayback(null);
     void (async () => {
       const container = host.current;
-      if (id === undefined || container === null) {
+      if ((id === undefined && load === undefined) || container === null) {
         setStatus("failed");
         return;
       }
@@ -94,7 +104,11 @@ export function ModelViewer({ evidence, onShowPicture, compact = false, autoplay
         setStatus("no-webgl");
         return;
       }
-      const result = await loadModelPreview(id);
+      const result: LoadedModel = load !== undefined
+        ? await load()
+        : await loadModelPreview(id!).then((value): LoadedModel => (value.ok
+          ? { ok: true, bytes: value.bytes, format: "glb" }
+          : { ok: false, reason: value.reason === "expired" ? "expired" : "failed" }));
       if (disposed) return;
       if (!result.ok) {
         setStatus(result.reason === "expired" ? "expired" : "failed");
@@ -113,13 +127,25 @@ export function ModelViewer({ evidence, onShowPicture, compact = false, autoplay
       const manager = new THREE.LoadingManager();
       manager.setURLModifier((url) => (url.startsWith("data:") || url.startsWith("blob:") ? url : "data:,"));
       const bytes = result.bytes;
-      const gltf = await new GLTFLoader(manager).parseAsync(
-        bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer,
-        "",
-      );
+      const buffer = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
+      let model: import("three").Object3D;
+      let animations: import("three").AnimationClip[];
+      if (result.format === "fbx") {
+        const { FBXLoader } = await import("three/examples/jsm/loaders/FBXLoader.js");
+        const group = new FBXLoader(manager).parse(buffer, "");
+        model = group;
+        animations = group.animations;
+      } else if (result.format === "obj") {
+        const { OBJLoader } = await import("three/examples/jsm/loaders/OBJLoader.js");
+        model = new OBJLoader(manager).parse(new TextDecoder().decode(bytes));
+        animations = [];
+      } else {
+        const gltf = await new GLTFLoader(manager).parseAsync(buffer, "");
+        model = gltf.scene;
+        animations = gltf.animations;
+      }
       if (disposed) return;
 
-      const model = gltf.scene;
       // glTF is Y-up with Blender's -Y as +Z; Studio puts Blender (x, y, z) at
       // (-x, z, y). Half a turn about Y takes one to the other, so the scene's
       // axes are Roblox's and the model faces the way it will in Studio.
@@ -224,7 +250,7 @@ export function ModelViewer({ evidence, onShowPicture, compact = false, autoplay
       // The model's own animation, if it has one: sampled by the mixer each
       // frame while it plays, and reported to the playback bar a few times a
       // second.
-      const clip = gltf.animations[0];
+      const clip = animations[0];
       const mixer = clip !== undefined && clip.duration > 0 ? new THREE.AnimationMixer(model) : undefined;
       if (mixer !== undefined && clip !== undefined) mixer.clipAction(clip).setLoop(THREE.LoopRepeat, Infinity).play();
       let playing = mixer !== undefined && (autoplay ?? !reducedMotion());
@@ -395,7 +421,7 @@ export function ModelViewer({ evidence, onShowPicture, compact = false, autoplay
       disposed = true;
       release();
     };
-  }, [id, compact, autoplay]);
+  }, [id, compact, autoplay, load]);
 
   const size = fact(evidence, MODEL_SIZE_LABEL);
   const triangles = fact(evidence, MODEL_TRIANGLES_LABEL);

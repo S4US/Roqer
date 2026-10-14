@@ -16,6 +16,10 @@
  *  - Soft line breaks inside a paragraph are kept rather than folded into
  *    spaces, because a line the model chose to break is nearly always a list or
  *    a set of paths it wanted on separate lines.
+ *
+ * Lists nest by indentation, ordered lists keep their starting number, and
+ * GitHub-style tables become tables, so a reply reads the way it does on
+ * claude.ai rather than as the markers that describe it.
  */
 
 export type InlineNode =
@@ -25,11 +29,18 @@ export type InlineNode =
   | { type: "emphasis"; children: InlineNode[] }
   | { type: "link"; href: string; children: InlineNode[] };
 
+export type ListItem = { children: InlineNode[]; lists: ListBlock[] };
+
+export type ListBlock = { type: "list"; ordered: boolean; start: number; items: ListItem[] };
+
+export type TableAlign = "left" | "center" | "right" | null;
+
 export type MarkdownBlock =
   | { type: "paragraph"; children: InlineNode[] }
   | { type: "heading"; level: number; children: InlineNode[] }
   | { type: "code"; language: string | null; value: string }
-  | { type: "list"; ordered: boolean; items: InlineNode[][] }
+  | ListBlock
+  | { type: "table"; align: TableAlign[]; header: InlineNode[][]; rows: InlineNode[][][] }
   | { type: "quote"; children: InlineNode[] }
   | { type: "rule" };
 
@@ -37,7 +48,9 @@ const FENCE = /^\s{0,3}(`{3,}|~{3,})\s*([^\s`]*)\s*$/;
 const HEADING = /^\s{0,3}(#{1,6})\s+(.*?)\s*#*\s*$/;
 const RULE = /^\s{0,3}([-*_])[ \t]*(\1[ \t]*){2,}$/;
 const BULLET = /^(\s*)[-*+]\s+(.*)$/;
-const ORDERED = /^(\s*)\d{1,9}[.)]\s+(.*)$/;
+const ORDERED = /^(\s*)(\d{1,9})[.)]\s+(.*)$/;
+/** A table's second line: cells of dashes, optionally colon-aligned. */
+const TABLE_DELIMITER = /^\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?\s*$/;
 const QUOTE = /^\s{0,3}>\s?(.*)$/;
 const BLANK = /^\s*$/;
 
@@ -100,28 +113,17 @@ export function parseMarkdown(source: string): MarkdownBlock[] {
       continue;
     }
 
-    if (BULLET.test(line) || ORDERED.test(line)) {
-      const ordered = !BULLET.test(line);
-      const items: string[] = [];
-      while (index < lines.length) {
-        const current = lines[index];
-        const match = ordered ? ORDERED.exec(current) : BULLET.exec(current);
-        if (match) {
-          items.push(match[2]);
-          index += 1;
-          continue;
-        }
-        // An indented, non-blank line that starts no new item continues the one
-        // above it, so a wrapped bullet stays one bullet.
-        if (items.length > 0 && !BLANK.test(current) && /^\s+\S/.test(current) &&
-          !BULLET.test(current) && !ORDERED.test(current)) {
-          items[items.length - 1] += `\n${current.trim()}`;
-          index += 1;
-          continue;
-        }
-        break;
-      }
-      blocks.push({ type: "list", ordered, items: items.map(parseInline) });
+    if (listItem(line) !== null) {
+      const list = parseList(lines, index);
+      blocks.push(list.block);
+      index = list.end;
+      continue;
+    }
+
+    if (isTableStart(lines, index)) {
+      const table = parseTable(lines, index);
+      blocks.push(table.block);
+      index = table.end;
       continue;
     }
 
@@ -130,7 +132,7 @@ export function parseMarkdown(source: string): MarkdownBlock[] {
       const current = lines[index];
       if (BLANK.test(current) || FENCE.test(current) || HEADING.test(current) ||
         RULE.test(current) || QUOTE.test(current) ||
-        BULLET.test(current) || ORDERED.test(current)) break;
+        BULLET.test(current) || ORDERED.test(current) || isTableStart(lines, index)) break;
       paragraph.push(current.trim());
       index += 1;
     }
@@ -138,6 +140,127 @@ export function parseMarkdown(source: string): MarkdownBlock[] {
   }
 
   return blocks;
+}
+
+type ItemLine = { indent: number; ordered: boolean; number: number; body: string };
+
+function indentWidth(whitespace: string): number {
+  return whitespace.replace(/\t/g, "    ").length;
+}
+
+function listItem(line: string): ItemLine | null {
+  const bullet = BULLET.exec(line);
+  // "---" and "***" are rules, not items.
+  if (bullet && !RULE.test(line)) return { indent: indentWidth(bullet[1]), ordered: false, number: 1, body: bullet[2] };
+  const ordered = ORDERED.exec(line);
+  if (ordered) return { indent: indentWidth(ordered[1]), ordered: true, number: Number(ordered[2]), body: ordered[3] };
+  return null;
+}
+
+/**
+ * One list and the lists nested in it. An item indented further than the
+ * list's own items opens a nested list under the item above; a line indented
+ * but starting no item continues that item's text, so a wrapped bullet stays
+ * one bullet. A blank line between items keeps the list going.
+ */
+function parseList(lines: string[], start: number): { block: ListBlock; end: number } {
+  const first = listItem(lines[start])!;
+  const block: ListBlock = { type: "list", ordered: first.ordered, start: first.number, items: [] };
+  const texts: string[] = [];
+  let index = start;
+  while (index < lines.length) {
+    const line = lines[index];
+    const item = listItem(line);
+    if (item !== null && item.indent <= first.indent + 1 && item.indent >= first.indent - 1) {
+      if (item.ordered !== first.ordered) break;
+      block.items.push({ children: [], lists: [] });
+      texts.push(item.body);
+      index += 1;
+      continue;
+    }
+    if (item !== null && item.indent > first.indent && block.items.length > 0) {
+      const nested = parseList(lines, index);
+      block.items[block.items.length - 1].lists.push(nested.block);
+      index = nested.end;
+      continue;
+    }
+    if (item === null && block.items.length > 0 && !BLANK.test(line) && /^\s+\S/.test(line) &&
+      indentWidth(/^\s*/.exec(line)![0]) > first.indent) {
+      texts[texts.length - 1] += `\n${line.trim()}`;
+      index += 1;
+      continue;
+    }
+    if (BLANK.test(line)) {
+      const next = index + 1 < lines.length ? listItem(lines[index + 1]) : null;
+      if (next !== null && next.indent >= first.indent - 1 && (next.indent > first.indent + 1 || next.ordered === first.ordered)) {
+        index += 1;
+        continue;
+      }
+    }
+    break;
+  }
+  block.items.forEach((entry, position) => { entry.children = parseInline(texts[position]); });
+  return { block, end: index };
+}
+
+/** Split a table row into its cells, keeping escaped pipes and pipes inside code. */
+function tableCells(line: string): string[] {
+  let source = line.trim();
+  if (source.startsWith("|")) source = source.slice(1);
+  if (source.endsWith("|") && !source.endsWith("\\|")) source = source.slice(0, -1);
+  const cells: string[] = [];
+  let current = "";
+  let inCode = 0;
+  for (let index = 0; index < source.length; index += 1) {
+    const character = source[index];
+    if (character === "\\" && source[index + 1] === "|") {
+      current += "|";
+      index += 1;
+      continue;
+    }
+    if (character === "`") {
+      const run = runLength(source, index, "`");
+      inCode = inCode === run ? 0 : inCode === 0 ? run : inCode;
+      current += source.slice(index, index + run);
+      index += run - 1;
+      continue;
+    }
+    if (character === "|" && inCode === 0) {
+      cells.push(current.trim());
+      current = "";
+      continue;
+    }
+    current += character;
+  }
+  cells.push(current.trim());
+  return cells;
+}
+
+function isTableStart(lines: string[], index: number): boolean {
+  const header = lines[index];
+  const delimiter = lines[index + 1];
+  if (header === undefined || delimiter === undefined || !header.includes("|") || !TABLE_DELIMITER.test(delimiter)) return false;
+  // Needs a pipe somewhere in the delimiter, or "---" alone would be a setext heading.
+  if (!delimiter.includes("|")) return false;
+  return tableCells(header).length === tableCells(delimiter).length;
+}
+
+function parseTable(lines: string[], start: number): { block: MarkdownBlock; end: number } {
+  const header = tableCells(lines[start]);
+  const align: TableAlign[] = tableCells(lines[start + 1]).map((cell) => {
+    const left = cell.startsWith(":");
+    const right = cell.endsWith(":");
+    return left && right ? "center" : right ? "right" : left ? "left" : null;
+  });
+  const rows: InlineNode[][][] = [];
+  let index = start + 2;
+  while (index < lines.length && !BLANK.test(lines[index]) && lines[index].includes("|")) {
+    const cells = tableCells(lines[index]);
+    // Short rows are padded and long ones cut, as GitHub renders them.
+    rows.push(header.map((_, column) => parseInline(cells[column] ?? "")));
+    index += 1;
+  }
+  return { block: { type: "table", align, header: header.map(parseInline), rows }, end: index };
 }
 
 /** A run of the opening character, at least as long as the opening fence. */
@@ -325,6 +448,10 @@ export function inlineToText(nodes: InlineNode[]): string {
   }).join("");
 }
 
+function listToText(list: ListBlock): string {
+  return list.items.map((item) => [inlineToText(item.children), ...item.lists.map(listToText)].join("\n")).join("\n");
+}
+
 /** Flattens a document to plain text, for titles and accessible labels. */
 export function markdownToPlainText(source: string): string {
   return parseMarkdown(source).map((block) => {
@@ -333,7 +460,8 @@ export function markdownToPlainText(source: string): string {
       case "heading":
       case "quote": return inlineToText(block.children);
       case "code": return block.value;
-      case "list": return block.items.map(inlineToText).join("\n");
+      case "list": return listToText(block);
+      case "table": return [block.header, ...block.rows].map((row) => row.map(inlineToText).join("\t")).join("\n");
       case "rule": return "";
     }
   }).filter((part) => part !== "").join("\n\n");

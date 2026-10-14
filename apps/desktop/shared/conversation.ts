@@ -17,6 +17,8 @@ export type ConversationMessage = {
    * fresh session ask for it again instead of acting as if nothing was.
    */
   attachments?: MessageAttachments;
+  /** A note the user sent while a run was working, which the provider received mid-run. */
+  note?: true;
 };
 
 export type MessageAttachments = { pictures: number; files: number };
@@ -89,6 +91,7 @@ export function boundConversation(messages: readonly ConversationMessage[], summ
       role: message.role, text,
       ...(run === undefined ? {} : { run }),
       ...(message.attachments === undefined ? {} : { attachments: message.attachments }),
+      ...(message.note === true ? { note: true as const } : {}),
     });
     totalChars += text.length + (run === undefined ? 0 : digestChars(run));
   }
@@ -150,6 +153,7 @@ export function isConversationContext(value: unknown): value is ConversationCont
     }
     if (message.attachments !== undefined &&
       (message.role !== "user" || !isMessageAttachments(message.attachments))) return false;
+    if (message.note !== undefined && (message.note !== true || message.role !== "user")) return false;
     if (totalChars > MAX_CONVERSATION_CHARS) return false;
   }
   return true;

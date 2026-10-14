@@ -15,6 +15,15 @@ import { describeSkins, parseSkins, type InspectedSkin } from "./blender-skin";
 import { analyzeFlipbook, decodePng, describeFlipbook, type FlipbookClaim, type FlipbookReport } from "./flipbook-sheet";
 import { analyzeRing, describeRing } from "./texture-ring";
 import type { McpCallOptions, McpToolImage, McpToolOutcome } from "./mcp-types";
+import { parseBlenderViews, type BlenderView } from "./blender-tool";
+import { modelPreviewSourceFileName } from "./model-preview";
+
+/** Where a job keeps the views its call asked for, read by the inspection. */
+const VIEWS_FILE = "roqer_views.json";
+
+function describeView(view: BlenderView): string {
+  return `${view.label ? `${view.label}: ` : ""}yaw ${Math.round(view.yaw)}°, pitch ${Math.round(view.pitch)}°, zoom ${view.zoom}${view.focus ? `, framing ${view.focus}` : ""}`;
+}
 import { findStudioContentDirectories, stageStudioPreviews, type StudioPreview } from "./studio-preview";
 import { isViewableGlb, JOB_RETENTION_MS, MAX_KEPT_JOBS, modelPreviewFileName, pruneJobFolders } from "./model-preview";
 import { onDarkGround, reviewSheet } from "./png-view";
@@ -1701,6 +1710,55 @@ def render_views(size, center):
     output.save()
 
 
+def render_custom_views(size, center):
+    """Render the angles the call asked for, one PNG each, beside the preview.
+
+    yaw turns around the model from the front it will have in Studio, where
+    Blender -Y is Roblox's forward: 0 sees the front, 90 the model's right side
+    (Blender -X, Roblox +X). pitch is above the horizon; zoom brings the camera
+    closer; focus frames one object instead of the whole model.
+    """
+    views_path = os.path.join(os.path.dirname(os.path.abspath(preview_path)), "roqer_views.json")
+    if not os.path.exists(views_path):
+        return 0
+    with open(views_path, encoding="utf8") as handle:
+        views = json.load(handle)
+    camera = scene.camera
+    if camera is None:
+        return 0
+    camera.data.type = "PERSP"
+    scene.render.resolution_x = 768
+    scene.render.resolution_y = 576
+    rendered = 0
+    for index, view in enumerate(views[:6]):
+        target_center, target_size = center, size
+        focus = view.get("focus")
+        if focus:
+            item = bpy.data.objects.get(focus)
+            if item is None:
+                lowered = focus.lower()
+                item = next((candidate for candidate in scene.objects if candidate.type == "MESH" and candidate.name.lower().startswith(lowered)), None)
+            if item is not None and item.type == "MESH":
+                corners = [item.matrix_world @ Vector(corner) for corner in item.bound_box]
+                focus_low = Vector((min(c.x for c in corners), min(c.y for c in corners), min(c.z for c in corners)))
+                focus_high = Vector((max(c.x for c in corners), max(c.y for c in corners), max(c.z for c in corners)))
+                target_center, target_size = (focus_low + focus_high) / 2, focus_high - focus_low
+        yaw = math.radians(float(view.get("yaw", 30)))
+        pitch = math.radians(max(-89.0, min(89.0, float(view.get("pitch", 20)))))
+        zoom = max(0.2, min(20.0, float(view.get("zoom", 1))))
+        direction = Vector((-math.sin(yaw) * math.cos(pitch), -math.cos(yaw) * math.cos(pitch), math.sin(pitch))).normalized()
+        radius = max(target_size.length / 2, 0.01)
+        distance = radius / math.sin(camera.data.angle / 2) * 1.05 / zoom
+        camera.location = target_center + direction * distance
+        camera.data.clip_start = max(distance / 1000, 0.0001)
+        camera.data.clip_end = distance * 4 + max(size.length, 0.01) * 4
+        camera.rotation_euler = (-direction).to_track_quat("-Z", "Y").to_euler()
+        scene.render.filepath = f"{preview_path}.view-{index}.png"
+        bpy.ops.render.render(write_still=True)
+        rendered += 1
+    return rendered
+
+
 if meshes:
     size = high - low
     stats["size"] = [round(size.x, 4), round(size.y, 4), round(size.z, 4)]
@@ -1722,6 +1780,10 @@ if meshes:
         stats["preview"] = os.path.exists(preview_path)
     except Exception as error:
         stats["previewError"] = str(error)[:200]
+    try:
+        stats["views"] = render_custom_views(size, (low + high) / 2)
+    except Exception as error:
+        stats["viewsError"] = str(error)[:200]
     # The model as measured, as one self-contained GLB for the 3D view in
     # Roqer's chat: the same meshes, modifiers applied, hidden objects left
     # out, images packed in. Draco stays off, so the viewer needs no decoder.
@@ -2013,9 +2075,25 @@ export class BlenderWorker {
   /** Run a script the engine has already approved. Never throws for the script's own failures. */
   async run(args: Record<string, unknown>, call: McpCallOptions = {}): Promise<McpToolOutcome> {
     const started = this.now();
-    const script = args.script;
-    if (typeof script !== "string" || script.trim() === "") {
-      return failure("blender needs a script: the Python to run.", "invalid_arguments", started, this.now);
+    const inspectFile = typeof args.inspect_file === "string" ? args.inspect_file : undefined;
+    let views: BlenderView[];
+    try {
+      views = parseBlenderViews(args.views);
+    } catch (error) {
+      return failure(error instanceof Error ? error.message : "views were not valid.", "invalid_arguments", started, this.now);
+    }
+    if (inspectFile !== undefined) {
+      const stat = path.isAbsolute(inspectFile) ? await fs.stat(inspectFile).catch(() => undefined) : undefined;
+      if (stat === undefined || !stat.isFile()) {
+        return failure(`inspect_file must be the absolute path of a model file; ${inspectFile} is not one Roqer can read.`, "invalid_arguments", started, this.now);
+      }
+      if (!MODEL_EXTENSIONS.has(path.extname(inspectFile).toLowerCase())) {
+        return failure("inspect_file must be a .glb, .gltf, .fbx or .obj file.", "invalid_arguments", started, this.now);
+      }
+    }
+    const script = inspectFile === undefined ? args.script : "";
+    if (typeof script !== "string" || (inspectFile === undefined && script.trim() === "")) {
+      return failure("blender needs a script: the Python to run, or inspect_file: a model to look at.", "invalid_arguments", started, this.now);
     }
     if (script.length > MAX_BLENDER_SCRIPT_CHARACTERS) {
       return failure(`The script is longer than ${MAX_BLENDER_SCRIPT_CHARACTERS} characters. Split the work into smaller jobs.`, "invalid_arguments", started, this.now);
@@ -2029,7 +2107,7 @@ export class BlenderWorker {
     if (requestedBase !== undefined && !isBlenderJobId(requestedBase)) {
       return failure("continue_from must be the id of an earlier job, exactly as that job's result gave it.", "invalid_arguments", started, this.now);
     }
-    let continueFrom = requestedBase;
+    let continueFrom = inspectFile === undefined ? requestedBase : undefined;
     let notContinued: string | undefined;
     const base = continueFrom === undefined ? undefined : await this.savedScene(continueFrom);
     if (continueFrom !== undefined && base === undefined) {
@@ -2070,10 +2148,24 @@ export class BlenderWorker {
       await fs.writeFile(path.join(jobDirectory, "roqer_runner.py"), RUNNER_SCRIPT, "utf8");
       await fs.writeFile(path.join(jobDirectory, "roqer_helpers.py"), HELPERS_SCRIPT, "utf8");
       await fs.writeFile(path.join(jobDirectory, "roqer_inspect.py"), INSPECT_SCRIPT, "utf8");
+      if (views.length > 0) await fs.writeFile(path.join(jobDirectory, VIEWS_FILE), JSON.stringify(views), "utf8");
     } catch {
       return failure("Roqer could not prepare a folder for the Blender job.", "job_setup_failed", started, this.now);
     }
 
+    const sceneFile = path.join(jobDirectory, "scene.blend");
+    let log = "";
+    let sceneSaved = false;
+    let contents: Awaited<ReturnType<typeof readSceneContents>> | undefined;
+    if (inspectFile !== undefined) {
+      // Looking runs no script: the file is copied in as if a job had
+      // exported it, and inspected like any export.
+      try {
+        await fs.copyFile(inspectFile, path.join(outputDirectory, path.basename(inspectFile)));
+      } catch {
+        return failure(`Roqer could not copy ${inspectFile} to look at it.`, "invalid_arguments", started, this.now);
+      }
+    } else {
     const run = await this.runBlender(
       [
         "--background", "--factory-startup", "--python-exit-code", "1", "--python", path.join(jobDirectory, "roqer_runner.py"),
@@ -2083,7 +2175,7 @@ export class BlenderWorker {
       seconds * 1000,
       call,
     );
-    const log = tail(run.output);
+    log = tail(run.output);
     if (run.cancelled) return failure("The Blender job was stopped with the run.", "cancelled", started, this.now);
     if (run.spawnError !== undefined) {
       return failure(`Blender could not be started: ${run.spawnError}. Check the Blender setting in Roqer's Settings.`, "blender_unavailable", started, this.now);
@@ -2103,9 +2195,9 @@ export class BlenderWorker {
         { jobDirectory, log },
       );
     }
-    const sceneFile = path.join(jobDirectory, "scene.blend");
-    const sceneSaved = run.output.includes(SCENE_SAVED_MARKER) && (await fs.stat(sceneFile).catch(() => undefined))?.isFile() === true;
-    const contents = sceneSaved ? await readSceneContents(path.join(jobDirectory, "scene.json")) : undefined;
+    sceneSaved = run.output.includes(SCENE_SAVED_MARKER) && (await fs.stat(sceneFile).catch(() => undefined))?.isFile() === true;
+    contents = sceneSaved ? await readSceneContents(path.join(jobDirectory, "scene.json")) : undefined;
+    }
 
     let entries: string[];
     try {
@@ -2135,6 +2227,10 @@ export class BlenderWorker {
 
     const files: InspectedFile[] = [];
     const images: McpToolImage[] = [];
+    /** The angles the call asked for, rendered of the first model. */
+    const viewImages: McpToolImage[] = [];
+    const viewLines: string[] = [];
+    let viewsOf: string | undefined;
     // The model the first preview pictures, which the chat shows, with its 3D preview when kept.
     let pictured: McpToolOutcome["pictured"];
     // A render is shown as itself: the image is the result, so there is nothing
@@ -2233,6 +2329,16 @@ export class BlenderWorker {
         const png = await fs.readFile(preview).catch(() => undefined);
         if (png !== undefined && png.length <= MAX_PREVIEW_BYTES) images.push({ data: png.toString("base64"), mediaType: "image/png" });
       }
+      if (index === 0 && views.length > 0) {
+        for (const [viewIndex, view] of views.entries()) {
+          const png = await fs.readFile(`${preview}.view-${viewIndex}.png`).catch(() => undefined);
+          if (png !== undefined && png.length <= MAX_PREVIEW_BYTES) {
+            viewImages.push({ data: png.toString("base64"), mediaType: "image/png" });
+            viewLines.push(`${viewImages.length}. ${describeView(view)}`);
+          } else viewLines.push(`(not rendered) ${describeView(view)}${typeof stats.viewsError === "string" ? `: ${stats.viewsError}` : ""}`);
+        }
+        viewsOf = name;
+      }
       if (modelPreview !== undefined) {
         // Kept only for the model the first preview pictures, and only when it
         // is a self-contained GLB the viewer can show; anything else is
@@ -2241,11 +2347,13 @@ export class BlenderWorker {
         const kept = shown && stats.model3d === true && await isViewableGlb(modelPreview);
         if (!kept) await fs.rm(modelPreview, { force: true }).catch(() => undefined);
         if (shown) pictured = { name, ...(kept ? { modelPreviewId: modelPreviewId(jobId, index) } : {}) };
+        // Which file the 3D view shows, so a one-click send uploads that file.
+        if (kept && !inspectScene) await fs.writeFile(path.join(jobDirectory, modelPreviewSourceFileName(index)), JSON.stringify({ name }), "utf8").catch(() => undefined);
       }
     }
 
     const previews = images.length;
-    images.push(...renderImages, ...flipbookImages);
+    images.push(...viewImages, ...renderImages, ...flipbookImages);
     const durationMs = this.now() - started;
     const lines = [`Blender job ${jobId} finished in ${(durationMs / 1000).toFixed(1)} s.`, ...(notContinued === undefined ? [] : [notContinued])];
     if (inspectScene) {
@@ -2323,6 +2431,12 @@ export class BlenderWorker {
           ? ["To use one: animation {action: 'check', animation_file: <its path>}, with locomotion: true for a gait, then build with the same animation_file and a parent. Its rig is the model path the script gave; the model must be rigged in Studio first, and be the one this scene was uploaded as."]
           : []),
       );
+    }
+    if (viewLines.length > 0) {
+      lines.push(`The views you asked for of ${viewsOf ?? "the model"}, attached after the preview in this order:`, ...viewLines);
+    }
+    if (inspectFile !== undefined) {
+      lines.push(`This was a look at ${inspectFile}: nothing ran and nothing changed. Its copy is ${path.join(outputDirectory, path.basename(inspectFile))}; to change the model, write a script that imports it.`);
     }
     lines.push(...describeScene(jobId, continueFrom, contents, sceneSaved, inspectScene));
     return {

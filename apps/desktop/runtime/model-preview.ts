@@ -19,6 +19,38 @@ export function modelPreviewFileName(index: number): string {
   return `model-preview-${index}.glb`;
 }
 
+/** Beside a kept preview: the name of the exported file it shows, in the job's output folder. */
+export function modelPreviewSourceFileName(index: number): string {
+  return `model-preview-${index}.json`;
+}
+
+/**
+ * The file to upload for a 3D preview: the job's own export when it is still
+ * there, else the preview itself, which is the same model as one
+ * self-contained GLB. Null once the job folder has been cleared.
+ */
+export async function modelPreviewSource(jobsRoot: string, id: unknown): Promise<{ filePath: string; name: string } | null> {
+  if (!isModelPreviewId(id)) return null;
+  const jobId = id.slice(0, 8);
+  const index = Number(id.slice(9));
+  const folders = await fs.readdir(jobsRoot).catch(() => [] as string[]);
+  const folder = folders.find((name) => name.endsWith(`-${jobId}`));
+  if (folder === undefined) return null;
+  const directory = path.join(jobsRoot, folder);
+  try {
+    const record: unknown = JSON.parse(await fs.readFile(path.join(directory, modelPreviewSourceFileName(index)), "utf8"));
+    const name = isRecord(record) && typeof record.name === "string" ? path.basename(record.name) : undefined;
+    if (name !== undefined && name !== "" && name !== "." && name !== "..") {
+      const filePath = path.join(directory, "output", name);
+      if ((await fs.stat(filePath).catch(() => undefined))?.isFile() === true) return { filePath, name };
+    }
+  } catch {
+    // No record: the preview itself is the model.
+  }
+  const preview = path.join(directory, modelPreviewFileName(index));
+  return (await fs.stat(preview).catch(() => undefined))?.isFile() === true ? { filePath: preview, name: `model-${jobId}.glb` } : null;
+}
+
 const GLB_MAGIC = 0x46546c67; // "glTF"
 const CHUNK_JSON = 0x4e4f534a; // "JSON"
 const CHUNK_BIN = 0x004e4942; // "BIN\0"

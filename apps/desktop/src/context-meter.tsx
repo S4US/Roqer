@@ -10,7 +10,7 @@ const RING_LENGTH = 2 * Math.PI * RING_RADIUS;
  * short figure, and the reported numbers behind them on a click. A chat with
  * nothing reported shows an empty dashed ring instead of a guess.
  */
-export function ContextMeter({ view, modelName, onNewChat, compacted, compactedUsage, canCompact, onCompact }: {
+export function ContextMeter({ view, modelName, onNewChat, compacted, compactedUsage, canCompact, onCompact, compacting = false, modelWritten = false }: {
   view: ContextMeterView;
   /** What the picker calls the model the reading is for. */
   modelName: string | null;
@@ -21,16 +21,22 @@ export function ContextMeter({ view, modelName, onNewChat, compacted, compactedU
   compactedUsage: string | null;
   canCompact: boolean;
   onCompact: () => void;
+  /** Claude is writing the compact summary now. */
+  compacting?: boolean;
+  /** The compact is Claude summarizing its saved conversation, not the window's own record. */
+  modelWritten?: boolean;
 }) {
   const reported = view.kind === "reported";
   const tone = reported ? view.tone : "none";
   const filled = reported ? (view.percent ?? 0) / 100 : 0;
   // Shared by both panel states: a chat with no reading can still be compacted.
   const compactRow = (close: () => void) => <div className="context-compact">
-    <span>{compacted > 0
-      ? `${compacted} earlier ${compacted === 1 ? "message is" : "messages are"} summarized for the model.${compactedUsage === null ? "" : ` ${compactedUsage}`}`
-      : "Summarize older messages to free up room."}</span>
-    <button type="button" disabled={!canCompact} onClick={() => { close(); onCompact(); }}>Compact chat</button>
+    <span>{modelWritten
+      ? "Claude compacts by itself when the context fills. Compact now to have Claude summarize the conversation so far and free up room. Every message stays on screen."
+      : compacted > 0
+        ? `${compacted} earlier ${compacted === 1 ? "message is" : "messages are"} summarized for the model.${compactedUsage === null ? "" : ` ${compactedUsage}`}`
+        : "Summarize older messages to free up room."}</span>
+    <button type="button" disabled={!canCompact || compacting} onClick={() => { close(); onCompact(); }}>{compacting ? "Compacting…" : "Compact chat"}</button>
   </div>;
   return <ComposerMenu
     className={`context-menu tone-${tone}`}

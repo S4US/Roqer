@@ -144,6 +144,8 @@ export function riskForTool(tool: string, args?: Record<string, unknown>, place:
   // Reading a durable Roblox operation cannot publish or mutate anything. The
   // upload action remains irreversible and keeps its normal confirmation.
   if (tool === "upload_asset" && args?.action === "status") return "read";
+  // Looking at a model file renders pictures of a copy and changes nothing.
+  if (tool === "run_blender_script" && args?.inspect_file !== undefined && args?.script === undefined) return "read";
   if (tool === "animation") {
     // Checking compiles and measures on the MCP host, reading a model's rig
     // from Studio when the animation is for one. Verifying plays a track on

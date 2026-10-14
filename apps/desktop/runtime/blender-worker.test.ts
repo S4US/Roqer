@@ -517,7 +517,8 @@ test("only the model the chat pictures is exported in 3D", async () => {
     assert.equal(outcome.ok, true, outcome.text);
     const { jobId, jobDirectory } = outcome.data as { jobId: string; jobDirectory: string };
     assert.deepEqual(outcome.pictured, { name: "b-barrel.glb", modelPreviewId: `${jobId}-1` });
-    assert.deepEqual((await fs.readdir(jobDirectory)).filter((name) => name.startsWith("model-preview")), ["model-preview-1.glb"]);
+    // The kept preview, and beside it the name of the export it shows, for a one-click send.
+    assert.deepEqual((await fs.readdir(jobDirectory)).filter((name) => name.startsWith("model-preview")), ["model-preview-1.glb", "model-preview-1.json"]);
     // Once a picture is kept, the next model is not asked for a 3D preview at all.
     assert.equal(argAfterDashes(blender.calls[3].args, 2), undefined);
     assert.equal(outcome.images?.length, 2);

@@ -11,6 +11,7 @@ function shape(blocks: MarkdownBlock[]): string[] {
       case "heading": return `h${block.level}`;
       case "code": return `code(${block.language ?? "-"}):${block.value}`;
       case "list": return `${block.ordered ? "ol" : "ul"}:${block.items.length}`;
+      case "table": return `table:${block.header.length}x${block.rows.length}`;
       case "quote": return "quote";
       case "rule": return "hr";
     }
@@ -75,14 +76,36 @@ test("an image becomes its description, since the conversation cannot show it", 
   ]);
 });
 
-test("a nested list is flattened to one level rather than dropped", () => {
-  const blocks = parseMarkdown("- one\n  - sub\n- two");
-  assert.deepEqual(shape(blocks), ["ul:3"]);
+test("a nested list stays nested under its item", () => {
+  const blocks = parseMarkdown("- one\n  - sub\n  - sub two\n- two");
+  assert.deepEqual(shape(blocks), ["ul:2"]);
+  const list = blocks[0];
+  assert.equal(list.type, "list");
+  if (list.type !== "list") return;
+  assert.equal(list.items[0].lists.length, 1);
+  assert.equal(list.items[0].lists[0].items.length, 2);
+  assert.equal(list.items[1].lists.length, 0);
 });
 
-test("a table is left as written rather than half-rendered", () => {
-  const blocks = parseMarkdown("| Script | Lines |\n| --- | --- |\n| Main | 12 |");
-  assert.deepEqual(shape(blocks), ["p:| Script | Lines |\n| --- | --- |\n| Main | 12 |"]);
+test("an ordered list split by blank lines stays one list and keeps its start", () => {
+  const blocks = parseMarkdown("3. three\n\n4. four");
+  assert.deepEqual(shape(blocks), ["ol:2"]);
+  assert.equal(blocks[0].type === "list" ? blocks[0].start : null, 3);
+});
+
+test("a table becomes a table with its alignment", () => {
+  const blocks = parseMarkdown("| Script | Lines |\n| --- | ---: |\n| `A|B` | 12 |\n| Main |");
+  assert.deepEqual(shape(blocks), ["table:2x2"]);
+  const table = blocks[0];
+  if (table.type !== "table") return;
+  assert.deepEqual(table.align, [null, "right"]);
+  assert.deepEqual(table.rows[0][0], [{ type: "code", value: "A|B" }]);
+  assert.deepEqual(table.rows[1][1], []);
+});
+
+test("a horizontal rule is not mistaken for a list item", () => {
+  assert.deepEqual(shape(parseMarkdown("---")), ["hr"]);
+  assert.deepEqual(shape(parseMarkdown("* * *")), ["hr"]);
 });
 
 test("a fenced block keeps every line and its language", () => {

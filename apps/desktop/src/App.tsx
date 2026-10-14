@@ -4,22 +4,29 @@ import {
   HelpCircle, Info, ListChecks, Loader2, MessageSquare, MinusCircle, Moon, MoreHorizontal,
   ArrowUp, Maximize2, Minimize2, PanelLeftClose, PanelLeftOpen, Paperclip, Pencil, Play, Plus, RotateCw, Scissors, Search, Settings, Square,
   ShieldCheck, Sparkles, Sun, Film,
-  Trash2, X, Zap,
+  Trash2, X, Zap, NotebookPen, Files,
 } from "lucide-react";
+import { ProjectNotesPanel } from "./project-notes-panel";
+import {
+  carriesOsFiles, carriesProjectFile, droppedProjectFile, FileKindIcon, ProjectFileViewer, ProjectFilesPanel,
+} from "./project-files-panel";
+import { ModelActionsContext, type ModelActions } from "./model-actions";
+import { CHAT_ROLE_BLURB, CHAT_ROLE_LABEL, CHAT_ROLES, isChatRole, type ChatRole } from "../shared/chat-role";
+import type { ProjectFile } from "../shared/project-files";
 import { Fragment, memo, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { ClipTrimDialog } from "./clip-trim-dialog";
 import { VIDEO_EXTENSIONS, type ClipSelection } from "../shared/reference-clip";
 import {
   appendMessage, createChat, createId, createInitialWorkspace, createProject,
-  deleteChat, deleteProject, modelPreference, normalizeWorkspace, renameChat,
+  deleteChat, deleteProject, effectivePreferences, modelPreference, normalizeWorkspace, renameChat, rolePreference,
   renameProject, selectedModelId, setChatCompaction, setChatStudioInstance, chatStudioTarget, chatsByActivity, withdrawMessage,
   type AssetAttachment, type ChatMessage, type WorkspaceState,
 } from "./model";
 import {
   cancelRun, cancelRunStart, compactChatSessions, getStudioStatus,
   hasDesktopRuntime, loadWorkspace, pickAsset, getStorageStatus, recoverWorkspace, exportWorkspace, releaseAttachments,
-  answerRunQuestion, attachImage, attachVideo, ATTACHABLE_IMAGE_TYPES, ATTACHABLE_VIDEO_TYPES, selectClip, steerRun,
+  answerRunQuestion, attachImage, attachVideo, ATTACHABLE_IMAGE_TYPES, ATTACHABLE_VIDEO_TYPES, selectClip, steerRun, compactChat, projectFilesApi,
   getBridgeState, restartBridge, subscribeToBridge, type McpServerState,
   getUpdateState, installUpdate, subscribeToUpdates, type AppUpdateState,
   flushWorkspace, getProviderModels, getProviderStatus, openScriptInStudio, respondToRun, saveWorkspace, startRun,
@@ -29,14 +36,14 @@ import {
 } from "./platform";
 import {
   activitySteps, applyRunEvent, createRunView, describeOutcome, recordAppliedAndVerified,
-  recordGateIssues, recordHasWarnings, recordOnlyAnswered, recordSteps, runAppliedAndVerified,
-  runGateIssues, runHasWarnings, runOnlyAnswered, toRunRecord, hasPicture,
+  recordGateIssues, recordHasWarnings, recordOnlyAnswered, recordSteps, recordTranscriptSegments, runAppliedAndVerified,
+  runGateIssues, runHasWarnings, runOnlyAnswered, toRunRecord, hasPicture, transcriptSegments,
   type ActivityStep, type PendingApproval, type RunView,
 } from "./run-view";
 import { EvidencePicture, rememberEvidencePicture } from "./evidence-picture";
 import { QUESTION_ESCAPE_OPTION, type RunQuestion } from "../shared/question";
 import { summarizeTasks, type RunTask, type RunTaskStatus } from "../shared/tasks";
-import { Markdown } from "./markdown-view";
+import { Markdown, StreamingMarkdown } from "./markdown-view";
 import { SettingsPage } from "./settings-page";
 import { DiagnosticsActions } from "./diagnostics-actions";
 import { sendBlockedNotice } from "./send-blocked";
@@ -58,7 +65,7 @@ import {
 } from "./diff-view";
 import {
   aggregateDuration, buildActivityModel, completedRunMetadataLabel, currentNodeTitle,
-  elapsedLabel, MAX_VISIBLE_ALERTS, outputTokensLabel, type ActivityNode, type StepStatus,
+  elapsedLabel, leafNode, MAX_VISIBLE_ALERTS, outputTokensLabel, type ActivityNode, type StepStatus,
 } from "./activity-model";
 import { CompletionLine } from "./completion-line";
 import {
@@ -147,7 +154,7 @@ const COMPACT_KEEPS_MESSAGES = 2;
  * a record is written from the same view the model would have been sent.
  */
 function toConversationMessages(messages: readonly ChatMessage[]): ConversationMessage[] {
-  return messages.map(({ role, text, run, attachments: attached }) => {
+  return messages.map(({ role, text, run, attachments: attached, note }) => {
     const digest = run === undefined ? undefined : digestRun(run);
     // A replay carries the words, not the files; the count says they existed.
     // Clamped to what the main process accepts, so an odd saved message can
@@ -159,6 +166,7 @@ function toConversationMessages(messages: readonly ChatMessage[]): ConversationM
       role, text,
       ...(digest === undefined || digestIsEmpty(digest) ? {} : { run: digest }),
       ...(role === "user" && pictures + files > 0 ? { attachments: { pictures, files } } : {}),
+      ...(note === true && role === "user" ? { note: true as const } : {}),
     };
   });
 }
@@ -278,6 +286,23 @@ function App() {
   const [showConnection, setShowConnection] = useState(false);
   const connectionRef = useRef<HTMLDivElement>(null);
   const [showSettings, setShowSettings] = useState(false);
+  const [showProjectNotes, setShowProjectNotes] = useState(false);
+  const [showFiles, setShowFiles] = useState(false);
+  /** The sidebar chat a file is being dragged over. */
+  const [dropTargetChat, setDropTargetChat] = useState<string | null>(null);
+  /** The selected project's shared files, or null while they load. */
+  const [projectFileList, setProjectFileList] = useState<ProjectFile[] | null>(null);
+  /** The project file being sent to Studio right now. */
+  const [sendingFile, setSendingFile] = useState<string | null>(null);
+  /** A shared-file chip opened for a look. */
+  const [viewingShared, setViewingShared] = useState<ProjectFile | null>(null);
+  const [modelBusy, setModelBusy] = useState<ModelActions["busy"]>(null);
+  const [savedPreviews, setSavedPreviews] = useState<ReadonlySet<string>>(new Set());
+  /** The chat whose conversation is being compacted, if any. */
+  const [compactingChatId, setCompactingChatId] = useState<string | null>(null);
+  const compacting = compactingChatId !== null && compactingChatId === workspace.selectedChatId;
+  /** The chat whose message waits for its compaction to finish before it sends. */
+  const [sendAfterCompact, setSendAfterCompact] = useState<string | null>(null);
   /** Why Send opened Settings, shown at the top of it; null when it was opened by hand. */
   const [settingsNotice, setSettingsNotice] = useState<string | null>(null);
   const [dialog, setDialog] = useState<Dialog | null>(null);
@@ -508,7 +533,10 @@ function App() {
     return () => window.clearInterval(interval);
   }, [hydrated, refreshStudioStatus]);
 
-  const provider = workspace.preferences.provider;
+  /** The chat's role, whose model and effort the composer shows and a run uses. */
+  const activeRole: ChatRole | null = selectedChat?.role ?? null;
+  const modelPrefs = effectivePreferences(workspace.preferences, activeRole);
+  const provider = modelPrefs.provider;
   const providerRef = useRef<ProviderId>(provider);
 
   const refreshProviderStatus = useCallback(async () => {
@@ -565,7 +593,10 @@ function App() {
   useEffect(() => {
     if (!hydrated || modelCatalog.models.length === 0) return;
     setWorkspace((current) => {
-      const chosen = selectedModelId(current.preferences, current.preferences.provider);
+      const role = current.projects.find((project) => project.id === current.selectedProjectId)?.chats
+        .find((chat) => chat.id === current.selectedChatId)?.role ?? null;
+      const preferences = effectivePreferences(current.preferences, role);
+      const chosen = selectedModelId(preferences, preferences.provider);
       // A remembered choice the provider no longer lists falls back to its
       // default rather than blocking the run.
       const models = modelCatalog.models;
@@ -573,16 +604,18 @@ function App() {
         models.find((candidate) => candidate.id === modelCatalog.defaultModelId) ??
         models[0];
       const effort = model.supportedReasoningEfforts.some((entry) =>
-        entry.reasoningEffort === current.preferences.reasoningEffort)
-        ? current.preferences.reasoningEffort
+        entry.reasoningEffort === preferences.reasoningEffort)
+        ? preferences.reasoningEffort
         : model.defaultReasoningEffort;
-      if (model.id === chosen && effort === current.preferences.reasoningEffort) return current;
+      if (model.id === chosen && effort === preferences.reasoningEffort) return current;
+      const patch = { ...modelPreference(preferences.provider, model.id), reasoningEffort: effort };
       return {
         ...current,
         preferences: {
           ...current.preferences,
-          ...modelPreference(current.preferences.provider, model.id),
-          reasoningEffort: effort,
+          ...(role !== null && current.preferences.roleSettings?.[role] !== undefined
+            ? rolePreference(current.preferences, role, patch)
+            : patch),
         },
       };
     });
@@ -630,8 +663,12 @@ function App() {
   const compactedFrom = selectedChat?.compaction?.folded ?? 0;
   const compactedUsage = compactUsageNote(selectedChat?.compaction?.usedTokens, selectedChat?.compaction?.windowTokens);
   const compactTo = selectedChat === undefined ? 0 : selectedChat.messages.length - COMPACT_KEEPS_MESSAGES;
+  // Claude chats compact their saved conversation with Claude's own summary;
+  // the main process says when there is none, and the record is used instead.
+  const modelCompact = provider === "claude" && hasDesktopRuntime();
   // Nothing new to fold yet, or a run may be working on this chat.
-  const canCompact = !isRunning && compactTo > compactedFrom;
+  const canCompact = !isRunning && compactingChatId === null &&
+    (modelCompact ? (selectedChat?.messages.length ?? 0) > 0 : compactTo > compactedFrom);
 
   /**
    * Fold the chat's older messages into a record the model reads in their place.
@@ -643,6 +680,22 @@ function App() {
     if (!selectedChat || !selectedProject || !canCompact) return;
     const projectId = selectedProject.id;
     const chatId = selectedChat.id;
+    if (modelCompact) {
+      setCompactingChatId(chatId);
+      setCompactNotice({ chatId, text: "Claude is summarizing this chat's conversation; this can take a minute. A message you send now waits until it finishes." });
+      try {
+        const result = await compactChat(projectId, chatId);
+        if (result.noSession !== true) {
+          setCompactNotice({ chatId, text: result.message });
+          return;
+        }
+      } finally {
+        setCompactingChatId(null);
+      }
+      setCompactNotice(null);
+      // No saved Claude conversation: the window's own record stands in.
+      if (compactTo <= compactedFrom) return;
+    }
     if (hasDesktopRuntime() && !(await compactChatSessions(chatId))) return;
     const summary = compactChatSummary(
       selectedChat.compaction?.summary ?? "",
@@ -714,7 +767,7 @@ function App() {
       return;
     }
     setWorkspace((current) => appendMessage(current, target.projectId, target.chatId, {
-      id: createId("message"), role: "user", text, createdAt: new Date().toISOString(),
+      id: createId("message"), role: "user", text, createdAt: new Date().toISOString(), note: true,
     }));
     setComposer("");
     const pending = runView?.pendingQuestion;
@@ -729,6 +782,8 @@ function App() {
     if (steering) { await sendSteer(); return; }
     const prompt = composedMessage(pastedBlocks, composer);
     if (!prompt || isRunning || !hydrated || !storageAvailable || storageRecovery.required) return;
+    // Starting a run would reopen the conversation being compacted; it waits instead.
+    if (compacting && workspace.selectedChatId !== null) { setSendAfterCompact(workspace.selectedChatId); return; }
     if (prompt.length > 64_000) { setAttachmentError("Shorten the message to 64,000 characters before sending."); return; }
     const unread = attachments.find((attachment) => attachment.clip !== undefined && (attachment.clip.id === undefined || readingClips.has(attachment.id)));
     if (unread !== undefined) {
@@ -737,7 +792,7 @@ function App() {
         : `Choose the part of “${unread.name}” to send first.`);
       return;
     }
-    const chosenModelId = selectedModelId(workspace.preferences, provider);
+    const chosenModelId = selectedModelId(modelPrefs, provider);
     const availableModel = modelCatalog.models.find((model) => model.id === chosenModelId);
     if (hasDesktopRuntime() && (providerStatus.kind !== "signed-in" || !availableModel)) {
       setSettingsNotice(sendBlockedNotice(provider, providerStatus, modelCatalog.message));
@@ -782,10 +837,14 @@ function App() {
         const target = chatStudioTarget(next, projectId, chatId);
         return resolveInstanceId(studioStatus, target.instanceId, target.pinned);
       })(),
-      provider: next.preferences.provider,
+      provider: modelPrefs.provider,
       model: availableModel?.id ?? null,
-      effort: availableModel?.supportedReasoningEfforts.some((entry) => entry.reasoningEffort === next.preferences.reasoningEffort)
-        ? next.preferences.reasoningEffort
+      ...(targetChat?.role === undefined ? {} : { role: targetChat.role }),
+      ...(targetChat?.sharedFileIds === undefined || targetChat.sharedFileIds.length === 0
+        ? {}
+        : { sharedFileIds: targetChat.sharedFileIds.filter((id) => projectFileList?.some((file) => file.id === id) ?? true) }),
+      effort: availableModel?.supportedReasoningEfforts.some((entry) => entry.reasoningEffort === modelPrefs.reasoningEffort)
+        ? modelPrefs.reasoningEffort
         : availableModel?.defaultReasoningEffort ?? "medium",
     };
     runTarget.current = { projectId, chatId };
@@ -904,6 +963,65 @@ function App() {
     if (overlaySidebar) setSidebarShown(false);
   }, [overlaySidebar]);
 
+  useEffect(() => {
+    if (!hydrated) return;
+    const projectId = workspace.selectedProjectId;
+    let live = true;
+    setProjectFileList(null);
+    const load = () => void projectFilesApi.list(projectId).then((result) => {
+      if (live) setProjectFileList(result.ok ? result.value : []);
+    });
+    load();
+    const unsubscribe = projectFilesApi.subscribe((changed) => { if (changed === projectId) load(); });
+    return () => { live = false; unsubscribe(); };
+  }, [hydrated, workspace.selectedProjectId]);
+
+  /** Blender results in the chat: keep one in the project, or send it to Studio. */
+  const modelActionsContext = useRef({ projectId: workspace.selectedProjectId, chatId: workspace.selectedChatId, endpoint: workspace.preferences.mcpEndpoint, instanceId: null as string | null });
+  modelActionsContext.current = {
+    projectId: workspace.selectedProjectId,
+    chatId: workspace.selectedChatId,
+    endpoint: workspace.preferences.mcpEndpoint,
+    instanceId: (() => {
+      const target = chatStudioTarget(workspace, workspace.selectedProjectId, workspace.selectedChatId);
+      return resolveInstanceId(studioStatus, target.instanceId, target.pinned);
+    })(),
+  };
+  const modelActions = useMemo<ModelActions>(() => ({
+    busy: modelBusy,
+    saved: savedPreviews,
+    save: (previewId) => {
+      const context = modelActionsContext.current;
+      setModelBusy({ previewId, action: "save" });
+      void projectFilesApi.savePreview(context.projectId, previewId, context.chatId).then((result) => {
+        if (result.ok) {
+          setSavedPreviews((current) => new Set(current).add(previewId));
+          setAttachmentError(`Saved ${result.value.name} to the project files. Every chat in the project can use it.`);
+        } else setAttachmentError(result.message);
+      }).finally(() => setModelBusy(null));
+    },
+    send: (previewId) => {
+      const context = modelActionsContext.current;
+      setModelBusy({ previewId, action: "send" });
+      setAttachmentError("Sending the model to Studio… uploading to Roblox, then inserting it into the place.");
+      void projectFilesApi.sendToStudio({ previewId }, context.endpoint, context.instanceId)
+        .then((result) => setAttachmentError(result.message))
+        .finally(() => setModelBusy(null));
+    },
+  }), [modelBusy, savedPreviews]);
+
+  // A message sent during compaction goes once it finishes, into the chat it
+  // was written for. Moving to another chat in the meantime drops the wait;
+  // the words stay in the composer.
+  const sendPromptRef = useRef<() => Promise<void>>(async () => undefined);
+  sendPromptRef.current = sendPrompt;
+  useEffect(() => {
+    if (compactingChatId !== null || sendAfterCompact === null) return;
+    const chatId = sendAfterCompact;
+    setSendAfterCompact(null);
+    if (workspace.selectedChatId === chatId) void sendPromptRef.current();
+  }, [compactingChatId, sendAfterCompact, workspace.selectedChatId]);
+
   const newChat = useCallback(() => {
     if (!hydrated || !storageAvailable || storageRecovery.required) return;
     const next = createChat(workspace);
@@ -977,6 +1095,66 @@ function App() {
 
   const updatePreferences = (changes: Partial<WorkspaceState["preferences"]>) => {
     setWorkspace((current) => ({ ...current, preferences: { ...current.preferences, ...changes } }));
+  };
+
+  /** A model or effort choice: the chat's role keeps its own, a general chat changes the workspace's. */
+  const updateModelChoice = (changes: Partial<WorkspaceState["preferences"]>) => {
+    setWorkspace((current) => ({
+      ...current,
+      preferences: {
+        ...current.preferences,
+        ...(activeRole === null ? changes : rolePreference(current.preferences, activeRole, changes)),
+      },
+    }));
+  };
+
+  /** Change one chat's own fields without touching its messages or order. */
+  const updateChatFields = useCallback((projectId: string, chatId: string, change: (chat: WorkspaceState["projects"][number]["chats"][number]) => Partial<WorkspaceState["projects"][number]["chats"][number]>) => {
+    setWorkspace((current) => ({
+      ...current,
+      projects: current.projects.map((project) => project.id !== projectId ? project : {
+        ...project,
+        chats: project.chats.map((chat) => chat.id === chatId ? { ...chat, ...change(chat) } : chat),
+      }),
+    }));
+  }, []);
+
+  const setChatRole = (role: ChatRole | null) => {
+    if (selectedChat === undefined || selectedChat === null) return;
+    updateChatFields(workspace.selectedProjectId, selectedChat.id, () => ({ role: role ?? undefined }));
+  };
+
+  /** Put a project file in front of a chat, or take it away. */
+  const shareFile = useCallback((projectId: string, chatId: string, fileId: string, shared: boolean) => {
+    updateChatFields(projectId, chatId, (chat) => {
+      const current = chat.sharedFileIds ?? [];
+      const next = shared ? (current.includes(fileId) ? current : [...current, fileId]) : current.filter((id) => id !== fileId);
+      return { sharedFileIds: next.length === 0 ? undefined : next };
+    });
+  }, [updateChatFields]);
+
+  /** Files dropped from the computer onto a chat: into the project, and shared with that chat. */
+  const addFilesToChat = async (projectId: string, chatId: string | null, dropped: File[]) => {
+    const result = await projectFilesApi.addDropped(projectId, dropped, chatId);
+    if (!result.ok) { setAttachmentError(result.message); return; }
+    if (chatId !== null) for (const file of result.value) shareFile(projectId, chatId, file.id, true);
+    setAttachmentError(`Added ${result.value.length === 1 ? result.value[0].name : `${result.value.length} files`} to the project files${chatId === null ? "" : " and shared with this chat"}.`);
+  };
+
+  const sendFileToStudio = async (file: ProjectFile) => {
+    setSendingFile(file.id);
+    setAttachmentError(`Sending ${file.name} to Studio… uploading to Roblox, then inserting it into the place.`);
+    try {
+      const target = chatStudioTarget(workspace, workspace.selectedProjectId, workspace.selectedChatId);
+      const result = await projectFilesApi.sendToStudio(
+        { projectId: workspace.selectedProjectId, fileId: file.id },
+        workspace.preferences.mcpEndpoint,
+        resolveInstanceId(studioStatus, target.instanceId, target.pinned),
+      );
+      setAttachmentError(`${file.name}: ${result.message}`);
+    } finally {
+      setSendingFile(null);
+    }
   };
 
   // Old message cards are intentionally memoized. Keep their action stable too,
@@ -1263,7 +1441,7 @@ function App() {
   const card = providerCard(provider, providerStatus, hasDesktopRuntime());
   const imagesReachModel = hasDesktopRuntime();
   const selectedModel = modelCatalog.models
-    .find((model) => model.id === selectedModelId(workspace.preferences, provider)) ?? null;
+    .find((model) => model.id === selectedModelId(modelPrefs, provider)) ?? null;
   const contextView = contextMeterView(
     workspace.selectedChatId === null ? undefined : contextReadings.get(workspace.selectedChatId),
     { provider, model: selectedModel?.id ?? null },
@@ -1360,7 +1538,7 @@ function App() {
   };
 
   return (
-    <div className="app-shell" data-theme={theme} data-sidebar={sidebarShown ? "shown" : "hidden"} aria-busy={!hydrated}>
+    <ModelActionsContext.Provider value={modelActions}><div className="app-shell" data-theme={theme} data-sidebar={sidebarShown ? "shown" : "hidden"} aria-busy={!hydrated}>
       {/* Settings covers the chat rather than replacing it, so a run keeps
           streaming underneath; while it is open the chat is unreachable. */}
       <aside className="sidebar" id="sidebar" inert={showSettings}>
@@ -1394,8 +1572,30 @@ function App() {
                   {chatsByActivity(project.chats).map((chat) => {
                     const runHere = isRunning && runLocation?.chatId === chat.id;
                     const runState = runHere ? (runNeedsInput ? "chat-needs-input" : "chat-running") : "";
-                    return <div className={`chat-row ${workspace.selectedChatId === chat.id ? "chat-selected" : ""} ${runState}`} key={chat.id}>
-                      <button className="chat-main" onClick={() => selectChat(project.id, chat.id)}><MessageSquare size={15} /><span className="chat-row-title">{chat.title}</span>
+                    return <div
+                      className={`chat-row ${workspace.selectedChatId === chat.id ? "chat-selected" : ""} ${runState}${dropTargetChat === chat.id ? " chat-drop-target" : ""}`}
+                      key={chat.id}
+                      onDragOver={(event) => {
+                        if (!carriesProjectFile(event) && !carriesOsFiles(event)) return;
+                        event.preventDefault();
+                        setDropTargetChat(chat.id);
+                      }}
+                      onDragLeave={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setDropTargetChat(null); }}
+                      onDrop={(event) => {
+                        setDropTargetChat(null);
+                        const projectFile = droppedProjectFile(event, project.id);
+                        if (projectFile !== null) {
+                          event.preventDefault();
+                          shareFile(project.id, chat.id, projectFile, true);
+                          setAttachmentError(`Shared the file with “${chat.title}”.`);
+                        } else if (event.dataTransfer.files.length > 0) {
+                          event.preventDefault();
+                          void addFilesToChat(project.id, chat.id, Array.from(event.dataTransfer.files));
+                        }
+                      }}
+                    >
+                      <button className={`chat-main${chat.role !== undefined ? " has-role" : ""}`} onClick={() => selectChat(project.id, chat.id)}><MessageSquare size={15} /><span className="chat-row-title">{chat.title}</span>
+                        {chat.role !== undefined && <span className={`chat-role-tag role-${chat.role}`}>{CHAT_ROLE_LABEL[chat.role]}</span>}
                         {/* While a run is in this chat, its state replaces the
                             row's timestamp: which chat Roqer is in, and whether
                             it is waiting, is the fact worth having from any
@@ -1440,7 +1640,18 @@ function App() {
         <header className="topbar">
           <button className="icon-button menu-button" onClick={() => setSidebarShown(true)} aria-label="Show sidebar" title="Show sidebar" aria-controls="sidebar" aria-expanded={sidebarShown}><PanelLeftOpen size={20} /></button>
           <div className="chat-heading"><strong>{selectedChat?.title ?? selectedProject?.name ?? "New project"}</strong><span>{selectedProject?.name} · {saveStatus === "saving" ? "saving…" : saveStatus === "error" ? "save failed" : "saved locally"}</span></div>
+          {selectedChat !== undefined && selectedChat !== null && <label className={`role-picker${activeRole === null ? "" : ` role-${activeRole}`}`} title={activeRole === null ? "Give this chat a role: each role keeps its own model and effort" : CHAT_ROLE_BLURB[activeRole]}>
+            <span>Role</span>
+            <select value={activeRole ?? ""} disabled={isRunning && runBelongsToSelectedChat} onChange={(event) => setChatRole(isChatRole(event.target.value) ? event.target.value : null)}>
+              <option value="">General</option>
+              {CHAT_ROLES.map((role) => <option key={role} value={role}>{CHAT_ROLE_LABEL[role]}</option>)}
+            </select>
+          </label>}
           <div className="topbar-actions">
+            <button className="icon-button files-button" onClick={() => setShowFiles(true)} aria-label="Project files" title="Project files: models, pictures and documents every chat can use">
+              <Files size={18} />{projectFileList !== null && projectFileList.length > 0 && <span className="files-count">{projectFileList.length}</span>}
+            </button>
+            <button className="icon-button" onClick={() => setShowProjectNotes(true)} aria-label="Project notes: master plan and memory" title="Project notes (master plan and memory)"><NotebookPen size={18} /></button>
             <button className="icon-button theme-button" onClick={() => updatePreferences({ theme: theme === "light" ? "dark" : "light" })} aria-label={theme === "light" ? "Switch to dark theme" : "Switch to light theme"} title={theme === "light" ? "Dark theme" : "Light theme"}>{theme === "light" ? <Moon size={18} /> : <Sun size={18} />}</button>
             <div className="connection-wrap" ref={connectionRef}>
               <button className={`connection-pill status-${studioStatus.kind}`} onClick={() => setShowConnection((value) => !value)}><span className="live-dot" /><span className="connection-label">{targetStudio?.name ?? (chatPinned && chatInstanceId !== null ? "This chat's place is not open" : studioStatus.placeName ?? "Roblox Studio")}</span><span className="connection-detail">{studioStatus.message}</span><ChevronDown size={15} /></button>
@@ -1529,7 +1740,13 @@ function App() {
 
         <div className="conversation-scroll" ref={scrollRef} onScroll={onConversationScroll}><div className="conversation">
           {selectedChat && selectedChat.messages.length > 0
-            ? <ConversationMessages key={selectedChat.id} messages={selectedChat.messages} onOpenInStudio={openArtifactInStudio} />
+            ? <ConversationMessages
+              key={selectedChat.id}
+              messages={selectedChat.messages}
+              onOpenInStudio={openArtifactInStudio}
+              // The live run shows its own notes, with whether Claude has them yet.
+              hideTrailingNotes={runView !== null && runBelongsToSelectedChat && runView.outcome === null}
+            />
             : <EmptyConversation onSuggestion={setComposer} />}
           {runView && runBelongsToSelectedChat
             ? <LiveRun view={runView} steps={runSteps} nodes={runActivityNodes} onOpenInStudio={openArtifactInStudio} />
@@ -1547,6 +1764,11 @@ function App() {
           <div
             className={`composer-card${draggingImage ? " dropping" : ""}`}
             onDragOver={(event) => {
+              if (carriesProjectFile(event)) {
+                event.preventDefault();
+                setDraggingImage(true);
+                return;
+              }
               if (isRunning || !Array.from(event.dataTransfer.items).some((item) => item.kind === "file")) return;
               event.preventDefault();
               setDraggingImage(true);
@@ -1554,11 +1776,22 @@ function App() {
             onDragLeave={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setDraggingImage(false); }}
             onDrop={(event) => {
               setDraggingImage(false);
+              const projectFile = droppedProjectFile(event, workspace.selectedProjectId);
+              if (projectFile !== null) {
+                event.preventDefault();
+                if (selectedChat) shareFile(workspace.selectedProjectId, selectedChat.id, projectFile, true);
+                return;
+              }
               if (isRunning) return;
+              const dropped = Array.from(event.dataTransfer.files);
               const images = droppedImages(event.dataTransfer.files);
-              if (images.length === 0) return;
+              // Pictures and clips attach to the message; anything else (a
+              // model, a plan) goes into the project's files for this chat.
+              const others = dropped.filter((file) => !images.includes(file));
+              if (images.length === 0 && others.length === 0) return;
               event.preventDefault();
-              void attachImages(images);
+              if (images.length > 0) void attachImages(images);
+              if (others.length > 0) void addFilesToChat(workspace.selectedProjectId, selectedChat?.id ?? null, others);
             }}
           >
             {composerExpanded
@@ -1584,7 +1817,19 @@ function App() {
               {runLocation && <button onClick={() => selectChat(runLocation.projectId, runLocation.chatId)}>Open</button>}
               <button onClick={stopRun}>Stop</button>
             </div>}
-            {draggingImage && <div className="composer-drop-hint">Drop an image or a video to attach it</div>}
+            {draggingImage && <div className="composer-drop-hint">Drop a picture or video to attach it, or a model or document to share it with this chat</div>}
+            {selectedChat?.sharedFileIds !== undefined && projectFileList !== null && <div className="shared-files" aria-label="Project files shared with this chat">
+              <span className="shared-files-label">Shared:</span>
+              {selectedChat.sharedFileIds.flatMap((id) => projectFileList.filter((file) => file.id === id)).map((file) => <span key={file.id} className={`shared-chip kind-${file.kind}`}>
+                <button type="button" onClick={() => setViewingShared(file)} title={file.kind === "model" ? "View in 3D" : "Open"}><FileKindIcon file={file} size={13} /> {file.name}</button>
+                <button type="button" className="shared-chip-remove" onClick={() => shareFile(workspace.selectedProjectId, selectedChat.id, file.id, false)} aria-label={`Stop sharing ${file.name} with this chat`}><X size={12} /></button>
+              </span>)}
+              <button type="button" className="shared-files-more" onClick={() => setShowFiles(true)}>Files…</button>
+            </div>}
+            {sendAfterCompact !== null && sendAfterCompact === workspace.selectedChatId && <div className="attachment-notice compact-queued" role="status">
+              <span><Loader2 size={13} className="spin" aria-hidden="true" /> Queued: your message sends as soon as compacting finishes. You can keep editing it.</span>
+              <button onClick={() => setSendAfterCompact(null)}>Cancel</button>
+            </div>}
             {attachmentError && <div className="attachment-notice" role="alert">{attachmentError}<button onClick={() => setAttachmentError(null)} aria-label="Dismiss"><X size={14} /></button></div>}
             {attachments.length > 0 && <div className="attachment-row">{attachments.map((attachment) => <div className={`attachment-chip${attachment.clip === undefined ? "" : " clip"}`} key={attachment.id}>
               {attachment.thumbnailDataUrl ? <img className="attachment-thumbnail" src={attachment.thumbnailDataUrl} alt="" /> : attachment.clip === undefined ? <FileBox size={16} /> : <Film size={16} />}
@@ -1634,15 +1879,15 @@ function App() {
                 status={providerStatus}
                 catalog={modelCatalog}
                 selectedModel={selectedModel}
-                effort={workspace.preferences.reasoningEffort}
+                effort={modelPrefs.reasoningEffort}
                 disabled={isRunning}
                 onManage={() => setShowSettings(true)}
-                onEffort={(reasoningEffort) => updatePreferences({ reasoningEffort })}
+                onEffort={(reasoningEffort) => updateModelChoice({ reasoningEffort })}
                 onPick={(nextProvider, model) => {
-                  const effort = model.supportedReasoningEfforts.some((entry) => entry.reasoningEffort === workspace.preferences.reasoningEffort)
-                    ? workspace.preferences.reasoningEffort
+                  const effort = model.supportedReasoningEfforts.some((entry) => entry.reasoningEffort === modelPrefs.reasoningEffort)
+                    ? modelPrefs.reasoningEffort
                     : model.defaultReasoningEffort;
-                  updatePreferences({ provider: nextProvider, ...modelPreference(nextProvider, model.id), reasoningEffort: effort });
+                  updateModelChoice({ provider: nextProvider, ...modelPreference(nextProvider, model.id), reasoningEffort: effort });
                 }}
               />
               <RunMenu
@@ -1663,22 +1908,47 @@ function App() {
                 compactedUsage={compactedUsage}
                 canCompact={canCompact}
                 onCompact={() => void compactSelectedChat()}
+                compacting={compacting}
+                modelWritten={modelCompact}
               />
               {showRunControls && <button className="stop-button" onClick={stopRun}><Square size={11} fill="currentColor" aria-hidden="true" /> Stop</button>}
               {steering
                 ? pendingQuestion && composer.trim()
                   ? <button className="send-button answer-send" onClick={() => void sendSteer()}>Send as answer <ArrowUp size={16} aria-hidden="true" /></button>
                   : <button className="send-button" onClick={() => void sendSteer()} disabled={!composer.trim()} aria-label="Send note to the running task"><ArrowUp size={18} /></button>
-                : !showRunControls && <button className="send-button" onClick={() => void sendPrompt()} disabled={!hydrated || !storageAvailable || storageRecovery.required || isRunning || message === "" || (hasDesktopRuntime() && providerStatus.kind === "signed-in" && !selectedModel)} aria-label="Send message"><ArrowUp size={18} /></button>}
+                : !showRunControls && <button className="send-button" onClick={() => void sendPrompt()} disabled={!hydrated || !storageAvailable || storageRecovery.required || isRunning || message === "" || sendAfterCompact !== null || (hasDesktopRuntime() && providerStatus.kind === "signed-in" && !selectedModel)} aria-label={compacting ? "Send once compacting finishes" : "Send message"} title={compacting ? "Sends once compacting finishes" : undefined}><ArrowUp size={18} /></button>}
             </div>
           </div>
         </div>
       </main>
 
+      {showFiles && <ProjectFilesPanel
+        projectId={workspace.selectedProjectId}
+        projectName={selectedProject?.name ?? "This project"}
+        chat={selectedChat ? { id: selectedChat.id, title: selectedChat.title, sharedFileIds: selectedChat.sharedFileIds ?? [] } : null}
+        files={projectFileList}
+        onShare={(fileId, shared) => { if (selectedChat) shareFile(workspace.selectedProjectId, selectedChat.id, fileId, shared); }}
+        onSendToStudio={(file) => void sendFileToStudio(file)}
+        sending={sendingFile}
+        onClose={() => setShowFiles(false)}
+      />}
+      {viewingShared !== null && <ProjectFileViewer
+        projectId={workspace.selectedProjectId}
+        file={viewingShared}
+        onClose={() => setViewingShared(null)}
+        actions={viewingShared.kind === "model" && <button type="button" className="files-action primary" disabled={sendingFile !== null} onClick={() => void sendFileToStudio(viewingShared)}>
+          {sendingFile === viewingShared.id ? <Loader2 size={14} className="spin" /> : <ArrowUp size={14} />} Send to Studio
+        </button>}
+      />}
+      {showProjectNotes && <ProjectNotesPanel
+        projectId={workspace.selectedProjectId}
+        projectName={selectedProject?.name ?? "This project"}
+        onClose={() => setShowProjectNotes(false)}
+      />}
       {showSettings && <SettingsPage preferences={workspace.preferences} studioStatus={studioStatus} updateState={updateState} onPreferences={updatePreferences} onStudioRefresh={() => void refreshStudioStatus()} onProviderChanged={() => { void refreshProviderStatus(); void refreshProviderModels(); }} onExport={() => void exportChats(storageRecovery.required ? undefined : workspace)} notice={settingsNotice ?? undefined} onClose={() => { setShowSettings(false); setSettingsNotice(null); }} />}
       {renderDialog()}
       {!hydrated && <div className="loading-overlay"><div><span /><strong>Opening your workspace…</strong></div></div>}
-    </div>
+    </div></ModelActionsContext.Provider>
   );
 }
 
@@ -1802,7 +2072,8 @@ const ConversationMessageView = memo(function ConversationMessageView({ message,
   onOpenInStudio: OpenInStudio;
 }) {
   return message.role === "user" ? (
-    <section className="message user-message" key={message.id}>
+    <section className={`message user-message${message.note === true ? " note-message" : ""}`} key={message.id}>
+      {message.note === true && <span className="note-label">Note sent while Roqer was working</span>}
       <p className="user-prompt">{message.text}</p>
       {message.attachments && message.attachments.length > 0 && <div className="message-attachments">{message.attachments.map((asset) => asset.clip !== undefined
         ? <figure key={asset.id} className="message-attachment-clip" title={asset.name}>
@@ -1822,10 +2093,18 @@ const ConversationMessageView = memo(function ConversationMessageView({ message,
   );
 });
 
-const ConversationMessages = memo(function ConversationMessages({ messages, onOpenInStudio }: {
+const ConversationMessages = memo(function ConversationMessages({ messages: allMessages, onOpenInStudio, hideTrailingNotes = false }: {
   messages: ChatMessage[];
   onOpenInStudio: OpenInStudio;
+  /** Leave out the notes after the last prompt: the live run below shows them. */
+  hideTrailingNotes?: boolean;
 }) {
+  const messages = useMemo(() => {
+    if (!hideTrailingNotes) return allMessages;
+    let end = allMessages.length;
+    while (end > 0 && allMessages[end - 1].note === true) end -= 1;
+    return end === allMessages.length ? allMessages : allMessages.slice(0, end);
+  }, [allMessages, hideTrailingNotes]);
   // The component is keyed by chat, so this index belongs to one transcript.
   // Appended messages leave it untouched and remain visible at the bottom.
   const [visibleFrom, setVisibleFrom] = useState(() => initialConversationWindowStart(messages.length));
@@ -1982,6 +2261,38 @@ function WaitingNotice({ label, detail, output }: { label: string; detail?: stri
   </div>;
 }
 
+/** One stretch of the reply, between steps. */
+function TranscriptText({ text, streaming }: { text: string; streaming: boolean }) {
+  if (text.trim() === "") return null;
+  return streaming
+    ? <StreamingMarkdown text={text.trim()} className="result-copy streaming-copy" />
+    : <Markdown text={text.trim()} className="result-copy" />;
+}
+
+/** A short run of steps is listed in full; a long one is folded by phase. */
+const INLINE_STEPS_UNFOLDED = 6;
+
+/**
+ * The steps taken between two stretches of prose, listed where they happened,
+ * the way Claude Code shows each tool between its messages. Each row opens to
+ * the operation, its target, and what came back.
+ */
+const InlineSteps = memo(function InlineSteps({ steps }: { steps: ActivityStep[] }) {
+  const [expanded, setExpanded] = useState<Record<string, boolean>>({});
+  const onToggle = useCallback((key: string, open: boolean) => {
+    setExpanded((current) => (current[key] === open ? current : { ...current, [key]: open }));
+  }, []);
+  const nodes = useMemo(
+    () => (steps.length <= INLINE_STEPS_UNFOLDED ? steps.map(leafNode) : buildActivityModel(steps)),
+    [steps],
+  );
+  return <ol className="activity-timeline inline-steps">
+    {nodes.map((node) => (node.children.length === 0
+      ? <ActivityLeaf key={node.key} node={node} />
+      : <ActivityGroup key={node.key} node={node} open={expanded[node.key] ?? node.status === "active"} onToggle={onToggle} />))}
+  </ol>;
+});
+
 function LiveRun({ view, steps, nodes, onOpenInStudio }: { view: RunView; steps: ActivityStep[]; nodes: ActivityNode[]; onOpenInStudio: OpenInStudio }) {
   const answered = view.text.trim() !== "";
   const running = view.outcome === null;
@@ -2002,9 +2313,25 @@ function LiveRun({ view, steps, nodes, onOpenInStudio }: { view: RunView; steps:
   // thinking, and both of those already say so elsewhere.
   const thinking = running && providerIsThinking(view, nodes);
   const renderFiles = useCallback((files: ChangeGroup[], expansion: FileExpansion) => <ChangeSet groups={files} expansion={expansion} onOpenInStudio={onOpenInStudio} />, [onOpenInStudio]);
+  // Keyed on what the segments are built from, which a streamed delta leaves
+  // alone: only the open stretch of prose grows, and it is sliced at render.
+  const { timeline, activities, evidence } = view;
+  const segments = useMemo(() => transcriptSegments({ timeline, activities, evidence }), [timeline, activities, evidence]);
   return <div className="mock-run"><section className="message assistant-message"><div className="message-content">
     {view.planner === DEMO_PLANNER && <p className="run-tag"><span className="run-badge">Demo</span></p>}
-    {running && <TypingIndicator done={produced} />}
+    <TaskList tasks={view.tasks} />
+    <div className="transcript">
+      {segments.map((segment, index) => segment.type === "steps"
+        ? <InlineSteps key={segment.key} steps={segment.steps} />
+        : <TranscriptText
+          key={segment.key}
+          text={view.text.slice(segment.start, segment.end ?? undefined)}
+          // Formatted as it streams, re-rendered a few times a second rather
+          // than on every delta, which would make a long reply quadratic.
+          streaming={running && index === segments.length - 1}
+        />)}
+    </div>
+    {running && !produced && <TypingIndicator done={false} />}
     {thinking && <WaitingNotice
       // Every turn opens with a progress label, so this is normally the
       // planner's own words; the fallback is for a planner that sends none.
@@ -2012,15 +2339,7 @@ function LiveRun({ view, steps, nodes, onOpenInStudio }: { view: RunView; steps:
       {...(view.status?.detail === undefined ? {} : { detail: view.status.detail })}
       output={view.outputTokens}
     />}
-    <TaskList tasks={view.tasks} />
-    <ActivitySection steps={steps} nodes={nodes} running={running} />
     <ResultsCard runId={view.runId} changes={view.changes} evidence={view.evidence} renderFiles={renderFiles} />
-    {answered && (running
-      // Parsing the whole growing document for every provider delta makes a
-      // long reply quadratic. Preserve the text while streaming, then render
-      // its Markdown once the completed message moves into history.
-      ? <div className="markdown result-copy streaming-copy"><p>{view.text}</p></div>
-      : <Markdown text={view.text} className="result-copy" />)}
     {appliedAndVerified && <AppliedStatus />}
     {view.outcome !== null && showOutcome && <OutcomeCard
       outcome={view.outcome}
@@ -2031,8 +2350,33 @@ function LiveRun({ view, steps, nodes, onOpenInStudio }: { view: RunView; steps:
       issues={runGateIssues(view)}
     />}
     {!running && <CompletionLine metadata={completionNote} usage={view.usage ?? undefined} />}
+    <RunNotes notes={view.notes} delivered={view.notesDelivered} running={running} />
     {view.desynchronized && <p className="run-warning"><AlertCircle size={14} /> Some updates were missed, so this timeline may be incomplete.</p>}
   </div></section></div>;
+}
+
+/**
+ * The notes sent while this run works, each with where it is: still queued
+ * in Roqer, or with the model. Claude reads a note at its next step; a
+ * provider that cannot take one mid-turn gets it when its turn ends.
+ */
+function RunNotes({ notes, delivered, running }: { notes: string[]; delivered: number; running: boolean }) {
+  if (notes.length === 0) return null;
+  return <ul className="run-notes" aria-label="Your notes">
+    {notes.map((note, index) => {
+      const sent = index < delivered;
+      return <li key={index} className={`run-note${sent ? " sent" : ""}`}>
+        <p className="run-note-text">{note}</p>
+        <span className="run-note-status">
+          {sent
+            ? <><Check size={12} aria-hidden="true" /> {running ? "Delivered, the model has it" : "Delivered"}</>
+            : running
+              ? <><Loader2 size={12} aria-hidden="true" className="spin" /> Queued, delivered at the next step</>
+              : "Not delivered: the run ended first. Send it again as a new message."}
+        </span>
+      </li>;
+    })}
+  </ul>;
 }
 
 /** One line of counts describing what a run actually did. */
@@ -2625,12 +2969,24 @@ function RunRecordView({ record, text, latest, onOpenInStudio }: { record: RunRe
     record.finishedAt,
   );
   const steps = useMemo(() => recordSteps(record), [record]);
+  const segments = useMemo(() => recordTranscriptSegments(record), [record]);
   const renderFiles = useCallback((files: ChangeGroup[], expansion: FileExpansion) => <ChangeSet groups={files} expansion={expansion} onOpenInStudio={onOpenInStudio} />, [onOpenInStudio]);
   return <>
     <TaskList tasks={record.tasks ?? []} settled />
-    <ActivitySection steps={steps} running={false} />
-    <ResultsCard runId={record.runId} changes={record.changes} evidence={record.evidence} collapsed={!latest} renderFiles={renderFiles} />
-    <Markdown text={text} className="result-copy" />
+    {segments !== null
+      ? <>
+        <div className="transcript">
+          {segments.map((segment) => segment.type === "steps"
+            ? <InlineSteps key={segment.key} steps={segment.steps} />
+            : <TranscriptText key={segment.key} text={segment.text} streaming={false} />)}
+        </div>
+        <ResultsCard runId={record.runId} changes={record.changes} evidence={record.evidence} collapsed={!latest} renderFiles={renderFiles} />
+      </>
+      : <>
+        <ActivitySection steps={steps} running={false} />
+        <ResultsCard runId={record.runId} changes={record.changes} evidence={record.evidence} collapsed={!latest} renderFiles={renderFiles} />
+        <Markdown text={text} className="result-copy" />
+      </>}
     {appliedAndVerified && <AppliedStatus />}
     {showOutcome && <OutcomeCard
       outcome={record.outcome}

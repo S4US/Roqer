@@ -80,7 +80,7 @@ export function parseUploadAssets(args: Record<string, unknown>): UploadRequest[
 }
 
 /** What one `upload_asset` outcome comes to, read the way a single upload's change card reads it. */
-function uploaded(request: UploadRequest, outcome: McpToolOutcome): UploadedAsset {
+export function uploadedAsset(request: UploadRequest, outcome: McpToolOutcome): UploadedAsset {
   const base = { filePath: request.filePath, displayName: request.displayName, assetType: request.assetType };
   const data = isRecord(outcome.data) ? outcome.data : {};
   const response = isRecord(data.response) ? data.response : {};
@@ -138,7 +138,7 @@ export async function uploadAssets(
     }
     const uploadArgs = { action: "upload", ...request };
     const outcome = await studio("upload_asset", uploadArgs, { signal: options.signal, timeoutMs: PER_UPLOAD_MS });
-    results.push(uploaded(request, outcome));
+    results.push(uploadedAsset(request, outcome));
   }
 
   const done = results.filter((asset) => asset.status === "complete" || asset.status === "processing").length;

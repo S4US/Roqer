@@ -3,6 +3,7 @@ import type { StorageStatus } from "../shared/workspace-storage";
 import type { McpServerState } from "../shared/mcp-server";
 import type { AppUpdateState } from "../shared/app-update";
 import { workspaceNeedsRecovery } from "../shared/workspace-validation";
+import type { ProjectNotesResult } from "../shared/project-notes";
 import type { RunEvent, RunStartRequest } from "../shared/run-events";
 import type { OpenStudioScriptRequest, StudioActionResult, StudioStatus } from "../shared/studio-status";
 import type {
@@ -205,6 +206,50 @@ export async function loadModelPreview(id: string): Promise<ModelPreviewResult> 
  */
 export async function loadEvidencePicture(ref: string): Promise<EvidencePictureResult> {
   return window.workbenchDesktop?.previews.loadPicture(ref) ?? { ok: false, reason: "refused" };
+}
+
+const NO_DESKTOP_NOTES: ProjectNotesResult = { ok: false, message: "Project notes need the desktop app." };
+
+/** The project's memory and master plan. */
+export const projectNotes = {
+  get: (projectId: string) => window.workbenchDesktop?.notes.get(projectId) ?? Promise.resolve(NO_DESKTOP_NOTES),
+  setPlan: (projectId: string, plan: string) => window.workbenchDesktop?.notes.setPlan(projectId, plan) ?? Promise.resolve(NO_DESKTOP_NOTES),
+  addMemory: (projectId: string, text: string) => window.workbenchDesktop?.notes.addMemory(projectId, text) ?? Promise.resolve(NO_DESKTOP_NOTES),
+  updateMemory: (projectId: string, id: string, text: string) =>
+    window.workbenchDesktop?.notes.updateMemory(projectId, id, text) ?? Promise.resolve(NO_DESKTOP_NOTES),
+  removeMemory: (projectId: string, id: string) =>
+    window.workbenchDesktop?.notes.removeMemory(projectId, id) ?? Promise.resolve(NO_DESKTOP_NOTES),
+};
+
+/** Compact a chat's saved Claude conversation now. */
+const NO_DESKTOP_FILES = { ok: false as const, message: "Project files need the desktop app." };
+
+/** The project's shared files; each call answers without the desktop app too. */
+export const projectFilesApi = {
+  list: (projectId: string) => window.workbenchDesktop?.files.list(projectId) ?? Promise.resolve(NO_DESKTOP_FILES),
+  addDropped: (projectId: string, dropped: File[], chatId: string | null) =>
+    window.workbenchDesktop?.files.addDropped(projectId, dropped, chatId) ?? Promise.resolve(NO_DESKTOP_FILES),
+  pick: (projectId: string, chatId: string | null) => window.workbenchDesktop?.files.pick(projectId, chatId) ?? Promise.resolve(NO_DESKTOP_FILES),
+  remove: (projectId: string, fileId: string) => window.workbenchDesktop?.files.remove(projectId, fileId) ?? Promise.resolve(NO_DESKTOP_FILES),
+  note: (projectId: string, fileId: string, note: string) =>
+    window.workbenchDesktop?.files.note(projectId, fileId, note) ?? Promise.resolve(NO_DESKTOP_FILES),
+  read: (projectId: string, fileId: string) => window.workbenchDesktop?.files.read(projectId, fileId) ?? Promise.resolve(NO_DESKTOP_FILES),
+  reveal: (projectId: string, fileId: string) => window.workbenchDesktop?.files.reveal(projectId, fileId) ?? Promise.resolve(NO_DESKTOP_FILES),
+  savePreview: (projectId: string, previewId: string, chatId: string | null) =>
+    window.workbenchDesktop?.files.savePreview(projectId, previewId, chatId) ?? Promise.resolve(NO_DESKTOP_FILES),
+  sendToStudio: (source: { projectId: string; fileId: string } | { previewId: string }, endpoint: string, instanceId: string | null) =>
+    window.workbenchDesktop?.files.sendToStudio(source, endpoint, instanceId) ?? Promise.resolve({ ok: false, message: "Sending to Studio needs the desktop app." }),
+  subscribe: (listener: (projectId: string) => void) => window.workbenchDesktop?.files.subscribe(listener) ?? (() => undefined),
+};
+
+/**
+ * Compact a chat's saved Claude conversation with Claude's own summary.
+ * `noSession` when the chat has none, so the caller compacts it another way.
+ */
+export async function compactChat(projectId: string, chatId: string): Promise<{ ok: boolean; message: string; noSession?: true }> {
+  const bridge = window.workbenchDesktop?.chats;
+  if (!bridge) return { ok: false, message: "Compacting needs the desktop app.", noSession: true };
+  return bridge.compactModel(projectId, chatId);
 }
 
 export async function getProviderStatus(provider: ProviderId): Promise<ProviderStatus> {

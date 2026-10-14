@@ -1,4 +1,5 @@
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -17,7 +18,11 @@ import type { SkillLibrary } from "./skill-library";
 import { createSkillToolRunner, SKILL_TOOL_NAME, type SkillToolRunner } from "./skill-tool";
 import { STUDIO_TOOL_NAME } from "./studio-tools";
 import { createWorkbenchToolInvoker, workbenchMcpTools, workbenchToolNames } from "./workbench-tools";
-import { buildConversationPrompt, buildFollowUpPrompt, continuesConversation } from "./conversation-prompt";
+import { buildConversationPrompt, buildFollowUpPrompt, buildResumePrompt, continuesConversation } from "./conversation-prompt";
+import type { ClaudeSessionRegistry } from "./claude-session-registry";
+import { notesVersion, projectNotesPrompt, projectNotesUpdate, type ProjectNotes, type ProjectNotesStore } from "./project-notes";
+import { sharedFilesNotice, type ProjectFilesToolContext } from "./project-files";
+import { chatRoleInstructions, type ChatRole } from "../shared/chat-role";
 import type { ProviderSessionStore } from "./provider-sessions";
 import { runDeveloperInstructions } from "./run-instructions";
 import { createProseStream } from "./text-stream";
@@ -35,12 +40,24 @@ function steerText(text: string): string {
 }
 
 /**
- * Notes reach Claude only at a turn boundary, so the explanation behind a
- * "none of these" answer cannot ride along with the tool result. Say so, and
- * ask for the turn to end, rather than pointing at a note that is still queued.
+ * Notes are written to Claude Code as soon as they are queued, and it shows
+ * them to the model at its next step, so the explanation behind a "none of
+ * these" answer normally arrives with this result. If it has not, ending the
+ * turn makes Claude Code start the next one with it.
  */
 const ESCAPE_RESULT =
-  "The user chose none of the offered options. Their explanation is queued as a user note. End this turn now without further actions; Roqer will send that note as the next user message.";
+  "The user chose none of the offered options and explained why in a note. Do not act on any of the offered options. The note reaches you as a user message with this result; follow it. If you do not see it, end this turn without further actions and it will arrive as the next message.";
+
+/** How often queued notes are handed to Claude Code while a turn runs. */
+const NOTE_POLL_MS = 400;
+
+/**
+ * How long to wait, after a turn that was given notes ends, for Claude Code to
+ * start another turn for a note the model had not reached. Claude Code says
+ * nothing when it folds a note into the running turn, so a quiet pause is
+ * the only sign that it did.
+ */
+const NOTE_FOLLOW_UP_MS = 2_500;
 
 /** The MCP server name Claude Code namespaces the tool under. */
 const MCP_SERVER_NAME = "workbench";
@@ -68,6 +85,9 @@ export type ClaudePlannerOptions = {
   skillLibrary: SkillLibrary;
   /** How long Claude may say nothing, outside a tool call, before the run is ended. Injectable for tests. */
   stallMs?: number;
+  /** How often queued notes are handed over mid-turn, and how long a turn given notes waits for a follow-up. For tests. */
+  notePollMs?: number;
+  noteFollowUpMs?: number;
   /** The chat this run belongs to, which names its kept session. */
   chatId?: string;
   /** Where a chat's Claude Code process waits for its next message. Without it, every run starts a new one. */
@@ -76,6 +96,16 @@ export type ClaudePlannerOptions = {
   blender?: boolean;
   /** Offer `reference_clip`: only in a chat holding a clip the user attached. */
   referenceClips?: boolean;
+  /** Where each chat's saved Claude Code session is recorded. Without it, sessions are not saved. */
+  registry?: ClaudeSessionRegistry;
+  /** The project's memory and master plan, given to every session and editable with tools. */
+  projectNotes?: { store: ProjectNotesStore; projectId: string };
+  /** The project's shared files, and which the user shared with this chat. */
+  projectFiles?: ProjectFilesToolContext;
+  /** What this chat is for, when the user gave it a role. */
+  role?: ChatRole;
+  /** Told after `project_files` changed the project's files. */
+  filesChanged?(): void;
 };
 
 const isRecord = (value: unknown): value is JsonRecord =>
@@ -129,14 +159,22 @@ async function writeMcpConfig(directory: string, server: WorkbenchMcpServerHandl
   return file;
 }
 
-function systemPrompt(options: ClaudePlannerOptions, autoPlaytest: boolean): string {
+function systemPrompt(options: ClaudePlannerOptions, autoPlaytest: boolean, notes: ProjectNotes | null): string {
   return [
     options.agent.systemInstructions,
     "<developer-instructions>",
     runDeveloperInstructions(options.agent.developerInstructions, autoPlaytest),
     "</developer-instructions>",
+    ...(notes === null ? [] : [projectNotesPrompt(notes)]),
+    ...(options.role === undefined ? [] : [chatRoleInstructions(options.role)]),
   ].join("\n\n");
 }
+
+/**
+ * The saved Claude Code session a process continues, or starts under a fixed
+ * id so that the next process can resume it.
+ */
+export type SessionRef = { id: string; resume: boolean };
 
 /**
  * Write the system prompt beside the MCP config rather than onto the command
@@ -152,20 +190,27 @@ async function writeSystemPrompt(directory: string, text: string): Promise<strin
   return file;
 }
 
-function buildArguments(options: ClaudePlannerOptions, configPath: string, systemPromptPath: string): string[] {
+function buildArguments(
+  options: ClaudePlannerOptions, configPath: string, systemPromptPath: string, ref: SessionRef | null = null, slashCommands = false,
+): string[] {
   const args = [
     "--print",
     "--input-format", "stream-json",
     "--output-format", "stream-json",
     "--verbose",
     "--include-partial-messages",
-    "--no-session-persistence",
+    // A saved session survives the process: a failed or cancelled run, an
+    // idle close, a changed model, or a restart resumes it rather than
+    // starting the chat over from a bounded replay.
+    ...(ref === null ? ["--no-session-persistence"] : ref.resume ? ["--resume", ref.id] : ["--session-id", ref.id]),
     "--model", options.model,
     "--system-prompt-file", systemPromptPath,
     // Roqer owns every Studio action, so Claude Code keeps none of its own
     // tools: no shell, filesystem, web, subagents, or ambient native skills.
     "--tools", "",
-    "--disable-slash-commands",
+    // Only Roqer's own compaction process takes a slash command; a run's
+    // prompt is the user's text and is never read as one.
+    ...(slashCommands ? [] : ["--disable-slash-commands"]),
     "--setting-sources", "",
     "--strict-mcp-config",
     "--mcp-config", configPath,
@@ -515,6 +560,10 @@ export class ClaudeSession {
   };
   /** Skill documents delivered into this process's conversation and still in it. */
   readonly skills: SkillToolRunner;
+  /** The saved Claude Code session this process writes to, or null when none is kept. */
+  sessionId: string | null = null;
+  /** The version of the project notes this conversation last saw. */
+  notesVersion: string | null = null;
 
   private binding: RunBinding | null = null;
   private dead = false;
@@ -542,6 +591,9 @@ export class ClaudeSession {
     key: string,
     autoPlaytest: boolean,
     signal: AbortSignal,
+    ref: SessionRef | null = null,
+    notes: ProjectNotes | null = null,
+    slashCommands = false,
   ): Promise<ClaudeSession> {
     let session: ClaudeSession | null = null;
     const server = await startWorkbenchMcpServer({
@@ -556,10 +608,12 @@ export class ClaudeSession {
       workingDirectory = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-claude-"));
       if (signal.aborted) throw new Error("Run was cancelled.");
       const configPath = await writeMcpConfig(workingDirectory, server);
-      const systemPromptPath = await writeSystemPrompt(workingDirectory, systemPrompt(options, autoPlaytest));
+      const systemPromptPath = await writeSystemPrompt(workingDirectory, systemPrompt(options, autoPlaytest, notes));
       if (signal.aborted) throw new Error("Run was cancelled.");
-      child = await options.launcher.launch(buildArguments(options, configPath, systemPromptPath));
+      child = await options.launcher.launch(buildArguments(options, configPath, systemPromptPath, ref, slashCommands));
       session = new ClaudeSession(key, child, server, workingDirectory, createSkillToolRunner(options.skillLibrary));
+      session.sessionId = ref?.id ?? null;
+      session.notesVersion = notes === null ? null : notesVersion(notes);
       session.attach();
       if (signal.aborted) throw new Error("Run was cancelled.");
       return session;
@@ -652,10 +706,37 @@ function sessionKey(options: ClaudePlannerOptions, { autoPlaytest, instanceId }:
     instanceId,
     options.model, options.supportsEffort ? options.effort : null, autoPlaytest,
     options.agent.id, options.agent.version, options.blender === true, options.referenceClips === true,
+    options.role ?? null, options.projectFiles !== undefined,
   ]);
 }
 
 export type ClaudeSessionStore = ProviderSessionStore<ClaudeSession>;
+
+/** Told to a resumed session whose chat now points at a different Studio place. */
+const PLACE_CHANGED_NOTICE =
+  "[Roqer: this chat is now connected to a different Studio place than in your earlier turns. What you read before describes the other place; read this one before relying on it.]";
+
+/**
+ * Where Claude Code keeps a saved session: its config directory, then the
+ * working directory with every character other than a letter or digit made a
+ * dash. Used only to notice a session that is gone (deleted, or saved under a
+ * different config directory) before resuming it fails.
+ */
+export function claudeSessionFile(cwd: string, sessionId: string, env: NodeJS.ProcessEnv = process.env): string {
+  const configDirectory = env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), ".claude");
+  return path.join(configDirectory, "projects", cwd.replace(/[^A-Za-z0-9]/g, "-"), `${sessionId}.jsonl`);
+}
+
+async function savedSessionExists(cwd: string, sessionId: string): Promise<boolean> {
+  try {
+    return (await fs.stat(claudeSessionFile(cwd, sessionId))).isFile();
+  } catch {
+    return false;
+  }
+}
+
+/** Claude Code's answer when `--resume` names a session it does not have. */
+const MISSING_SESSION = /no conversation found/i;
 
 /**
  * A model-driven planner backed by the user's Claude subscription.
@@ -697,6 +778,25 @@ export function createClaudePlanner(options: ClaudePlannerOptions): Planner {
       let runUsage: ClaudeRunUsage | undefined;
       /** The same usage request by request. */
       const requestLog = new ClaudeRequestLog();
+      /** Whether notes were written to Claude Code during the turn in progress. */
+      let notesThisTurn = false;
+      /** Waiting, after a turn ended, to see whether Claude Code starts another for a note. */
+      let followUp: ReturnType<typeof setTimeout> | null = null;
+      let notePoll: ReturnType<typeof setInterval> | null = null;
+      /**
+       * Hand queued notes to Claude Code now rather than at the end of the
+       * turn. It queues them and shows them to the model at its next step,
+       * alongside the next tool result, the way a message typed into Claude
+       * Code mid-turn reaches it.
+       */
+      const deliverNotes = () => {
+        if (settled || session === undefined || followUp !== null) return;
+        const steers = context.takeSteers();
+        if (steers.length === 0) return;
+        notesThisTurn = true;
+        session.writeUserMessage(steers.map((text) => ({ type: "text", text: steerText(text) })));
+        context.status("Sent your note to Claude", steers.length === 1 ? steers[0] : `${steers.length} notes sent.`);
+      };
 
       const finish = (summary: string) => {
         if (settled) return;
@@ -735,6 +835,13 @@ export function createClaudePlanner(options: ClaudePlannerOptions): Planner {
         escapeResult: ESCAPE_RESULT,
         settled: () => settled,
         fail,
+        notesChanged: () => {
+          const projectNotes = options.projectNotes;
+          if (projectNotes === undefined || session === undefined) return;
+          void projectNotes.store.get(projectNotes.projectId).then((current) => {
+            if (session !== undefined) session.notesVersion = notesVersion(current);
+          }, () => undefined);
+        },
       });
 
       const limitWarnings = new LimitWarnings("Claude", (label, detail) => context.status(label, detail));
@@ -743,6 +850,15 @@ export function createClaudePlanner(options: ClaudePlannerOptions): Planner {
         // Any output is progress: with partial messages on, thinking streams
         // as events too, so a long silent-looking turn is still talking.
         watchdog.progressed();
+
+        if (followUp !== null && message.type !== "rate_limit_event" && message.type !== "result") {
+          // Claude Code started a turn for a note the last one had not reached.
+          clearTimeout(followUp);
+          followUp = null;
+          streaming = false;
+          prose.beginSegment();
+          turnProseStart = prose.text().length;
+        }
 
         if (message.type === "rate_limit_event") {
           // A reached limit ends the turn with Claude Code's own message,
@@ -823,30 +939,67 @@ export function createClaudePlanner(options: ClaudePlannerOptions): Planner {
             session?.writeUserMessage(steers.map((text) => ({ type: "text", text: steerText(text) })));
             return;
           }
-          finish(prose.text().trim() || summary.trim() || "Claude finished the turn.");
+          const ended = () => finish(prose.text().trim() || summary.trim() || "Claude finished the turn.");
+          if (notesThisTurn) {
+            // A note written late in the turn may not have reached the model;
+            // Claude Code then starts a turn for it straight away.
+            notesThisTurn = false;
+            followUp = setTimeout(() => {
+              followUp = null;
+              ended();
+            }, options.noteFollowUpMs ?? NOTE_FOLLOW_UP_MS);
+            return;
+          }
+          ended();
         }
       };
 
       const chatId = options.sessions !== undefined ? options.chatId : undefined;
+      const registry = options.registry !== undefined && options.chatId !== undefined
+        ? { store: options.registry, chatId: options.chatId }
+        : undefined;
       const key = sessionKey(options, context);
+      const notes = options.projectNotes === undefined
+        ? null
+        : await options.projectNotes.store.get(options.projectNotes.projectId).catch(() => null);
+      /** How the first message is written: to a live process, a resumed saved session, or a new one. */
+      let opening: "live" | "resumed" | "new" = "new";
+      /** The saved session this run writes to, if sessions are saved. */
+      let saved = registry === undefined ? undefined : await registry.store.get(registry.chatId);
       try {
-        // A kept session is used only when it has seen exactly this chat so
-        // far, under the settings this run asks for; anything else would put
-        // the model in a conversation the user is not looking at.
+        // A kept process is used only when it has seen exactly this chat so
+        // far, under the settings this run asks for. Any other is closed;
+        // its saved session is resumed below, so nothing it held is lost.
         const kept = chatId === undefined ? undefined : options.sessions!.take(chatId);
         if (kept !== undefined) {
           const current = kept.alive && kept.key === key && kept.lastPrompt !== null &&
-            continuesConversation(context.conversation, kept.lastPrompt);
-          if (current) session = kept;
-          else await kept.close();
+            continuesConversation(context.conversation, kept.lastPrompt) &&
+            (saved === undefined || kept.sessionId === saved.sessionId);
+          if (current) {
+            session = kept;
+            opening = "live";
+          } else await kept.close();
         }
-        const resumed = session !== undefined;
-        session ??= await ClaudeSession.open(options, key, context.autoPlaytest, context.signal);
+        if (session === undefined && saved !== undefined && !(await savedSessionExists(options.cwd, saved.sessionId))) {
+          // The saved conversation is gone; start a new one from the replay.
+          await registry!.store.forget(registry!.chatId);
+          saved = undefined;
+        }
+        if (session === undefined && saved !== undefined) {
+          session = await ClaudeSession.open(
+            options, key, context.autoPlaytest, context.signal, { id: saved.sessionId, resume: true }, notes,
+          );
+          opening = "resumed";
+        }
+        if (session === undefined) {
+          const ref = registry === undefined ? null : { id: randomUUID(), resume: false };
+          session = await ClaudeSession.open(options, key, context.autoPlaytest, context.signal, ref, notes);
+        }
         if (settled) return await completion.promise;
         if (context.signal.aborted) throw new Error("Run was cancelled.");
         // A kept process is already connected, so there is nothing to wait for
         // but the model.
-        if (resumed) context.progress(waitingLabel);
+        if (opening === "live") context.progress(waitingLabel);
 
         runUsage = new ClaudeRunUsage(session.usageTotals);
         session.bind({
@@ -859,18 +1012,57 @@ export function createClaudePlanner(options: ClaudePlannerOptions): Planner {
               return await invokeTool(name, args);
             } finally {
               release();
+              // Written before the result goes back, so a note sent while
+              // this call ran is with the model at its very next step.
+              deliverNotes();
             }
           },
           message: onMessage,
-          closed: fail,
+          closed: (error) => {
+            if (registry !== undefined && opening === "resumed" && MISSING_SESSION.test(error instanceof Error ? error.message : String(error))) {
+              void registry.store.forget(registry.chatId);
+              fail(new Error("Claude Code no longer has this chat's saved conversation. Send the message again to start a new one from the chat's history."));
+              return;
+            }
+            fail(error);
+          },
         });
         const skills = session.skills;
+        const isLoaded = (name: string) => skills.isLoaded(name);
+        let text = opening === "live"
+          ? buildFollowUpPrompt(context.conversation, context.prompt, isLoaded)
+          : opening === "resumed"
+            ? buildResumePrompt(
+              context.conversation, context.prompt, saved!.lastPrompt, isLoaded,
+              saved!.instanceId !== null && saved!.instanceId !== context.instanceId ? [PLACE_CHANGED_NOTICE] : [],
+            )
+            : buildConversationPrompt(context.conversation, context.prompt);
+        // A live process started before the notes last changed (the user
+        // edited them, or another chat did) is told what they say now.
+        if (notes !== null) {
+          const version = notesVersion(notes);
+          if (session.notesVersion !== version) {
+            text = `${projectNotesUpdate(notes)}\n\n${text}`;
+            session.notesVersion = version;
+          }
+        }
+        if (options.projectFiles !== undefined && options.projectFiles.shared.length > 0) {
+          const files = await options.projectFiles.store.list(options.projectFiles.projectId).catch(() => []);
+          const notice = sharedFilesNotice(files, options.projectFiles.shared);
+          if (notice !== null) text = `${notice}\n\n${text}`;
+        }
+        if (registry !== undefined && session.sessionId !== null) {
+          // Recorded before the model answers: from here on the saved session
+          // holds this prompt, whatever becomes of the run.
+          await registry.store.update(registry.chatId, {
+            sessionId: session.sessionId, lastPrompt: context.prompt, instanceId: context.instanceId, model: options.model,
+          });
+        }
+        notePoll = setInterval(deliverNotes, options.notePollMs ?? NOTE_POLL_MS);
         session.writeUserMessage([
           {
             type: "text",
-            text: resumed
-              ? buildFollowUpPrompt(context.conversation, context.prompt, (name) => skills.isLoaded(name))
-              : buildConversationPrompt(context.conversation, context.prompt),
+            text,
           },
           ...context.images.map((image) => ({
             type: "image",
@@ -880,6 +1072,8 @@ export function createClaudePlanner(options: ClaudePlannerOptions): Planner {
 
         return await completion.promise;
       } finally {
+        if (notePoll !== null) clearInterval(notePoll);
+        if (followUp !== null) clearTimeout(followUp);
         context.signal.removeEventListener("abort", onAbort);
         watchdog.signal.removeEventListener("abort", onStall);
         watchdog.stop();
@@ -895,4 +1089,76 @@ export function createClaudePlanner(options: ClaudePlannerOptions): Planner {
       }
     },
   };
+}
+
+export type ClaudeCompaction = { ok: true; preTokens: number | null; postTokens: number | null } | { ok: false; message: string };
+
+/** How long a compaction may take; summarizing a full context is one long model call. */
+const COMPACT_TIMEOUT_MS = 10 * 60_000;
+
+/**
+ * Compact one chat's saved conversation now, the way `/compact` does in
+ * Claude Code, instead of waiting for Claude Code to do it when the context
+ * fills.
+ *
+ * A run's process never takes slash commands, so the chat's live process (if
+ * any) is closed and a short-lived one resumes the saved session with them
+ * allowed, sends `/compact`, and exits. The next run resumes the compacted
+ * session. The caller makes sure no run is using the chat.
+ */
+export async function compactClaudeChat(
+  options: ClaudePlannerOptions & { chatId: string; registry: ClaudeSessionRegistry },
+): Promise<ClaudeCompaction> {
+  const saved = await options.registry.get(options.chatId);
+  if (saved === undefined || !(await savedSessionExists(options.cwd, saved.sessionId))) {
+    return { ok: false, message: "This chat has no saved Claude conversation to compact yet. Send a message first." };
+  }
+  const account = await options.getStatus();
+  if (account.kind !== "signed-in") return { ok: false, message: account.message };
+
+  const live = options.sessions?.take(options.chatId);
+  if (live !== undefined) await live.close();
+
+  const notes = options.projectNotes === undefined
+    ? null
+    : await options.projectNotes.store.get(options.projectNotes.projectId).catch(() => null);
+  const controller = new AbortController();
+  const session = await ClaudeSession.open(
+    { ...options, model: saved.model ?? options.model }, "compact", false, controller.signal,
+    { id: saved.sessionId, resume: true }, notes, true,
+  );
+  try {
+    return await new Promise<ClaudeCompaction>((resolve) => {
+      let preTokens: number | null = null;
+      let postTokens: number | null = null;
+      let boundary = false;
+      const timer = setTimeout(() => resolve({ ok: false, message: "Compacting took too long and was stopped. The conversation is unchanged." }), COMPACT_TIMEOUT_MS);
+      const done = (result: ClaudeCompaction) => {
+        clearTimeout(timer);
+        resolve(result);
+      };
+      session.bind({
+        invoke: async () => ({ ok: false, text: "No Roqer run is active. End this turn." }),
+        message: (message) => {
+          if (message.type === "system" && message.subtype === "compact_boundary") {
+            boundary = true;
+            const metadata = isRecord(message.compact_metadata) ? message.compact_metadata : {};
+            preTokens = tokenCount(metadata.pre_tokens) ?? null;
+            postTokens = tokenCount(metadata.post_tokens) ?? null;
+            return;
+          }
+          if (message.type !== "result") return;
+          if (boundary) done({ ok: true, preTokens, postTokens });
+          else {
+            const detail = typeof message.result === "string" && message.result.trim() !== "" ? ` ${message.result.trim()}` : "";
+            done({ ok: false, message: `Claude Code did not compact the conversation.${detail}` });
+          }
+        },
+        closed: (error) => done({ ok: false, message: error.message }),
+      });
+      session.writeUserMessage([{ type: "text", text: "/compact" }]);
+    });
+  } finally {
+    await session.close();
+  }
 }

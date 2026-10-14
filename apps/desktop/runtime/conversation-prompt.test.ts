@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { buildConversationPrompt, buildFollowUpPrompt, continuesConversation } from "./conversation-prompt";
+import { buildConversationPrompt, buildFollowUpPrompt, buildResumePrompt, continuesConversation, messagesSince } from "./conversation-prompt";
 import { MAX_CONVERSATION_MESSAGE_CHARS } from "../shared/conversation";
 
 const EXCHANGE = {
@@ -197,4 +197,37 @@ test("a reply without a run renders exactly as it did before records existed", (
   }, "Next.");
   assert.equal(prompt.includes("Roqer's record"), false);
   assert.match(prompt, /Assistant:\nJust an answer\.\n\nCurrent user message:\nNext\./);
+});
+
+test("notes sent during a run are part of that run, not messages the session missed", () => {
+  const context = {
+    messages: [
+      { role: "user" as const, text: "Build the radar." },
+      { role: "user" as const, text: "Make it red.", note: true as const },
+      { role: "assistant" as const, text: "Built a red radar." },
+    ],
+    truncated: false,
+  };
+  assert.equal(continuesConversation(context, "Build the radar."), true);
+  assert.deepEqual(messagesSince(context, "Build the radar."), []);
+  assert.equal(buildResumePrompt(context, "Next.", "Build the radar."), "Next.");
+});
+
+test("a resumed session is told about messages after its last prompt and labelled notes", () => {
+  const context = {
+    messages: [
+      { role: "user" as const, text: "Build the radar." },
+      { role: "assistant" as const, text: "Built it." },
+      { role: "user" as const, text: "Asked elsewhere." },
+      { role: "user" as const, text: "Also blue.", note: true as const },
+      { role: "assistant" as const, text: "Other model's answer." },
+    ],
+    truncated: false,
+  };
+  const prompt = buildResumePrompt(context, "Continue.", "Build the radar.");
+  assert.match(prompt, /since your last turn/);
+  assert.match(prompt, /User:\nAsked elsewhere\./);
+  assert.match(prompt, /a note sent while the assistant was working\):\nAlso blue\./);
+  assert.match(prompt, /Current user message:\nContinue\.$/);
+  assert.equal(messagesSince(context, "Never sent."), null);
 });
