@@ -9,6 +9,7 @@ import {
 } from "./preview-layout";
 import { evidenceImages, previewsNotShown } from "./run-view";
 import { EvidencePicture } from "./evidence-picture";
+import { ModelActionButtons } from "./model-actions";
 
 /** Which version of each picture with several is on show, by the picture's id; absent means the latest. */
 type VersionChoice = {
@@ -95,6 +96,8 @@ export const PreviewsPanel = memo(function PreviewsPanel({ category, evidence, c
           className="previews-not-kept"
           title={`A run keeps up to ${MAX_RECORDED_EVIDENCE_IMAGES} pictures: the latest of each thing first, then earlier versions. The rest are listed in Activity without their picture.`}
         >{notShown} earlier {notShown === 1 ? "picture" : "pictures"} not kept</em>}
+        {previewSource(onShow(choice, latest)) === "blender" && onShow(choice, latest).modelPreviewId !== undefined &&
+          <ModelActionButtons previewId={onShow(choice, latest).modelPreviewId!} />}
         <button type="button" className="previews-open" aria-haspopup="dialog" onClick={(event) => show(images.length - 1, event.currentTarget)}>
           Open viewer<Maximize2 size={13} aria-hidden="true" />
         </button>
@@ -293,6 +296,7 @@ function PreviewViewer({ images, changes, choice, index, onIndex, onClose }: {
         {boxes && <BoxesNote note={boxes} />}
       </div>
       {choice.versions.has(picture.id) && <VersionStepper evidence={picture} choice={choice} />}
+      {model && previewSource(current) === "blender" && current.modelPreviewId !== undefined && <ModelActionButtons previewId={current.modelPreviewId} />}
       {model && <div className="preview-viewer-mode" role="group" aria-label="Show as">
         <button type="button" aria-pressed={inModel} onClick={() => setPictureAt(null)}><Rotate3d size={14} aria-hidden="true" />3D</button>
         <button type="button" aria-pressed={!inModel} onClick={showPicture} ref={pictureButton}><ImageIcon size={14} aria-hidden="true" />Picture</button>

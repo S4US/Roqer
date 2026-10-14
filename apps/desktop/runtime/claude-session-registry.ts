@@ -24,6 +24,12 @@ export type ClaudeChatSession = {
   instanceId: string | null;
   /** The model the session last ran on, for compaction. */
   model: string | null;
+  /**
+   * The version of the project notes the conversation was last given, so a
+   * resumed session is sent them again only when they changed. Null after a
+   * compaction, which may have summarized them away.
+   */
+  notesVersion: string | null;
   updatedAt: string;
 };
 
@@ -39,6 +45,7 @@ function parseEntry(value: unknown): ClaudeChatSession | null {
     lastPrompt: typeof value.lastPrompt === "string" ? value.lastPrompt : null,
     instanceId: typeof value.instanceId === "string" ? value.instanceId : null,
     model: typeof value.model === "string" ? value.model : null,
+    notesVersion: typeof value.notesVersion === "string" ? value.notesVersion : null,
     updatedAt: typeof value.updatedAt === "string" ? value.updatedAt : new Date(0).toISOString(),
   };
 }
@@ -108,7 +115,7 @@ export class ClaudeSessionRegistry {
       const entries = await this.load();
       const current = entries.get(chatId);
       const next: ClaudeChatSession = {
-        lastPrompt: null, instanceId: null, model: null,
+        lastPrompt: null, instanceId: null, model: null, notesVersion: null,
         ...(current?.sessionId === change.sessionId ? current : {}),
         ...change,
         updatedAt: new Date().toISOString(),

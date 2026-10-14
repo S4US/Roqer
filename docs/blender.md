@@ -79,6 +79,37 @@ the tool away again.
 A job stops after two minutes by default, and never runs longer than 200
 seconds. Stopping the run stops Blender.
 
+## Looking closer
+
+The four-view preview can hide a problem: an underside with a hole, a back that
+was never finished, a wheel sunk into the body. The agent can ask for up to six
+more pictures of a job's result, each from an angle it chooses:
+
+- `yaw`: degrees around the model from the front it will have in Studio
+  (0 front, 90 its right side, 180 back, 270 its left side);
+- `pitch`: degrees above the horizon, from -89 (from below) to 89 (from above);
+- `zoom`: 1 frames the whole model, 2 is twice as close;
+- `focus`: one object, by the name the result lists, to frame instead of the
+  whole model.
+
+Each picture reaches the agent after the preview, in the order asked, with the
+angle it was taken from. The Modeller role is told to use them whenever the
+default views could hide something.
+
+The agent can also look at a model it did not just build (a project file, a
+model you dropped in, another chat's export) by passing its path as
+`inspect_file` instead of a script. Roqer then imports that GLB, glTF, FBX or
+OBJ into an empty scene, measures it and renders its preview and views, exactly
+as it checks a job's own export. No script of the agent's runs and nothing is
+changed, so this does not ask for approval. Its preview opens in 3D in the chat
+like any other.
+
+Because it does not ask, a look reaches only Roqer's own folders: the
+project's files and the Blender jobs. A path anywhere else on your computer or
+on the network is refused before it is opened; add the file to the project
+files first. A glTF that keeps its buffers or textures in separate files is
+refused too, with a request for a single GLB.
+
 ## Previewing textures in Studio
 
 Particle textures and flipbook sheets take several drawn versions to get
@@ -180,6 +211,9 @@ folder, for a job you approved with that preview. Roqer does
 keep secrets out of Blender's reach: it starts Blender without any environment
 variable named like a credential (a key, token, secret, password or cookie) and
 without Roqer's own settings.
+
+Looking at a file with `inspect_file` runs only Roqer's own inspection script,
+which imports the file and renders it; that is why it does not ask.
 
 ## Where Roqer keeps things
 

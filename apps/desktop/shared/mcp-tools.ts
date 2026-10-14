@@ -105,7 +105,27 @@ export const LOCAL_TOOL_RISK: Readonly<Record<string, ToolRisk>> = {
   // Tiles frames Roqer already stored from a clip the user attached to the
   // chat: it reads nothing else and changes nothing.
   read_reference_clip: "read",
+  // The project's notes and shared files, kept by Roqer outside Studio and
+  // used by every chat in the project. Changing them is a recoverable edit the
+  // user can see and undo in Roqer; reading them is a read (see
+  // `PROJECT_DATA_READS`).
+  project_memory: "mutation",
+  master_plan: "mutation",
+  project_files: "mutation",
 };
+
+/** The actions of the project-data operations that only read. */
+const PROJECT_DATA_READS: Readonly<Record<string, readonly string[]>> = {
+  project_memory: ["list"],
+  master_plan: ["read"],
+  project_files: ["list", "read", "path"],
+};
+
+/** Whether a call to a project-data operation only reads. */
+export function isProjectDataRead(tool: string, args?: Record<string, unknown>): boolean {
+  return Object.prototype.hasOwnProperty.call(PROJECT_DATA_READS, tool)
+    && typeof args?.action === "string" && PROJECT_DATA_READS[tool].includes(args.action);
+}
 
 /**
  * An own-property check, not `tool in TOOL_RISK` and not a truthiness test on
@@ -144,6 +164,9 @@ export function riskForTool(tool: string, args?: Record<string, unknown>, place:
   // Reading a durable Roblox operation cannot publish or mutate anything. The
   // upload action remains irreversible and keeps its normal confirmation.
   if (tool === "upload_asset" && args?.action === "status") return "read";
+  // Looking at a model file renders pictures of a copy and changes nothing.
+  if (tool === "run_blender_script" && args?.inspect_file !== undefined && args?.script === undefined) return "read";
+  if (isProjectDataRead(tool, args)) return "read";
   if (tool === "animation") {
     // Checking compiles and measures on the MCP host, reading a model's rig
     // from Studio when the animation is for one. Verifying plays a track on
@@ -214,6 +237,10 @@ const TOOL_TIMEOUT_MS: Readonly<Record<string, number>> = {
   upload_assets: 300_000,
   // Up to sixteen stored frames read from disk and tiled; nothing waits on Studio.
   read_reference_clip: 60_000,
+  // Files in Roqer's own folders; a save copies at most one file of up to 512 MB.
+  project_memory: 30_000,
+  master_plan: 30_000,
+  project_files: 120_000,
 };
 
 /**
@@ -420,6 +447,14 @@ export function summarizeToolCall(tool: string, args: Record<string, unknown>): 
   if (tool === "run_blender_script") return tool;
   if (tool === "animation") return summarizeAnimation(args);
   if (tool === "upload_assets") return summarizeUploads(args);
+  // The action says what the call did; a save also names the file.
+  if (tool === "project_memory" || tool === "master_plan" || tool === "project_files") {
+    const action = typeof args.action === "string" ? args.action : "";
+    const name = tool === "project_files" && action === "save" && typeof args.name === "string" && args.name !== ""
+      ? ` ${truncate(args.name, 60)}`
+      : "";
+    return action === "" ? tool : `${tool} · ${action}${name}`;
+  }
   for (const key of IDENTIFYING_ARGUMENTS) {
     const value = args[key];
     if (typeof value === "string" && value !== "") {

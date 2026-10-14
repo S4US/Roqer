@@ -1,3 +1,4 @@
+import type { ChatRole } from "./chat-role";
 import type { ApprovalMode, PolicyReason, ToolRisk } from "./policy";
 import type { ConversationContext } from "./conversation";
 import type { CompletionVerification, CompletionIssueCode } from "./completion";
@@ -47,6 +48,10 @@ export type RunRequest = {
   provider: ProviderId;
   model: string | null;
   effort: ReasoningEffort;
+  /** What the chat is for, when the user gave it a role. */
+  role?: ChatRole;
+  /** The project files the user shared with this chat. */
+  sharedFileIds?: string[];
 };
 
 /**

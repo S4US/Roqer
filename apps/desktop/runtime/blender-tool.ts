@@ -50,15 +50,66 @@ export function blenderToolDefinition(): Readonly<{ name: typeof BLENDER_TOOL_NA
           maximum: MAX_BLENDER_JOB_SECONDS,
           description: `How long the script may run before Blender is stopped; default ${DEFAULT_BLENDER_JOB_SECONDS}.`,
         },
+        views: {
+          type: "array",
+          maxItems: MAX_BLENDER_VIEWS,
+          description: "Up to 6 extra pictures of the result from angles you choose, each attached after the four-view preview. Use them whenever a problem could hide from the default views: the underside, the back, inside an opening, a close-up of a joint.",
+          items: {
+            type: "object",
+            properties: {
+              yaw: { type: "number", description: "Degrees around the model from its front as it will face in Studio: 0 front, 90 its right side, 180 back, 270 its left side. Default 30." },
+              pitch: { type: "number", description: "Degrees above the horizon, -89 (from below) to 89 (from above). Default 20." },
+              zoom: { type: "number", description: "1 frames the whole model (or the focus object); 2 is twice as close. 0.2 to 20. Default 1." },
+              focus: { type: "string", description: "The name of one object to frame instead of the whole model, as the result lists it. Choose a yaw and pitch from the side that object is on, or the rest of the model hides it." },
+              label: { type: "string", description: "What this view is for, echoed in the result." },
+            },
+            additionalProperties: false,
+          },
+        },
+        inspect_file: {
+          type: "string",
+          description: "The absolute path of a .glb, .gltf, .fbx or .obj file to look at instead of running a script (a project file, another chat's export): Roqer re-imports it, measures it and renders its preview and your views, changing nothing, so it needs no approval. Leave script out when you use it.",
+        },
         preview_in_studio: {
           type: "boolean",
           description: "Copy the job's PNGs and flipbook sheets into the user's Roblox Studio install and return an rbxasset:// address for each, so a texture can be seen on a ParticleEmitter, Beam or Decal in Studio before it is uploaded. Use it while a texture is still changing: iterate on previews, and upload only the settled set. The addresses work on this computer only, so replace each with its uploaded id before the work is done.",
         },
       },
-      required: ["script"],
       additionalProperties: false,
     },
   };
+}
+
+export const MAX_BLENDER_VIEWS = 6;
+
+export type BlenderView = { yaw: number; pitch: number; zoom: number; focus?: string; label?: string };
+
+/** The views a call asked for, checked and filled in with their defaults. */
+export function parseBlenderViews(value: unknown): BlenderView[] {
+  if (value === undefined || value === null) return [];
+  if (!Array.isArray(value) || value.length > MAX_BLENDER_VIEWS) {
+    throw new MalformedToolCallError(`blender views must be a list of at most ${MAX_BLENDER_VIEWS} angles.`);
+  }
+  return value.map((entry, index) => {
+    if (typeof entry !== "object" || entry === null || Array.isArray(entry)) {
+      throw new MalformedToolCallError(`blender views[${index}] must be an object {yaw, pitch, zoom, focus}.`);
+    }
+    const view = entry as JsonRecord;
+    const number = (key: string, fallback: number, low: number, high: number) => {
+      const raw = view[key];
+      if (raw === undefined || raw === null) return fallback;
+      if (typeof raw !== "number" || !Number.isFinite(raw)) throw new MalformedToolCallError(`blender views[${index}].${key} must be a number.`);
+      return Math.min(Math.max(raw, low), high);
+    };
+    const yaw = number("yaw", 30, -720, 720);
+    return {
+      yaw: ((yaw % 360) + 360) % 360,
+      pitch: number("pitch", 20, -89, 89),
+      zoom: number("zoom", 1, 0.2, 20),
+      ...(typeof view.focus === "string" && view.focus.trim() !== "" ? { focus: view.focus.trim().slice(0, 120) } : {}),
+      ...(typeof view.label === "string" && view.label.trim() !== "" ? { label: view.label.trim().slice(0, 80) } : {}),
+    };
+  });
 }
 
 /** The engine operation for a `blender` call. Throws so every provider reports the same message. */
@@ -67,10 +118,17 @@ export function parseBlenderToolInput(value: unknown): { operation: string; args
     throw new MalformedToolCallError("blender requires an object with a script.");
   }
   const record = value as JsonRecord;
-  if (typeof record.script !== "string" || record.script.trim() === "") {
-    throw new MalformedToolCallError("blender requires script: the complete Python to run.");
+  const views = parseBlenderViews(record.views);
+  if (typeof record.inspect_file === "string" && record.inspect_file.trim() !== "") {
+    if (record.script !== undefined && record.script !== null && record.script !== "") {
+      throw new MalformedToolCallError("blender takes either script or inspect_file, not both: inspect_file looks at a model without running anything.");
+    }
+    return { operation: BLENDER_OPERATION, args: { inspect_file: record.inspect_file.trim(), ...(views.length > 0 ? { views } : {}) } };
   }
-  const args: JsonRecord = { script: record.script };
+  if (typeof record.script !== "string" || record.script.trim() === "") {
+    throw new MalformedToolCallError("blender requires script: the complete Python to run, or inspect_file: a model file to look at.");
+  }
+  const args: JsonRecord = { script: record.script, ...(views.length > 0 ? { views } : {}) };
   if (typeof record.timeout_seconds === "number") args.timeout_seconds = record.timeout_seconds;
   if (record.preview_in_studio !== undefined && record.preview_in_studio !== null) {
     if (typeof record.preview_in_studio !== "boolean") {

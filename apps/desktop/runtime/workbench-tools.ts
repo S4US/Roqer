@@ -13,6 +13,9 @@ import {
 import { runTaskTool, taskToolDefinition, TASK_TOOL_NAME } from "./task-tool";
 import { runQuestionTool, questionToolDefinition, QUESTION_TOOL_NAME } from "./question-tool";
 import type { WorkbenchMcpTool, WorkbenchMcpToolResult } from "./workbench-mcp-server";
+import { memoryToolDefinition, MEMORY_TOOL_NAME, planToolDefinition, PLAN_TOOL_NAME, type ProjectNotesStore } from "./project-notes";
+import { PROJECT_FILES_TOOL_NAME, projectFilesToolDefinition, type ProjectFilesToolContext } from "./project-files";
+import { isProjectDataRead } from "../shared/mcp-tools";
 
 /**
  * The Roqer tools an MCP-speaking provider (Claude Code, the Antigravity CLI)
@@ -31,6 +34,10 @@ export type WorkbenchToolOptions = {
   blender?: boolean;
   /** Offer `reference_clip`: only in a chat holding a clip the user attached. */
   referenceClips?: boolean;
+  /** Offer `project_memory` and `master_plan`: the project's notes, kept across chats. */
+  projectNotes?: { store: ProjectNotesStore; projectId: string };
+  /** Offer `project_files`: the project's shared files. */
+  projectFiles?: ProjectFilesToolContext;
 };
 
 /** Every tool granted for these options, in the order they are announced. */
@@ -39,6 +46,8 @@ export function workbenchToolNames(options: WorkbenchToolOptions): string[] {
     STUDIO_TOOL_NAME, SKILL_TOOL_NAME, ICON_TOOL_NAME, TASK_TOOL_NAME, QUESTION_TOOL_NAME,
     ...(options.blender === true ? [BLENDER_TOOL_NAME] : []),
     ...(options.referenceClips === true ? [REFERENCE_CLIP_TOOL_NAME] : []),
+    ...(options.projectNotes !== undefined ? [MEMORY_TOOL_NAME, PLAN_TOOL_NAME] : []),
+    ...(options.projectFiles !== undefined ? [PROJECT_FILES_TOOL_NAME] : []),
   ];
 }
 
@@ -49,6 +58,8 @@ export function workbenchMcpTools(options: WorkbenchToolOptions): WorkbenchMcpTo
     skillToolDefinition(options.skillLibrary), iconToolDefinition(), taskToolDefinition(), questionToolDefinition(),
     ...(options.blender === true ? [blenderToolDefinition()] : []),
     ...(options.referenceClips === true ? [referenceClipToolDefinition()] : []),
+    ...(options.projectNotes !== undefined ? [memoryToolDefinition(), planToolDefinition()] : []),
+    ...(options.projectFiles !== undefined ? [projectFilesToolDefinition()] : []),
   ];
 }
 
@@ -61,6 +72,8 @@ export type WorkbenchToolInvokerOptions = WorkbenchToolOptions & {
   settled(): boolean;
   /** End the run: cancellation, a host failure, or malformed calls that are not converging. */
   fail(error: unknown): void;
+  /** Told after a notes tool changed the notes, so the session knows it has seen them. */
+  notesChanged?(): void;
 };
 
 export type WorkbenchToolInvoker = (name: string, args: JsonRecord) => Promise<WorkbenchMcpToolResult>;
@@ -93,6 +106,20 @@ export function createWorkbenchToolInvoker(context: PlannerContext, options: Wor
       try {
         return { ok: true, text: runTaskTool(context, args) };
       } catch (error) {
+        return failure(error);
+      }
+    }
+    const notesTool = options.projectNotes !== undefined && (name === MEMORY_TOOL_NAME || name === PLAN_TOOL_NAME);
+    if (notesTool || (options.projectFiles !== undefined && name === PROJECT_FILES_TOOL_NAME)) {
+      // Through the engine, as the local operations of the same names: each
+      // call is a step in the run, and a change follows the approval mode.
+      // Wrong ids and missing passages come back for the model to correct.
+      try {
+        const result = await runStudioTool(name, args);
+        if (result.ok && notesTool && !isProjectDataRead(name, args)) options.notesChanged?.();
+        return result;
+      } catch (error) {
+        options.fail(error);
         return failure(error);
       }
     }

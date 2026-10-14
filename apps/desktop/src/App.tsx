@@ -4,22 +4,29 @@ import {
   HelpCircle, Info, ListChecks, Loader2, MessageSquare, MinusCircle, Moon, MoreHorizontal,
   ArrowUp, Maximize2, Minimize2, PanelLeftClose, PanelLeftOpen, Paperclip, Pencil, Play, Plus, RotateCw, Scissors, Search, Settings, Square,
   ShieldCheck, Sparkles, Sun, Film,
-  Trash2, X, Zap,
+  Trash2, X, Zap, NotebookPen, Files,
 } from "lucide-react";
+import { ProjectNotesPanel } from "./project-notes-panel";
+import {
+  carriesOsFiles, carriesProjectFile, dragProjectFile, droppedProjectFile, FileKindIcon, ProjectFileViewer, ProjectFilesPanel,
+} from "./project-files-panel";
+import { ModelActionsContext, type ModelActions } from "./model-actions";
+import { CHAT_ROLE_BLURB, CHAT_ROLE_LABEL, CHAT_ROLES, isChatRole, type ChatRole } from "../shared/chat-role";
+import { canSendToStudio, chooseSendPlace, type ProjectFile, type SendPlace } from "../shared/project-files";
 import { Fragment, memo, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { ClipTrimDialog } from "./clip-trim-dialog";
 import { VIDEO_EXTENSIONS, type ClipSelection } from "../shared/reference-clip";
 import {
   appendMessage, createChat, createId, createInitialWorkspace, createProject, undeliverNotes,
-  deleteChat, deleteProject, modelPreference, normalizeWorkspace, renameChat,
+  deleteChat, deleteProject, effectivePreferences, modelPreference, normalizeWorkspace, renameChat, rolePreference,
   renameProject, selectedModelId, setChatCompaction, setChatStudioInstance, chatStudioTarget, chatsByActivity, withdrawMessage,
   type AssetAttachment, type ChatMessage, type WorkspaceState,
 } from "./model";
 import {
   cancelRun, cancelRunStart, compactChatSessions, getStudioStatus,
   hasDesktopRuntime, loadWorkspace, pickAsset, getStorageStatus, recoverWorkspace, exportWorkspace, releaseAttachments,
-  answerRunQuestion, attachImage, attachVideo, ATTACHABLE_IMAGE_TYPES, ATTACHABLE_VIDEO_TYPES, selectClip, steerRun, compactChat,
+  answerRunQuestion, attachImage, attachVideo, ATTACHABLE_IMAGE_TYPES, ATTACHABLE_VIDEO_TYPES, selectClip, steerRun, compactChat, projectFilesApi, forgetDeletedChats, forgetDeletedProject,
   getBridgeState, restartBridge, subscribeToBridge, type McpServerState,
   getUpdateState, installUpdate, subscribeToUpdates, type AppUpdateState,
   flushWorkspace, getProviderModels, getProviderStatus, openScriptInStudio, respondToRun, saveWorkspace, startRun,
@@ -94,7 +101,11 @@ type Dialog =
   | { kind: "rename-project"; projectId: string }
   | { kind: "delete-project"; projectId: string }
   | { kind: "rename-chat"; projectId: string; chatId: string }
-  | { kind: "delete-chat"; projectId: string; chatId: string };
+  | { kind: "delete-chat"; projectId: string; chatId: string }
+  | { kind: "send-to-studio"; source: SendSource; name: string; placeName: string };
+
+/** What Send to Studio sends: a project file, or a Blender result's model. */
+type SendSource = { projectId: string; fileId: string } | { previewId: string };
 
 const RENAME_ACTION = "rename";
 const DELETE_ACTION = "delete";
@@ -164,6 +175,9 @@ type ChatRun = {
 /** Whether a run is stopped on the person: a question or an approval waits for them. */
 const runNeedsInputOf = (run: ChatRun): boolean =>
   run.view !== null && run.view.outcome === null && (run.view.pendingQuestion !== null || run.view.pendingApproval !== null);
+
+/** Shared-file chips shown above the composer before the rest fold away. */
+const SHARED_CHIPS_SHOWN = 4;
 
 /** A manual compact keeps the last exchange word for word, so the next run starts from what was just said. */
 const COMPACT_KEEPS_MESSAGES = 2;
@@ -272,6 +286,7 @@ function App() {
   const [compactingChatId, setCompactingChatId] = useState<string | null>(null);
   // What the last compact said, kept with its chat so it never shows on another one.
   const [compactNotice, setCompactNotice] = useState<{ chatId: string; text: string } | null>(null);
+  const [showAllShared, setShowAllShared] = useState(false);
   /** The callId of a pending question being answered in the composer, if any. */
   const [explainingQuestion, setExplainingQuestion] = useState<string | null>(null);
   const composerRef = useRef<HTMLTextAreaElement>(null);
@@ -311,6 +326,19 @@ function App() {
   const [showSettings, setShowSettings] = useState(false);
   /** The community icon has just taken the dismissed card's place and pulses once. */
   const [communityIconArrived, setCommunityIconArrived] = useState(false);
+  const [showProjectNotes, setShowProjectNotes] = useState(false);
+  const [showFiles, setShowFiles] = useState(false);
+  /** The sidebar chat a file is being dragged over. */
+  const [dropTargetChat, setDropTargetChat] = useState<string | null>(null);
+  /** The selected project's shared files, or null while they load. */
+  const [projectFileList, setProjectFileList] = useState<ProjectFile[] | null>(null);
+  /** The send to Studio in progress: its id, to stop it, and the file or preview it is for. */
+  const [sending, setSending] = useState<{ sendId: string; key: string; name: string } | null>(null);
+  const sendingFile = sending?.key ?? null;
+  /** A shared-file chip opened for a look. */
+  const [viewingShared, setViewingShared] = useState<ProjectFile | null>(null);
+  const [modelBusy, setModelBusy] = useState<ModelActions["busy"]>(null);
+  const [savedPreviews, setSavedPreviews] = useState<ReadonlySet<string>>(new Set());
   /** The chat whose message waits for its compaction to finish before it sends. */
   const [sendAfterCompact, setSendAfterCompact] = useState<string | null>(null);
   /** Why Send opened Settings, shown at the top of it; null when it was opened by hand. */
@@ -564,7 +592,10 @@ function App() {
     return () => window.clearInterval(interval);
   }, [hydrated, refreshStudioStatus]);
 
-  const provider = workspace.preferences.provider;
+  /** The chat's role, whose model and effort the composer shows and a run uses. */
+  const activeRole: ChatRole | null = selectedChat?.role ?? null;
+  const modelPrefs = effectivePreferences(workspace.preferences, activeRole);
+  const provider = modelPrefs.provider;
   const providerRef = useRef<ProviderId>(provider);
 
   const refreshProviderStatus = useCallback(async () => {
@@ -621,7 +652,10 @@ function App() {
   useEffect(() => {
     if (!hydrated || modelCatalog.models.length === 0) return;
     setWorkspace((current) => {
-      const chosen = selectedModelId(current.preferences, current.preferences.provider);
+      const role = current.projects.find((project) => project.id === current.selectedProjectId)?.chats
+        .find((chat) => chat.id === current.selectedChatId)?.role ?? null;
+      const preferences = effectivePreferences(current.preferences, role);
+      const chosen = selectedModelId(preferences, preferences.provider);
       // A remembered choice the provider no longer lists falls back to its
       // default rather than blocking the run.
       const models = modelCatalog.models;
@@ -629,16 +663,18 @@ function App() {
         models.find((candidate) => candidate.id === modelCatalog.defaultModelId) ??
         models[0];
       const effort = model.supportedReasoningEfforts.some((entry) =>
-        entry.reasoningEffort === current.preferences.reasoningEffort)
-        ? current.preferences.reasoningEffort
+        entry.reasoningEffort === preferences.reasoningEffort)
+        ? preferences.reasoningEffort
         : model.defaultReasoningEffort;
-      if (model.id === chosen && effort === current.preferences.reasoningEffort) return current;
+      if (model.id === chosen && effort === preferences.reasoningEffort) return current;
+      const patch = { ...modelPreference(preferences.provider, model.id), reasoningEffort: effort };
       return {
         ...current,
         preferences: {
           ...current.preferences,
-          ...modelPreference(current.preferences.provider, model.id),
-          reasoningEffort: effort,
+          ...(role !== null && current.preferences.roleSettings?.[role] !== undefined
+            ? rolePreference(current.preferences, role, patch)
+            : patch),
         },
       };
     });
@@ -746,6 +782,10 @@ function App() {
       setCompactingChatId(null);
     }
   };
+  // The project files shared with the selected chat that still exist, in the order shared.
+  const sharedFiles = selectedChat?.sharedFileIds === undefined || projectFileList === null
+    ? []
+    : selectedChat.sharedFileIds.flatMap((id) => projectFileList.filter((file) => file.id === id));
   const showRunControls = runStarting || runView !== null;
   /** The composer addresses the running agent rather than starting a run. */
   const steering = isRunning && !runStarting;
@@ -811,7 +851,7 @@ function App() {
         : `Choose the part of “${unread.name}” to send first.`);
       return;
     }
-    const chosenModelId = selectedModelId(workspace.preferences, provider);
+    const chosenModelId = selectedModelId(modelPrefs, provider);
     const availableModel = modelCatalog.models.find((model) => model.id === chosenModelId);
     if (hasDesktopRuntime() && (providerStatus.kind !== "signed-in" || !availableModel)) {
       setSettingsNotice(sendBlockedNotice(provider, providerStatus, modelCatalog.message));
@@ -856,10 +896,14 @@ function App() {
         const target = chatStudioTarget(next, projectId, chatId);
         return resolveInstanceId(studioStatus, target.instanceId, target.pinned);
       })(),
-      provider: next.preferences.provider,
+      provider: modelPrefs.provider,
       model: availableModel?.id ?? null,
-      effort: availableModel?.supportedReasoningEfforts.some((entry) => entry.reasoningEffort === next.preferences.reasoningEffort)
-        ? next.preferences.reasoningEffort
+      ...(targetChat?.role === undefined ? {} : { role: targetChat.role }),
+      ...(targetChat?.sharedFileIds === undefined || targetChat.sharedFileIds.length === 0
+        ? {}
+        : { sharedFileIds: targetChat.sharedFileIds.filter((id) => projectFileList?.some((file) => file.id === id) ?? true) }),
+      effort: availableModel?.supportedReasoningEfforts.some((entry) => entry.reasoningEffort === modelPrefs.reasoningEffort)
+        ? modelPrefs.reasoningEffort
         : availableModel?.defaultReasoningEffort ?? "medium",
     };
     const attempt = ++runAttempt.current;
@@ -995,6 +1039,38 @@ function App() {
     if (overlaySidebar) setSidebarShown(false);
   }, [overlaySidebar]);
 
+  useEffect(() => {
+    if (!hydrated) return;
+    const projectId = workspace.selectedProjectId;
+    let live = true;
+    setProjectFileList(null);
+    const load = () => void projectFilesApi.list(projectId).then((result) => {
+      if (live) setProjectFileList(result.ok ? result.value : []);
+    });
+    load();
+    const unsubscribe = projectFilesApi.subscribe((changed) => { if (changed === projectId) load(); });
+    return () => { live = false; unsubscribe(); };
+  }, [hydrated, workspace.selectedProjectId]);
+
+  /** Blender results in the chat: keep one in the project, or send it to Studio. */
+  const modelActionsContext = useRef({ projectId: workspace.selectedProjectId, chatId: workspace.selectedChatId });
+  modelActionsContext.current = { projectId: workspace.selectedProjectId, chatId: workspace.selectedChatId };
+  const modelActions = useMemo<ModelActions>(() => ({
+    busy: modelBusy ?? (sending === null ? null : { previewId: sending.key, action: "send" }),
+    saved: savedPreviews,
+    save: (previewId) => {
+      const context = modelActionsContext.current;
+      setModelBusy({ previewId, action: "save" });
+      void projectFilesApi.savePreview(context.projectId, previewId, context.chatId).then((result) => {
+        if (result.ok) {
+          setSavedPreviews((current) => new Set(current).add(previewId));
+          setAttachmentError(`Saved ${result.value.name} to the project files. Every chat in the project can use it.`);
+        } else setAttachmentError(result.message);
+      }).finally(() => setModelBusy(null));
+    },
+    send: (previewId) => askToSendRef.current({ previewId }, "this Blender model"),
+  }), [modelBusy, savedPreviews, sending]);
+
   // A message sent during compaction goes once it finishes, into the chat it
   // was written for. Moving to another chat in the meantime drops the wait;
   // the words stay in the composer.
@@ -1036,6 +1112,7 @@ function App() {
     if (!storageAvailable || storageRecovery.required) return;
     resetRun(chatId, true);
     setWorkspace((current) => deleteChat(current, projectId, chatId));
+    forgetDeletedChats([chatId]);
     clearComposer();
     setAttachments([]);
     closeDialog();
@@ -1043,8 +1120,10 @@ function App() {
 
   const removeProject = (projectId: string) => {
     if (!storageAvailable || storageRecovery.required) return;
-    for (const chat of workspace.projects.find((project) => project.id === projectId)?.chats ?? []) resetRun(chat.id, true);
+    const chats = workspace.projects.find((project) => project.id === projectId)?.chats ?? [];
+    for (const chat of chats) resetRun(chat.id, true);
     setWorkspace((current) => deleteProject(current, projectId));
+    forgetDeletedProject(projectId, chats.map((chat) => chat.id));
     setExpandedProjects((current) => {
       const next = new Set(current);
       next.delete(projectId);
@@ -1081,6 +1160,90 @@ function App() {
   const updatePreferences = (changes: Partial<WorkspaceState["preferences"]>) => {
     setWorkspace((current) => ({ ...current, preferences: { ...current.preferences, ...changes } }));
   };
+
+  /** A model or effort choice: the chat's role keeps its own, a general chat changes the workspace's. */
+  const updateModelChoice = (changes: Partial<WorkspaceState["preferences"]>) => {
+    setWorkspace((current) => ({
+      ...current,
+      preferences: {
+        ...current.preferences,
+        ...(activeRole === null ? changes : rolePreference(current.preferences, activeRole, changes)),
+      },
+    }));
+  };
+
+  /** Change one chat's own fields without touching its messages or order. */
+  const updateChatFields = useCallback((projectId: string, chatId: string, change: (chat: WorkspaceState["projects"][number]["chats"][number]) => Partial<WorkspaceState["projects"][number]["chats"][number]>) => {
+    setWorkspace((current) => ({
+      ...current,
+      projects: current.projects.map((project) => project.id !== projectId ? project : {
+        ...project,
+        chats: project.chats.map((chat) => chat.id === chatId ? { ...chat, ...change(chat) } : chat),
+      }),
+    }));
+  }, []);
+
+  const setChatRole = (role: ChatRole | null) => {
+    if (selectedChat === undefined || selectedChat === null) return;
+    updateChatFields(workspace.selectedProjectId, selectedChat.id, () => ({ role: role ?? undefined }));
+  };
+
+  /** Put a project file in front of a chat, or take it away. */
+  const shareFile = useCallback((projectId: string, chatId: string, fileId: string, shared: boolean) => {
+    updateChatFields(projectId, chatId, (chat) => {
+      const current = chat.sharedFileIds ?? [];
+      const next = shared ? (current.includes(fileId) ? current : [...current, fileId]) : current.filter((id) => id !== fileId);
+      return { sharedFileIds: next.length === 0 ? undefined : next };
+    });
+  }, [updateChatFields]);
+
+  /** Files dropped from the computer onto a chat: into the project, and shared with that chat. */
+  const addFilesToChat = async (projectId: string, chatId: string | null, dropped: File[]) => {
+    const result = await projectFilesApi.addDropped(projectId, dropped, chatId);
+    if (!result.ok) { setAttachmentError(result.message); return; }
+    if (chatId !== null) for (const file of result.value) shareFile(projectId, chatId, file.id, true);
+    setAttachmentError(`Added ${result.value.length === 1 ? result.value[0].name : `${result.value.length} files`} to the project files${chatId === null ? "" : " and shared with this chat"}.`);
+  };
+
+  /**
+   * The chat's place for a send: the place its runs worked in or the user
+   * picked for it is chosen; otherwise the send needs exactly one open place.
+   */
+  const sendPlace = (): SendPlace => {
+    const target = chatStudioTarget(workspace, workspace.selectedProjectId, workspace.selectedChatId);
+    return { instanceId: target.instanceId, chosen: target.pinned || selectedChat?.studioInstanceId !== undefined };
+  };
+
+  /**
+   * Ask before sending: an upload to Roblox cannot be taken back, so the
+   * confirmation names the file and the place, and says it goes through
+   * moderation. A place that could not take it is reported instead, with
+   * nothing uploaded.
+   */
+  const askToSend = (source: SendSource, name: string) => {
+    if (sending !== null) return;
+    const chosen = chooseSendPlace(studioStatus.instances ?? [], sendPlace());
+    if (!chosen.ok) { setAttachmentError(chosen.message); return; }
+    const placeName = connectedStudios(studioStatus).find((studio) => studio.instanceId === chosen.instanceId)?.name ?? "the place";
+    setDialog({ kind: "send-to-studio", source, name, placeName });
+  };
+  const askToSendRef = useRef(askToSend);
+  askToSendRef.current = askToSend;
+
+  const sendToStudioNow = async (source: SendSource, name: string) => {
+    closeDialog();
+    const sendId = createId("send");
+    setSending({ sendId, key: "fileId" in source ? source.fileId : source.previewId, name });
+    setAttachmentError(null);
+    try {
+      const result = await projectFilesApi.sendToStudio(source, workspace.preferences.mcpEndpoint, sendPlace(), sendId);
+      setAttachmentError(`${name.charAt(0).toUpperCase()}${name.slice(1)}: ${result.message}`);
+    } finally {
+      setSending(null);
+    }
+  };
+
+  const sendFileToStudio = (file: ProjectFile) => askToSend({ projectId: workspace.selectedProjectId, fileId: file.id }, file.name);
 
   const dismissCommunityInvite = () => {
     updatePreferences({ communityInviteDismissed: true });
@@ -1372,7 +1535,7 @@ function App() {
   const invite = hydrated ? communityInvite(COMMUNITY_INVITE_URL, workspace.preferences.communityInviteDismissed, workspace.projects) : "none";
   const imagesReachModel = hasDesktopRuntime();
   const selectedModel = modelCatalog.models
-    .find((model) => model.id === selectedModelId(workspace.preferences, provider)) ?? null;
+    .find((model) => model.id === selectedModelId(modelPrefs, provider)) ?? null;
   const contextView = contextMeterView(
     workspace.selectedChatId === null ? undefined : contextReadings.get(workspace.selectedChatId),
     { provider, model: selectedModel?.id ?? null },
@@ -1414,6 +1577,16 @@ function App() {
 
   const renderDialog = () => {
     if (!dialog) return null;
+    if (dialog.kind === "send-to-studio") {
+      return <ConfirmModal
+        heading={`Send ${dialog.name} to Studio?`}
+        description={`Roqer uploads it to Roblox as a Model with your Open Cloud key, then inserts it into ${dialog.placeName}'s Workspace. The upload goes to your Roblox account and through Roblox moderation, and it cannot be taken back from Roqer.`}
+        confirmLabel="Upload and insert"
+        confirmIcon={<ArrowUp size={15} />}
+        tone="primary"
+        onConfirm={() => void sendToStudioNow(dialog.source, dialog.name)} onClose={closeDialog}
+      />;
+    }
     if (dialog.kind === "create-project") {
       return <NameModal
         heading="Create a project" description="Keep related chats together in one project."
@@ -1469,7 +1642,7 @@ function App() {
   };
 
   return (
-    <div className="app-shell" data-theme={theme} data-sidebar={sidebarShown ? "shown" : "hidden"} aria-busy={!hydrated}>
+    <ModelActionsContext.Provider value={modelActions}><div className="app-shell" data-theme={theme} data-sidebar={sidebarShown ? "shown" : "hidden"} aria-busy={!hydrated}>
       {/* Settings covers the chat rather than replacing it, so a run keeps
           streaming underneath; while it is open the chat is unreachable. */}
       <aside className="sidebar" id="sidebar" inert={showSettings}>
@@ -1505,8 +1678,30 @@ function App() {
                     const runHere = chatRun !== null;
                     const needsInput = chatRun !== null && runNeedsInputOf(chatRun);
                     const runState = runHere ? (needsInput ? "chat-needs-input" : "chat-running") : "";
-                    return <div className={`chat-row ${workspace.selectedChatId === chat.id ? "chat-selected" : ""} ${runState}`} key={chat.id}>
-                      <button className="chat-main" onClick={() => selectChat(project.id, chat.id)}><MessageSquare size={15} /><span className="chat-row-title">{chat.title}</span>
+                    return <div
+                      className={`chat-row ${workspace.selectedChatId === chat.id ? "chat-selected" : ""} ${runState}${dropTargetChat === chat.id ? " chat-drop-target" : ""}`}
+                      key={chat.id}
+                      onDragOver={(event) => {
+                        if (!carriesProjectFile(event) && !carriesOsFiles(event)) return;
+                        event.preventDefault();
+                        setDropTargetChat(chat.id);
+                      }}
+                      onDragLeave={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setDropTargetChat(null); }}
+                      onDrop={(event) => {
+                        setDropTargetChat(null);
+                        const projectFile = droppedProjectFile(event, project.id);
+                        if (projectFile !== null) {
+                          event.preventDefault();
+                          shareFile(project.id, chat.id, projectFile, true);
+                          setAttachmentError(`Shared the file with “${chat.title}”.`);
+                        } else if (event.dataTransfer.files.length > 0) {
+                          event.preventDefault();
+                          void addFilesToChat(project.id, chat.id, Array.from(event.dataTransfer.files));
+                        }
+                      }}
+                    >
+                      <button className={`chat-main${chat.role !== undefined ? " has-role" : ""}`} onClick={() => selectChat(project.id, chat.id)}><MessageSquare size={15} /><span className="chat-row-title">{chat.title}</span>
+                        {chat.role !== undefined && <span className={`chat-role-tag role-${chat.role}`}>{CHAT_ROLE_LABEL[chat.role]}</span>}
                         {/* While a run is in this chat, its state replaces the
                             row's timestamp: which chat Roqer is in, and whether
                             it is waiting, is the fact worth having from any
@@ -1555,7 +1750,18 @@ function App() {
         <header className="topbar">
           <button className="icon-button menu-button" onClick={() => setSidebarShown(true)} aria-label="Show sidebar" title="Show sidebar" aria-controls="sidebar" aria-expanded={sidebarShown}><PanelLeftOpen size={20} /></button>
           <div className="chat-heading"><strong>{selectedChat?.title ?? selectedProject?.name ?? "New project"}</strong><span>{selectedProject?.name} · {saveStatus === "saving" ? "saving…" : saveStatus === "error" ? "save failed" : "saved locally"}</span></div>
+          {selectedChat !== undefined && selectedChat !== null && <label className={`role-picker${activeRole === null ? "" : ` role-${activeRole}`}`} title={activeRole === null ? "Give this chat a role: each role keeps its own model and effort" : CHAT_ROLE_BLURB[activeRole]}>
+            <span>Role</span>
+            <select value={activeRole ?? ""} disabled={isRunning} onChange={(event) => setChatRole(isChatRole(event.target.value) ? event.target.value : null)}>
+              <option value="">General</option>
+              {CHAT_ROLES.map((role) => <option key={role} value={role}>{CHAT_ROLE_LABEL[role]}</option>)}
+            </select>
+          </label>}
           <div className="topbar-actions">
+            <button className="icon-button files-button" onClick={() => setShowFiles(true)} aria-label="Project files" title="Project files: models, pictures and documents every chat can use">
+              <Files size={18} />{projectFileList !== null && projectFileList.length > 0 && <span className="files-count">{projectFileList.length}</span>}
+            </button>
+            <button className="icon-button" onClick={() => setShowProjectNotes(true)} aria-label="Project notes: master plan and memory" title="Project notes (master plan and memory)"><NotebookPen size={18} /></button>
             <button className="icon-button theme-button" onClick={() => updatePreferences({ theme: theme === "light" ? "dark" : "light" })} aria-label={theme === "light" ? "Switch to dark theme" : "Switch to light theme"} title={theme === "light" ? "Dark theme" : "Light theme"}>{theme === "light" ? <Moon size={18} /> : <Sun size={18} />}</button>
             <div className="connection-wrap" ref={connectionRef}>
               <button className={`connection-pill status-${studioStatus.kind}`} onClick={() => setShowConnection((value) => !value)}><span className="live-dot" /><span className="connection-label">{targetStudio?.name ?? (chatPinned && chatInstanceId !== null ? "This chat's place is not open" : studioStatus.placeName ?? "Roblox Studio")}</span><span className="connection-detail">{studioStatus.message}</span><ChevronDown size={15} /></button>
@@ -1668,6 +1874,11 @@ function App() {
           <div
             className={`composer-card${draggingImage ? " dropping" : ""}`}
             onDragOver={(event) => {
+              if (carriesProjectFile(event)) {
+                event.preventDefault();
+                setDraggingImage(true);
+                return;
+              }
               if (isRunning || !Array.from(event.dataTransfer.items).some((item) => item.kind === "file")) return;
               event.preventDefault();
               setDraggingImage(true);
@@ -1675,11 +1886,22 @@ function App() {
             onDragLeave={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setDraggingImage(false); }}
             onDrop={(event) => {
               setDraggingImage(false);
+              const projectFile = droppedProjectFile(event, workspace.selectedProjectId);
+              if (projectFile !== null) {
+                event.preventDefault();
+                if (selectedChat) shareFile(workspace.selectedProjectId, selectedChat.id, projectFile, true);
+                return;
+              }
               if (isRunning) return;
+              const dropped = Array.from(event.dataTransfer.files);
               const images = droppedImages(event.dataTransfer.files);
-              if (images.length === 0) return;
+              // Pictures and clips attach to the message; anything else (a
+              // model, a plan) goes into the project's files for this chat.
+              const others = dropped.filter((file) => !images.includes(file));
+              if (images.length === 0 && others.length === 0) return;
               event.preventDefault();
-              void attachImages(images);
+              if (images.length > 0) void attachImages(images);
+              if (others.length > 0) void addFilesToChat(workspace.selectedProjectId, selectedChat?.id ?? null, others);
             }}
           >
             {composerExpanded
@@ -1699,7 +1921,23 @@ function App() {
             {/* A disabled composer with no reason reads as a broken one. This
                 says where the run is and offers the two things that can be done
                 about it from here: go to it, or stop it. */}
-            {draggingImage && <div className="composer-drop-hint">Drop an image or a video to attach it</div>}
+            {draggingImage && <div className="composer-drop-hint">Drop a picture or video to attach it, or a model or document to share it with this chat</div>}
+            {selectedChat?.sharedFileIds !== undefined && projectFileList !== null && <div className="shared-files" aria-label="Project files shared with this chat">
+              <span className="shared-files-label">Shared:</span>
+              {/* A long list folds after a few, so it never crowds the message out. */}
+              {(showAllShared ? sharedFiles : sharedFiles.slice(0, SHARED_CHIPS_SHOWN)).map((file) => <span key={file.id} className={`shared-chip kind-${file.kind}`} draggable onDragStart={(event) => dragProjectFile(event, workspace.selectedProjectId, file)} title="Drag onto another chat to share it there">
+                <button type="button" onClick={() => setViewingShared(file)} title={file.kind === "model" ? "View in 3D" : "Open"}><FileKindIcon file={file} size={13} /> {file.name}</button>
+                <button type="button" className="shared-chip-remove" onClick={() => shareFile(workspace.selectedProjectId, selectedChat.id, file.id, false)} aria-label={`Stop sharing ${file.name} with this chat`}><X size={12} /></button>
+              </span>)}
+              {sharedFiles.length > SHARED_CHIPS_SHOWN && <button type="button" className="shared-files-more" aria-expanded={showAllShared} onClick={() => setShowAllShared((shown) => !shown)}>
+                {showAllShared ? "Show fewer" : `+${sharedFiles.length - SHARED_CHIPS_SHOWN} more`}
+              </button>}
+              <button type="button" className="shared-files-more" onClick={() => setShowFiles(true)}>Files…</button>
+            </div>}
+            {sending !== null && <div className="attachment-notice compact-queued" role="status">
+              <span><Loader2 size={13} className="spin" aria-hidden="true" /> Sending {sending.name} to Studio: uploading to Roblox, then inserting it into the place.</span>
+              <button onClick={() => void projectFilesApi.cancelSend(sending.sendId)}>Stop</button>
+            </div>}
             {sendAfterCompact !== null && sendAfterCompact === workspace.selectedChatId && <div className="attachment-notice compact-queued" role="status">
               <span><Loader2 size={13} className="spin" aria-hidden="true" /> Queued: your message sends as soon as compacting finishes. You can keep editing it.</span>
               <button onClick={() => setSendAfterCompact(null)}>Cancel</button>
@@ -1753,15 +1991,15 @@ function App() {
                 status={providerStatus}
                 catalog={modelCatalog}
                 selectedModel={selectedModel}
-                effort={workspace.preferences.reasoningEffort}
+                effort={modelPrefs.reasoningEffort}
                 disabled={isRunning}
                 onManage={() => setShowSettings(true)}
-                onEffort={(reasoningEffort) => updatePreferences({ reasoningEffort })}
+                onEffort={(reasoningEffort) => updateModelChoice({ reasoningEffort })}
                 onPick={(nextProvider, model) => {
-                  const effort = model.supportedReasoningEfforts.some((entry) => entry.reasoningEffort === workspace.preferences.reasoningEffort)
-                    ? workspace.preferences.reasoningEffort
+                  const effort = model.supportedReasoningEfforts.some((entry) => entry.reasoningEffort === modelPrefs.reasoningEffort)
+                    ? modelPrefs.reasoningEffort
                     : model.defaultReasoningEffort;
-                  updatePreferences({ provider: nextProvider, ...modelPreference(nextProvider, model.id), reasoningEffort: effort });
+                  updateModelChoice({ provider: nextProvider, ...modelPreference(nextProvider, model.id), reasoningEffort: effort });
                 }}
               />
               <RunMenu
@@ -1796,10 +2034,33 @@ function App() {
         </div>
       </main>
 
+      {showFiles && <ProjectFilesPanel
+        projectId={workspace.selectedProjectId}
+        projectName={selectedProject?.name ?? "This project"}
+        chat={selectedChat ? { id: selectedChat.id, title: selectedChat.title, sharedFileIds: selectedChat.sharedFileIds ?? [] } : null}
+        files={projectFileList}
+        onShare={(fileId, shared) => { if (selectedChat) shareFile(workspace.selectedProjectId, selectedChat.id, fileId, shared); }}
+        onSendToStudio={sendFileToStudio}
+        sending={sendingFile}
+        onClose={() => setShowFiles(false)}
+      />}
+      {viewingShared !== null && <ProjectFileViewer
+        projectId={workspace.selectedProjectId}
+        file={viewingShared}
+        onClose={() => setViewingShared(null)}
+        actions={viewingShared.kind === "model" && canSendToStudio(viewingShared.name) && <button type="button" className="files-action primary" disabled={sendingFile !== null} onClick={() => sendFileToStudio(viewingShared)}>
+          {sendingFile === viewingShared.id ? <Loader2 size={14} className="spin" /> : <ArrowUp size={14} />} Send to Studio
+        </button>}
+      />}
+      {showProjectNotes && <ProjectNotesPanel
+        projectId={workspace.selectedProjectId}
+        projectName={selectedProject?.name ?? "This project"}
+        onClose={() => setShowProjectNotes(false)}
+      />}
       {showSettings && <SettingsPage preferences={workspace.preferences} studioStatus={studioStatus} updateState={updateState} onPreferences={updatePreferences} onStudioRefresh={() => void refreshStudioStatus()} onProviderChanged={() => { void refreshProviderStatus(); void refreshProviderModels(); }} onExport={() => void exportChats(storageRecovery.required ? undefined : workspace)} notice={settingsNotice ?? undefined} onClose={() => { setShowSettings(false); setSettingsNotice(null); }} />}
       {renderDialog()}
       {!hydrated && <div className="loading-overlay"><div><span /><strong>Opening your workspace…</strong></div></div>}
-    </div>
+    </div></ModelActionsContext.Provider>
   );
 }
 
@@ -2898,18 +3159,21 @@ function NameModal({ heading, description, label, placeholder, initialValue = ""
  * dialog says what is about to be lost in the same terms the sidebar uses, and
  * Cancel keeps the focus so that leaning on Enter cannot delete anything.
  */
-function ConfirmModal({ heading, description, confirmLabel, onConfirm, onClose }: {
+function ConfirmModal({ heading, description, confirmLabel, onConfirm, onClose, confirmIcon = <Trash2 size={15} />, tone = "danger" }: {
   heading: string;
   description: string;
   confirmLabel: string;
   onConfirm: () => void;
   onClose: () => void;
+  confirmIcon?: ReactNode;
+  /** A delete is danger; an action the user asked for, confirmed, is primary. */
+  tone?: "danger" | "primary";
 }) {
   useEscapeToClose(onClose);
   return <div className="modal-backdrop" role="presentation" onMouseDown={onClose}><div className="name-modal" role="dialog" aria-modal="true" aria-label={heading} onMouseDown={(event) => event.stopPropagation()}>
     <div className="modal-header"><div><h2>{heading}</h2></div><button className="icon-button" onClick={onClose} aria-label="Close"><X size={19} /></button></div>
     <p>{description}</p>
-    <div className="modal-actions"><button className="secondary-action" autoFocus onClick={onClose}>Cancel</button><button className="danger-action" onClick={onConfirm}><Trash2 size={15} /> {confirmLabel}</button></div>
+    <div className="modal-actions"><button className="secondary-action" autoFocus onClick={onClose}>Cancel</button><button className={tone === "danger" ? "danger-action" : "primary-action"} onClick={onConfirm}>{confirmIcon} {confirmLabel}</button></div>
   </div></div>;
 }
 

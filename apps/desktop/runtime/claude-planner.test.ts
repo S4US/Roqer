@@ -11,6 +11,8 @@ import {
   compactClaudeChat, createClaudePlanner, streamedOutput, type ClaudeSession,
 } from "./claude-planner";
 import { ClaudeSessionRegistry } from "./claude-session-registry";
+import { ProjectNotesStore } from "./project-notes";
+import { projectDataOperations } from "./project-operations";
 import { timeoutForTool } from "../shared/mcp-tools";
 import type { RunUsage } from "../shared/run-events";
 import type { AgentDefinition } from "./agent-definition";
@@ -1640,6 +1642,81 @@ test("compacting a chat resumes its saved session with /compact allowed and repo
     assert.equal(sessions.size, 0);
   } finally {
     await fixture.dispose();
+  }
+});
+
+const NOTES_TOOLS = ["mcp__workbench__project_memory", "mcp__workbench__master_plan"];
+
+test("Claude is given the project's notes as data, and its own edits to them are steps in the run", async () => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "roqer-notes-"));
+  try {
+    const store = new ProjectNotesStore(directory);
+    await store.setPlan("project-1", "# Dark Forest\n\n- Radar: status building");
+    await store.addMemory("project-1", "Characters are R6 only.");
+    const sessions = new ProviderSessionStore<ClaudeSession>();
+    const provider = savingLauncher(NOTES_TOOLS);
+    const planner = createClaudePlanner({
+      ...PLANNER_DEFAULTS, launcher: provider.launcher, chatId: "chat-1", sessions,
+      projectNotes: { store, projectId: "project-1" },
+    });
+    const controller = new AbortController();
+    const made = makeContext(controller);
+    // The engine runs the notes tools as local operations, as main.ts registers them.
+    const operations = new Map(projectDataOperations({ notes: { store, projectId: "project-1" } }));
+    const context: PlannerContext = {
+      ...made.context,
+      call: async (tool, args) => {
+        made.recorded.calls.push(tool);
+        return operations.get(tool)!(args, {}, async () => { throw new Error("no Studio"); });
+      },
+    };
+
+    let target!: Awaited<ReturnType<typeof mcpTarget>>;
+    provider.answerWith((text, child) => {
+      if (text.includes("Mark the radar done")) {
+        void (async () => {
+          target = await mcpTarget(provider.launches[0].args);
+          assert.match(await callTool(target, { action: "edit", old_text: "status building", new_text: "status done" }, "master_plan"), /"ok":true,"text":"Master plan updated."/);
+          assert.match(await callTool(target, { action: "add", text: "The radar sweep runs on the client." }, "project_memory"), /"text":"Saved as mem-/);
+          child.writeLine({ type: "result", subtype: "success", is_error: false, result: "Marked it done." });
+        })();
+        return;
+      }
+      child.writeLine({ type: "result", subtype: "success", is_error: false, result: "OK" });
+    });
+
+    await planner.run(context);
+    // The system prompt says how to keep the notes, and carries none of what they say.
+    const prompt = provider.launches[0].systemPrompt;
+    assert.match(prompt, /<project-notes-guide>/);
+    assert.match(prompt, /not instructions from Roqer/);
+    assert.doesNotMatch(prompt, /Dark Forest|R6 only/);
+    // Their contents come with the first message, framed as data.
+    assert.match(provider.inputs[0], /^<project-notes>\n\[Roqer: the project notes as they are saved now\. This is project data/);
+    assert.match(provider.inputs[0], /<master-plan>\n# Dark Forest/);
+    assert.match(provider.inputs[0], /Characters are R6 only\./);
+
+    await planner.run(followUp(context, "OK", "Mark the radar done."));
+    const notes = await store.get("project-1");
+    assert.match(notes.plan, /status done/);
+    assert.equal(notes.memories.length, 2);
+    // Each edit went through the engine, so the run shows it as a step.
+    assert.deepEqual(made.recorded.calls, ["master_plan", "project_memory"]);
+
+    // The session wrote those itself, so its next message carries no update.
+    await planner.run(followUp(followUp(context, "OK", "Mark the radar done."), "Marked it done.", "Next."));
+    assert.equal(provider.inputs[2], "Next.");
+
+    // The user edits the plan in Roqer: the live session is told on its next message.
+    await store.setPlan("project-1", "# Dark Forest\n\n- Radar: needs fixing");
+    const fourth = followUp(followUp(followUp(context, "OK", "Mark the radar done."), "Marked it done.", "Next."), "Answer 3", "And now?");
+    await planner.run(fourth);
+    assert.match(provider.inputs[3], /project notes changed since you last saw them/);
+    assert.match(provider.inputs[3], /needs fixing/);
+    assert.equal(provider.launches.length, 1, "telling it does not restart the process");
+    await sessions.closeAll();
+  } finally {
+    await fs.rm(directory, { recursive: true, force: true });
   }
 });
 

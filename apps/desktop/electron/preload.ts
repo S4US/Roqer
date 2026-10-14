@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer, type IpcRendererEvent } from "electron";
+import { contextBridge, ipcRenderer, webUtils, type IpcRendererEvent } from "electron";
 import {
   isProviderInstallResult,
   isProviderLoginResult,
@@ -41,6 +41,8 @@ import { isBlenderSettingsResult, type BlenderSettingsResult } from "../shared/b
 import { isRojoResult, type RojoResult } from "../shared/rojo";
 import { isModelPreviewResult, type ModelPreviewResult } from "../shared/model-preview";
 import { isEvidencePictureResult, type EvidencePictureResult } from "../shared/evidence-picture";
+import { isProjectNotesResult, type ProjectNotesResult } from "../shared/project-notes";
+import { isProjectFile, type ProjectFile, type ProjectFilesResult, type SendPlace, type SendToStudioResult } from "../shared/project-files";
 
 /**
  * The renderer's only route to the desktop runtime.
@@ -250,6 +252,10 @@ const chats = {
    * False when a run is working on the chat right now.
    */
   compact: (chatId: string): Promise<boolean> => ipcRenderer.invoke("chat:compact", chatId),
+  /** Remove what the main process keeps for deleted chats: saved sessions and their transcripts. */
+  forgetDeleted: (chatIds: string[]): Promise<boolean> => ipcRenderer.invoke("workspace:forget-chats", chatIds),
+  /** The same for a deleted project's chats, and its files and notes. */
+  forgetProject: (projectId: string, chatIds: string[]): Promise<boolean> => ipcRenderer.invoke("workspace:forget-project", projectId, chatIds),
   /**
    * Compact the chat's saved Claude conversation now, as `/compact` does.
    * `noSession` when there is none to compact.
@@ -263,6 +269,22 @@ const chats = {
       : { ok: false, message: "Compacting returned an invalid answer." };
   },
 };
+
+/** A files answer, checked: a failure's message, or a value the check accepts. */
+function filesAnswer<T>(value: unknown, check: (inner: unknown) => inner is T): ProjectFilesResult<T> {
+  if (typeof value !== "object" || value === null) return { ok: false, message: "Project files returned an invalid answer." };
+  const answer = value as { ok?: unknown; value?: unknown; message?: unknown };
+  if (answer.ok === false) return { ok: false, message: typeof answer.message === "string" ? answer.message : "Project files failed." };
+  return answer.ok === true && check(answer.value) ? { ok: true, value: answer.value } : { ok: false, message: "Project files returned an invalid answer." };
+}
+
+const isFileList = (value: unknown): value is ProjectFile[] => Array.isArray(value) && value.every(isProjectFile);
+const isTrue = (value: unknown): value is true => value === true;
+const isBytes = (value: unknown): value is Uint8Array => value instanceof Uint8Array;
+
+function notesAnswer(value: unknown): ProjectNotesResult {
+  return isProjectNotesResult(value) ? value : { ok: false, message: "The project notes returned an invalid answer." };
+}
 
 contextBridge.exposeInMainWorld("workbenchDesktop", {
   storage: {
@@ -371,6 +393,56 @@ contextBridge.exposeInMainWorld("workbenchDesktop", {
       if (!isEvidencePictureRef(ref)) return { ok: false, reason: "invalid" };
       const value: unknown = await ipcRenderer.invoke("previews:picture", ref);
       return isEvidencePictureResult(value) ? value : { ok: false, reason: "invalid" };
+    },
+  },
+  /** The project's memory and master plan. Every answer is checked before the window sees it. */
+  notes: {
+    get: async (projectId: string): Promise<ProjectNotesResult> => notesAnswer(await ipcRenderer.invoke("notes:get", projectId)),
+    setPlan: async (projectId: string, plan: string): Promise<ProjectNotesResult> =>
+      notesAnswer(await ipcRenderer.invoke("notes:set-plan", projectId, plan)),
+    addMemory: async (projectId: string, text: string): Promise<ProjectNotesResult> =>
+      notesAnswer(await ipcRenderer.invoke("notes:add-memory", projectId, text)),
+    updateMemory: async (projectId: string, id: string, text: string): Promise<ProjectNotesResult> =>
+      notesAnswer(await ipcRenderer.invoke("notes:update-memory", projectId, id, text)),
+    removeMemory: async (projectId: string, id: string): Promise<ProjectNotesResult> =>
+      notesAnswer(await ipcRenderer.invoke("notes:remove-memory", projectId, id)),
+  },
+  /** The project's shared files. Paths of dropped files are read here, where the File objects are. */
+  files: {
+    list: async (projectId: string) => filesAnswer(await ipcRenderer.invoke("files:list", projectId), isFileList),
+    addDropped: async (projectId: string, dropped: File[], chatId: string | null) => {
+      const paths = dropped.map((file) => webUtils.getPathForFile(file)).filter((entry) => entry !== "");
+      if (paths.length === 0) return { ok: false as const, message: "Those files could not be read. Drop files from your computer." };
+      return filesAnswer(await ipcRenderer.invoke("files:add", projectId, paths, chatId ?? undefined), isFileList);
+    },
+    pick: async (projectId: string, chatId: string | null) =>
+      filesAnswer(await ipcRenderer.invoke("files:pick", projectId, chatId ?? undefined), isFileList),
+    remove: async (projectId: string, fileId: string) => filesAnswer(await ipcRenderer.invoke("files:remove", projectId, fileId), isTrue),
+    note: async (projectId: string, fileId: string, note: string) =>
+      filesAnswer(await ipcRenderer.invoke("files:note", projectId, fileId, note), isProjectFile),
+    read: async (projectId: string, fileId: string) => filesAnswer(await ipcRenderer.invoke("files:read", projectId, fileId), isBytes),
+    reveal: async (projectId: string, fileId: string) => filesAnswer(await ipcRenderer.invoke("files:reveal", projectId, fileId), isTrue),
+    savePreview: async (projectId: string, previewId: string, chatId: string | null) =>
+      filesAnswer(await ipcRenderer.invoke("files:save-preview", projectId, previewId, chatId ?? undefined), isProjectFile),
+    sendToStudio: async (source: { projectId: string; fileId: string } | { previewId: string }, endpoint: string, place: SendPlace, sendId: string): Promise<SendToStudioResult> => {
+      const value: unknown = await ipcRenderer.invoke("studio:send-model", { source, endpoint, place, sendId });
+      if (typeof value !== "object" || value === null) return { ok: false, message: "Studio returned an invalid answer." };
+      const answer = value as { ok?: unknown; message?: unknown; assetId?: unknown; cancelled?: unknown };
+      return typeof answer.ok === "boolean" && typeof answer.message === "string"
+        ? {
+          ok: answer.ok,
+          message: answer.message,
+          ...(typeof answer.assetId === "string" ? { assetId: answer.assetId } : {}),
+          ...(answer.cancelled === true ? { cancelled: true as const } : {}),
+        }
+        : { ok: false, message: "Studio returned an invalid answer." };
+    },
+    /** Stop a send started with `sendToStudio`. */
+    cancelSend: (sendId: string): Promise<void> => ipcRenderer.invoke("studio:cancel-send", sendId),
+    subscribe: (listener: (projectId: string) => void) => {
+      const forward = (_event: IpcRendererEvent, projectId: unknown) => { if (typeof projectId === "string") listener(projectId); };
+      ipcRenderer.on("files:changed", forward);
+      return () => { ipcRenderer.removeListener("files:changed", forward); };
     },
   },
   app: {

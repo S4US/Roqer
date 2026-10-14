@@ -20,6 +20,9 @@ import { STUDIO_TOOL_NAME } from "./studio-tools";
 import { createWorkbenchToolInvoker, workbenchMcpTools, workbenchToolNames } from "./workbench-tools";
 import { buildConversationPrompt, buildFollowUpPrompt, buildResumePrompt, continuesConversation } from "./conversation-prompt";
 import type { ClaudeSessionRegistry } from "./claude-session-registry";
+import { notesVersion, projectNotesData, projectNotesGuide, type ProjectNotesStore } from "./project-notes";
+import { sharedFilesNotice, type ProjectFilesToolContext } from "./project-files";
+import { chatRoleInstructions, type ChatRole } from "../shared/chat-role";
 import type { ProviderSessionStore } from "./provider-sessions";
 import { runDeveloperInstructions } from "./run-instructions";
 import { createProseStream } from "./text-stream";
@@ -94,6 +97,12 @@ export type ClaudePlannerOptions = {
   referenceClips?: boolean;
   /** Where each chat's saved Claude Code session is recorded. Without it, sessions are not saved. */
   registry?: ClaudeSessionRegistry;
+  /** The project's memory and master plan, given to every session and editable with tools. */
+  projectNotes?: { store: ProjectNotesStore; projectId: string };
+  /** The project's shared files, and which the user shared with this chat. */
+  projectFiles?: ProjectFilesToolContext;
+  /** What this chat is for, when the user gave it a role. */
+  role?: ChatRole;
 };
 
 const isRecord = (value: unknown): value is JsonRecord =>
@@ -153,6 +162,9 @@ function systemPrompt(options: ClaudePlannerOptions, autoPlaytest: boolean): str
     "<developer-instructions>",
     runDeveloperInstructions(options.agent.developerInstructions, autoPlaytest),
     "</developer-instructions>",
+    // How to use the notes; their contents are data and arrive in the conversation.
+    ...(options.projectNotes === undefined ? [] : [projectNotesGuide()]),
+    ...(options.role === undefined ? [] : [chatRoleInstructions(options.role)]),
   ].join("\n\n");
 }
 
@@ -563,6 +575,8 @@ export class ClaudeSession {
   readonly skills: SkillToolRunner;
   /** The saved Claude Code session this process writes to, or null when none is kept. */
   sessionId: string | null = null;
+  /** The version of the project notes this conversation was last given, or null when it has not been given them. */
+  notesVersion: string | null = null;
 
   private binding: RunBinding | null = null;
   private dead = false;
@@ -680,7 +694,11 @@ export class ClaudeSession {
       if (!isRecord(message)) return;
       // Compaction replaces what the model was given with a summary of it, so
       // a pointer to a skill loaded before this line would point at nothing.
-      if (message.type === "system" && message.subtype === "compact_boundary") this.skills.clearCache();
+      // The same goes for the project notes it was given.
+      if (message.type === "system" && message.subtype === "compact_boundary") {
+        this.skills.clearCache();
+        this.notesVersion = null;
+      }
       this.binding?.message(message);
     });
   }
@@ -703,6 +721,7 @@ function sessionKey(options: ClaudePlannerOptions, { autoPlaytest, instanceId }:
     instanceId,
     options.model, options.supportsEffort ? options.effort : null, autoPlaytest,
     options.agent.id, options.agent.version, options.blender === true, options.referenceClips === true,
+    options.role ?? null, options.projectFiles !== undefined,
   ]);
 }
 
@@ -865,6 +884,13 @@ export function createClaudePlanner(options: ClaudePlannerOptions): Planner {
         escapeResult: ESCAPE_RESULT,
         settled: () => settled,
         fail,
+        notesChanged: () => {
+          const projectNotes = options.projectNotes;
+          if (projectNotes === undefined || session === undefined) return;
+          void projectNotes.store.get(projectNotes.projectId).then((current) => {
+            if (session !== undefined) session.notesVersion = notesVersion(current);
+          }, () => undefined);
+        },
       });
 
       const limitWarnings = new LimitWarnings("Claude", (label, detail) => context.status(label, detail));
@@ -885,6 +911,15 @@ export function createClaudePlanner(options: ClaudePlannerOptions): Planner {
           // which says when it resets; this is only the warning before it.
           const warning = claudeLimitWarning(message.rate_limit_info);
           if (warning !== null) limitWarnings.warn(warning);
+          return;
+        }
+
+        if (message.type === "system" && message.subtype === "compact_boundary") {
+          // Claude Code compacted the conversation mid-run. A resumed session
+          // must be sent the notes again as well as this live one.
+          if (registry !== undefined && session?.sessionId) {
+            void registry.store.update(registry.chatId, { sessionId: session.sessionId, notesVersion: null }).catch(() => undefined);
+          }
           return;
         }
 
@@ -972,6 +1007,9 @@ export function createClaudePlanner(options: ClaudePlannerOptions): Planner {
         ? { store: options.registry, chatId: options.chatId }
         : undefined;
       const key = sessionKey(options, context);
+      const notes = options.projectNotes === undefined
+        ? null
+        : await options.projectNotes.store.get(options.projectNotes.projectId).catch(() => null);
       /** How the first message is written: to a live process, a resumed saved session, or a new one. */
       let opening: "live" | "resumed" | "new" = "new";
       /** The saved session this run writes to, if sessions are saved. */
@@ -999,6 +1037,8 @@ export function createClaudePlanner(options: ClaudePlannerOptions): Planner {
           session = await ClaudeSession.open(
             options, key, context.autoPlaytest, context.signal, { id: saved.sessionId, resume: true },
           );
+          // The notes it was given before are in the conversation it resumed.
+          session.notesVersion = saved.notesVersion;
           opening = "resumed";
         }
         if (session === undefined) {
@@ -1039,7 +1079,7 @@ export function createClaudePlanner(options: ClaudePlannerOptions): Planner {
         });
         const skills = session.skills;
         const isLoaded = (name: string) => skills.isLoaded(name);
-        const text = opening === "live"
+        let text = opening === "live"
           ? buildFollowUpPrompt(context.conversation, context.prompt, isLoaded)
           : opening === "resumed"
             ? buildResumePrompt(
@@ -1047,11 +1087,28 @@ export function createClaudePlanner(options: ClaudePlannerOptions): Planner {
               saved!.instanceId !== null && saved!.instanceId !== context.instanceId ? [PLACE_CHANGED_NOTICE] : [],
             )
             : buildConversationPrompt(context.conversation, context.prompt);
+        // The notes' contents go in front of the message as data: the first
+        // time this conversation is given them, and again once they changed
+        // (the user edited them, or another chat did) or a compaction may
+        // have summarized them away.
+        if (notes !== null) {
+          const version = notesVersion(notes);
+          if (session.notesVersion !== version) {
+            text = `${projectNotesData(notes, session.notesVersion !== null)}\n\n${text}`;
+            session.notesVersion = version;
+          }
+        }
+        if (options.projectFiles !== undefined && options.projectFiles.shared.length > 0) {
+          const files = await options.projectFiles.store.list(options.projectFiles.projectId).catch(() => []);
+          const notice = sharedFilesNotice(files, options.projectFiles.shared);
+          if (notice !== null) text = `${notice}\n\n${text}`;
+        }
         if (registry !== undefined && session.sessionId !== null) {
           // Recorded before the model answers: from here on the saved session
           // holds this prompt, whatever becomes of the run.
           await registry.store.update(registry.chatId, {
             sessionId: session.sessionId, lastPrompt: context.prompt, instanceId: context.instanceId, model: options.model,
+            notesVersion: session.notesVersion,
           });
         }
         notePoll = setInterval(deliverNotes, options.notePollMs ?? NOTE_POLL_MS);
@@ -1129,7 +1186,7 @@ export async function compactClaudeChat(
     { id: saved.sessionId, resume: true }, true,
   );
   try {
-    return await new Promise<ClaudeCompaction>((resolve) => {
+    const result = await new Promise<ClaudeCompaction>((resolve) => {
       let preTokens: number | null = null;
       let postTokens: number | null = null;
       let boundary = false;
@@ -1160,6 +1217,9 @@ export async function compactClaudeChat(
       });
       session.writeUserMessage([{ type: "text", text: "/compact" }]);
     });
+    // The summary may not keep the notes word for word; the next run sends them again.
+    if (result.ok) await options.registry.update(options.chatId, { sessionId: saved.sessionId, notesVersion: null });
+    return result;
   } finally {
     await session.close();
   }
