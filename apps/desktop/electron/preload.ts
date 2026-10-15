@@ -368,6 +368,7 @@ contextBridge.exposeInMainWorld("workbenchDesktop", {
     chatGpt: connector("chatgpt"),
     claude: connector("claude"),
     antigravity: connector("antigravity"),
+    opencode: connector("opencode"),
     custom: connector("custom"),
   },
   customProviders,

@@ -2,11 +2,11 @@ import {
   AlertCircle, AlertTriangle, Archive, Boxes, Check, ChevronDown, ChevronRight, Circle, Download,
   CircleDot, ExternalLink, FileBox, FileCode2, FileText, Folder, FolderPlus, Gamepad2,
   HelpCircle, Info, ListChecks, Loader2, MessageSquare, MinusCircle, Moon, MoreHorizontal,
-  ArrowUp, Maximize2, Minimize2, PanelLeftClose, PanelLeftOpen, Paperclip, Pencil, Play, Plus, RotateCw, Scissors, Search, Settings, Square,
+  ArrowUp, Maximize2, Minimize2, PanelLeftClose, PanelLeftOpen, Paperclip, Pencil, Play, Plus, RotateCw, Scissors, Search, Settings, Square, Grid2X2, PanelsTopLeft,
   ShieldCheck, Sparkles, Sun, Film,
   Trash2, X, Zap,
 } from "lucide-react";
-import { Fragment, memo, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { Fragment, memo, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode, type Dispatch, type SetStateAction, type RefObject } from "react";
 import { createPortal } from "react-dom";
 import { ClipTrimDialog } from "./clip-trim-dialog";
 import { VIDEO_EXTENSIONS, type ClipSelection } from "../shared/reference-clip";
@@ -46,6 +46,8 @@ import { ContextMeter } from "./context-meter";
 import { compactUsageNote, contextMeterView, nextContextReading, type ContextReading } from "./context-usage";
 import { blockPreview, characterCount, composedMessage, isLongPaste, lineCount, textSize, type PastedBlock } from "./composer-text";
 import { RojoPill } from "./rojo-pill";
+import { reconcileChatTabs, closeChatTab, placeChat } from "./chat-tabs";
+import { closeChatGrid, createChatGrid, nextChatGridId, placeGridChat, type ChatGrid } from "./chat-grids";
 
 /** The key that sends with Enter and makes a new chat with N, named the way this computer's keyboard names it. */
 const SEND_MODIFIER = typeof navigator !== "undefined" && /Mac/.test(navigator.userAgent) ? "⌘" : "Ctrl";
@@ -90,6 +92,7 @@ import { providerLabel, type ProviderId } from "../shared/provider";
  * rename or a delete survive the row it was opened from scrolling away.
  */
 type Dialog =
+  | { kind: "close-tab"; chatId: string }
   | { kind: "create-project" }
   | { kind: "rename-project"; projectId: string }
   | { kind: "delete-project"; projectId: string }
@@ -127,6 +130,7 @@ const CHAT_MENU_ITEMS: readonly RowMenuItem[] = [
   { id: RENAME_ACTION, label: "Rename chat", icon: <Pencil size={14} /> },
   { id: "export", label: "Export chat…", icon: <Download size={14} /> },
   { id: "archive", label: "Archive to file…", icon: <Archive size={14} /> },
+  { id: "close", label: "Close chat", icon: <X size={14} /> },
   { id: DELETE_ACTION, label: "Delete chat", icon: <Trash2 size={14} />, danger: true },
 ];
 
@@ -143,7 +147,7 @@ const isImageAttachment = (attachment: AssetAttachment): boolean =>
 /**
  * One chat's run as the window tracks it. A chat has at most one run at a time,
  * and several chats may run at once: the main process refuses a second run in
- * the same chat or on the same Studio place, and everything else is per chat.
+ * the same chat, and sharing a Studio place is explicit in grid mode.
  */
 type ChatRun = {
   projectId: string;
@@ -238,8 +242,6 @@ function App() {
   const [saveStatus, setSaveStatus] = useState<"saved" | "saving" | "error">("saved");
   const [storageRecovery, setStorageRecovery] = useState<StorageStatus>({ required: false, message: null });
   const [storageError, setStorageError] = useState<string | null>(null);
-  const [attachmentError, setAttachmentError] = useState<string | null>(null);
-  const [draggingImage, setDraggingImage] = useState(false);
   const [bridgeState, setBridgeState] = useState<McpServerState>({ kind: "starting" });
   const [bridgeBusy, setBridgeBusy] = useState(false);
   /**
@@ -252,60 +254,34 @@ function App() {
   const [updateState, setUpdateState] = useState<AppUpdateState>({ kind: "idle" });
   const [storageBusy, setStorageBusy] = useState(false);
   const [expandedProjects, setExpandedProjects] = useState(() => new Set<string>());
-  const [composer, setComposer] = useState("");
-  /** Long pastes, folded out of the text so what was typed stays readable. Sent first, in order. */
-  const [pastedBlocks, setPastedBlocks] = useState<PastedBlock[]>([]);
-  const [composerExpanded, setComposerExpanded] = useState(false);
-  const [attachments, setAttachments] = useState<AssetAttachment[]>([]);
-  /** Clips whose frames Roqer is reading, and the one whose part is being chosen. */
-  const [readingClips, setReadingClips] = useState<ReadonlySet<string>>(() => new Set());
-  const [trimmingClip, setTrimmingClip] = useState<string | null>(null);
-  const attachmentsRef = useRef(attachments);
-  useEffect(() => { attachmentsRef.current = attachments; }, [attachments]);
+  const [openChatIds, setOpenChatIds] = useState<readonly string[]>([]);
+  const [grid, setGrid] = useState(true);
+  const [grids, setGrids] = useState<readonly ChatGrid[]>(() => [createChatGrid(1)]);
+  const [activeGridId, setActiveGridId] = useState(1);
+  const activeGrid = grids.find((entry) => entry.id === activeGridId) ?? grids[0];
+  const layoutSize = activeGrid.size;
+  const gridSlots = activeGrid.slots;
+  const setGridSlots = useCallback((update: (slots: readonly (string | null)[]) => readonly (string | null)[]) => {
+    setGrids((current) => current.map((entry) => entry.id === activeGridId ? { ...entry, slots: update(entry.slots) } : entry));
+  }, [activeGridId]);
+  const setLayoutSize = (size: ChatGrid["size"]) => setGrids((current) => current.map((entry) => entry.id === activeGridId ? { ...entry, size } : entry));
+  const pendingGridSlot = useRef<number | null>(null);
+  const lastGridSelection = useRef<string | null>(null);
+  const [expandedChatId, setExpandedChatId] = useState<string | null>(null);
+  const [providerRefresh, setProviderRefresh] = useState(0);
+  const [draftChats, setDraftChats] = useState<ReadonlySet<string>>(() => new Set());
+  const onDraftChange = useCallback((chatId: string, dirty: boolean) => {
+    setDraftChats((current) => {
+      if (current.has(chatId) === dirty) return current;
+      const next = new Set(current);
+      if (dirty) next.add(chatId); else next.delete(chatId);
+      return next;
+    });
+  }, []);
   /** Every chat's run, keyed by chat. See `runsRef` for why the latest copy is also kept in a ref. */
   const [runs, setRunsState] = useState<ReadonlyMap<string, ChatRun>>(() => new Map());
   /** The latest context reading per chat, for the composer's meter. Never saved; see context-usage.ts. */
   const [contextReadings, setContextReadings] = useState<ReadonlyMap<string, ContextReading>>(() => new Map());
-  /** The chat whose compact is waiting on the main process. */
-  const [compactingChatId, setCompactingChatId] = useState<string | null>(null);
-  // What the last compact said, kept with its chat so it never shows on another one.
-  const [compactNotice, setCompactNotice] = useState<{ chatId: string; text: string } | null>(null);
-  /** The callId of a pending question being answered in the composer, if any. */
-  const [explainingQuestion, setExplainingQuestion] = useState<string | null>(null);
-  const composerRef = useRef<HTMLTextAreaElement>(null);
-  const clearComposer = useCallback(() => {
-    setComposer("");
-    setPastedBlocks([]);
-    setComposerExpanded(false);
-  }, []);
-  // The box grows with what is typed, up to a limit the stylesheet sets, and
-  // scrolls after that; the expanded editor fills its space instead.
-  useLayoutEffect(() => {
-    const box = composerRef.current;
-    if (box === null) return;
-    box.style.height = "";
-    if (!composerExpanded) box.style.height = `${box.scrollHeight}px`;
-  }, [composer, composerExpanded, pastedBlocks.length]);
-  // The transcript keeps room for the composer below its last message, so a
-  // composer grown by a long draft never hides what it is replying to.
-  const dockRef = useRef<HTMLDivElement>(null);
-  useLayoutEffect(() => {
-    const dock = dockRef.current;
-    const workspaceElement = dock?.parentElement;
-    if (!dock || !workspaceElement || composerExpanded) return;
-    const measure = () => workspaceElement.style.setProperty("--dock-height", `${Math.ceil(dock.getBoundingClientRect().height)}px`);
-    measure();
-    const observer = new ResizeObserver(measure);
-    observer.observe(dock);
-    return () => observer.disconnect();
-  }, [composerExpanded]);
-  // Choosing to explain moves the person's attention from the card to the
-  // box, so the box takes focus rather than waiting to be clicked.
-  useEffect(() => {
-    if (explainingQuestion !== null) composerRef.current?.focus();
-  }, [explainingQuestion]);
-  const [showConnection, setShowConnection] = useState(false);
-  const connectionRef = useRef<HTMLDivElement>(null);
   const [showSettings, setShowSettings] = useState(false);
   /** The community icon has just taken the dismissed card's place and pulses once. */
   const [communityIconArrived, setCommunityIconArrived] = useState(false);
@@ -341,18 +317,70 @@ function App() {
   const recordedRuns = useRef(new Set<string>());
   const latestWorkspace = useRef(workspace);
   latestWorkspace.current = workspace;
-  /** Whether the box holds nothing typed or pasted, as of the latest render. */
-  const composerEmpty = useRef(true);
-  composerEmpty.current = composer === "" && pastedBlocks.length === 0;
-
-  const selectedProject = useMemo(
-    () => workspace.projects.find((project) => project.id === workspace.selectedProjectId) ?? workspace.projects[0],
-    [workspace],
-  );
-  const selectedChat = useMemo(
-    () => selectedProject?.chats.find((chat) => chat.id === workspace.selectedChatId),
-    [selectedProject, workspace.selectedChatId],
-  );
+  const chatLocations = useMemo(() => new Map(workspace.projects.flatMap((project) => project.chats.map((chat) => [chat.id, { project, chat }] as const))), [workspace.projects]);
+  useEffect(() => {
+    setOpenChatIds((current) => reconcileChatTabs(current, new Set(chatLocations.keys()), workspace.selectedChatId));
+  }, [chatLocations, workspace.selectedChatId]);
+  useEffect(() => {
+    setGrids((current) => current.map((entry) => ({ ...entry, slots: entry.slots.map((id) => id !== null && chatLocations.has(id) ? id : null) })));
+  }, [chatLocations]);
+  useEffect(() => {
+    if (!grid || workspace.selectedChatId === null) { lastGridSelection.current = null; return; }
+    const selected = workspace.selectedChatId;
+    const requested = pendingGridSlot.current;
+    pendingGridSlot.current = null;
+    if (lastGridSelection.current === selected && requested === null) return;
+    lastGridSelection.current = selected;
+    setGridSlots((current) => {
+      if (requested !== null) return placeChat(current, requested, selected);
+      if (current.slice(0, layoutSize).includes(selected)) return current;
+      const empty = current.slice(0, layoutSize).indexOf(null);
+      return placeChat(current, empty < 0 ? 0 : empty, selected);
+    });
+  }, [grid, workspace.selectedChatId, layoutSize, setGridSlots]);
+  useEffect(() => {
+    if (expandedChatId !== null) setExpandedChatId(workspace.selectedChatId);
+  }, [workspace.selectedChatId, expandedChatId]);
+  useEffect(() => {
+    setExpandedProjects((current) => current.has(workspace.selectedProjectId) ? current : new Set(current).add(workspace.selectedProjectId));
+  }, [workspace.selectedProjectId]);
+  const closeTab = (chatId: string) => {
+    if (expandedChatId === chatId) setExpandedChatId(null);
+    const closed = closeChatTab(openChatIds, chatId, workspace.selectedChatId);
+    if (grid && workspace.selectedChatId === chatId) closed.selected = gridSlots.slice(0, layoutSize).find((id) => id !== null && id !== chatId) ?? null;
+    setGridSlots((current) => current.map((id) => id === chatId ? null : id));
+    // Selecting the neighbouring tab must leave the closed chat's cell empty.
+    lastGridSelection.current = closed.selected;
+    if (!grids.some((entry) => entry.id !== activeGridId && entry.slots.includes(chatId))) setOpenChatIds(closed.tabs);
+    if (closed.selected !== workspace.selectedChatId) {
+      const next = closed.selected === null ? undefined : chatLocations.get(closed.selected);
+      setWorkspace((current) => ({ ...current, selectedProjectId: next?.project.id ?? current.selectedProjectId, selectedChatId: closed.selected }));
+    }
+  };
+  const activateGrid = (entry: ChatGrid) => {
+    const selected = entry.slots.slice(0, entry.size).find((id) => id !== null && chatLocations.has(id)) ?? null;
+    const location = selected === null ? undefined : chatLocations.get(selected);
+    lastGridSelection.current = selected;
+    setActiveGridId(entry.id);
+    setGrid(true);
+    setExpandedChatId(null);
+    setWorkspace((current) => ({ ...current, selectedChatId: selected, selectedProjectId: location?.project.id ?? current.selectedProjectId }));
+  };
+  const newGrid = () => {
+    const entry = createChatGrid(nextChatGridId(grids));
+    setGrids((current) => [...current, entry]);
+    activateGrid(entry);
+  };
+  const closeGrid = (id: number) => {
+    const next = closeChatGrid(grids, id);
+    setGrids(next);
+    if (id === activeGridId) activateGrid(next[Math.min(grids.findIndex((entry) => entry.id === id), next.length - 1)]);
+  };
+  const assignChat = (cell: number, chatId: string) => {
+    if (!chatLocations.has(chatId)) return;
+    setOpenChatIds((current) => current.includes(chatId) ? current : [...current, chatId]);
+    setGrids((current) => placeGridChat(current, activeGridId, cell, chatId));
+  };
 
   /**
    * Abandon a chat's run, used when the chat or its project is deleted. With no
@@ -444,7 +472,8 @@ function App() {
         if (cancelled) return;
         setStorageRecovery(status);
         if (status.required) setSaveStatus("error");
-        const restored = normalizeWorkspace(saved, initialTheme);
+        const loaded = normalizeWorkspace(saved, initialTheme);
+        const restored = loaded.selectedChatId === null ? createChat(loaded) : loaded;
         setWorkspace(restored);
         // Open the project the user was last in, so their chats are visible
         // without a click. Nothing is expanded before this point.
@@ -521,27 +550,6 @@ function App() {
     const unsubscribe = subscribeToUpdates(setUpdateState);
     return () => { cancelled = true; unsubscribe(); };
   }, []);
-
-  // Dismissed the way the app's other menus are: a press anywhere outside, or
-  // Escape. The pill itself is inside the wrapper, so its own click still
-  // toggles rather than closing and reopening.
-  useEffect(() => {
-    if (!showConnection) return;
-    const handlePointerDown = (event: PointerEvent) => {
-      if (connectionRef.current && !connectionRef.current.contains(event.target as Node)) {
-        setShowConnection(false);
-      }
-    };
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setShowConnection(false);
-    };
-    document.addEventListener("pointerdown", handlePointerDown);
-    window.addEventListener("keydown", handleKeyDown);
-    return () => {
-      document.removeEventListener("pointerdown", handlePointerDown);
-      window.removeEventListener("keydown", handleKeyDown);
-    };
-  }, [showConnection]);
 
   const restartStudioBridge = useCallback(async () => {
     setBridgeBusy(true);
@@ -670,304 +678,6 @@ function App() {
     setRuns(next);
   }, [runs, setRuns]);
 
-  // The chat on screen is the one whose run the composer, the live view, and
-  // the stop control follow. Other chats keep their runs going in the background.
-  const selectedRun = selectedChat === undefined ? null : runs.get(selectedChat.id) ?? null;
-  const runView = selectedRun?.view ?? null;
-  const runStarting = selectedRun !== null && selectedRun.runId === null;
-  const isRunning = runStarting || (runView !== null && runView.outcome === null);
-
-  const compactedFrom = selectedChat?.compaction?.folded ?? 0;
-  const compactedUsage = compactUsageNote(selectedChat?.compaction?.usedTokens, selectedChat?.compaction?.windowTokens);
-  const compactTo = selectedChat === undefined ? 0 : selectedChat.messages.length - COMPACT_KEEPS_MESSAGES;
-  // Send waits while the chat on screen is being compacted: a run started
-  // between the main process dropping the provider's conversation and the
-  // record being saved would rebuild that conversation from the whole chat.
-  const compacting = compactingChatId !== null && compactingChatId === selectedChat?.id;
-  // Nothing new to fold yet, or a run may be working on this chat.
-  const canCompact = !isRunning && !compacting && compactTo > compactedFrom;
-
-  /**
-   * Fold the chat's older messages into a record the model reads in their place.
-   * Only the model's view changes: every message stays on screen. The main process
-   * is asked first, since it drops the provider's own copy of the conversation and
-   * refuses while a run owns the chat, in which case nothing changes here.
-   */
-  const compactSelectedChat = async () => {
-    if (!selectedChat || !selectedProject || !canCompact) return;
-    const projectId = selectedProject.id;
-    const chatId = selectedChat.id;
-    if (hasDesktopRuntime()) {
-      setCompactingChatId(chatId);
-      try {
-        if (!(await compactChatSessions(chatId))) return;
-      } finally {
-        setCompactingChatId(null);
-      }
-    }
-    const summary = compactChatSummary(
-      selectedChat.compaction?.summary ?? "",
-      toConversationMessages(selectedChat.messages.slice(compactedFrom, compactTo)),
-    );
-    // The figures are the provider's last report for this chat, taken as the
-    // compact happens. A chat with no report yet records none.
-    const reading = contextReadings.get(chatId);
-    const usage: { usedTokens?: number; windowTokens?: number | null } = reading === undefined
-      ? {}
-      : { usedTokens: reading.usedTokens, windowTokens: reading.windowTokens };
-    setWorkspace((current) => setChatCompaction(current, projectId, chatId, { folded: compactTo, summary, ...usage }));
-    // The reading described the context before the compact. The meter shows
-    // nothing rather than a figure the compact made untrue, until the next run reports.
-    setContextReadings((current) => {
-      if (!current.has(chatId)) return current;
-      const next = new Map(current);
-      next.delete(chatId);
-      return next;
-    });
-    const note = compactUsageNote(usage.usedTokens, usage.windowTokens);
-    setCompactNotice(note === null ? null : { chatId, text: `Compacted. ${note}` });
-  };
-  const showRunControls = runStarting || runView !== null;
-  /** The composer addresses the running agent rather than starting a run. */
-  const steering = isRunning && !runStarting;
-  /**
-   * The pending question the person chose to answer in their own words. The
-   * question stays pending -- the run stays paused -- until the note is sent,
-   * because resuming the model before its answer exists would have it proceed
-   * on nothing. Cleared by the send, by choosing an option after all, and by
-   * the question going away.
-   */
-  const explaining = explainingQuestion !== null && runView?.pendingQuestion?.callId === explainingQuestion;
-
-  /**
-   * Hand the composer's text to the running agent as a note for its next
-   * turn. Recorded in the chat the moment it is accepted, so the transcript
-   * shows what was said mid-run in the order it was said. Refused only when
-   * the run ended first -- then the words stay in the composer and the next
-   * Send starts a fresh run with them.
-   *
-   * While a question waits, the note is the answer to it, whether or not the
-   * person chose "none of these" first: the run cannot read a note until the
-   * question is answered, so a note sent without answering would leave the run
-   * paused on a reply it already has. The answer follows the note: the note
-   * has to be queued before the model resumes, so that the turn it resumes
-   * into carries both.
-   */
-  const sendSteer = async () => {
-    const text = composer.trim();
-    if (!text || !steering) return;
-    if (text.length > MAX_STEER_CHARS) { setAttachmentError(`Shorten the note to ${MAX_STEER_CHARS.toLocaleString()} characters.`); return; }
-    if (!selectedRun) return;
-    const target = { projectId: selectedRun.projectId, chatId: selectedRun.chatId };
-    const accepted = selectedRun.demo
-      ? selectedRun.demo.steer(text)
-      : selectedRun.runId !== null && await steerRun(selectedRun.runId, text);
-    if (!accepted) {
-      setAttachmentError("Roqer had already finished. Send it as a new message.");
-      return;
-    }
-    setWorkspace((current) => appendMessage(current, target.projectId, target.chatId, {
-      id: createId("message"), role: "user", text, createdAt: new Date().toISOString(),
-    }));
-    setComposer("");
-    const pending = runView?.pendingQuestion;
-    if (pending) {
-      setExplainingQuestion(null);
-      if (selectedRun.demo) selectedRun.demo.answer(pending.callId, pending.options.length);
-      else if (selectedRun.runId !== null) void answerRunQuestion(selectedRun.runId, pending.callId, pending.options.length);
-    }
-  };
-
-  const sendPrompt = async () => {
-    if (steering) { await sendSteer(); return; }
-    const prompt = composedMessage(pastedBlocks, composer);
-    if (!prompt || isRunning || compacting || !hydrated || !storageAvailable || storageRecovery.required) return;
-    if (prompt.length > 64_000) { setAttachmentError("Shorten the message to 64,000 characters before sending."); return; }
-    const unread = attachments.find((attachment) => attachment.clip !== undefined && (attachment.clip.id === undefined || readingClips.has(attachment.id)));
-    if (unread !== undefined) {
-      setAttachmentError(readingClips.has(unread.id)
-        ? `Roqer is still reading “${unread.name}”. Send once it has finished.`
-        : `Choose the part of “${unread.name}” to send first.`);
-      return;
-    }
-    const chosenModelId = selectedModelId(workspace.preferences, provider);
-    const availableModel = modelCatalog.models.find((model) => model.id === chosenModelId);
-    if (hasDesktopRuntime() && (providerStatus.kind !== "signed-in" || !availableModel)) {
-      setSettingsNotice(sendBlockedNotice(provider, providerStatus, modelCatalog.message));
-      setShowSettings(true);
-      return;
-    }
-
-    let next = workspace;
-    if (!next.selectedChatId) next = createChat(next);
-    const projectId = next.selectedProjectId;
-    const chatId = next.selectedChatId!;
-    const targetChat = next.projects.find((project) => project.id === projectId)?.chats.find((chat) => chat.id === chatId);
-    // A reply that came from a run carries the host's digest of that run --
-    // what it changed, left open, and was told -- so a follow-up starts from
-    // the record rather than rediscovering it from Studio.
-    // Messages a compact folded away are not replayed; its record stands for them.
-    const folded = targetChat?.compaction?.folded ?? 0;
-    const conversation = boundConversation(
-      toConversationMessages((targetChat?.messages ?? []).slice(folded)),
-      targetChat?.compaction?.summary,
-    );
-    const messageId = createId("message");
-    next = appendMessage(next, projectId, chatId, {
-      id: messageId, role: "user", text: prompt, createdAt: new Date().toISOString(),
-      attachments: attachments.length > 0 ? attachments : undefined,
-    });
-    setWorkspace(next);
-    setExpandedProjects((current) => new Set(current).add(projectId));
-    clearComposer();
-    setAttachments([]);
-    // Whatever the box was warning about has been answered by sending.
-    setAttachmentError(null);
-
-    const request: RunStartRequest = {
-      projectId, chatId, prompt, conversation,
-      startId: createId("start"),
-      attachmentIds: attachments.map((attachment) => attachment.id),
-      approvalMode: next.preferences.approvalMode,
-      autoPlaytest: next.preferences.autoPlaytest,
-      endpoint: next.preferences.mcpEndpoint,
-      instanceId: (() => {
-        const target = chatStudioTarget(next, projectId, chatId);
-        return resolveInstanceId(studioStatus, target.instanceId, target.pinned);
-      })(),
-      provider: next.preferences.provider,
-      model: availableModel?.id ?? null,
-      effort: availableModel?.supportedReasoningEfforts.some((entry) => entry.reasoningEffort === next.preferences.reasoningEffort)
-        ? next.preferences.reasoningEffort
-        : availableModel?.defaultReasoningEffort ?? "medium",
-    };
-    const attempt = ++runAttempt.current;
-    const contextTarget = { chatId, provider: request.provider, model: request.model };
-    const startId = request.startId!;
-    // The chat's run is recorded before anything else happens, so the composer
-    // and the sidebar show it at once, and so a later answer can tell it apart.
-    const commit = (run: ChatRun) => setRuns(new Map(runsRef.current).set(chatId, run));
-    const liveRun = (): ChatRun | undefined => runsRef.current.get(chatId);
-    const forget = () => {
-      const next = new Map(runsRef.current);
-      next.delete(chatId);
-      setRuns(next);
-    };
-    commit({ projectId, chatId, runId: null, startId, attempt, view: null, demo: null, contextTarget });
-    setCompactNotice(null);
-
-    if (!hasDesktopRuntime()) {
-      const runId = createId("demo-run");
-      commit({ projectId, chatId, runId, startId: null, attempt, view: createRunView(runId, prompt, request.approvalMode), demo: null, contextTarget });
-      const demo = startDemoRun(runId, request, (event) => applyRunEvents([event]));
-      const live = liveRun();
-      if (live?.runId === runId) commit({ ...live, demo });
-      return;
-    }
-
-    /**
-     * A run that never started gives its prompt back: the message comes out of
-     * the chat and its words go back in the box, with the reason above them,
-     * so trying again is one Send. That is only done while the chat is still
-     * open and the box still empty. Otherwise the transcript keeps the words
-     * and says why they went nowhere, as it always did, rather than dropping
-     * them or overwriting what was typed since. Files were released with the
-     * failed start, so they have to be attached again.
-     */
-    const startFailed = (reason: string) => {
-      const current = latestWorkspace.current;
-      if (!composerEmpty.current || current.selectedProjectId !== projectId || current.selectedChatId !== chatId) {
-        setWorkspace((state) => appendMessage(state, projectId, chatId, {
-          id: createId("message"), role: "assistant",
-          text: `I couldn't start this run: ${reason}`,
-          createdAt: new Date().toISOString(),
-        }));
-        return;
-      }
-      setWorkspace((state) => withdrawMessage(state, projectId, chatId, messageId));
-      setComposer(prompt);
-      setAttachmentError(`The run didn't start: ${reason}${attachments.length > 0 ? " Attach your files again before sending." : ""}`);
-      composerRef.current?.focus();
-    };
-
-    // While this start is pending, events that name no known run are held for it.
-    // The count goes down when the start settles, and the held events go with
-    // the last of them.
-    const finishStart = () => {
-      startsPending.current -= 1;
-      if (startsPending.current === 0) eventBuffer.current = [];
-    };
-    startsPending.current += 1;
-    let started: Awaited<ReturnType<typeof startRun>>;
-    try {
-      started = await startRun(request);
-    } catch (error) {
-      finishStart();
-      if (liveRun()?.attempt !== attempt) return;
-      forget();
-      startFailed(error instanceof Error ? error.message : String(error));
-      return;
-    }
-    const live = liveRun();
-    // The chat's run was abandoned while the start was in flight: the run it
-    // started is cancelled rather than left working for nobody.
-    if (live?.attempt !== attempt) {
-      finishStart();
-      if (started.ok) void cancelRun(started.runId);
-      return;
-    }
-    if (!started.ok) {
-      finishStart();
-      forget();
-      startFailed(started.message);
-      return;
-    }
-
-    const buffered = eventBuffer.current
-      .filter((event) => event.runId === started.runId)
-      .sort((left, right) => left.seq - right.seq);
-    eventBuffer.current = eventBuffer.current.filter((event) => event.runId !== started.runId);
-    finishStart();
-    commit({
-      ...live,
-      runId: started.runId,
-      startId: null,
-      view: buffered.reduce(applyRunEvent, createRunView(started.runId, prompt, request.approvalMode)),
-    });
-  };
-
-  const answerApproval = (decision: "approved" | "rejected") => {
-    const pending = runView?.pendingApproval;
-    if (!selectedRun || !pending) return;
-    if (selectedRun.demo) selectedRun.demo.respond(pending.callId, decision);
-    else if (selectedRun.runId !== null) void respondToRun(selectedRun.runId, pending.callId, decision);
-  };
-
-  /** Answer the agent's question by index. */
-  const answerQuestion = (answerIndex: number) => {
-    const pending = runView?.pendingQuestion;
-    if (!selectedRun || !pending) return;
-    // Choosing one of the model's options after all withdraws the explanation.
-    setExplainingQuestion(null);
-    if (selectedRun.demo) selectedRun.demo.answer(pending.callId, answerIndex);
-    else if (selectedRun.runId !== null) void answerRunQuestion(selectedRun.runId, pending.callId, answerIndex);
-  };
-
-  /** Hand the pending question to the composer; the answer goes out with the note. */
-  const explainAnswer = () => {
-    const pending = runView?.pendingQuestion;
-    if (!runView || !pending) return;
-    setExplainingQuestion((current) => current === pending.callId ? null : pending.callId);
-  };
-
-  /** Stop the chat on screen. Its start is abandoned if the run has not begun. */
-  const stopRun = () => {
-    if (!selectedRun) return;
-    if (selectedRun.demo) selectedRun.demo.cancel();
-    else if (selectedRun.runId !== null) void cancelRun(selectedRun.runId);
-    else resetRun(selectedRun.chatId);
-  };
-
   /** Picking a chat gets the sidebar out of the way only when it is in the way.
    *  A docked sidebar is part of the layout and stays put. */
   const dismissOverlaySidebar = useCallback(() => {
@@ -976,21 +686,17 @@ function App() {
 
   const newChat = useCallback(() => {
     if (!hydrated || !storageAvailable || storageRecovery.required) return;
-    const next = createChat(workspace);
-    setWorkspace(next);
-    setExpandedProjects((current) => new Set(current).add(next.selectedProjectId));
-    clearComposer(); void releaseAttachments(attachments.map((asset) => asset.id)); setAttachments([]); dismissOverlaySidebar();
-  }, [workspace, attachments, hydrated, storageAvailable, storageRecovery.required, dismissOverlaySidebar, clearComposer]);
+    setWorkspace((current) => createChat(current));
+    setExpandedProjects((current) => new Set(current).add(workspace.selectedProjectId));
+    dismissOverlaySidebar();
+  }, [workspace, hydrated, storageAvailable, storageRecovery.required, dismissOverlaySidebar]);
 
   const closeDialog = useCallback(() => setDialog(null), []);
 
   const addProject = (name: string) => {
     if (!storageAvailable || storageRecovery.required) return;
-    const next = createProject(workspace, name);
-    setWorkspace(next);
-    setExpandedProjects((current) => new Set(current).add(next.selectedProjectId));
+    setWorkspace((current) => createChat(createProject(current, name)));
     closeDialog();
-    clearComposer();
   };
 
   /**
@@ -1003,8 +709,6 @@ function App() {
     if (!storageAvailable || storageRecovery.required) return;
     resetRun(chatId, true);
     setWorkspace((current) => deleteChat(current, projectId, chatId));
-    clearComposer();
-    setAttachments([]);
     closeDialog();
   };
 
@@ -1017,15 +721,12 @@ function App() {
       next.delete(projectId);
       return next;
     });
-    clearComposer();
-    setAttachments([]);
     closeDialog();
   };
 
   const selectChat = (projectId: string, chatId: string) => {
-    setWorkspace((current) => ({ ...current, selectedProjectId: projectId, selectedChatId: chatId }));
-    clearComposer();
-    void releaseAttachments(attachments.map((asset) => asset.id)); setAttachments([]); dismissOverlaySidebar();
+    setWorkspace((current) => current.selectedProjectId === projectId && current.selectedChatId === chatId ? current : { ...current, selectedProjectId: projectId, selectedChatId: chatId });
+    dismissOverlaySidebar();
   };
 
   const selectProject = (projectId: string) => {
@@ -1041,8 +742,6 @@ function App() {
     // when a chat is picked, rather than following into a chat it was not for.
     const project = workspace.projects.find((candidate) => candidate.id === projectId);
     setWorkspace((current) => ({ ...current, selectedProjectId: projectId, selectedChatId: project === undefined ? null : chatsByActivity(project.chats)[0]?.id ?? null }));
-    clearComposer();
-    void releaseAttachments(attachments.map((asset) => asset.id)); setAttachments([]);
   };
 
   const updatePreferences = (changes: Partial<WorkspaceState["preferences"]>) => {
@@ -1053,146 +752,6 @@ function App() {
     updatePreferences({ communityInviteDismissed: true });
     setCommunityIconArrived(true);
   };
-
-  // Old message cards are intentionally memoized. Keep their action stable too,
-  // while still reading the latest endpoint and Studio selection when clicked.
-  const chatTarget = chatStudioTarget(workspace, workspace.selectedProjectId, workspace.selectedChatId);
-  const chatInstanceId = chatTarget.instanceId;
-  const chatPinned = chatTarget.pinned;
-  const openArtifactContext = useRef({
-    endpoint: workspace.preferences.mcpEndpoint,
-    studioInstanceId: chatInstanceId,
-    studioStatus,
-  });
-  useEffect(() => {
-    openArtifactContext.current = {
-      endpoint: workspace.preferences.mcpEndpoint,
-      studioInstanceId: chatInstanceId,
-      studioStatus,
-    };
-  }, [chatInstanceId, studioStatus, workspace.preferences.mcpEndpoint]);
-  const openArtifactInStudio = useCallback((target: string, instanceId?: string) => {
-    const context = openArtifactContext.current;
-    return openScriptInStudio({
-      endpoint: context.endpoint,
-      target,
-      // A change record names the place it was made in, and opening it
-      // somewhere else would show the wrong script.
-      instanceId: instanceId ?? resolveInstanceId(context.studioStatus, context.studioInstanceId),
-    });
-  }, []);
-
-  /** Every connected place, so a second one is visible rather than implied. */
-  const studios = useMemo(
-    () => connectedStudios(studioStatus, chatInstanceId, chatPinned),
-    [studioStatus, chatInstanceId, chatPinned],
-  );
-  /** Record the place for the chat in view, and for the next chat after it. */
-  const chooseStudio = (instanceId: string | null) => {
-    setWorkspace((current) => setChatStudioInstance(
-      current,
-      current.selectedProjectId,
-      current.selectedChatId,
-      instanceId,
-    ));
-  };
-  /**
-   * The place the pill names. It has to be the one a run would go to, not
-   * whichever plugin connected first: naming a place Roqer is not working in
-   * is worse than naming none.
-   */
-  const targetStudio = studios.find((studio) => studio.isTarget);
-
-  /**
-   * Have Roqer read the frames of the part of a clip the user chose. The chip
-   * says it is reading until the frames are kept, and the message cannot be
-   * sent before then.
-   */
-  const readClip = async (id: string, selection: ClipSelection) => {
-    setReadingClips((current) => new Set(current).add(id));
-    try {
-      const read = await selectClip(id, selection);
-      setAttachments((current) => current.map((attachment) => (attachment.id === id ? read : attachment)));
-    } catch (error) {
-      // A clip removed while it was read, with its message or by hand, needs no word.
-      if (attachmentsRef.current.some((attachment) => attachment.id === id)) {
-        setAttachmentError(error instanceof Error ? error.message : "The clip's frames could not be read.");
-      }
-    } finally {
-      setReadingClips((current) => {
-        const next = new Set(current);
-        next.delete(id);
-        return next;
-      });
-    }
-  };
-
-  /**
-   * Keep a newly attached file if the message still has room for its
-   * pictures, a clip counting as two; a clip short enough to send whole is
-   * read at once, and a longer one opens the dialog for choosing its part.
-   */
-  const keepAttached = (attached: readonly AssetAttachment[], asset: AssetAttachment): AssetAttachment[] | null => {
-    if (totalImageSlots([...attached, asset]) > MAX_IMAGES_PER_MESSAGE) {
-      void releaseAttachments([asset.id]);
-      setAttachmentError(`One message carries up to ${MAX_IMAGES_PER_MESSAGE} pictures, and a clip is sent as two. Send this one in another message.`);
-      return null;
-    }
-    const next = [...attached, asset];
-    setAttachments(next);
-    if (asset.clip !== undefined) {
-      if (asset.clip.start === 0 && asset.clip.end >= asset.clip.duration) void readClip(asset.id, asset.clip);
-      else setTrimmingClip(asset.id);
-    }
-    return next;
-  };
-
-  const attachAsset = async () => {
-    setAttachmentError(null);
-    if (attachments.length >= MAX_ATTACHMENTS_PER_MESSAGE) { setAttachmentError("Attach up to eight files per message."); return; }
-    try {
-      const asset = await pickAsset();
-      if (asset) keepAttached(attachments, asset);
-    } catch (error) {
-      setAttachmentError(error instanceof Error ? error.message : "The file could not be attached.");
-    }
-  };
-
-  /**
-   * Attach pasted or dropped pictures and videos, one at a time so that the
-   * first failure stops the batch with a reason rather than leaving a
-   * half-attached message.
-   */
-  const attachImages = async (files: readonly File[]) => {
-    setAttachmentError(null);
-    let attached: AssetAttachment[] = attachments;
-    for (const file of files) {
-      if (attached.length >= MAX_ATTACHMENTS_PER_MESSAGE) {
-        setAttachmentError("Attach up to eight files per message.");
-        break;
-      }
-      const video = isVideoFile(file);
-      if (totalImageSlots(attached) + (video ? 2 : 1) > MAX_IMAGES_PER_MESSAGE) {
-        setAttachmentError(`Send up to ${MAX_IMAGES_PER_MESSAGE} pictures in one message; a clip counts as two.`);
-        break;
-      }
-      try {
-        const asset = video
-          ? await attachVideo(file, file.name || "clip.mp4")
-          : await attachImage(file, file.name || "screenshot.png");
-        const kept = keepAttached(attached, asset);
-        if (kept === null) break;
-        attached = kept;
-      } catch (error) {
-        setAttachmentError(error instanceof Error ? error.message : "The file could not be attached.");
-        break;
-      }
-    }
-  };
-
-  /** Pictures and videos from a paste or a drop; anything else is left to the browser. */
-  const droppedImages = (list: FileList | null | undefined): File[] =>
-    Array.from(list ?? []).filter((file) => ATTACHABLE_IMAGE_TYPES.has(file.type) || (hasDesktopRuntime() && isVideoFile(file)));
 
   const repairStorage = async () => {
     setStorageBusy(true);
@@ -1220,6 +779,10 @@ function App() {
   };
 
   const chatAction = async (projectId: string, chatId: string, action: string) => {
+    if (action === "close") {
+      if (draftChats.has(chatId) && !grids.some((entry) => entry.id !== activeGridId && entry.slots.includes(chatId))) setDialog({ kind: "close-tab", chatId }); else closeTab(chatId);
+      return;
+    }
     if (action !== "export" && action !== "archive") {
       if (storageAvailable && !storageRecovery.required) setDialog(chatDialog(projectId, chatId, action));
       return;
@@ -1240,127 +803,23 @@ function App() {
     }
   };
 
-  /**
-   * Follow the conversation as it grows, unless the reader has scrolled away.
-   *
-   * The transcript only moves on its own while the reader is already at the
-   * end of it. Someone who scrolled up to re-read a diff is reading, and
-   * yanking them back down because a tool call finished would be the app
-   * talking over them.
-   */
-  const scrollRef = useRef<HTMLDivElement>(null);
-  const following = useRef(true);
-  const scrollToEnd = useCallback((behavior: ScrollBehavior) => {
-    const node = scrollRef.current;
-    if (node) node.scrollTo({ top: node.scrollHeight, behavior });
-  }, []);
-  const onConversationScroll = useCallback(() => {
-    const node = scrollRef.current;
-    if (node) following.current = node.scrollHeight - node.scrollTop - node.clientHeight < 120;
-  }, []);
-
-  // A sent or completed message is a beat the reader is meant to notice, so it
-  // is followed smoothly.
-  const messageCount = selectedChat?.messages.length ?? 0;
-  useEffect(() => {
-    if (following.current) scrollToEnd("smooth");
-  }, [messageCount, scrollToEnd]);
-
-  // A run's own events arrive many times a second while a reply streams, and
-  // every approval, activity row and status change is one of them. Animating
-  // each would leave the view permanently mid-glide, so these keep the end in
-  // view without a transition of their own.
-  useEffect(() => {
-    if (following.current) scrollToEnd("instant");
-  }, [runView?.lastSeq, runStarting, scrollToEnd]);
-
-  // Another chat opens at its end, and opens there immediately.
-  useEffect(() => {
-    following.current = true;
-    scrollToEnd("instant");
-  }, [workspace.selectedChatId, scrollToEnd]);
-
   useEffect(() => {
     const handleShortcut = (event: KeyboardEvent) => {
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "n") {
         event.preventDefault();
         // Not underneath Settings or a dialog: the new chat would open out of
         // sight and take the draft with it.
-        if (showSettings || dialog !== null || trimmingClip !== null) return;
+        if (showSettings || dialog !== null || document.querySelector('[role="dialog"]') !== null) return;
         newChat();
       }
     };
     window.addEventListener("keydown", handleShortcut);
     return () => window.removeEventListener("keydown", handleShortcut);
-  }, [newChat, showSettings, dialog, trimmingClip]);
+  }, [newChat, showSettings, dialog]);
 
   const theme = workspace.preferences.theme;
-  const approvalMode = workspace.preferences.approvalMode;
-  /**
-   * The decision the run is blocked on, docked above the composer rather than
-   * left in the transcript. A run keeps appending activity while it waits, so a
-   * card inside the stream scrolls away from the user it is waiting for.
-   */
-  const pendingApproval = runView?.pendingApproval ?? null;
-  /**
-   * The question the run is stopped on, docked for the same reason. In the
-   * stream it was drawn at the top of the run, above the plan and the reply
-   * already on screen, so it arrived where nobody was looking.
-   */
-  const pendingQuestion = runView?.pendingQuestion ?? null;
-  /** Words in the composer while a question waits: Send will answer with them. */
-  const answeringInWords = pendingQuestion !== null && (explaining || composer.trim() !== "");
-  // Keyed on the three arrays the steps are built from rather than on the view,
-  // so a streamed delta -- which replaces the view but none of these -- leaves
-  // the steps, the model, and everything memoised on them untouched. Measured:
-  // with the whole view as the key, a run holding three diffs and forty tool
-  // rows cost ~146 ms per delta, all of it reconciling rows that had not changed.
-  const runTimeline = runView?.timeline;
-  const runActivities = runView?.activities;
-  const runEvidence = runView?.evidence;
-  const runSteps = useMemo(
-    () => (runTimeline && runActivities && runEvidence
-      ? activitySteps({ timeline: runTimeline, activities: runActivities, evidence: runEvidence })
-      : []),
-    [runTimeline, runActivities, runEvidence],
-  );
-  const runActivityNodes = useMemo(() => buildActivityModel(runSteps), [runSteps]);
-  /**
-   * Whether the provider itself is working right now, which is what the
-   * composer's spinner claims. A run waiting on Studio or on the user is not
-   * thinking, and the Activity heading and approval card already say what those
-   * waits are, so the spinner stands down for both.
-   */
-  const thinking = runView !== null && runView.outcome === null
-    ? providerIsThinking(runView, runActivityNodes)
-    : runView === null && runStarting;
-  const autoPlaytest = workspace.preferences.autoPlaytest;
   const card = providerCard(provider, providerStatus, hasDesktopRuntime());
   const invite = hydrated ? communityInvite(COMMUNITY_INVITE_URL, workspace.preferences.communityInviteDismissed, workspace.projects) : "none";
-  const imagesReachModel = hasDesktopRuntime();
-  const selectedModel = modelCatalog.models
-    .find((model) => model.id === selectedModelId(workspace.preferences, provider)) ?? null;
-  const contextView = contextMeterView(
-    workspace.selectedChatId === null ? undefined : contextReadings.get(workspace.selectedChatId),
-    { provider, model: selectedModel?.id ?? null },
-  );
-  /** Exactly what Send would send. */
-  const message = composedMessage(pastedBlocks, composer);
-  // Offered once there is enough to want more room, and never in the way before.
-  const canExpand = !isRunning && (pastedBlocks.length > 0 || lineCount(composer) >= 4 || composer.length >= 400);
-  const composerHint: ReactNode = message.length >= 1_000
-    ? characterCount(message.length)
-    : composer.trim() !== "" && !isRunning
-      ? <><kbd>{SEND_MODIFIER}</kbd> <kbd>Enter</kbd> to send</>
-      : null;
-  /** A pasted block is edited as text: every block goes back into the box, in order, and the box opens large. */
-  const editPastedText = () => {
-    setComposer(composedMessage(pastedBlocks, composer));
-    setPastedBlocks([]);
-    setComposerExpanded(true);
-    window.requestAnimationFrame(() => composerRef.current?.focus());
-  };
-
   const onlyProject = workspace.projects.length < 2;
   const projectMenuItems: readonly RowMenuItem[] = [
     { id: RENAME_ACTION, label: "Rename project", icon: <Pencil size={14} /> },
@@ -1381,6 +840,10 @@ function App() {
 
   const renderDialog = () => {
     if (!dialog) return null;
+    if (dialog.kind === "close-tab") return <ConfirmModal
+      heading="Close this tab?" description="Its unsent message and attached files will be discarded. The chat history is kept, and a running task continues in the background."
+      confirmLabel="Close tab" onConfirm={() => { closeTab(dialog.chatId); closeDialog(); }} onClose={closeDialog}
+    />;
     if (dialog.kind === "create-project") {
       return <NameModal
         heading="Create a project" description="Keep related chats together in one project."
@@ -1518,12 +981,872 @@ function App() {
           unreachable while the sidebar is away. */}
       <button className="sidebar-scrim" tabIndex={sidebarShown ? 0 : -1} onClick={() => setSidebarShown(false)} aria-label="Hide sidebar" />
 
-      <main className="workspace" inert={showSettings}>
+      <div className="workspace chat-area" inert={showSettings}>
+        <div className="chat-tabbar">
+          <button className="icon-button menu-button" onClick={() => setSidebarShown(true)} aria-label="Show sidebar"><PanelLeftOpen size={18} /></button>
+          <div className="chat-tabs" role={grid ? "tablist" : undefined} aria-label={grid ? "Chat grids" : undefined}>
+            {grid && grids.map((entry, index) => {
+              const active = activeGridId === entry.id;
+              const gridRuns = entry.slots.flatMap((id) => id !== null && runs.has(id) ? [runs.get(id)!] : []);
+              return <div className={`chat-tab${active ? " selected" : ""}`} key={entry.id}>
+                <button type="button" role="tab" id={`grid-tab-${entry.id}`} aria-selected={active} aria-controls="grid-panel" tabIndex={active ? 0 : -1}
+                  onClick={() => activateGrid(entry)}
+                  onKeyDown={(event) => {
+                    const nextIndex = event.key === "ArrowRight" ? (index + 1) % grids.length : event.key === "ArrowLeft" ? (index + grids.length - 1) % grids.length : event.key === "Home" ? 0 : event.key === "End" ? grids.length - 1 : null;
+                    if (nextIndex === null) return;
+                    event.preventDefault();
+                    const next = grids[nextIndex];
+                    activateGrid(next); document.getElementById(`grid-tab-${next.id}`)?.focus();
+                  }} title={`Grid ${entry.id}`}>
+                  {gridRuns.some(runNeedsInputOf) ? <CircleDot size={13} aria-label="Needs your answer" /> : gridRuns.length > 0 ? <Loader2 size={13} className="chat-tab-working" aria-label="Running" /> : <Grid2X2 size={13} />}
+                  <span>Grid {entry.id}</span>
+                </button>
+                <button type="button" className="chat-tab-close" aria-label={`Close Grid ${entry.id}`} title="Close grid · chats and running tasks are kept" onClick={() => closeGrid(entry.id)}><X size={12} /></button>
+              </div>;
+            })}
+          </div>
+          <button className="icon-button theme-button" onClick={() => updatePreferences({ theme: theme === "light" ? "dark" : "light" })} aria-label={theme === "light" ? "Switch to dark theme" : "Switch to light theme"} title={theme === "light" ? "Dark theme" : "Light theme"}>{theme === "light" ? <Moon size={18} /> : <Sun size={18} />}</button>
+          {grid && <button className="icon-button" onClick={newGrid} aria-label="New grid" title="New grid"><Plus size={18} /></button>}
+          {grid && <div className="chat-layout-picker" role="group" aria-label="Chat layout">{([2, 4, 6] as const).map((size) => <button key={size} aria-label={`${size} chat layout`} title={`${size === 2 ? "2 columns" : size === 4 ? "2 × 2 grid" : "3 × 2 grid"}`} aria-pressed={layoutSize === size} onClick={() => { setLayoutSize(size); setExpandedChatId(null); }}>
+            <span className={`chat-layout-icon cells-${size}`} aria-hidden="true">{Array.from({ length: size }, (_, cell) => <span key={cell} />)}</span>
+          </button>)}</div>}
+          <button className="icon-button" onClick={() => {
+            if (!grid && gridSlots.every((id) => id === null) && workspace.selectedChatId !== null) setGridSlots((current) => placeChat(current, 0, workspace.selectedChatId));
+            setGrid(!grid); setExpandedChatId(null);
+          }} aria-pressed={grid} aria-label={grid ? "Show one chat" : "Show chats in a grid"} title={grid ? "Single chat" : "Chat grid"}>{grid ? <PanelsTopLeft size={18} /> : <Grid2X2 size={18} />}</button>
+        </div>
+        {/* Studio loads plugins when it starts, so a session that was already
+            open is still running the previous one. Nothing else in the product
+            would tell them why their newly updated Roqer behaves like the old
+            one. */}
+        {(bridgeState.kind === "running" || bridgeState.kind === "adopted") && bridgeState.pluginUpdated === true && !studioRestartDismissed &&
+          <div className="restart-notice" role="status">
+            <RotateCw size={18} />
+            <div><strong>Restart Roblox Studio</strong>
+              <p>Roqer updated the Studio plugin. If Studio is open, restart it so the new version loads.</p>
+            </div>
+            <button onClick={() => setStudioRestartDismissed(true)}>Got it</button>
+          </div>}
+
+        {(storageRecovery.required || storageError) && <div className="storage-notice" role="alert">
+          <AlertTriangle size={18} />
+          <div><strong>{storageRecovery.required ? "Saved chats need recovery" : "Your changes may not be saved"}</strong><p>{storageError ?? storageRecovery.message}</p>
+            {storageRecovery.required && <p>Recovery keeps a backup of the original files before saving the readable chats. Review them below first.</p>}
+          </div>
+          <button disabled={storageBusy} onClick={() => void repairStorage()}>{storageBusy ? "Working…" : storageRecovery.required ? "Back up and recover" : "Retry"}</button>
+          <button onClick={() => void exportChats(storageRecovery.required ? undefined : workspace)}>Export a copy</button>
+        </div>}
+
+
+        <div id="grid-panel" role={grid ? "tabpanel" : undefined} aria-labelledby={grid ? `grid-tab-${activeGridId}` : undefined} className={`chat-panes${grid && expandedChatId === null ? ` grid layout-${layoutSize}` : ""}`}>
+        {openChatIds.map((id) => {
+          const location = chatLocations.get(id);
+          if (!location) return null;
+          const cell = gridSlots.indexOf(id);
+          const visible = grid ? expandedChatId !== null ? expandedChatId === id : cell >= 0 && cell < layoutSize : workspace.selectedChatId === id;
+          return <div className={`chat-pane-slot${workspace.selectedChatId === id ? " active" : ""}`} id={`pane-${id}`} role="region" aria-label={location.chat.title} key={id}
+            style={grid && expandedChatId === null ? { order: cell } : undefined}
+            onDragOver={(event) => { if (grid && event.dataTransfer.types.includes("text/roqer-chat")) event.preventDefault(); }} onDrop={(event) => { const moved = event.dataTransfer.getData("text/roqer-chat"); if (grid && cell >= 0 && chatLocations.has(moved)) { event.preventDefault(); assignChat(cell, moved); } }}
+            hidden={!visible} onFocusCapture={() => selectChat(location.project.id, id)} onPointerDownCapture={() => selectChat(location.project.id, id)}>
+          <ChatPane visible={visible} target={{ projectId: location.project.id, chatId: id }} services={{
+          workspace, setWorkspace, hydrated, storageAvailable, storageRecovery, saveStatus,
+          runs, runsRef, setRuns, contextReadings, setContextReadings, eventBuffer, startsPending, runAttempt,
+          resetRun, applyRunEvents, studioStatus, bridgeState, bridgeBusy, refreshStudioStatus, restartStudioBridge,
+          newChat, setShowSettings, setSettingsNotice, chatAction, updatePreferences, onDraftChange, providerRefresh,
+          grid, expanded: expandedChatId === id,
+          toggleExpand: () => { selectChat(location.project.id, id); setExpandedChatId(expandedChatId === id ? null : id); },
+        }} />
+        </div>;
+        })}
+        {grid && expandedChatId === null && gridSlots.slice(0, layoutSize).map((id, cell) => id === null && <div className="chat-grid-add" key={`empty-${cell}`} style={{ order: cell }}
+          onDragOver={(event) => { if (event.dataTransfer.types.includes("text/roqer-chat")) event.preventDefault(); }} onDrop={(event) => { event.preventDefault(); assignChat(cell, event.dataTransfer.getData("text/roqer-chat")); }}>
+          <Plus size={28} aria-hidden="true" /><span>Cell {cell + 1}</span>
+          <RowMenu label={`Choose a chat for cell ${cell + 1}`} className="chat-cell-picker" menuClassName="chat-cell-picker-menu" items={[...chatLocations].map(([chatId, entry]) => ({ id: chatId, label: `${entry.project.name} · ${entry.chat.title}`, title: `${entry.project.name} · ${entry.chat.title}`, icon: <MessageSquare size={14} /> }))} onSelect={(chatId) => assignChat(cell, chatId)} disabled={chatLocations.size === 0}><span>Choose a chat…</span><ChevronDown size={15} /></RowMenu>
+          <button type="button" onClick={() => { pendingGridSlot.current = cell; newChat(); }} disabled={!hydrated || !storageAvailable || storageRecovery.required}>New chat</button>
+        </div>)}
+        {!grid && workspace.selectedChatId === null && <div className="chat-grid-empty"><MessageSquare size={28} /><p>Open a chat from the sidebar, or start a new one.</p><button className="primary-action" onClick={newChat}>New chat</button></div>}
+        </div>
+      </div>
+
+      {showSettings && <SettingsPage preferences={workspace.preferences} studioStatus={studioStatus} updateState={updateState} onPreferences={updatePreferences} onStudioRefresh={() => void refreshStudioStatus()} onProviderChanged={() => { setProviderRefresh((current) => current + 1); void refreshProviderStatus(); void refreshProviderModels(); }} onExport={() => void exportChats(storageRecovery.required ? undefined : workspace)} notice={settingsNotice ?? undefined} onClose={() => { setShowSettings(false); setSettingsNotice(null); }} />}
+      {renderDialog()}
+      {!hydrated && <div className="loading-overlay"><div><span /><strong>Opening your workspace…</strong></div></div>}
+    </div>
+  );
+}
+
+type ChatPaneTarget = { projectId: string; chatId: string };
+type ChatPaneServices = {
+  workspace: WorkspaceState;
+  setWorkspace: Dispatch<SetStateAction<WorkspaceState>>;
+  hydrated: boolean;
+  storageAvailable: boolean;
+  storageRecovery: StorageStatus;
+  saveStatus: "saved" | "saving" | "error";
+  runs: ReadonlyMap<string, ChatRun>;
+  runsRef: RefObject<ReadonlyMap<string, ChatRun>>;
+  setRuns: (runs: ReadonlyMap<string, ChatRun>) => void;
+  contextReadings: ReadonlyMap<string, ContextReading>;
+  setContextReadings: Dispatch<SetStateAction<ReadonlyMap<string, ContextReading>>>;
+  eventBuffer: RefObject<RunEvent[]>;
+  startsPending: RefObject<number>;
+  runAttempt: RefObject<number>;
+  resetRun: (chatId?: string, discard?: boolean) => void;
+  applyRunEvents: (events: readonly RunEvent[]) => void;
+  studioStatus: StudioStatus;
+  bridgeState: McpServerState;
+  bridgeBusy: boolean;
+  refreshStudioStatus: () => Promise<void>;
+  restartStudioBridge: () => Promise<void>;
+  newChat: () => void;
+  setShowSettings: Dispatch<SetStateAction<boolean>>;
+  setSettingsNotice: Dispatch<SetStateAction<string | null>>;
+  chatAction: (projectId: string, chatId: string, action: string) => Promise<void>;
+  updatePreferences: (changes: Partial<WorkspaceState["preferences"]>) => void;
+  onDraftChange: (chatId: string, dirty: boolean) => void;
+  providerRefresh: number;
+  grid: boolean;
+  expanded: boolean;
+  toggleExpand: () => void;
+};
+
+function ChatPane({ target, services, visible }: { target: ChatPaneTarget; services: ChatPaneServices; visible: boolean }) {
+  const { workspace: savedWorkspace, setWorkspace, hydrated, storageAvailable, storageRecovery, saveStatus,
+    runs, runsRef, setRuns, contextReadings, setContextReadings, eventBuffer, startsPending, runAttempt,
+    resetRun, applyRunEvents, studioStatus, bridgeState, bridgeBusy, refreshStudioStatus, restartStudioBridge,
+    newChat, setShowSettings, setSettingsNotice, chatAction } = services;
+  const [preferences, setPreferences] = useState(savedWorkspace.preferences);
+  const workspace: WorkspaceState = { ...savedWorkspace, selectedProjectId: target.projectId, selectedChatId: target.chatId,
+    preferences: { ...preferences, theme: savedWorkspace.preferences.theme, mcpEndpoint: savedWorkspace.preferences.mcpEndpoint,
+      studioInstanceId: savedWorkspace.preferences.studioInstanceId } };
+  const latestWorkspace = useRef(workspace);
+  latestWorkspace.current = workspace;
+  const selectedProject = workspace.projects.find((project) => project.id === target.projectId);
+  const selectedChat = selectedProject?.chats.find((chat) => chat.id === target.chatId);
+  const updatePreferences = (changes: Partial<WorkspaceState["preferences"]>) => {
+    setPreferences((current) => ({ ...current, ...changes }));
+    services.updatePreferences(changes);
+  };
+  const [attachmentError, setAttachmentError] = useState<string | null>(null);
+  const [draggingImage, setDraggingImage] = useState(false);
+  const [composer, setComposer] = useState("");
+  /** Long pastes, folded out of the text so what was typed stays readable. Sent first, in order. */
+  const [pastedBlocks, setPastedBlocks] = useState<PastedBlock[]>([]);
+  const [composerExpanded, setComposerExpanded] = useState(false);
+  const [attachments, setAttachments] = useState<AssetAttachment[]>([]);
+  /** Clips whose frames Roqer is reading, and the one whose part is being chosen. */
+  const [readingClips, setReadingClips] = useState<ReadonlySet<string>>(() => new Set());
+  const [trimmingClip, setTrimmingClip] = useState<string | null>(null);
+  const attachmentsRef = useRef(attachments);
+  useEffect(() => { attachmentsRef.current = attachments; }, [attachments]);
+  /** The chat whose compact is waiting on the main process. */
+  const [compactingChatId, setCompactingChatId] = useState<string | null>(null);
+  // What the last compact said, kept with its chat so it never shows on another one.
+  const [compactNotice, setCompactNotice] = useState<{ chatId: string; text: string } | null>(null);
+  /** The callId of a pending question being answered in the composer, if any. */
+  const [explainingQuestion, setExplainingQuestion] = useState<string | null>(null);
+  const composerRef = useRef<HTMLTextAreaElement>(null);
+  const clearComposer = useCallback(() => {
+    setComposer("");
+    setPastedBlocks([]);
+    setComposerExpanded(false);
+  }, []);
+  // The box grows with what is typed, up to a limit the stylesheet sets, and
+  // scrolls after that; the expanded editor fills its space instead.
+  useLayoutEffect(() => {
+    const box = composerRef.current;
+    if (box === null || !visible) return;
+    box.style.height = "";
+    if (!composerExpanded) box.style.height = `${box.scrollHeight}px`;
+  }, [composer, composerExpanded, pastedBlocks.length, visible]);
+  // The transcript keeps room for the composer below its last message, so a
+  // composer grown by a long draft never hides what it is replying to.
+  const dockRef = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    const dock = dockRef.current;
+    const workspaceElement = dock?.parentElement;
+    if (!dock || !workspaceElement || composerExpanded || !visible) return;
+    const measure = () => workspaceElement.style.setProperty("--dock-height", `${Math.ceil(dock.getBoundingClientRect().height)}px`);
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(dock);
+    return () => observer.disconnect();
+  }, [composerExpanded, visible]);
+  // Choosing to explain moves the person's attention from the card to the
+  // box, so the box takes focus rather than waiting to be clicked.
+  useEffect(() => {
+    if (explainingQuestion !== null) composerRef.current?.focus();
+  }, [explainingQuestion]);
+  const [showConnection, setShowConnection] = useState(false);
+  const connectionRef = useRef<HTMLDivElement>(null);
+  const [providerStatus, setProviderStatus] = useState<ProviderStatus>({ kind: "checking", message: "Checking provider" });
+  const [modelCatalog, setModelCatalog] = useState<ProviderModelCatalog>({ models: [], defaultModelId: null });
+  useEffect(() => () => { void releaseAttachments(attachmentsRef.current.map((asset) => asset.id)); }, []);
+
+  /** Whether the box holds nothing typed or pasted, as of the latest render. */
+  const composerEmpty = useRef(true);
+  composerEmpty.current = composer === "" && pastedBlocks.length === 0;
+  useEffect(() => {
+    services.onDraftChange(target.chatId, composer !== "" || pastedBlocks.length > 0 || attachments.length > 0);
+  }, [composer, pastedBlocks.length, attachments.length, target.chatId, services.onDraftChange]);
+  useEffect(() => () => services.onDraftChange(target.chatId, false), [target.chatId, services.onDraftChange]);
+  const mounted = useRef(true);
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
+
+  // Dismissed the way the app's other menus are: a press anywhere outside, or
+  // Escape. The pill itself is inside the wrapper, so its own click still
+  // toggles rather than closing and reopening.
+  useEffect(() => {
+    if (!showConnection) return;
+    const handlePointerDown = (event: PointerEvent) => {
+      if (connectionRef.current && !connectionRef.current.contains(event.target as Node)) {
+        setShowConnection(false);
+      }
+    };
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setShowConnection(false);
+    };
+    document.addEventListener("pointerdown", handlePointerDown);
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("pointerdown", handlePointerDown);
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [showConnection]);
+
+  const provider = workspace.preferences.provider;
+  const providerRef = useRef<ProviderId>(provider);
+
+  const refreshProviderStatus = useCallback(async () => {
+    const requested = provider;
+    const status = await getProviderStatus(requested);
+    if (providerRef.current === requested) setProviderStatus(status);
+  }, [provider]);
+
+  // Kept ahead of the effects below so a response that arrives after a switch
+  // can tell that it is answering a question nobody is asking any more.
+  useEffect(() => {
+    providerRef.current = provider;
+  }, [provider]);
+
+  // Switching providers must not leave the previous one's account on screen.
+  useEffect(() => {
+    setProviderStatus({ kind: "checking", message: `Checking ${providerLabel(provider)}` });
+    setModelCatalog({ models: [], defaultModelId: null });
+  }, [provider]);
+
+  useEffect(() => {
+    if (!hydrated || !hasDesktopRuntime()) return;
+    void refreshProviderStatus();
+    const interval = window.setInterval(() => void refreshProviderStatus(), 15_000);
+    return () => window.clearInterval(interval);
+  }, [hydrated, refreshProviderStatus]);
+
+  /**
+   * A catalog belongs to the provider it was asked for. Without this guard a
+   * slow answer for the previous provider lands after a switch, and the
+   * selection effect below records that provider's model id against the new
+   * one — which then fails at run start, because no catalog contains it.
+   */
+  const refreshProviderModels = useCallback(async () => {
+    const requested = provider;
+    const catalog = await getProviderModels(requested);
+    if (providerRef.current === requested) setModelCatalog(catalog);
+  }, [provider]);
+
+  useEffect(() => {
+    if (services.providerRefresh === 0) return;
+    void refreshProviderStatus();
+    void refreshProviderModels();
+  }, [services.providerRefresh, refreshProviderStatus, refreshProviderModels]);
+
+  useEffect(() => {
+    if (!hydrated || providerStatus.kind !== "signed-in") {
+      setModelCatalog({ models: [], defaultModelId: null });
+      return;
+    }
+    void refreshProviderModels();
+    // A catalog can change while the provider stays signed in: Claude Code
+    // and Codex update their model lists, and a custom connection can be
+    // edited in Settings. Refresh it independently of provider status so the
+    // picker converges without a provider switch or an application restart.
+    const interval = window.setInterval(() => void refreshProviderModels(), 30_000);
+    return () => window.clearInterval(interval);
+  }, [hydrated, providerStatus.kind, refreshProviderModels]);
+
+  useEffect(() => {
+    if (!hydrated || modelCatalog.models.length === 0) return;
+    setPreferences((current) => {
+      const chosen = selectedModelId(current, current.provider);
+      // A remembered choice the provider no longer lists falls back to its
+      // default rather than blocking the run.
+      const models = modelCatalog.models;
+      const model = models.find((candidate) => candidate.id === chosen) ??
+        models.find((candidate) => candidate.id === modelCatalog.defaultModelId) ??
+        models[0];
+      const effort = model.supportedReasoningEfforts.some((entry) =>
+        entry.reasoningEffort === current.reasoningEffort)
+        ? current.reasoningEffort
+        : model.defaultReasoningEffort;
+      if (model.id === chosen && effort === current.reasoningEffort) return current;
+      return {
+        ...current,
+        ...modelPreference(current.provider, model.id),
+        reasoningEffort: effort,
+      };
+    });
+  }, [hydrated, modelCatalog]);
+
+  // The chat on screen is the one whose run the composer, the live view, and
+  // the stop control follow. Other chats keep their runs going in the background.
+  const selectedRun = selectedChat === undefined ? null : runs.get(selectedChat.id) ?? null;
+  const runView = selectedRun?.view ?? null;
+  const runStarting = selectedRun !== null && selectedRun.runId === null;
+  const isRunning = runStarting || (runView !== null && runView.outcome === null);
+
+  const compactedFrom = selectedChat?.compaction?.folded ?? 0;
+  const compactedUsage = compactUsageNote(selectedChat?.compaction?.usedTokens, selectedChat?.compaction?.windowTokens);
+  const compactTo = selectedChat === undefined ? 0 : selectedChat.messages.length - COMPACT_KEEPS_MESSAGES;
+  // Send waits while the chat on screen is being compacted: a run started
+  // between the main process dropping the provider's conversation and the
+  // record being saved would rebuild that conversation from the whole chat.
+  const compacting = compactingChatId !== null && compactingChatId === selectedChat?.id;
+  // Nothing new to fold yet, or a run may be working on this chat.
+  const canCompact = !isRunning && !compacting && compactTo > compactedFrom;
+
+  /**
+   * Fold the chat's older messages into a record the model reads in their place.
+   * Only the model's view changes: every message stays on screen. The main process
+   * is asked first, since it drops the provider's own copy of the conversation and
+   * refuses while a run owns the chat, in which case nothing changes here.
+   */
+  const compactSelectedChat = async () => {
+    if (!selectedChat || !selectedProject || !canCompact) return;
+    const projectId = selectedProject.id;
+    const chatId = selectedChat.id;
+    if (hasDesktopRuntime()) {
+      setCompactingChatId(chatId);
+      try {
+        if (!(await compactChatSessions(chatId))) return;
+      } finally {
+        setCompactingChatId(null);
+      }
+    }
+    const summary = compactChatSummary(
+      selectedChat.compaction?.summary ?? "",
+      toConversationMessages(selectedChat.messages.slice(compactedFrom, compactTo)),
+    );
+    // The figures are the provider's last report for this chat, taken as the
+    // compact happens. A chat with no report yet records none.
+    const reading = contextReadings.get(chatId);
+    const usage: { usedTokens?: number; windowTokens?: number | null } = reading === undefined
+      ? {}
+      : { usedTokens: reading.usedTokens, windowTokens: reading.windowTokens };
+    setWorkspace((current) => setChatCompaction(current, projectId, chatId, { folded: compactTo, summary, ...usage }));
+    // The reading described the context before the compact. The meter shows
+    // nothing rather than a figure the compact made untrue, until the next run reports.
+    setContextReadings((current) => {
+      if (!current.has(chatId)) return current;
+      const next = new Map(current);
+      next.delete(chatId);
+      return next;
+    });
+    const note = compactUsageNote(usage.usedTokens, usage.windowTokens);
+    setCompactNotice(note === null ? null : { chatId, text: `Compacted. ${note}` });
+  };
+  const showRunControls = runStarting || runView !== null;
+  /** The composer addresses the running agent rather than starting a run. */
+  const steering = isRunning && !runStarting;
+  /**
+   * The pending question the person chose to answer in their own words. The
+   * question stays pending -- the run stays paused -- until the note is sent,
+   * because resuming the model before its answer exists would have it proceed
+   * on nothing. Cleared by the send, by choosing an option after all, and by
+   * the question going away.
+   */
+  const explaining = explainingQuestion !== null && runView?.pendingQuestion?.callId === explainingQuestion;
+
+  /**
+   * Hand the composer's text to the running agent as a note for its next
+   * turn. Recorded in the chat the moment it is accepted, so the transcript
+   * shows what was said mid-run in the order it was said. Refused only when
+   * the run ended first -- then the words stay in the composer and the next
+   * Send starts a fresh run with them.
+   *
+   * While a question waits, the note is the answer to it, whether or not the
+   * person chose "none of these" first: the run cannot read a note until the
+   * question is answered, so a note sent without answering would leave the run
+   * paused on a reply it already has. The answer follows the note: the note
+   * has to be queued before the model resumes, so that the turn it resumes
+   * into carries both.
+   */
+  const sendSteer = async () => {
+    const text = composer.trim();
+    if (!text || !steering) return;
+    if (text.length > MAX_STEER_CHARS) { setAttachmentError(`Shorten the note to ${MAX_STEER_CHARS.toLocaleString()} characters.`); return; }
+    if (!selectedRun) return;
+    const target = { projectId: selectedRun.projectId, chatId: selectedRun.chatId };
+    const accepted = selectedRun.demo
+      ? selectedRun.demo.steer(text)
+      : selectedRun.runId !== null && await steerRun(selectedRun.runId, text);
+    if (!accepted) {
+      setAttachmentError("Roqer had already finished. Send it as a new message.");
+      return;
+    }
+    setWorkspace((current) => appendMessage(current, target.projectId, target.chatId, {
+      id: createId("message"), role: "user", text, createdAt: new Date().toISOString(),
+    }));
+    setComposer("");
+    const pending = runView?.pendingQuestion;
+    if (pending) {
+      setExplainingQuestion(null);
+      if (selectedRun.demo) selectedRun.demo.answer(pending.callId, pending.options.length);
+      else if (selectedRun.runId !== null) void answerRunQuestion(selectedRun.runId, pending.callId, pending.options.length);
+    }
+  };
+
+  const sendPrompt = async () => {
+    if (steering) { await sendSteer(); return; }
+    const prompt = composedMessage(pastedBlocks, composer);
+    if (!prompt || isRunning || runsRef.current.has(target.chatId) || compacting || !hydrated || !storageAvailable || storageRecovery.required) return;
+    if (prompt.length > 64_000) { setAttachmentError("Shorten the message to 64,000 characters before sending."); return; }
+    const unread = attachments.find((attachment) => attachment.clip !== undefined && (attachment.clip.id === undefined || readingClips.has(attachment.id)));
+    if (unread !== undefined) {
+      setAttachmentError(readingClips.has(unread.id)
+        ? `Roqer is still reading “${unread.name}”. Send once it has finished.`
+        : `Choose the part of “${unread.name}” to send first.`);
+      return;
+    }
+    const chosenModelId = selectedModelId(workspace.preferences, provider);
+    const availableModel = modelCatalog.models.find((model) => model.id === chosenModelId);
+    if (hasDesktopRuntime() && (providerStatus.kind !== "signed-in" || !availableModel)) {
+      setSettingsNotice(sendBlockedNotice(provider, providerStatus, modelCatalog.message));
+      setShowSettings(true);
+      return;
+    }
+
+    const next = workspace;
+    const projectId = next.selectedProjectId;
+    const chatId = next.selectedChatId!;
+    const targetChat = next.projects.find((project) => project.id === projectId)?.chats.find((chat) => chat.id === chatId);
+    // A reply that came from a run carries the host's digest of that run --
+    // what it changed, left open, and was told -- so a follow-up starts from
+    // the record rather than rediscovering it from Studio.
+    // Messages a compact folded away are not replayed; its record stands for them.
+    const folded = targetChat?.compaction?.folded ?? 0;
+    const conversation = boundConversation(
+      toConversationMessages((targetChat?.messages ?? []).slice(folded)),
+      targetChat?.compaction?.summary,
+    );
+    const messageId = createId("message");
+    const userMessage: ChatMessage = {
+      id: messageId, role: "user", text: prompt, createdAt: new Date().toISOString(),
+      attachments: attachments.length > 0 ? attachments : undefined,
+    };
+    setWorkspace((current) => appendMessage(current, projectId, chatId, userMessage));
+    clearComposer();
+    attachmentsRef.current = [];
+    setAttachments([]);
+    // Whatever the box was warning about has been answered by sending.
+    setAttachmentError(null);
+
+    const request: RunStartRequest = {
+      projectId, chatId, prompt, conversation,
+      allowConcurrentPlaceRuns: services.grid,
+      startId: createId("start"),
+      attachmentIds: attachments.map((attachment) => attachment.id),
+      approvalMode: next.preferences.approvalMode,
+      autoPlaytest: next.preferences.autoPlaytest,
+      endpoint: next.preferences.mcpEndpoint,
+      instanceId: (() => {
+        const target = chatStudioTarget(next, projectId, chatId);
+        return resolveInstanceId(studioStatus, target.instanceId, target.pinned);
+      })(),
+      provider: next.preferences.provider,
+      model: availableModel?.id ?? null,
+      effort: availableModel?.supportedReasoningEfforts.some((entry) => entry.reasoningEffort === next.preferences.reasoningEffort)
+        ? next.preferences.reasoningEffort
+        : availableModel?.defaultReasoningEffort ?? "medium",
+    };
+    const attempt = ++runAttempt.current;
+    const contextTarget = { chatId, provider: request.provider, model: request.model };
+    const startId = request.startId!;
+    // The chat's run is recorded before anything else happens, so the composer
+    // and the sidebar show it at once, and so a later answer can tell it apart.
+    const commit = (run: ChatRun) => setRuns(new Map(runsRef.current).set(chatId, run));
+    const liveRun = (): ChatRun | undefined => runsRef.current.get(chatId);
+    const forget = () => {
+      const next = new Map(runsRef.current);
+      next.delete(chatId);
+      setRuns(next);
+    };
+    commit({ projectId, chatId, runId: null, startId, attempt, view: null, demo: null, contextTarget });
+    setCompactNotice(null);
+
+    if (!hasDesktopRuntime()) {
+      const runId = createId("demo-run");
+      commit({ projectId, chatId, runId, startId: null, attempt, view: createRunView(runId, prompt, request.approvalMode), demo: null, contextTarget });
+      const demo = startDemoRun(runId, request, (event) => applyRunEvents([event]));
+      const live = liveRun();
+      if (live?.runId === runId) commit({ ...live, demo });
+      return;
+    }
+
+    /**
+     * A run that never started gives its prompt back: the message comes out of
+     * the chat and its words go back in the box, with the reason above them,
+     * so trying again is one Send. That is only done while the chat is still
+     * open and the box still empty. Otherwise the transcript keeps the words
+     * and says why they went nowhere, as it always did, rather than dropping
+     * them or overwriting what was typed since. Files were released with the
+     * failed start, so they have to be attached again.
+     */
+    const startFailed = (reason: string) => {
+      const current = latestWorkspace.current;
+      if (!mounted.current || !composerEmpty.current || current.selectedProjectId !== projectId || current.selectedChatId !== chatId) {
+        setWorkspace((state) => appendMessage(state, projectId, chatId, {
+          id: createId("message"), role: "assistant",
+          text: `I couldn't start this run: ${reason}`,
+          createdAt: new Date().toISOString(),
+        }));
+        return;
+      }
+      setWorkspace((state) => withdrawMessage(state, projectId, chatId, messageId));
+      setComposer(prompt);
+      setAttachmentError(`The run didn't start: ${reason}${attachments.length > 0 ? " Attach your files again before sending." : ""}`);
+      composerRef.current?.focus();
+    };
+
+    // While this start is pending, events that name no known run are held for it.
+    // The count goes down when the start settles, and the held events go with
+    // the last of them.
+    const finishStart = () => {
+      startsPending.current -= 1;
+      if (startsPending.current === 0) eventBuffer.current = [];
+    };
+    startsPending.current += 1;
+    let started: Awaited<ReturnType<typeof startRun>>;
+    try {
+      started = await startRun(request);
+    } catch (error) {
+      finishStart();
+      if (liveRun()?.attempt !== attempt) return;
+      forget();
+      startFailed(error instanceof Error ? error.message : String(error));
+      return;
+    }
+    const live = liveRun();
+    // The chat's run was abandoned while the start was in flight: the run it
+    // started is cancelled rather than left working for nobody.
+    if (live?.attempt !== attempt) {
+      finishStart();
+      if (started.ok) void cancelRun(started.runId);
+      return;
+    }
+    if (!started.ok) {
+      finishStart();
+      forget();
+      startFailed(started.message);
+      return;
+    }
+
+    const buffered = eventBuffer.current
+      .filter((event) => event.runId === started.runId)
+      .sort((left, right) => left.seq - right.seq);
+    eventBuffer.current = eventBuffer.current.filter((event) => event.runId !== started.runId);
+    finishStart();
+    commit({
+      ...live,
+      runId: started.runId,
+      startId: null,
+      view: buffered.reduce(applyRunEvent, createRunView(started.runId, prompt, request.approvalMode)),
+    });
+  };
+
+  const answerApproval = (decision: "approved" | "rejected") => {
+    const pending = runView?.pendingApproval;
+    if (!selectedRun || !pending) return;
+    if (selectedRun.demo) selectedRun.demo.respond(pending.callId, decision);
+    else if (selectedRun.runId !== null) void respondToRun(selectedRun.runId, pending.callId, decision);
+  };
+
+  /** Answer the agent's question by index. */
+  const answerQuestion = (answerIndex: number) => {
+    const pending = runView?.pendingQuestion;
+    if (!selectedRun || !pending) return;
+    // Choosing one of the model's options after all withdraws the explanation.
+    setExplainingQuestion(null);
+    if (selectedRun.demo) selectedRun.demo.answer(pending.callId, answerIndex);
+    else if (selectedRun.runId !== null) void answerRunQuestion(selectedRun.runId, pending.callId, answerIndex);
+  };
+
+  /** Hand the pending question to the composer; the answer goes out with the note. */
+  const explainAnswer = () => {
+    const pending = runView?.pendingQuestion;
+    if (!runView || !pending) return;
+    setExplainingQuestion((current) => current === pending.callId ? null : pending.callId);
+  };
+
+  /** Stop the chat on screen. Its start is abandoned if the run has not begun. */
+  const stopRun = () => {
+    if (!selectedRun) return;
+    if (selectedRun.demo) selectedRun.demo.cancel();
+    else if (selectedRun.runId !== null) void cancelRun(selectedRun.runId);
+    else resetRun(selectedRun.chatId);
+  };
+
+  // Old message cards are intentionally memoized. Keep their action stable too,
+  // while still reading the latest endpoint and Studio selection when clicked.
+  const chatTarget = chatStudioTarget(workspace, workspace.selectedProjectId, workspace.selectedChatId);
+  const chatInstanceId = chatTarget.instanceId;
+  const chatPinned = chatTarget.pinned;
+  const openArtifactContext = useRef({
+    endpoint: workspace.preferences.mcpEndpoint,
+    studioInstanceId: chatInstanceId,
+    studioStatus,
+  });
+  useEffect(() => {
+    openArtifactContext.current = {
+      endpoint: workspace.preferences.mcpEndpoint,
+      studioInstanceId: chatInstanceId,
+      studioStatus,
+    };
+  }, [chatInstanceId, studioStatus, workspace.preferences.mcpEndpoint]);
+  const openArtifactInStudio = useCallback((target: string, instanceId?: string) => {
+    const context = openArtifactContext.current;
+    return openScriptInStudio({
+      endpoint: context.endpoint,
+      target,
+      // A change record names the place it was made in, and opening it
+      // somewhere else would show the wrong script.
+      instanceId: instanceId ?? resolveInstanceId(context.studioStatus, context.studioInstanceId),
+    });
+  }, []);
+
+  /** Every connected place, so a second one is visible rather than implied. */
+  const studios = useMemo(
+    () => connectedStudios(studioStatus, chatInstanceId, chatPinned),
+    [studioStatus, chatInstanceId, chatPinned],
+  );
+  /** Record the place for the chat in view, and for the next chat after it. */
+  const chooseStudio = (instanceId: string | null) => {
+    setWorkspace((current) => setChatStudioInstance(
+      current,
+      target.projectId,
+      target.chatId,
+      instanceId,
+    ));
+  };
+  /**
+   * The place the pill names. It has to be the one a run would go to, not
+   * whichever plugin connected first: naming a place Roqer is not working in
+   * is worse than naming none.
+   */
+  const targetStudio = studios.find((studio) => studio.isTarget);
+
+  /**
+   * Have Roqer read the frames of the part of a clip the user chose. The chip
+   * says it is reading until the frames are kept, and the message cannot be
+   * sent before then.
+   */
+  const readClip = async (id: string, selection: ClipSelection) => {
+    setReadingClips((current) => new Set(current).add(id));
+    try {
+      const read = await selectClip(id, selection);
+      setAttachments((current) => current.map((attachment) => (attachment.id === id ? read : attachment)));
+    } catch (error) {
+      // A clip removed while it was read, with its message or by hand, needs no word.
+      if (attachmentsRef.current.some((attachment) => attachment.id === id)) {
+        setAttachmentError(error instanceof Error ? error.message : "The clip's frames could not be read.");
+      }
+    } finally {
+      setReadingClips((current) => {
+        const next = new Set(current);
+        next.delete(id);
+        return next;
+      });
+    }
+  };
+
+  /**
+   * Keep a newly attached file if the message still has room for its
+   * pictures, a clip counting as two; a clip short enough to send whole is
+   * read at once, and a longer one opens the dialog for choosing its part.
+   */
+  const keepAttached = (attached: readonly AssetAttachment[], asset: AssetAttachment): AssetAttachment[] | null => {
+    if (!mounted.current) { void releaseAttachments([asset.id]); return null; }
+    if (totalImageSlots([...attached, asset]) > MAX_IMAGES_PER_MESSAGE) {
+      void releaseAttachments([asset.id]);
+      setAttachmentError(`One message carries up to ${MAX_IMAGES_PER_MESSAGE} pictures, and a clip is sent as two. Send this one in another message.`);
+      return null;
+    }
+    const next = [...attached, asset];
+    setAttachments(next);
+    if (asset.clip !== undefined) {
+      if (asset.clip.start === 0 && asset.clip.end >= asset.clip.duration) void readClip(asset.id, asset.clip);
+      else setTrimmingClip(asset.id);
+    }
+    return next;
+  };
+
+  const attachAsset = async () => {
+    setAttachmentError(null);
+    if (attachments.length >= MAX_ATTACHMENTS_PER_MESSAGE) { setAttachmentError("Attach up to eight files per message."); return; }
+    try {
+      const asset = await pickAsset();
+      if (asset) keepAttached(attachments, asset);
+    } catch (error) {
+      setAttachmentError(error instanceof Error ? error.message : "The file could not be attached.");
+    }
+  };
+
+  /**
+   * Attach pasted or dropped pictures and videos, one at a time so that the
+   * first failure stops the batch with a reason rather than leaving a
+   * half-attached message.
+   */
+  const attachImages = async (files: readonly File[]) => {
+    setAttachmentError(null);
+    let attached: AssetAttachment[] = attachments;
+    for (const file of files) {
+      if (attached.length >= MAX_ATTACHMENTS_PER_MESSAGE) {
+        setAttachmentError("Attach up to eight files per message.");
+        break;
+      }
+      const video = isVideoFile(file);
+      if (totalImageSlots(attached) + (video ? 2 : 1) > MAX_IMAGES_PER_MESSAGE) {
+        setAttachmentError(`Send up to ${MAX_IMAGES_PER_MESSAGE} pictures in one message; a clip counts as two.`);
+        break;
+      }
+      try {
+        const asset = video
+          ? await attachVideo(file, file.name || "clip.mp4")
+          : await attachImage(file, file.name || "screenshot.png");
+        const kept = keepAttached(attached, asset);
+        if (kept === null) break;
+        attached = kept;
+      } catch (error) {
+        setAttachmentError(error instanceof Error ? error.message : "The file could not be attached.");
+        break;
+      }
+    }
+  };
+
+  /** Pictures and videos from a paste or a drop; anything else is left to the browser. */
+  const droppedImages = (list: FileList | null | undefined): File[] =>
+    Array.from(list ?? []).filter((file) => ATTACHABLE_IMAGE_TYPES.has(file.type) || (hasDesktopRuntime() && isVideoFile(file)));
+
+  /**
+   * Follow the conversation as it grows, unless the reader has scrolled away.
+   *
+   * The transcript only moves on its own while the reader is already at the
+   * end of it. Someone who scrolled up to re-read a diff is reading, and
+   * yanking them back down because a tool call finished would be the app
+   * talking over them.
+   */
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const following = useRef(true);
+  const scrollToEnd = useCallback((behavior: ScrollBehavior) => {
+    const node = scrollRef.current;
+    if (node) node.scrollTo({ top: node.scrollHeight, behavior });
+  }, []);
+  const onConversationScroll = useCallback(() => {
+    const node = scrollRef.current;
+    if (node) following.current = node.scrollHeight - node.scrollTop - node.clientHeight < 120;
+  }, []);
+
+  // A sent or completed message is a beat the reader is meant to notice, so it
+  // is followed smoothly.
+  const messageCount = selectedChat?.messages.length ?? 0;
+  useEffect(() => {
+    if (visible && following.current) scrollToEnd("smooth");
+  }, [messageCount, scrollToEnd, visible]);
+
+  // A run's own events arrive many times a second while a reply streams, and
+  // every approval, activity row and status change is one of them. Animating
+  // each would leave the view permanently mid-glide, so these keep the end in
+  // view without a transition of their own.
+  useEffect(() => {
+    if (visible && following.current) scrollToEnd("instant");
+  }, [runView?.lastSeq, runStarting, scrollToEnd, visible]);
+
+  // Another chat opens at its end, and opens there immediately.
+  useEffect(() => {
+    following.current = true;
+    scrollToEnd("instant");
+  }, [workspace.selectedChatId, scrollToEnd]);
+
+  const approvalMode = workspace.preferences.approvalMode;
+  /**
+   * The decision the run is blocked on, docked above the composer rather than
+   * left in the transcript. A run keeps appending activity while it waits, so a
+   * card inside the stream scrolls away from the user it is waiting for.
+   */
+  const pendingApproval = runView?.pendingApproval ?? null;
+  /**
+   * The question the run is stopped on, docked for the same reason. In the
+   * stream it was drawn at the top of the run, above the plan and the reply
+   * already on screen, so it arrived where nobody was looking.
+   */
+  const pendingQuestion = runView?.pendingQuestion ?? null;
+  /** Words in the composer while a question waits: Send will answer with them. */
+  const answeringInWords = pendingQuestion !== null && (explaining || composer.trim() !== "");
+  // Keyed on the three arrays the steps are built from rather than on the view,
+  // so a streamed delta -- which replaces the view but none of these -- leaves
+  // the steps, the model, and everything memoised on them untouched. Measured:
+  // with the whole view as the key, a run holding three diffs and forty tool
+  // rows cost ~146 ms per delta, all of it reconciling rows that had not changed.
+  const runTimeline = runView?.timeline;
+  const runActivities = runView?.activities;
+  const runEvidence = runView?.evidence;
+  const runSteps = useMemo(
+    () => (runTimeline && runActivities && runEvidence
+      ? activitySteps({ timeline: runTimeline, activities: runActivities, evidence: runEvidence })
+      : []),
+    [runTimeline, runActivities, runEvidence],
+  );
+  const runActivityNodes = useMemo(() => buildActivityModel(runSteps), [runSteps]);
+  /**
+   * Whether the provider itself is working right now, which is what the
+   * composer's spinner claims. A run waiting on Studio or on the user is not
+   * thinking, and the Activity heading and approval card already say what those
+   * waits are, so the spinner stands down for both.
+   */
+  const thinking = runView !== null && runView.outcome === null
+    ? providerIsThinking(runView, runActivityNodes)
+    : runView === null && runStarting;
+  const autoPlaytest = workspace.preferences.autoPlaytest;
+  const imagesReachModel = hasDesktopRuntime();
+  const selectedModel = modelCatalog.models
+    .find((model) => model.id === selectedModelId(workspace.preferences, provider)) ?? null;
+  const contextView = contextMeterView(
+    workspace.selectedChatId === null ? undefined : contextReadings.get(workspace.selectedChatId),
+    { provider, model: selectedModel?.id ?? null },
+  );
+  /** Exactly what Send would send. */
+  const message = composedMessage(pastedBlocks, composer);
+  // Offered once there is enough to want more room, and never in the way before.
+  const canExpand = !isRunning && (pastedBlocks.length > 0 || lineCount(composer) >= 4 || composer.length >= 400);
+  const composerHint: ReactNode = message.length >= 1_000
+    ? characterCount(message.length)
+    : composer.trim() !== "" && !isRunning
+      ? <><kbd>{SEND_MODIFIER}</kbd> <kbd>Enter</kbd> to send</>
+      : null;
+  /** A pasted block is edited as text: every block goes back into the box, in order, and the box opens large. */
+  const editPastedText = () => {
+    setComposer(composedMessage(pastedBlocks, composer));
+    setPastedBlocks([]);
+    setComposerExpanded(true);
+    window.requestAnimationFrame(() => composerRef.current?.focus());
+  };
+
+
+  return (
+      <main className="workspace" aria-label={selectedChat?.title ?? "Chat"}>
         <header className="topbar">
-          <button className="icon-button menu-button" onClick={() => setSidebarShown(true)} aria-label="Show sidebar" title="Show sidebar" aria-controls="sidebar" aria-expanded={sidebarShown}><PanelLeftOpen size={20} /></button>
-          <div className="chat-heading"><strong>{selectedChat?.title ?? selectedProject?.name ?? "New project"}</strong><span>{selectedProject?.name} · {saveStatus === "saving" ? "saving…" : saveStatus === "error" ? "save failed" : "saved locally"}</span></div>
+          <div className="chat-heading" draggable={services.grid} onDragStart={(event) => event.dataTransfer.setData("text/roqer-chat", target.chatId)}><strong>{selectedChat?.title ?? selectedProject?.name ?? "New project"}</strong><span>{selectedProject?.name} · {saveStatus === "saving" ? "saving…" : saveStatus === "error" ? "save failed" : "saved locally"}</span></div>
           <div className="topbar-actions">
-            <button className="icon-button theme-button" onClick={() => updatePreferences({ theme: theme === "light" ? "dark" : "light" })} aria-label={theme === "light" ? "Switch to dark theme" : "Switch to light theme"} title={theme === "light" ? "Dark theme" : "Light theme"}>{theme === "light" ? <Moon size={18} /> : <Sun size={18} />}</button>
+            {services.grid && <button type="button" className="icon-button" onClick={services.toggleExpand} aria-label={services.expanded ? "Return to chat grid" : "Expand this chat"} title={services.expanded ? "Return to grid" : "Expand chat"} aria-pressed={services.expanded}>{services.expanded ? <Minimize2 size={17} /> : <Maximize2 size={17} />}</button>}
             <div className="connection-wrap" ref={connectionRef}>
               <button className={`connection-pill status-${studioStatus.kind}`} onClick={() => setShowConnection((value) => !value)}><span className="live-dot" /><span className="connection-label">{targetStudio?.name ?? (chatPinned && chatInstanceId !== null ? "This chat's place is not open" : studioStatus.placeName ?? "Roblox Studio")}</span><span className="connection-detail">{studioStatus.message}</span><ChevronDown size={15} /></button>
               {showConnection && <div className="connection-popover"><div className="popover-title"><div className="studio-icon"><Gamepad2 size={18} /></div><div><strong>Roblox Studio</strong><span>{studioStatus.message}</span></div></div><dl><div><dt>Bridge</dt><dd>{statusLabel(studioStatus.kind)}</dd></div></dl>
@@ -1583,31 +1906,9 @@ function App() {
               </div>}
             </div>
             <RojoPill instanceId={targetStudio?.instanceId ?? null} placeName={targetStudio?.name} refreshSignal={studioStatus} />
-            <RowMenu label="Chat options" iconSize={20} disabled={!selectedChat} items={CHAT_MENU_ITEMS} onSelect={(action) => { if (selectedChat) void chatAction(workspace.selectedProjectId, selectedChat.id, action); }} />
+            <RowMenu label="Chat options" iconSize={20} disabled={!selectedChat} items={CHAT_MENU_ITEMS} onSelect={(action) => { if (selectedChat) void chatAction(target.projectId, selectedChat.id, action); }} />
           </div>
         </header>
-
-        {/* Studio loads plugins when it starts, so a session that was already
-            open is still running the previous one. Nothing else in the product
-            would tell them why their newly updated Roqer behaves like the old
-            one. */}
-        {(bridgeState.kind === "running" || bridgeState.kind === "adopted") && bridgeState.pluginUpdated === true && !studioRestartDismissed &&
-          <div className="restart-notice" role="status">
-            <RotateCw size={18} />
-            <div><strong>Restart Roblox Studio</strong>
-              <p>Roqer updated the Studio plugin. If Studio is open, restart it so the new version loads.</p>
-            </div>
-            <button onClick={() => setStudioRestartDismissed(true)}>Got it</button>
-          </div>}
-
-        {(storageRecovery.required || storageError) && <div className="storage-notice" role="alert">
-          <AlertTriangle size={18} />
-          <div><strong>{storageRecovery.required ? "Saved chats need recovery" : "Your changes may not be saved"}</strong><p>{storageError ?? storageRecovery.message}</p>
-            {storageRecovery.required && <p>Recovery keeps a backup of the original files before saving the readable chats. Review them below first.</p>}
-          </div>
-          <button disabled={storageBusy} onClick={() => void repairStorage()}>{storageBusy ? "Working…" : storageRecovery.required ? "Back up and recover" : "Retry"}</button>
-          <button onClick={() => void exportChats(storageRecovery.required ? undefined : workspace)}>Export a copy</button>
-        </div>}
 
         <div className="conversation-scroll" ref={scrollRef} onScroll={onConversationScroll}><div className="conversation">
           {selectedChat && selectedChat.messages.length > 0
@@ -1750,11 +2051,6 @@ function App() {
           </div>
         </div>
       </main>
-
-      {showSettings && <SettingsPage preferences={workspace.preferences} studioStatus={studioStatus} updateState={updateState} onPreferences={updatePreferences} onStudioRefresh={() => void refreshStudioStatus()} onProviderChanged={() => { void refreshProviderStatus(); void refreshProviderModels(); }} onExport={() => void exportChats(storageRecovery.required ? undefined : workspace)} notice={settingsNotice ?? undefined} onClose={() => { setShowSettings(false); setSettingsNotice(null); }} />}
-      {renderDialog()}
-      {!hydrated && <div className="loading-overlay"><div><span /><strong>Opening your workspace…</strong></div></div>}
-    </div>
   );
 }
 
@@ -1782,11 +2078,13 @@ const MENU_ITEM_HEIGHT = 33;
  * scroll or resize closes it rather than leaving it stranded beside the wrong
  * row.
  */
-function RowMenu({ label, items, onSelect, className = "", iconSize = 16, disabled = false }: {
+function RowMenu({ label, items, onSelect, className = "", menuClassName = "", children, iconSize = 16, disabled = false }: {
   label: string;
   items: readonly RowMenuItem[];
   onSelect: (id: string) => void;
   className?: string;
+  menuClassName?: string;
+  children?: ReactNode;
   iconSize?: number;
   disabled?: boolean;
 }) {
@@ -1808,10 +2106,10 @@ function RowMenu({ label, items, onSelect, className = "", iconSize = 16, disabl
   const open = () => {
     const rect = triggerRef.current?.getBoundingClientRect();
     if (!rect) return;
-    const height = items.length * MENU_ITEM_HEIGHT + 8;
+    const height = Math.min(items.length * MENU_ITEM_HEIGHT + 8, children ? 320 : window.innerHeight - 24);
     const right = Math.max(8, window.innerWidth - rect.right);
     setAnchor(rect.bottom + height + 12 > window.innerHeight
-      ? { bottom: window.innerHeight - rect.top + 6, right }
+      ? { bottom: Math.max(8, Math.min(window.innerHeight - height - 8, window.innerHeight - rect.top + 6)), right }
       : { top: rect.bottom + 6, right });
     focusItem(0);
   };
@@ -1823,7 +2121,10 @@ function RowMenu({ label, items, onSelect, className = "", iconSize = 16, disabl
       if (menuRef.current?.contains(target) || triggerRef.current?.contains(target)) return;
       close();
     };
-    const dismiss = () => close();
+    const dismiss = (event: Event) => {
+      if (event.type === "scroll" && event.target instanceof Node && menuRef.current?.contains(event.target)) return;
+      close();
+    };
     document.addEventListener("pointerdown", handlePointerDown);
     // Captured, so scrolling the folder list counts and not just the window.
     window.addEventListener("scroll", dismiss, true);
@@ -1842,6 +2143,8 @@ function RowMenu({ label, items, onSelect, className = "", iconSize = 16, disabl
   const handleItemKeyDown = (event: React.KeyboardEvent<HTMLButtonElement>, index: number) => {
     if (event.key === "ArrowDown") { event.preventDefault(); focusItem(index + 1); }
     if (event.key === "ArrowUp") { event.preventDefault(); focusItem(index - 1); }
+    if (event.key === "Home") { event.preventDefault(); focusItem(0); }
+    if (event.key === "End") { event.preventDefault(); focusItem(items.length - 1); }
     if (event.key === "Escape") { event.preventDefault(); close(true); }
   };
 
@@ -1851,9 +2154,10 @@ function RowMenu({ label, items, onSelect, className = "", iconSize = 16, disabl
       type="button" ref={triggerRef} disabled={disabled} title={label} aria-label={label}
       aria-haspopup="menu" aria-expanded={anchor !== null}
       onClick={() => anchor ? close() : open()}
-    ><MoreHorizontal size={iconSize} /></button>
+      onKeyDown={(event) => { if (event.key === "ArrowDown" && !anchor) { event.preventDefault(); open(); } }}
+    >{children ?? <MoreHorizontal size={iconSize} />}</button>
     {anchor && createPortal(
-      <div className="row-menu" role="menu" aria-label={label} ref={menuRef} style={{ top: anchor.top, bottom: anchor.bottom, right: anchor.right }}>
+      <div className={`row-menu ${menuClassName}`} role="menu" aria-label={label} ref={menuRef} style={{ top: anchor.top, bottom: anchor.bottom, right: anchor.right }}>
         {items.map((item, index) => <button
           className={`row-menu-item ${item.danger ? "danger" : ""}`}
           type="button" role="menuitem" key={item.id} disabled={item.disabled} title={item.title}

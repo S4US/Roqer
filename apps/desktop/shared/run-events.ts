@@ -54,6 +54,8 @@ export type RunRequest = {
  * identity of a run is never chosen by the less-trusted side of the bridge.
  */
 export type RunStartRequest = Omit<RunRequest, "runId"> & {
+  /** Grid mode permits this start to share its Studio place with another chat. */
+  allowConcurrentPlaceRuns?: boolean;
   /** Correlates a cancellable startup before the host has created a run. */
   startId?: string;
   /** Opaque handles issued by the native file picker; never filesystem paths. */

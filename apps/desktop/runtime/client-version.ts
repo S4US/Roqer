@@ -13,13 +13,14 @@ import fs from "node:fs/promises";
  * after a minute rather than on every status read.
  */
 
-export type VersionedClient = "codex" | "claude" | "antigravity";
+export type VersionedClient = "codex" | "claude" | "antigravity" | "opencode";
 
 /** What each client prints: `codex-cli 0.160.0`, `2.1.289 (Claude Code)`, and `1.3.1` alone for `agy`. */
 const VERSION_LINES: Readonly<Record<VersionedClient, RegExp>> = {
   codex: /^codex(?:-cli)? (\S+)/m,
   claude: /^(\S+) \(Claude Code\)/m,
   antigravity: /^(\S+)\s*$/,
+  opencode: /^(\S+)\s*$/m,
 };
 const VERSION_SHAPE = /^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/;
 const MAX_VERSION_LENGTH = 64;

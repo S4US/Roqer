@@ -4,8 +4,29 @@ import test from "node:test";
 import type { McpServerView } from "../shared/mcp-servers";
 import type { ToolRisk } from "../shared/policy";
 import {
-  argumentsFromText, emptyMcpDraft, isMcpDraftDirty, mcpDraftFrom, mcpSaveRequest, mcpServerDetail, mcpToolRows, withReadOnlyHints, type McpDraft,
+  argumentsFromText, emptyMcpDraft, isMcpDraftDirty, mcpDraftFrom, mcpDraftFromPreset, MCP_SERVER_PRESETS, mcpSaveRequest, mcpServerDetail, mcpToolRows, withReadOnlyHints, type McpDraft,
 } from "./mcp-server-settings";
+
+test("Meshy quick setup requires a key and saves the official server with encrypted-secret input", () => {
+  const draft = mcpDraftFromPreset(MCP_SERVER_PRESETS[0]);
+  assert.equal(mcpSaveRequest(draft).ok, false);
+  const row = draft.secrets.stdio[0];
+  const ready = { ...draft, secrets: { ...draft.secrets, stdio: [{ ...row, value: "test-api-key" }] } };
+  const request = mcpSaveRequest(ready);
+  assert.equal(request.ok, true);
+  if (!request.ok) return;
+  assert.deepEqual(request.save, { name: "meshy", enabled: true, transport: "stdio", command: "npx", args: ["-y", "@meshy-ai/meshy-mcp-server"], newTools: "trust", toolRisk: {}, secrets: [{ name: "MESHY_API_KEY", value: "test-api-key" }] });
+  assert.equal(isMcpDraftDirty(draft, undefined), true);
+  assert.equal(mcpDraftFromPreset(MCP_SERVER_PRESETS[0]).secrets.stdio[0].value, "");
+});
+
+test("ElevenLabs quick setup uses canonical OAuth endpoint without keys or automatic tool permissions", () => {
+  const draft = mcpDraftFromPreset(MCP_SERVER_PRESETS[1]);
+  const result = mcpSaveRequest(draft);
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+  assert.deepEqual(result.save, { name: "elevenlabs", enabled: true, transport: "http", url: "https://api.us.elevenlabs.io/v1/mcp", auth: "oauth", newTools: "trust", toolRisk: {}, secrets: [] });
+});
 
 const stdioServer = (changes: Partial<McpServerView> = {}): McpServerView => ({
   id: "mcp-abcd1234",

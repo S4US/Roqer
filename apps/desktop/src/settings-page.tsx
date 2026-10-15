@@ -47,7 +47,7 @@ const SECTIONS: ReadonlyArray<{ id: SettingsSectionId; label: string }> = [
 const ACCOUNT_PROVIDERS = ENABLED_PROVIDER_IDS.filter((provider) => provider !== "custom");
 
 const ACCOUNT_CLIENTS: Partial<Record<ProviderId, string>> = {
-  chatgpt: "Codex", claude: "Claude Code", antigravity: "Antigravity CLI",
+  chatgpt: "Codex", claude: "Claude Code", antigravity: "Antigravity CLI", opencode: "OpenCode",
 };
 
 /**
@@ -388,7 +388,7 @@ function AccountRow({ provider, onChanged }: { provider: ProviderId; onChanged: 
 
   const signedIn = status.kind === "signed-in";
   // Signing in needs the client, so without it the row can only look again.
-  const canCheckOnly = signedIn || status.kind === "not-installed";
+  const canCheckOnly = provider === "opencode" || signedIn || status.kind === "not-installed";
   const client = ACCOUNT_CLIENTS[provider];
   const installable = status.kind === "not-installed" && status.installable === true;
   const detail = !signedIn && installing

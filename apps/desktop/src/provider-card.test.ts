@@ -24,3 +24,8 @@ test("your own models say what is set up, and a signed-out card says what to do"
   assert.deepEqual(providerCard("claude", { kind: "not-installed", message: "Claude Code was not found on this computer.", installable: true }, true),
     { title: "Studio access", detail: "Install Claude Code in Settings to use Claude", badge: "Local" });
 });
+
+test("OpenCode keeps its service limitation visible instead of claiming an account is connected", () => {
+  const message = "OpenCode CLI detected. The provider may restrict free models through Roqer.";
+  assert.deepEqual(providerCard("opencode", { kind: "signed-in", message }, true), { title: "OpenCode", detail: message, badge: "Experimental" });
+});

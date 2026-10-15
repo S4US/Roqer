@@ -91,7 +91,7 @@ export function compactTokenCount(tokens: number): string {
 }
 
 const REPORTERS: Record<ProviderId, string> = {
-  claude: "Claude Code", chatgpt: "Codex", antigravity: "The Antigravity CLI", custom: "your endpoint",
+  claude: "Claude Code", chatgpt: "Codex", antigravity: "The Antigravity CLI", opencode: "OpenCode", custom: "your endpoint",
 };
 
 /**

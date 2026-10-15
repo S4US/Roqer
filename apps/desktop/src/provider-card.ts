@@ -8,7 +8,7 @@ import { providerLabel, type ProviderId, type ProviderStatus } from "../shared/p
 export type ProviderCard = Readonly<{ title: string; detail: string; badge?: string }>;
 
 /** The app each subscription is run through. */
-const CLIENTS: Partial<Record<ProviderId, string>> = { claude: "Claude Code", chatgpt: "Codex", antigravity: "Antigravity CLI" };
+const CLIENTS: Partial<Record<ProviderId, string>> = { claude: "Claude Code", chatgpt: "Codex", antigravity: "Antigravity CLI", opencode: "OpenCode" };
 
 const capitalized = (text: string) => `${text[0]?.toUpperCase() ?? ""}${text.slice(1)}`;
 
@@ -19,6 +19,7 @@ export function providerCard(provider: ProviderId, status: ProviderStatus, deskt
     return { title: "Studio access", detail: `Install ${client} in Settings to use ${providerLabel(provider)}`, badge: "Local" };
   }
   if (status.kind !== "signed-in") return { title: "Studio access", detail: status.message, badge: "Local" };
+  if (provider === "opencode") return { title: "OpenCode", detail: status.message, badge: "Experimental" };
   if (client === undefined) return { title: providerLabel(provider) === "Custom" ? "Your own models" : providerLabel(provider), detail: status.message };
   const plan = status.planType?.trim();
   return {

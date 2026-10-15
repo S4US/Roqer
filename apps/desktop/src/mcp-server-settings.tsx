@@ -107,6 +107,35 @@ export function emptyMcpDraft(): McpDraft {
   };
 }
 
+type McpServerPreset = Readonly<{
+  id: string;
+  title: string;
+  description: string;
+  setup: string;
+  config: Partial<Pick<McpDraft, "name" | "transport" | "command" | "args" | "url" | "oauth">>;
+  secretName?: string;
+}>;
+
+export const MCP_SERVER_PRESETS: readonly McpServerPreset[] = [
+  {
+    id: "meshy", title: "Meshy AI", description: "Create 3D models, textures and animations · API key",
+    setup: "Paste your Meshy API key, then choose Save & test. Node.js must be installed; the official Meshy server downloads on first use. Generation uses your Meshy credits.",
+    config: { name: "meshy", transport: "stdio", command: "npx", args: "-y\n@meshy-ai/meshy-mcp-server" },
+    secretName: "MESHY_API_KEY",
+  },
+  {
+    id: "elevenlabs", title: "ElevenLabs", description: "Generate speech and manage voice agents · Sign in",
+    setup: "Choose Save & sign in to connect your ElevenLabs account in your browser. Nothing to install and no API key needed. Audio generation uses your ElevenLabs credits.",
+    config: { name: "elevenlabs", transport: "http", url: "https://api.us.elevenlabs.io/v1/mcp", oauth: true },
+  },
+];
+
+export function mcpDraftFromPreset(preset: McpServerPreset): McpDraft {
+  const draft = { ...emptyMcpDraft(), ...preset.config };
+  if (preset.secretName) draft.secrets = { stdio: [{ key: rowKey(), name: preset.secretName, value: "", saved: false }], http: [] };
+  return draft;
+}
+
 export function mcpDraftFrom(server: McpServerView): McpDraft {
   const saved = server.secretNames.map((name): DraftSecret => ({ key: rowKey(), name, value: "", saved: true }));
   return {
@@ -252,7 +281,7 @@ export function mcpServerDetail(server: McpServerView): string {
  * server keeps its page when its first save gives it an id, so a test that
  * save was made for lands on the page that asked for it.
  */
-export type McpServerVisit = { key: string; id?: string };
+export type McpServerVisit = { key: string; id?: string; preset?: string };
 
 let nextVisit = 0;
 
@@ -290,11 +319,12 @@ export function McpServerSettings({ visit, onVisit, guarded, onDirtyChange }: {
     return <McpServerPage
       key={visit.key}
       server={editing}
+      preset={MCP_SERVER_PRESETS.find((preset) => preset.id === visit.preset)}
       onBack={() => guarded(() => onVisit(null))}
       onDirtyChange={onDirtyChange}
       onSaved={(next, saved) => {
         setServers(next);
-        onVisit({ key: visit.key, id: saved.id });
+        onVisit({ ...visit, id: saved.id });
       }}
       onRemoved={(next) => {
         setServers(next);
@@ -310,6 +340,16 @@ export function McpServerSettings({ visit, onVisit, guarded, onDirtyChange }: {
       <h1>MCP servers</h1>
       <p>Give the agent tools from other programs and services. You decide what each tool may do.</p>
     </div>
+    <SettingsGroup title="Quick setup" footnote="Choose a service, then enter its API key or sign in. Each service uses your own account.">
+      {MCP_SERVER_PRESETS.map((preset) => {
+        const exists = servers?.some((server) => server.name === preset.config.name) === true;
+        return <button key={preset.id} type="button" className="settings-row settings-link" disabled={full || exists}
+          onClick={() => onVisit({ key: `add-${nextVisit++}`, preset: preset.id })}>
+          <span className="settings-row-text"><strong>{preset.title}</strong><span>{exists ? "Already added · manage it below" : preset.description}</span></span>
+          <ChevronRight size={16} className="settings-chevron" aria-hidden="true" />
+        </button>;
+      })}
+    </SettingsGroup>
     <SettingsGroup
       title="Your servers"
       action={<button type="button" className="text-button" disabled={full} title={full ? `Up to ${MAX_MCP_SERVERS} servers` : undefined} onClick={() => onVisit({ key: `add-${nextVisit++}` })}><Plus size={14} /> Add server</button>}
@@ -339,16 +379,18 @@ export function McpServerSettings({ visit, onVisit, guarded, onDirtyChange }: {
  * saves first, and a new program or a changed command is confirmed by the
  * main process in a dialog of its own before it is saved.
  */
-function McpServerPage({ server, onBack, onSaved, onRemoved, onDirtyChange }: {
+function McpServerPage({ server, preset, onBack, onSaved, onRemoved, onDirtyChange }: {
   /** The saved server being edited, or undefined to add one. */
   server: McpServerView | undefined;
+  preset?: McpServerPreset;
   onBack: () => void;
   /** Saved: every server now, and the one this page shows. */
   onSaved: (servers: readonly McpServerView[], saved: McpServerView) => void;
   onRemoved: (servers: readonly McpServerView[]) => void;
   onDirtyChange: (dirty: boolean) => void;
 }) {
-  const [draft, setDraft] = useState<McpDraft>(() => server === undefined ? emptyMcpDraft() : mcpDraftFrom(server));
+  const [draft, setDraft] = useState<McpDraft>(() => server !== undefined ? mcpDraftFrom(server) : preset ? mcpDraftFromPreset(preset) : emptyMcpDraft());
+  const [showConnection, setShowConnection] = useState(preset === undefined);
   const [saved, setSaved] = useState<McpServerView | undefined>(server);
   const [message, setMessage] = useState<{ ok: boolean; text: string } | null>(null);
   const [busy, setBusy] = useState(false);
@@ -485,7 +527,7 @@ function McpServerPage({ server, onBack, onSaved, onRemoved, onDirtyChange }: {
     setSignIn({ pending: false, ok: true, text: "Signed out." });
   };
 
-  const canSave = !busy && draft.name.trim() !== "" && (stdio ? draft.command.trim() !== "" : draft.url.trim() !== "");
+  const canSave = !busy && mcpSaveRequest(draft).ok;
   const showSaveBar = adding || dirty;
   const rows = mcpToolRows(listed, draft.toolRisk);
   /** Tools the server calls read-only that the user has not set yet. */
@@ -498,17 +540,18 @@ function McpServerPage({ server, onBack, onSaved, onRemoved, onDirtyChange }: {
   return <div className="settings-subpage">
     <div className="settings-page-head">
       <button type="button" className="settings-back" onClick={onBack}><ChevronLeft size={14} /> MCP servers</button>
-      <h1>{adding ? "Add a server" : saved.name}</h1>
-      {adding && <p>Roqer starts the program or calls the URL, and offers the server&apos;s tools to the model.</p>}
+      <h1>{preset?.title ?? (adding ? "Add a server" : saved.name)}</h1>
+      {preset ? <p>{preset.setup}</p> : adding && <p>Roqer starts the program or calls the URL, and offers the server&apos;s tools to the model.</p>}
     </div>
 
     <SettingsGroup
       title="Server"
-      footnote={stdio
+      action={preset && <button type="button" className="text-button" aria-expanded={showConnection} onClick={() => setShowConnection(!showConnection)}>{showConnection ? "Hide connection settings" : "Connection settings"}</button>}
+      footnote={!showConnection ? undefined : stdio
         ? "Roqer shows you the exact command and asks before it saves a new program or a changed one."
         : "Use HTTPS. Plain HTTP is only for a server on this computer or your local network. Put a key in a header, not in the URL."}
     >
-      <label className="settings-field">
+      {showConnection && <><label className="settings-field">
         <span>Name</span>
         <input className="mono" value={draft.name} maxLength={32} spellCheck={false} autoComplete="off" autoFocus={adding} placeholder="e.g. github" onChange={(event) => update({ name: event.target.value })} />
         <span className="custom-hint">What the model calls it. Lowercase letters, digits, - and _.</span>
@@ -518,9 +561,9 @@ function McpServerPage({ server, onBack, onSaved, onRemoved, onDirtyChange }: {
         <div className="settings-segmented" role="group" aria-labelledby="mcp-transport">
           {(["stdio", "http"] as const).map((transport) => <button key={transport} type="button" aria-pressed={draft.transport === transport} title={TRANSPORT_TITLES[transport]} onClick={() => update({ transport })}>{TRANSPORT_LABELS[transport]}</button>)}
         </div>
-      </div>
+      </div></>}
       {stdio
-        ? <>
+        ? showConnection && <>
           <label className="settings-field">
             <span>Program</span>
             <input className="mono" value={draft.command} spellCheck={false} autoComplete="off" placeholder="npx" onChange={(event) => update({ command: event.target.value })} />
@@ -533,13 +576,13 @@ function McpServerPage({ server, onBack, onSaved, onRemoved, onDirtyChange }: {
           </label>
         </>
         : <>
-          <label className="settings-field">
+          {showConnection && <><label className="settings-field">
             <span>URL</span>
             <input className="mono" value={draft.url} spellCheck={false} autoComplete="off" placeholder="https://example.com/mcp" onChange={(event) => update({ url: event.target.value })} />
           </label>
           <SettingsRow title="Sign in with OAuth" detail="For a server you sign in to on its website, such as ElevenLabs. Roqer opens the page in your browser and keeps the sign-in encrypted on this computer.">
             <SettingsSwitch label="Sign in with OAuth" checked={draft.oauth} onChange={(oauth) => update({ oauth })} />
-          </SettingsRow>
+          </SettingsRow></>}
           {draft.oauth && <>
             <SettingsRow
               title={signedIn ? "Signed in" : "Not signed in"}
@@ -557,11 +600,11 @@ function McpServerPage({ server, onBack, onSaved, onRemoved, onDirtyChange }: {
                   : <button type="button" className="small-button" disabled={!canSave} onClick={() => void runSignIn()}>{needsSaveFirst ? "Save & sign in" : "Sign in"}</button>}
             </SettingsRow>
             {signIn.text !== undefined && <p className={`custom-message ${signIn.ok ? "ok" : "error"}`}>{signIn.ok ? <Check size={13} /> : null} {signIn.text}</p>}
-            <label className="settings-field">
+            {showConnection && <label className="settings-field">
               <span>Client ID</span>
               <input className="mono" value={draft.oauthClientId} spellCheck={false} autoComplete="off" placeholder="Optional" onChange={(event) => update({ oauthClientId: event.target.value })} />
               <span className="custom-hint">Leave this empty unless the server&apos;s provider gave you a client ID. Most servers need none.</span>
-            </label>
+            </label>}
           </>}
         </>}
       <SettingsRow title="Offer to the model" detail="When off, the agent cannot use this server.">
@@ -569,24 +612,24 @@ function McpServerPage({ server, onBack, onSaved, onRemoved, onDirtyChange }: {
       </SettingsRow>
     </SettingsGroup>
 
-    <SettingsGroup
-      title={stdio ? "Environment variables" : "Headers"}
-      action={<button type="button" className="text-button" disabled={secretRows.length >= MAX_MCP_SECRETS} onClick={() => setSecretRows([...secretRows, { key: rowKey(), name: "", value: "", saved: false }])}><Plus size={14} /> {stdio ? "Add variable" : "Add header"}</button>}
+    {(showConnection || secretRows.length > 0) && <SettingsGroup
+      title={!showConnection && preset?.secretName ? "API key" : stdio ? "Environment variables" : "Headers"}
+      action={showConnection && <button type="button" className="text-button" disabled={secretRows.length >= MAX_MCP_SECRETS} onClick={() => setSecretRows([...secretRows, { key: rowKey(), name: "", value: "", saved: false }])}><Plus size={14} /> {stdio ? "Add variable" : "Add header"}</button>}
       footnote={`${stdio ? "Set for the program when Roqer starts it." : "Sent with every request to the server."} Values are stored encrypted on this computer and are not shown again.`}
     >
       {secretRows.length === 0 && <p className="custom-empty">{stdio
         ? "None. Add one for a key the program reads, such as GITHUB_TOKEN."
         : "None. Add one for a key the server asks for, such as Authorization."}</p>}
       {secretRows.map((row) => <div key={row.key} className="settings-field">
-        {row.saved
-          ? <span className="mcp-secret-name" title={row.name}>{row.name}</span>
+        {row.saved || !showConnection
+          ? <span className="mcp-secret-name" title={row.name}>{!showConnection && row.name === preset?.secretName ? `${preset.title} API key` : row.name}</span>
           : <input className="mono" value={row.name} spellCheck={false} autoComplete="off" autoFocus={row.name === "" && row.value === ""} aria-label={stdio ? "Variable name" : "Header name"} placeholder={stdio ? "NAME" : "Authorization"} onChange={(event) => updateSecret(row.key, { name: event.target.value })} />}
         <div className="custom-key-row">
           <input type="password" value={row.value} spellCheck={false} autoComplete="off" aria-label={`Value for ${row.name.trim() || (stdio ? "the variable" : "the header")}`} placeholder={row.saved ? "Saved · type a new value to replace it" : "Value"} onChange={(event) => updateSecret(row.key, { value: event.target.value })} />
-          <button type="button" className="small-button" aria-label={`Remove ${row.name.trim() || (stdio ? "variable" : "header")}`} onClick={() => setSecretRows(secretRows.filter((entry) => entry.key !== row.key))}><X size={14} /></button>
+          {showConnection && <button type="button" className="small-button" aria-label={`Remove ${row.name.trim() || (stdio ? "variable" : "header")}`} onClick={() => setSecretRows(secretRows.filter((entry) => entry.key !== row.key))}><X size={14} /></button>}
         </div>
       </div>)}
-    </SettingsGroup>
+    </SettingsGroup>}
 
     <SettingsGroup
       title={`Tools${rows.length > 0 ? ` · ${rows.length}` : ""}`}
