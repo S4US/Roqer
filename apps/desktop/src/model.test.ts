@@ -236,6 +236,18 @@ test("an Antigravity model choice is kept apart from the other providers'", () =
   assert.deepEqual(modelPreference("antigravity", "gemini-3.1-pro-high"), { antigravityModelId: "gemini-3.1-pro-high" });
 });
 
+test("an OpenCode model choice is kept apart from the other providers'", () => {
+  const workspace = createInitialWorkspace();
+  const saved = normalizeWorkspace({
+    ...workspace,
+    preferences: { ...workspace.preferences, provider: "opencode", opencodeModelId: "opencode/big-pickle", claudeModelId: "opus" },
+  });
+  assert.equal(saved.preferences.provider, "opencode");
+  assert.equal(selectedModelId(saved.preferences, "opencode"), "opencode/big-pickle");
+  assert.equal(selectedModelId(saved.preferences, "claude"), "opus");
+  assert.deepEqual(modelPreference("opencode", "opencode/mimo-v2.6-flash-free"), { opencodeModelId: "opencode/mimo-v2.6-flash-free" });
+});
+
 test("a dismissed community invite stays dismissed, and an older workspace has not seen it", () => {
   const workspace = createInitialWorkspace();
   assert.equal(workspace.preferences.communityInviteDismissed, false);

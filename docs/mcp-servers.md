@@ -12,6 +12,29 @@ activity log as a Studio call, whichever provider runs the chat.
 
 ## Add a server
 
+### Quick setup
+
+Open **Settings → MCP servers → Quick setup**:
+
+- **Meshy AI:** enter your Meshy API key and choose **Save & test**. Roqer
+  preconfigures the official `@meshy-ai/meshy-mcp-server` with
+  `MESHY_API_KEY`. Node.js/npm must be installed; `npx` downloads the server
+  on first use. See [Meshy's setup documentation](https://docs.meshy.ai/en/api/ai).
+- **ElevenLabs:** choose **Save & sign in**, finish the browser sign-in, then
+  **Test**. Roqer preconfigures the hosted server's canonical US endpoint and
+  OAuth; no API key or local installation is needed. It provides speech
+  generation and voice-agent management. The old local API-key server is
+  deprecated. See [ElevenLabs' hosted-server documentation](https://elevenlabs.io/docs/eleven-agents/operate/hosted-mcp).
+
+Both use your own service account and credits. Presets are not saved or
+connected until you choose to add them. Keys use the same encrypted storage
+as manually added servers, and tool approvals work the same way. **Connection
+settings** exposes the prefilled settings, including the URL for a different
+ElevenLabs residency region. A preset already added under its default name
+is managed in **Your servers** instead of being added again.
+
+### Manual setup
+
 1. Open **Settings → MCP servers** and choose **Add server**.
 2. Give it a short name, such as `github`. This is what the agent calls it.
 3. Choose how it runs:

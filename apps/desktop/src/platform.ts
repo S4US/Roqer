@@ -100,6 +100,8 @@ function connector(provider: ProviderId) {
       return providers?.claude;
     case "antigravity":
       return providers?.antigravity;
+    case "opencode":
+      return providers?.opencode;
     case "custom":
       return providers?.custom;
   }

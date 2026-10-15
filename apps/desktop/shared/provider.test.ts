@@ -1,7 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { isProviderInstallResult, isProviderStatus } from "./provider";
+import { isProviderInstallResult, isProviderStatus, isProviderModelCatalog } from "./provider";
+
+test("model context capacity must be a positive safe integer when reported", () => {
+  const model = { id: "test", displayName: "Test", defaultReasoningEffort: "none", supportedReasoningEfforts: [{ reasoningEffort: "none" }] };
+  for (const contextWindow of [undefined, 200000]) assert.equal(isProviderModelCatalog({ models: [{ ...model, contextWindow }], defaultModelId: "test" }), true);
+  for (const contextWindow of [null, "200000", 0, -1, 2.5, Infinity]) assert.equal(isProviderModelCatalog({ models: [{ ...model, contextWindow }], defaultModelId: "test" }), false);
+});
 
 test("a missing client is a status the renderer accepts, apart from a failing one", () => {
   assert.equal(isProviderStatus({ kind: "not-installed", message: "Codex was not found on this computer." }), true);

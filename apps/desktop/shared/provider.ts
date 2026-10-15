@@ -10,10 +10,10 @@
  * exists. It is not a provider id any more, so a saved workspace that names
  * it moves to the default when it loads.
  */
-export type ProviderId = "chatgpt" | "claude" | "antigravity" | "custom";
+export type ProviderId = "chatgpt" | "claude" | "antigravity" | "opencode" | "custom";
 
 /** Every provider this build knows how to drive. */
-export const PROVIDER_IDS: readonly ProviderId[] = ["chatgpt", "claude", "antigravity", "custom"];
+export const PROVIDER_IDS: readonly ProviderId[] = ["chatgpt", "claude", "antigravity", "opencode", "custom"];
 
 /** Providers this build offers. */
 export const ENABLED_PROVIDER_IDS: readonly ProviderId[] = PROVIDER_IDS;
@@ -22,7 +22,7 @@ export const ENABLED_PROVIDER_IDS: readonly ProviderId[] = PROVIDER_IDS;
 export const DEFAULT_PROVIDER_ID: ProviderId = "chatgpt";
 
 export function isProviderId(value: unknown): value is ProviderId {
-  return value === "chatgpt" || value === "claude" || value === "antigravity" || value === "custom";
+  return value === "chatgpt" || value === "claude" || value === "antigravity" || value === "opencode" || value === "custom";
 }
 
 /** Whether this build can drive the provider. */
@@ -43,6 +43,8 @@ export function providerLabel(provider: ProviderId): string {
       return "Claude";
     case "antigravity":
       return "Antigravity";
+    case "opencode":
+      return "OpenCode";
     case "custom":
       return "Custom";
   }
@@ -109,6 +111,8 @@ export type ProviderModel = {
   }>;
   /** Which provider runs this model, for transparency rather than routing. */
   runsOn?: string;
+  /** Reported model capacity; absent when the provider does not publish it. */
+  contextWindow?: number;
 };
 
 /** Account-visible model metadata, sanitized before crossing into the renderer. */
@@ -162,6 +166,7 @@ function isProviderModel(value: unknown): value is ProviderModel {
     !isReasoningEffort(value.defaultReasoningEffort) || !Array.isArray(value.supportedReasoningEfforts)) return false;
   return (value.description === undefined || typeof value.description === "string") &&
     (value.runsOn === undefined || typeof value.runsOn === "string") &&
+    (value.contextWindow === undefined || (typeof value.contextWindow === "number" && Number.isSafeInteger(value.contextWindow) && value.contextWindow > 0)) &&
     value.supportedReasoningEfforts.every((entry) => isRecord(entry) &&
       isReasoningEffort(entry.reasoningEffort) &&
       (entry.description === undefined || typeof entry.description === "string"));

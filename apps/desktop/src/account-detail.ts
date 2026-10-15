@@ -14,6 +14,7 @@ export function accountDetail(status: ProviderStatus, client: string | undefined
     ? status.clientVersion
     : undefined;
   const named = client === undefined ? undefined : version === undefined ? client : `${client} ${version}`;
+  if (client === "OpenCode") return version === undefined ? status.message : `${status.message} · ${named}`;
   if (status.kind === "signed-in") {
     return [status.planType === undefined ? undefined : capitalized(status.planType), status.email, named === undefined ? undefined : `through ${named}`]
       .filter((part): part is string => part !== undefined && part !== "")

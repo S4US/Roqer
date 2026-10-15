@@ -118,6 +118,7 @@ export type Preferences = {
   chatGptModelId: string | null;
   claudeModelId: string | null;
   antigravityModelId: string | null;
+  opencodeModelId: string | null;
   /** A custom model, as `<connection id>:<model id>`. The connection itself lives in the main process. */
   customModelId: string | null;
   reasoningEffort: ReasoningEffort;
@@ -132,6 +133,8 @@ export function selectedModelId(preferences: Preferences, provider: ProviderId):
       return preferences.claudeModelId;
     case "antigravity":
       return preferences.antigravityModelId;
+    case "opencode":
+      return preferences.opencodeModelId;
     case "custom":
       return preferences.customModelId;
   }
@@ -146,6 +149,8 @@ export function modelPreference(provider: ProviderId, modelId: string): Partial<
       return { claudeModelId: modelId };
     case "antigravity":
       return { antigravityModelId: modelId };
+    case "opencode":
+      return { opencodeModelId: modelId };
     case "custom":
       return { customModelId: modelId };
   }
@@ -218,6 +223,7 @@ export function createInitialWorkspace(theme: Theme = "dark"): WorkspaceState {
       chatGptModelId: null,
       claudeModelId: null,
       antigravityModelId: null,
+      opencodeModelId: null,
       customModelId: null,
       reasoningEffort: "medium",
     },
@@ -384,6 +390,9 @@ export function normalizeWorkspace(value: unknown, themeFallback: Theme = "dark"
     // Additive: a workspace saved before Antigravity was offered has none chosen.
     antigravityModelId: typeof rawPreferences.antigravityModelId === "string" && rawPreferences.antigravityModelId !== ""
       ? rawPreferences.antigravityModelId
+      : null,
+    opencodeModelId: typeof rawPreferences.opencodeModelId === "string" && rawPreferences.opencodeModelId !== ""
+      ? rawPreferences.opencodeModelId
       : null,
     // Additive: a workspace saved before custom models existed has none chosen.
     customModelId: typeof rawPreferences.customModelId === "string" && rawPreferences.customModelId !== ""

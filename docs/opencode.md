@@ -1,0 +1,17 @@
+# OpenCode (experimental)
+
+Roqer keeps native OpenCode tool schemas available with permission `ask` and runs the noninteractive CLI without `--auto`. This avoids the free-tier refusal caused by removing native tools from the model's tool list. Real experiments with OpenCode 1.18.32, Big Pickle and Muse Spark produced replies and MCP calls; a native file-read request was automatically refused. See the [experiment results](opencode-verification.md#additional-permission-experiments).
+
+Install the [OpenCode CLI](https://opencode.ai/docs/) with `npm install -g opencode-ai`, then select OpenCode in Roqer. The integration has been checked against OpenCode 1.18.32. On Windows Roqer launches the native `opencode.exe` inside the npm package, without a command shell. A custom installation can be selected with `WORKBENCH_OPENCODE_EXECUTABLE`; on Windows this must point to an `.exe`.
+
+Roqer reads the installed CLI's model catalog and offers active OpenCode models that report zero input, output and cache prices and support tools. Availability comes from OpenCode and may change. The catalog is cached for one minute; discovery failures are shown without a fallback list. A listed model can still be unavailable or rate limited when a request is sent. Paid accounts and the user's OpenCode configuration are not imported.
+
+Each run uses a private configuration, home and session directory. Native shell, file editing, web and subagent tools require permission; the noninteractive CLI automatically refuses those requests, without showing an approval dialog. Only the tools exposed by Roqer's local MCP server are granted, and those still pass through Roqer's approval and cancellation policy. Roqer's Full auto mode applies to its MCP tools and does not enable OpenCode's native `--auto` flag. An unexpected native tool event stops the run. The MCP credential stays in the private config file. Session sharing, snapshots, external plugins and background updates are disabled. The process, MCP listener and temporary files are removed when the run ends or fails.
+
+The current request includes the chat's bounded history and attached images. Notes entered during a run are delivered as separate user messages at a turn boundary; if a note is waiting when another tool is requested, that tool is refused until the note is delivered. A follow-up message in the chat starts a fresh private session with the recorded history. No session is retained after a run.
+
+Provider errors, malformed output, unsupported tools, silent completion and truncated replies fail the run instead of reporting success. A silent model is stopped after five minutes, excluding time spent on Roqer tools and user approvals. Usage is recorded only from counts OpenCode actually reports.
+
+The model menu offers reasoning levels reported in the installed CLI's `variants` metadata, passed through `opencode run --variant`. Medium is selected initially when available, otherwise the first supported level. Models without supported variants have no reasoning selector. The context meter uses the most recent completed step's input, output, reasoning and cache tokens, with the model's reported context capacity; it is a reading after each model step, not a live token estimate or the cumulative run usage. Without a published capacity, only the token count is shown. This does not retain or import native OpenCode sessions between runs.
+
+See the [verification record](opencode-verification.md) for checks performed and remaining failures.

@@ -86,6 +86,9 @@ import { AntigravityClient, ANTIGRAVITY_SIGN_IN_HOSTS } from "../runtime/antigra
 import { resolveAntigravityExecutable } from "../runtime/antigravity-executable";
 import { AntigravityLimitsTracker } from "../runtime/antigravity-limits";
 import { createAntigravityPlanner, type AntigravitySession } from "../runtime/antigravity-planner";
+import { OpenCodeClient } from "../runtime/opencode-cli";
+import { resolveOpenCodeExecutable } from "../runtime/opencode-executable";
+import { createOpenCodePlanner } from "../runtime/opencode-planner";
 import { ProviderSessionStore } from "../runtime/provider-sessions";
 import { CodexAppServerClient } from "../runtime/codex-app-server";
 import { CodexLimitsTracker } from "../runtime/codex-limits";
@@ -254,6 +257,7 @@ let claudeLimits: ClaudeLimitsTracker | null = null;
 let claudeCode: ClaudeCodeClient | null = null;
 let antigravityLimits: AntigravityLimitsTracker | null = null;
 let antigravityCli: AntigravityClient | null = null;
+let opencodeCli: OpenCodeClient | null = null;
 const clientInstalls = new ClientInstallRunner();
 const clientVersions = new ClientVersionReader();
 /** A ChatGPT sign-in waiting in the browser, and how it ends. */
@@ -1195,6 +1199,11 @@ function antigravityPlanLimits(): AntigravityLimitsTracker {
   return antigravityLimits;
 }
 
+function opencodeProvider(): OpenCodeClient {
+  opencodeCli ??= new OpenCodeClient();
+  return opencodeCli;
+}
+
 /**
  * Sign-in hosts a provider CLI is allowed to send the user to. A vendor tool
  * that returns anything else is not opened: the address comes from a child
@@ -1204,6 +1213,7 @@ const SIGN_IN_HOSTS: Record<ProviderId, readonly string[]> = {
   chatgpt: ["chatgpt.com", "auth.openai.com"],
   claude: ["claude.com", "claude.ai", "console.anthropic.com", "platform.claude.com"],
   antigravity: ANTIGRAVITY_SIGN_IN_HOSTS,
+  opencode: [],
   // Custom connections are configured in Settings; nothing is signed in to.
   custom: [],
 };
@@ -1225,6 +1235,8 @@ async function readProviderStatus(provider: ProviderId): Promise<ProviderStatus>
       return claudeProvider().getStatus();
     case "antigravity":
       return antigravityProvider().getStatus();
+    case "opencode":
+      return opencodeProvider().getStatus();
     case "chatgpt":
       return chatGptProvider().getChatGptStatus();
   }
@@ -1238,6 +1250,8 @@ async function readProviderCatalog(provider: ProviderId): Promise<ProviderModelC
       return claudeProvider().listModels();
     case "antigravity":
       return antigravityProvider().listModels();
+    case "opencode":
+      return opencodeProvider().models();
     case "chatgpt":
       return chatGptProvider().listChatGptModels();
   }
@@ -1252,6 +1266,7 @@ async function readClientVersion(provider: ProviderId): Promise<string | null> {
     if (provider === "claude") return await clientVersions.read("claude", await resolveClaudeExecutable());
     if (provider === "chatgpt") return await clientVersions.read("codex", await resolveCodexExecutable());
     if (provider === "antigravity") return await clientVersions.read("antigravity", await resolveAntigravityExecutable());
+    if (provider === "opencode") return await clientVersions.read("opencode", await resolveOpenCodeExecutable());
   } catch {
     // Not installed: the status says so itself.
   }
@@ -1299,7 +1314,7 @@ async function loginProvider(event: IpcMainInvokeEvent, value: unknown): Promise
     if (provider === "antigravity") antigravityProvider().forgetStatus();
     const current = await readProviderStatus(provider);
     if (current.kind === "signed-in") return { ok: true, message: current.message };
-    if (provider === "custom") return { ok: false, message: current.message };
+    if (provider === "custom" || provider === "opencode") return { ok: false, message: current.message };
     if (provider === "antigravity") {
       if (current.kind === "not-installed") return { ok: false, message: current.message };
       // A new sign-in may be a different account; nothing it did not run may carry over.
@@ -1817,6 +1832,22 @@ function plannerFor(
       externalMcp,
     });
   }
+  if (request.provider === "opencode") {
+    const client = opencodeProvider();
+    return createOpenCodePlanner({
+      getStatus: () => client.getStatus(),
+      getModels: () => client.models(),
+      model: request.model!,
+      effort: request.effort,
+      ...(modelName === undefined ? {} : { modelName }),
+      agent: agentRuntime.definition,
+      skillLibrary: agentRuntime.skillLibrary,
+      blender,
+      referenceClips,
+      externalMcp,
+      homeParent: cwd,
+    });
+  }
   if (request.provider !== "chatgpt") throw new Error(`No planner drives ${providerLabel(request.provider)}.`);
   return createChatGptPlanner({
     appServer: chatGptProvider(),
@@ -1969,7 +2000,7 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
 
 function parseStartRequest(value: unknown): RunStartRequest | null {
   if (!isRecord(value)) return null;
-  const { projectId, chatId, prompt, conversation, approvalMode, autoPlaytest, endpoint, instanceId, provider, model, effort, startId, attachmentIds } = value;
+  const { projectId, chatId, prompt, conversation, approvalMode, autoPlaytest, endpoint, instanceId, provider, model, effort, startId, attachmentIds, allowConcurrentPlaceRuns } = value;
   if (typeof projectId !== "string" || projectId === "" || projectId.length > 1_000) return null;
   if (typeof chatId !== "string" || chatId === "" || chatId.length > 1_000) return null;
   if (typeof prompt !== "string" || prompt.trim() === "" || prompt.length > 64_000) return null;
@@ -1978,6 +2009,7 @@ function parseStartRequest(value: unknown): RunStartRequest | null {
   if (!isConversationContext(conversation)) return null;
   if (!APPROVAL_MODES.includes(approvalMode as ApprovalMode)) return null;
   if (typeof autoPlaytest !== "boolean") return null;
+  if (allowConcurrentPlaceRuns !== undefined && typeof allowConcurrentPlaceRuns !== "boolean") return null;
   if (typeof endpoint !== "string" || endpoint === "") return null;
   if (instanceId !== null && typeof instanceId !== "string") return null;
   if (!isEnabledProvider(provider)) return null;
@@ -1997,6 +2029,7 @@ function parseStartRequest(value: unknown): RunStartRequest | null {
     effort,
     startId,
     attachmentIds,
+    allowConcurrentPlaceRuns,
   };
 }
 
@@ -2016,7 +2049,7 @@ function settle<T>(promise: Promise<T>): Promise<Settled<T>> {
   );
 }
 
-/** One run per chat and one writing run per Roblox Studio place; see run-claims.ts. */
+/** One run per chat; Studio place sharing is explicit for starts from grid mode. */
 const runHolds = new RunHolds();
 
 async function startRun(event: IpcMainInvokeEvent, payload: unknown): Promise<RunStartResult> {
@@ -2037,7 +2070,7 @@ async function startRun(event: IpcMainInvokeEvent, payload: unknown): Promise<Ru
     // so two starts that arrive together cannot both get them. A cancelled
     // start lets go at once rather than at its next await: it never executes
     // after the cancel, and the person may send again straight away.
-    const begun = runHolds.begin(request.chatId, request.instanceId);
+    const begun = runHolds.begin(request.chatId, request.instanceId, request.allowConcurrentPlaceRuns === true);
     if (!begun.ok) return { ok: false, message: begun.message };
     const runHold = begun.hold;
     hold = runHold;
@@ -2644,14 +2677,17 @@ function runSmokeTest(window: BrowserWindow): void {
         // The smoke run never reaches a vendor: the main process gives it the
         // local inspection planner and skips the vendor sign-in, so this runs
         // on a machine with neither Codex nor Claude Code installed.
-        const started = await bridge.runs.start({
+        const smokeRequest = {
           projectId: "smoke", chatId: "smoke",
           prompt: "Inspect this project and explain how it works",
           conversation: { messages: [], truncated: false },
           approvalMode: "Read only", autoPlaytest: false,
           endpoint: "http://127.0.0.1:59999", instanceId: null,
           provider: "chatgpt", model: null, effort: "medium",
-        });
+        };
+        const malformedSharing = await bridge.runs.start({ ...smokeRequest, allowConcurrentPlaceRuns: "true" });
+        if (malformedSharing?.ok || malformedSharing?.message !== "The run request was not valid.") return { ok: false, reason: "sharing-validation" };
+        const started = await bridge.runs.start({ ...smokeRequest, allowConcurrentPlaceRuns: true });
         if (!started?.ok) return { ok: false, reason: "run-start", message: started?.message };
         await finished;
 
@@ -2855,6 +2891,7 @@ app.on("before-quit", () => {
   codexAppServer?.close();
   claudeCode?.close();
   antigravityCli?.close();
+  opencodeCli?.close();
 });
 
 app.on("will-quit", (event) => {

@@ -53,6 +53,33 @@ const held = (result: ReturnType<RunHolds["begin"]>) => {
   return result.hold;
 };
 
+test("grid runs can share a place, but keep their chat and release only their own claim", () => {
+  const holds = new RunHolds();
+  const first = held(holds.begin("chat-a", "place-a"));
+  const second = held(holds.begin("chat-b", "place-a", true));
+  assert.deepEqual(holds.begin("chat-b", "place-a", true), { ok: false, message: CHAT_BUSY });
+  assert.deepEqual(holds.begin("chat-c", "place-a"), { ok: false, message: STUDIO_PLACE_BUSY });
+  first.release();
+  first.release();
+  assert.deepEqual(holds.begin("chat-c", "place-a"), { ok: false, message: STUDIO_PLACE_BUSY });
+  second.release();
+  assert.ok(holds.begin("chat-c", "place-a").ok);
+});
+
+test("grid runs share a place discovered during startup and cannot bind after cancellation", () => {
+  const holds = new RunHolds();
+  const first = held(holds.begin("chat-a", null, true));
+  const second = held(holds.begin("chat-b", null, true));
+  assert.equal(first.holdPlace("place-a"), true);
+  assert.equal(second.holdPlace("place-a"), true);
+  assert.equal(second.holdPlace("place-b"), false);
+  first.release();
+  assert.equal(first.holdPlace("place-b"), false);
+  assert.deepEqual(holds.begin("chat-c", "place-a"), { ok: false, message: STUDIO_PLACE_BUSY });
+  second.release();
+  assert.ok(holds.begin("chat-c", "place-a").ok);
+});
+
 test("a chat takes one run at a time, even on different places", () => {
   const holds = new RunHolds();
   const first = held(holds.begin("chat-a", "place-a"));

@@ -46,6 +46,7 @@ a sword, the Scarlet Requiem, with a combo, a flash step, and three special atta
 - **You stay in control.** Choose how much it may do on its own, from Read only to Full auto, and see every script change as a diff.
 - **Built for Roblox.** Bundled Roblox skills, Creator Store search and insertion, and Open Cloud uploads with your own key.
 - **Your own MCP servers.** Add other MCP servers in Settings and the agent can use their tools, with the risk of each tool set by you and every call approved like a Studio call.
+- **Chat grids.** Switch between grids with independent layouts and chat positions, keep complete chats side by side, and expand a panel when needed. Grid mode allows several chats to work on the same Studio place. See [chat grids](docs/chat-tabs.md).
 - **Local.** No Roqer account or server. Chats are saved on your computer, and the conversation goes straight to your model provider.
 
 ## Getting started
@@ -67,6 +68,8 @@ npm run start:desktop
 Roqer installs its Studio plugin when it starts. Open (or restart) Roblox Studio so it loads the plugin, then open a place, pick a model in Roqer, and ask for something.
 
 If you use ChatGPT, Claude or Antigravity and don't have Codex, Claude Code or the Antigravity CLI yet, open Settings in Roqer and choose Install next to your account. Roqer runs OpenAI's, Anthropic's or Google's official installer after you confirm, then you connect your subscription.
+
+The experimental OpenCode integration runs free models through the installed CLI (`npm install -g opencode-ai`) and Roqer's MCP tools. See [OpenCode setup and behavior](docs/opencode.md).
 ## Use the Studio tools from another AI client
 
 Roqer's Studio tools are a standalone [MCP](https://modelcontextprotocol.io) server, so you can also use them from Claude Code, Codex, Cursor, or any other MCP client, without Roqer. After building:

@@ -24,3 +24,8 @@ test("an account that is not signed in keeps its message, followed by the client
     "Codex was not found on this computer. Install it to use ChatGPT.");
   assert.equal(accountDetail({ kind: "checking", message: "Checking…" }, "Codex"), "Checking…");
 });
+
+test("OpenCode shows its availability message rather than inventing an account", () => {
+  assert.equal(accountDetail({ kind: "signed-in", message: "Free model access may be restricted.", clientVersion: "1.18.32" }, "OpenCode"),
+    "Free model access may be restricted. · OpenCode 1.18.32");
+});
