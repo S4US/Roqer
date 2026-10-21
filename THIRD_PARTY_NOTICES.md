@@ -111,6 +111,17 @@ and [`apps/desktop/agent/PROVENANCE.md`](apps/desktop/agent/PROVENANCE.md)
 records which skills were changed here and which material was written for
 this repository.
 
+## Stud UI Clean Roblox
+
+The opt-in CLEANSTUD UI theme in `apps/desktop/agent/skills/roblox-cleanstud/`
+is generated from
+[TemporaryLooker22/Stud-UI-Clean-Roblox](https://github.com/TemporaryLooker22/Stud-UI-Clean-Roblox),
+under the MIT licence. Its notice is
+[`apps/desktop/agent/skills/roblox-cleanstud/LICENSE.txt`](apps/desktop/agent/skills/roblox-cleanstud/LICENSE.txt),
+and the skill's own `THIRD_PARTY_NOTICES.md` carries upstream's notice for its
+icon registry. [`apps/desktop/agent/PROVENANCE.md`](apps/desktop/agent/PROVENANCE.md)
+records how the skill is built from upstream and which asset IDs it names.
+
 ## LibMP
 
 The Studio plugin's micro-profiler reads captures through Roblox's
@@ -123,9 +134,9 @@ build that carries it; that permission grants no rights in LibMP itself.
 
 ## Roblox assets
 
-The UI skill's icon catalog lists Roblox image asset IDs. No artwork is copied
-into this repository; Roblox serves each image at runtime under the terms its
-creator set on Roblox.
+The UI skills' icon catalogs and the CLEANSTUD kit list Roblox image and audio
+asset IDs. No artwork or audio is copied into this repository; Roblox serves
+each asset at runtime under the terms its creator set on Roblox.
 
 ## proper-lockfile 4.1.2
 

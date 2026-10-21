@@ -299,21 +299,36 @@ test("a failed skill load can be retried", async () => {
   assert.equal(attempts, 2);
 });
 
-/** Every loadable resource in the shipped pack, as `[skill, resource]`. */
-async function packResources(): Promise<Array<[string, string]>> {
+/**
+ * Every resource in the shipped pack, as `[skill, resource]`: the ones
+ * `load_skill` serves, or with `install`, the modules only a template write reads.
+ */
+async function packResources(install = false): Promise<Array<[string, string]>> {
   const resources: Array<[string, string]> = [];
   for (const skill of await fs.readdir(SKILLS_ROOT, { withFileTypes: true })) {
     if (!skill.isDirectory()) continue;
     const files = await fs.readdir(path.join(SKILLS_ROOT, skill.name), { recursive: true });
     for (const file of files) {
       const resource = file.split(path.sep).join("/");
-      if (resource.endsWith(".md") || (resource.startsWith("templates/") && resource.endsWith(".lua"))) {
+      const template = resource.startsWith("templates/") && resource.endsWith(".lua");
+      if (install ? template && resource.startsWith("templates/install/") : resource.endsWith(".md") || (template && !resource.startsWith("templates/install/"))) {
         resources.push([skill.name, resource]);
       }
     }
   }
   return resources;
 }
+
+test("a module the pack installs is refused by load_skill and read whole by a template write", async () => {
+  const pack = await openSkillLibrary(SKILLS_ROOT);
+  const modules = await packResources(true);
+  assert.ok(modules.length > 0, "the walk found the installed modules");
+  for (const [name, resource] of modules) {
+    await assert.rejects(() => runSkillTool(pack, { name, resource }), /installs unchanged with set_script_source/);
+    const written = await pack.load(name, resource, { write: true });
+    assert.equal(written.content, (await fs.readFile(path.join(SKILLS_ROOT, name, resource), "utf8")).replace(/\r\n/g, "\n"));
+  }
+});
 
 test("every resource in the shipped pack fits in one inline result on its own", async () => {
   const pack = await openSkillLibrary(SKILLS_ROOT);
@@ -360,5 +375,24 @@ test("a themed shop route arrives complete in at most two inline results", async
       request = [...result.matchAll(/^- (\S+): not loaded yet/gm)].map((match) => match[1]);
     }
     assert.deepEqual([...delivered].sort(), [...route].sort(), `${theme} route arrived incomplete`);
+  }
+});
+
+test("the CLEANSTUD route a screen loads first arrives whole in one inline result, whichever example it copies", async () => {
+  const pack = await openSkillLibrary(SKILLS_ROOT);
+  const examples = (await fs.readdir(path.join(SKILLS_ROOT, "roblox-cleanstud", "templates", "examples")))
+    .filter((file) => /^0[1-5]_/.test(file));
+  assert.equal(examples.length, 5);
+  for (const example of examples) {
+    // The first call roblox-cleanstud's SKILL.md names, for a menu, which also takes the controller.
+    const route = [
+      "references/kit-api.md", "references/layouts-and-archetypes.md", "references/checklist.md", "references/screenshots.md",
+      "references/icons/index.md", `templates/examples/${example}`, "templates/examples/06_MenuController.client.lua",
+    ];
+    const result = await createSkillToolRunner(pack)({ name: "roblox-cleanstud", resources: route });
+    assert.ok(result.length <= CLAUDE_CODE_INLINE_CHARACTERS, `${example}: ${result.length} characters`);
+    assert.doesNotMatch(result, /^- \S+: not loaded yet/m, example);
+    const delivered = [...result.matchAll(/<skill(?:-template)? name="roblox-cleanstud" resource="([^"]+)">/g)].map((match) => match[1]);
+    assert.deepEqual(delivered.sort(), [...route].sort(), example);
   }
 });

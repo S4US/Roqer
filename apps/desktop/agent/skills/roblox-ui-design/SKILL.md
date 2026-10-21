@@ -17,7 +17,7 @@ First decide whether the request creates a new UI or edits an existing one.
 
 The host marks clear UI-creation requests so this entrypoint is not optional. Minimize skill-loading turns.
 
-1. Resolve the requested theme and semantic layout from the user request when they are already obvious. Inspect nearby UI/builders first only when project context can actually change that route. Themes: **SIM** (rounded white cartoon cards); **MODERN STUDS**, the stud theme: rounded, outlined, lipped studded blocks, used for every stud, studded, or blocky request; **CLASSIC STUDS**, the recovered square bevel-stack theme, used only when the user asks for classic, square, or old-style studs, or when the screen being edited was built with it.
+1. Resolve the requested theme and semantic layout from the user request when they are already obvious. Inspect nearby UI/builders first only when project context can actually change that route. Themes: **SIM** (rounded white cartoon cards); **MODERN STUDS**, the stud theme: rounded, outlined, lipped studded blocks, used for every stud, studded, or blocky request; **CLASSIC STUDS**, the recovered square bevel-stack theme, used only when the user asks for classic, square, or old-style studs, or when the screen being edited was built with it; **CLEANSTUD**, the opt-in Stud UI Clean kit, used only when the user asks for cleanstud or Stud UI Clean by name, or when the screen being edited was built with it (a ScreenGui with a `CleanStudBuilder` attribute). For CLEANSTUD, load `roblox-cleanstud` and follow its route instead of steps 2–4: it brings its own kit, icons and references.
 2. For a normal new UI, load all resources needed for the chosen route in **one `load_skill` call after this entrypoint**:
    - `references/core/generation.md`
    - `references/core/assets.md`
@@ -45,7 +45,7 @@ For reference-image reconstruction only, a coherent pixel design canvas plus uni
 
 ### Editing
 
-Load [editing](references/core/editing.md), locate the current builder, and preserve its identity, layout, theme, and unrelated geometry. Do not classify or load a new layout unless the user explicitly requests a structural redesign. If an edit adds a component to an existing SIM or CLASSIC STUDS screen, load the recovered active-theme parts and `references/selected/<theme>/<layout>.md` only when exact sibling construction is not already visible in source; for a MODERN STUDS screen, load `references/themes/modern-studs/part-1.md` and `part-2.md` the same way.
+Load [editing](references/core/editing.md), locate the current builder, and preserve its identity, layout, theme, and unrelated geometry. Do not classify or load a new layout unless the user explicitly requests a structural redesign. If an edit adds a component to an existing SIM or CLASSIC STUDS screen, load the recovered active-theme parts and `references/selected/<theme>/<layout>.md` only when exact sibling construction is not already visible in source; for a MODERN STUDS screen, load `references/themes/modern-studs/part-1.md` and `part-2.md` the same way. A CLEANSTUD screen is edited through `roblox-cleanstud` instead.
 
 ## Layout taxonomy for new UI
 

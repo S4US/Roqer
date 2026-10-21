@@ -12,14 +12,29 @@ export type SkillDocument = Readonly<{
   content: string;
 }>;
 
+export type SkillLoadOptions = Readonly<{
+  /** The file is for `set_script_source {template}`: Roqer writes it into Studio and the model never reads it. */
+  write?: boolean;
+}>;
+
 export interface SkillLibrary {
   readonly catalog: readonly SkillSummary[];
-  load(name: string, resource?: string): Promise<SkillDocument>;
+  load(name: string, resource?: string, options?: SkillLoadOptions): Promise<SkillDocument>;
 }
 
 const MAX_SKILLS = 64;
 const MAX_DESCRIPTION_CHARS = 500;
 const MAX_DOCUMENT_BYTES = 64 * 1024;
+/**
+ * Modules a skill installs into the place unchanged, such as a UI kit and its
+ * icon registry. They are written with `set_script_source {template}` and
+ * never loaded into the conversation: one is larger than a tool result can
+ * carry, and the model never needs its code, only the API its references
+ * describe. So they may be larger than a document, and `load_skill` refuses
+ * them.
+ */
+const INSTALL_TEMPLATES = ["templates", "install"];
+const MAX_INSTALL_TEMPLATE_BYTES = 256 * 1024;
 const SKILL_NAME = /^[a-z0-9-]{1,63}$/;
 
 function yamlScalar(raw: string): string {
@@ -46,7 +61,7 @@ function frontmatterField(source: string, field: string): string {
   return yamlScalar(match[1]);
 }
 
-function validateResource(resource: string): string {
+function validateResource(name: string, resource: string, options: SkillLoadOptions): { relativePath: string; maxBytes: number } {
   if (resource === "" || resource.includes("\\") || path.posix.isAbsolute(resource)) {
     throw new Error("Skill resources must use relative POSIX-style paths.");
   }
@@ -60,7 +75,11 @@ function validateResource(resource: string): string {
   if (!isMarkdown && !isLuaTemplate) {
     throw new Error("Only Markdown skill resources and Lua files below templates/ can be loaded.");
   }
-  return segments.join(path.sep);
+  const isInstallTemplate = isLuaTemplate && INSTALL_TEMPLATES.every((segment, index) => segments[index] === segment);
+  if (isInstallTemplate && options.write !== true) {
+    throw new Error(`${name}/${resource} is a module Roqer installs unchanged with set_script_source {template: "${name}/${resource}"}, so it is not loaded. The skill's references describe its API.`);
+  }
+  return { relativePath: segments.join(path.sep), maxBytes: isInstallTemplate ? MAX_INSTALL_TEMPLATE_BYTES : MAX_DOCUMENT_BYTES };
 }
 
 export async function openSkillLibrary(root: string): Promise<SkillLibrary> {
@@ -91,10 +110,10 @@ export async function openSkillLibrary(root: string): Promise<SkillLibrary> {
 
   return Object.freeze({
     catalog: Object.freeze(catalog),
-    async load(name: string, resource = "SKILL.md"): Promise<SkillDocument> {
+    async load(name: string, resource = "SKILL.md", options: SkillLoadOptions = {}): Promise<SkillDocument> {
       const directory = directories.get(name);
       if (!directory) throw new Error(`Unknown client skill: ${name}`);
-      const relativePath = validateResource(resource);
+      const { relativePath, maxBytes } = validateResource(name, resource, options);
       let resolved: string;
       try {
         resolved = await fs.realpath(path.join(directory, relativePath));
@@ -104,8 +123,8 @@ export async function openSkillLibrary(root: string): Promise<SkillLibrary> {
       const boundary = `${directory}${path.sep}`;
       if (!resolved.startsWith(boundary)) throw new Error("Skill resource path traversal is not allowed.");
       const stat = await fs.stat(resolved);
-      if (!stat.isFile() || stat.size > MAX_DOCUMENT_BYTES) {
-        throw new Error(`Skill resource must be a supported file no larger than ${MAX_DOCUMENT_BYTES} bytes.`);
+      if (!stat.isFile() || stat.size > maxBytes) {
+        throw new Error(`Skill resource must be a supported file no larger than ${maxBytes} bytes.`);
       }
       const content = await fs.readFile(resolved, "utf8").catch(() => {
         throw new Error(`Skill resource could not be read: ${name}/${resource}`);

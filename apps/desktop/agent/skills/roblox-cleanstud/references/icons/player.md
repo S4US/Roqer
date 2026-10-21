@@ -1,0 +1,15 @@
+# Icons: Player
+
+Part of the icon catalog (`references/icons/index.md`). An icon's path for `Icons.Get(path)` is `Player/<Subcategory>/<Name>`: the row's subcategory, then the name in backticks. ★ = used by the reference game.
+
+| Subcategory | Name → asset id |
+|---|---|
+| 4 Players | `4 Players 1st` 137195579182647<br>`4 Players 1st Outline` 118172592365461<br>`4 Players 2nd` 126675042648511<br>`4 Players 2nd Outline` 78273787659853<br>`4 Players Black` 81978520544153<br>`4 Players White` 94338782232275 |
+| Add Player | `Add Player 1st` 110532570091569<br>`Add Player 1st Outline` 73659702190059<br>`Add Player 2nd` 75023543519760<br>`Add Player 2nd Outline` 76306972447760<br>`Add Player Black` 105000294800979<br>`Add Player White` 115337859055346 |
+| Arm | `Arm 1st` 119465909699698<br>`Arm 1st Outline` 101715782250286<br>`Arm 2nd` 119439661488626<br>`Arm 2nd Outline` 75213945680674<br>`Arm Black` 105625882407686<br>`Arm White` 125902527528067<br>`Blue Arm 1st` 106398140730954<br>`Blue Arm 1st Outline` 70817091514684<br>`Blue Arm 2nd` 126821198148772<br>`Blue Arm 2nd Outline` 130269932218731<br>`Green Arm 1st` 74805341726193<br>`Green Arm 1st Outline` 73502569188614<br>`Green Arm 2nd` 120056466675490<br>`Green Arm 2nd_1` 86451584176075<br>`Purple Arm 1st` 83171053592381<br>`Purple Arm 1st Outline` 127784633407218<br>`Purple Arm 2nd` 84498529126927<br>`Purple Arm 2nd Outline` 131647058250348<br>`Red Arm 1st` 110277300476246<br>`Red Arm 1st Outline` 140063507009277<br>`Red Arm 2nd` 74980080049650<br>`Red Arm 2nd Outline` 120566580354252 |
+| Friend | `Friend 1st` 115595826489465<br>`Friend 1st Outline` 104726247016522<br>`Friend 2nd` 92198017484652<br>`Friend 2nd Outline` 131128769431845<br>`Friend Black` 126864889469533<br>`Friend White` 104935631577035 |
+| Full Body | `Full Body 1st` 107249950554922<br>`Full Body 1st Outline` 77589096360120<br>`Full Body 2nd` 89452338536410<br>`Full Body 2nd Outline` 90696427648561<br>`Full Body Black` 126512572177371<br>`Full Body White` 73307788072286 |
+| Player | `Player 1st` 90771808503123<br>`Player 1st Outline` 84565274576236<br>`Player 2nd` 75769347149645<br>`Player 2nd Outline` 139271302509377<br>`Player Black` 128491911925587<br>`Player White` 122892093444823 |
+| RIP | `RIP 1st` 124694246260649<br>`RIP 1st Outline` 123202112919028<br>`RIP 2nd` 84127767141171<br>`RIP 2nd Outline` 96818551620140<br>`RIP Black` 125557376740515<br>`RIP White` 87424909560014 |
+| Skull | `Skull 1st` 100258184913583<br>`Skull 1st Outline` 83738751439313<br>`Skull 2nd` 117368159164845<br>`Skull 2nd Outline` 120371274579575<br>`Skull Black` 137270230185229<br>`Skull White` 85035414056068<br>`White Skull 1st` 75698777740889<br>`White Skull 1st Outline` 72630628697267<br>`White Skull 2nd` 83384736102240<br>`White Skull 2nd Outline` 117416364219226 |
+| Smiling Face With Horns | `Smiling Face With Horns 1st` 104747065753694<br>`Smiling Face With Horns 1st Outline` 103037150363045<br>`Smiling Face With Horns 2nd` 124727984491646<br>`Smiling Face With Horns 2nd Outline` 93433994630393<br>`Smiling Face With Horns Black` 129102747886229<br>`Smiling Face With Horns White` 116504298320199 |

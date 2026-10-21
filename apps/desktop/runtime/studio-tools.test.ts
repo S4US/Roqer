@@ -2054,6 +2054,28 @@ test("a template is written into a new script without the model reading, sending
   assert.doesNotMatch(result.text, /local VFX = \{\}/, "the template's text is not handed back to the model");
 });
 
+test("a template write asks the pack for a module it installs, which load_skill would refuse", async () => {
+  const target = "game.ReplicatedStorage.StudUI";
+  const { context, calls } = contextWith([
+    ok({ source: "1: ", revision: EMPTY_REVISION, lineCount: 1 }),
+    ok({ success: true, revision: "sr1:9:after", previousRevision: EMPTY_REVISION }),
+    ok({ source: "1: return {}\n2: ", revision: "sr1:9:after" }),
+  ]);
+  const run = createStudioToolRunner(context, {
+    templates: {
+      load: async (name: string, resource?: string, options?: { write?: boolean }) => {
+        if (options?.write !== true) throw new Error(`${name}/${resource} is a module Roqer installs unchanged, so it is not loaded.`);
+        return { name, resource: resource ?? "SKILL.md", content: "return {}\n" };
+      },
+    },
+  });
+
+  const result = await run("set_script_source", { instancePath: target, template: "roblox-cleanstud/templates/install/StudUI.lua" });
+
+  assert.equal(result.ok, true, result.text);
+  assert.deepEqual(calls[1], { tool: "set_script_source", args: { instancePath: target, source: "return {}\n", expectedRevision: EMPTY_REVISION } });
+});
+
 test("a script that already holds the template is left alone", async () => {
   const target = "game.ReplicatedStorage.VFX.Emit";
   const { context, calls, changes } = contextWith([
