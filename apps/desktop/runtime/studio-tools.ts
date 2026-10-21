@@ -2065,7 +2065,7 @@ export function createStudioToolRunner(context: PlannerContext, options: StudioT
       if (path === undefined) return refuse(`template must name a Lua file in a skill's templates folder, such as ${TEMPLATE_EXAMPLE}.`);
       if (options.templates === undefined) return refuse("skill templates are not available in this run; send the source instead.");
       try {
-        templateSource = normalizeNewlines((await options.templates.load(path.name, path.resource)).content);
+        templateSource = normalizeNewlines((await options.templates.load(path.name, path.resource, { write: true })).content);
       } catch (error) {
         return refuse(`${template} could not be read: ${error instanceof Error ? error.message : String(error)}`);
       }

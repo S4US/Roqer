@@ -153,6 +153,26 @@ No image bytes are copied into the repository. Referencing an ID does not distri
 
 Eight IDs across five categories were checked through a live Studio bridge on 2026-09-08; all resolved to square pre-coloured images. That is a transcription sanity check, not review of all 106. A final targeted saturation pass yielded one new ID from 120 probes, so 106 is treated as practically saturated rather than mathematically complete.
 
+## Stud UI Clean Roblox (CLEANSTUD)
+
+`skills/roblox-cleanstud/` is generated from [TemporaryLooker22/Stud-UI-Clean-Roblox](https://github.com/TemporaryLooker22/Stud-UI-Clean-Roblox), under the MIT licence; its notice is `skills/roblox-cleanstud/LICENSE.txt`, and `skills/roblox-cleanstud/UPSTREAM.json` records the commit and a hash of every generated file. Upstream describes the kit as measured on one shipped Roblox simulator it does not name, and its README sets that game's shop beside the kit's copy.
+
+`apps/desktop/scripts/update-cleanstud.mjs` builds the skill, and an update is a re-run of it:
+- the kit's three modules (`StudUI`, `StudMotion`, `CheckUIIcons`) are copied unchanged below `templates/install/`, which Roqer writes into a place with `set_script_source {template}` and `load_skill` refuses;
+- the five example builders and the menu controller are copied unchanged below `templates/examples/`;
+- the references have upstream's file paths and three Studio MCP tool names rewritten to Roqer's;
+- the icon catalog is split into one file per category;
+- `references/kit-api.md` gathers the kit's own doc comments.
+
+Only `SKILL.md` is written by hand. It keeps upstream's identity rules, kit reference, rules of thumb and extension guide as upstream wrote them, and fits the workflow to Roqer's operations: installing the kit by template, a builder module per screen, and Roqer's audit. The script stops instead of writing when the licence changes, when upstream adds a file it has no rule for, or when the kit's Luau goes past building UI (catalog `require`s, remotes, HTTP, dynamic code). Upstream's reference screenshots are captures of the reference game and are not shipped; their descriptions are.
+
+The kit names asset IDs that upstream does not own. Checked through Roblox's public asset API on 2026-10-19 and 2026-10-20:
+- the 1,022 registry icons and the sunburst are images uploaded on 2026-09-30 and 2026-10-01 by the account `drawygamemake`, not offered on the Creator Store. Upstream credits the icons to a "Check-UI Clean Roblox" set under MIT; that grant is upstream's statement, not the uploader's;
+- the stud tile, shop header, basket, Robux coin and the eight rarity panels are images uploaded on 2026-10-14 and 2026-10-15 by `TuriptoMakeGames`, an account created on 2026-10-09; upstream calls them "the reference creator's uploaded images";
+- the five sounds are public Creator Store audio by their own creators.
+
+On 2026-10-20 the project owner chose to reference these IDs as the kit does, and to ship CLEANSTUD as an opt-in theme, reached only when a user asks for it by name, while it is tested against MODERN STUDS.
+
 ## Release requirements
 
 When the bundle changes:

@@ -1,0 +1,43 @@
+{
+  "schemaVersion": 1,
+  "source": "https://github.com/TemporaryLooker22/Stud-UI-Clean-Roblox",
+  "commit": "7ae67f3f4cf4bd55a597d8f58d81feebb1be7dee",
+  "committed": "2026-10-19T02:11:23+02:00",
+  "license": {
+    "spdx": "MIT",
+    "sha256": "b360f94951fbad425bbbf11851025139aa95cdba130df0510f8b4d7c891d1067"
+  },
+  "skillSha256": "c725df05c090604fb07f5beb7663e91721ce3704449a289c709a3be404cbbfe6",
+  "files": {
+    "LICENSE.txt": "b360f94951fbad425bbbf11851025139aa95cdba130df0510f8b4d7c891d1067",
+    "THIRD_PARTY_NOTICES.md": "16f36516878700889cdbff4f4834c1b697092df318fc63d070518eb46439e0b6",
+    "references/checklist.md": "fa2753be5ca840077b5fc794abd68cc8f576f97f6e70610f0f0d2d6e14335103",
+    "references/components.md": "1c4e50dcb30311ad2a6d10ab8356d5e014d0d732c931274b6c787de8a9b236af",
+    "references/design-tokens.md": "596aff853d4d8e339be7223db68bbba1f183cc1a194c623829a812e525e6033c",
+    "references/icons-and-assets.md": "4876d29a8b5bdadc3d2d4eed0974de40dca7e1271010ad07f67a45a261fabfcd",
+    "references/icons/animal.md": "a43f278f97a9a295516bf7d10dc790376a0886bdb8968c64a484fe8d8b0fc8e5",
+    "references/icons/currency.md": "03b657d971ae878832c3a5e03fad4a0494f079c0e0779f5175a4bdf288d148f8",
+    "references/icons/exclusive.md": "a353f4d8c6e76a7f79e11801e0f4ca3e835f87d894e055de8006bc870826edf9",
+    "references/icons/food.md": "0d94d35c270d5ec08dd9d9b9345dd6d45695ee61cdac94541c85232923fc4270",
+    "references/icons/index.md": "8a13b89f5c4aa332b7cd002cde0f49e054e99a2e3ba99dddb9e00a7f120b3ce9",
+    "references/icons/item.md": "ddcb204a9273e72479181ed7195606db1ab6bbf55f74458138a0aa2f81cd6c31",
+    "references/icons/main.md": "5fa518e80e09ba075fc79d39af1c693a7bdb7145e1983bd7db7e775b4be32863",
+    "references/icons/nature.md": "5002e370073d487b65c8deb7ae666fe06f4492bbb0459beabf2f622bb90e921c",
+    "references/icons/player.md": "81f89ed4863729ebd6c3ccdf294ebc946fd054acf62f6ec65121838234d4d2ad",
+    "references/icons/social.md": "d5a1e31014f932bad6e18ac4b94a35ca60730545848bacdf2030e2c248448f4d",
+    "references/icons/ui.md": "39652d31690378f87bea369bb722f33c4e5e701458dc27813a6f1b3cca4c2337",
+    "references/kit-api.md": "37cbb692b7095d492b2c4c6903670ff514f820d65c172a1badb2f42485f5d3a9",
+    "references/layouts-and-archetypes.md": "1f038eb1cbc450ba6a6e2c2109fc7e361c1ccf80dd4ed12d48ab5c2cd9483021",
+    "references/motion-and-sound.md": "bd0a0e6bb5ad8ae67988007efb4a9d822c814d988c7c158c52254cf093f57821",
+    "references/screenshots.md": "e8e8a94cba1ecd7db8ea686b3358538fffc3248804035725a0ddc6d831258bd5",
+    "templates/examples/01_ShopWindow.lua": "74a8ea1fa778b508984b71f0d5b8587fc031883efd2315c52a720d832f4fbc96",
+    "templates/examples/02_Hud.lua": "1407d6dc2eb7bef97661e14d41d8d5a60c69a526961527803f4d608394357755",
+    "templates/examples/03_Rebirth.lua": "1289b225f9782b0191760d21b949c429e4b7a93cc0448326c3a05b9c69980092",
+    "templates/examples/04_DailyRewards.lua": "e3a8082ee244d6795c7ed87ee38fdc5320bcecd4e67be9578a22e9cc100edb08",
+    "templates/examples/05_IndexWithTabs.lua": "182769f5b1bbe5eba000c5c57e901e81a46b0ce55575e646b707fbe596ea3458",
+    "templates/examples/06_MenuController.client.lua": "28d7396fa92070596bb3f92de5fca9f9bf4e0aad58f98ba4484e02f549133d87",
+    "templates/install/CheckUIIcons.lua": "c840b6fd850e89f57d5b4bfa0cc193c629025b95613f295a9c1ca0738de73a51",
+    "templates/install/StudMotion.lua": "b07d7c5cf57b4b3636c341f64b0ab5b865ee34bd30b05ccedec2df9b1df85713",
+    "templates/install/StudUI.lua": "54418bc051af6f1a9ab64628feb37b89a457850889960416d7a172c637fc8b7d"
+  }
+}

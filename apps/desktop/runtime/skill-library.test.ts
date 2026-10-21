@@ -68,6 +68,38 @@ test("skill library loads canonical Lua templates without opening arbitrary code
   }
 });
 
+test("a module below templates/install is read only for a template write, and may be larger than a document", async () => {
+  const root = await fixture();
+  try {
+    const kit = path.join(root, "roblox-test", "templates", "install");
+    await fs.mkdir(kit, { recursive: true });
+    // Larger than any document may be, as an icon registry is.
+    const registry = `return {\n${"\tIcon = \"rbxassetid://1\",\n".repeat(4_000)}}\n`;
+    assert.ok(registry.length > 64 * 1024);
+    await fs.writeFile(path.join(kit, "Registry.lua"), registry);
+    await fs.writeFile(path.join(kit, "Huge.lua"), "-".repeat(256 * 1024 + 1));
+    const library = await openSkillLibrary(root);
+
+    await assert.rejects(
+      () => library.load("roblox-test", "templates/install/Registry.lua"),
+      /installs unchanged with set_script_source \{template: "roblox-test\/templates\/install\/Registry\.lua"\}, so it is not loaded/,
+    );
+    assert.equal((await library.load("roblox-test", "templates/install/Registry.lua", { write: true })).content, registry);
+    await assert.rejects(
+      () => library.load("roblox-test", "templates/install/Huge.lua", { write: true }),
+      /no larger than 262144 bytes/,
+    );
+    // Every other template keeps the document limit, written or read.
+    await fs.writeFile(path.join(root, "roblox-test", "templates", "sim", "wheel.lua"), registry);
+    await assert.rejects(
+      () => library.load("roblox-test", "templates/sim/wheel.lua", { write: true }),
+      /no larger than 65536 bytes/,
+    );
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
 test("skill library rejects unknown skills, traversal, and unsupported resources", async () => {
   const root = await fixture();
   try {
