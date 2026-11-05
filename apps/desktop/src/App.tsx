@@ -29,8 +29,8 @@ import {
 } from "./platform";
 import {
   activitySteps, applyRunEvent, createRunView, describeOutcome, recordAppliedAndVerified,
-  recordGateIssues, recordHasWarnings, recordOnlyAnswered, recordSteps, recordTranscriptSegments, runAppliedAndVerified,
-  runGateIssues, runHasWarnings, runOnlyAnswered, toRunRecord, hasPicture, transcriptSegments,
+  recordGateIssues, recordHasWarnings, recordOnlyAnswered, recordSteps, runAppliedAndVerified,
+  runGateIssues, runHasWarnings, runOnlyAnswered, toRunRecord, hasPicture,
   type ActivityStep, type PendingApproval, type RunView,
 } from "./run-view";
 import { EvidencePicture, rememberEvidencePicture } from "./evidence-picture";
@@ -60,7 +60,7 @@ import {
 } from "./diff-view";
 import {
   aggregateDuration, buildActivityModel, completedRunMetadataLabel, currentNodeTitle,
-  elapsedLabel, leafNode, MAX_VISIBLE_ALERTS, outputTokensLabel, type ActivityNode, type StepStatus,
+  elapsedLabel, MAX_VISIBLE_ALERTS, outputTokensLabel, type ActivityNode, type StepStatus,
 } from "./activity-model";
 import { CompletionLine } from "./completion-line";
 import {
@@ -2132,38 +2132,6 @@ function WaitingNotice({ label, detail, output }: { label: string; detail?: stri
   </div>;
 }
 
-/** One stretch of the reply, between steps. */
-function TranscriptText({ text, streaming }: { text: string; streaming: boolean }) {
-  if (text.trim() === "") return null;
-  return streaming
-    ? <StreamingMarkdown text={text.trim()} className="result-copy streaming-copy" />
-    : <Markdown text={text.trim()} className="result-copy" />;
-}
-
-/** A short run of steps is listed in full; a long one is folded by phase. */
-const INLINE_STEPS_UNFOLDED = 6;
-
-/**
- * The steps taken between two stretches of prose, listed where they happened,
- * the way Claude Code shows each tool between its messages. Each row opens to
- * the operation, its target, and what came back.
- */
-const InlineSteps = memo(function InlineSteps({ steps }: { steps: ActivityStep[] }) {
-  const [expanded, setExpanded] = useState<Record<string, boolean>>({});
-  const onToggle = useCallback((key: string, open: boolean) => {
-    setExpanded((current) => (current[key] === open ? current : { ...current, [key]: open }));
-  }, []);
-  const nodes = useMemo(
-    () => (steps.length <= INLINE_STEPS_UNFOLDED ? steps.map(leafNode) : buildActivityModel(steps)),
-    [steps],
-  );
-  return <ol className="activity-timeline inline-steps">
-    {nodes.map((node) => (node.children.length === 0
-      ? <ActivityLeaf key={node.key} node={node} />
-      : <ActivityGroup key={node.key} node={node} open={expanded[node.key] ?? node.status === "active"} onToggle={onToggle} />))}
-  </ol>;
-});
-
 function LiveRun({ view, steps, nodes, onOpenInStudio }: { view: RunView; steps: ActivityStep[]; nodes: ActivityNode[]; onOpenInStudio: OpenInStudio }) {
   const answered = view.text.trim() !== "";
   const running = view.outcome === null;
@@ -2184,25 +2152,9 @@ function LiveRun({ view, steps, nodes, onOpenInStudio }: { view: RunView; steps:
   // thinking, and both of those already say so elsewhere.
   const thinking = running && providerIsThinking(view, nodes);
   const renderFiles = useCallback((files: ChangeGroup[], expansion: FileExpansion) => <ChangeSet groups={files} expansion={expansion} onOpenInStudio={onOpenInStudio} />, [onOpenInStudio]);
-  // Keyed on what the segments are built from, which a streamed delta leaves
-  // alone: only the open stretch of prose grows, and it is sliced at render.
-  const { timeline, activities, evidence } = view;
-  const segments = useMemo(() => transcriptSegments({ timeline, activities, evidence }), [timeline, activities, evidence]);
   return <div className="mock-run"><section className="message assistant-message"><div className="message-content">
     {view.planner === DEMO_PLANNER && <p className="run-tag"><span className="run-badge">Demo</span></p>}
-    <TaskList tasks={view.tasks} />
-    <div className="transcript">
-      {segments.map((segment, index) => segment.type === "steps"
-        ? <InlineSteps key={segment.key} steps={segment.steps} />
-        : <TranscriptText
-          key={segment.key}
-          text={view.text.slice(segment.start, segment.end ?? undefined)}
-          // Formatted as it streams, re-rendered a few times a second rather
-          // than on every delta, which would make a long reply quadratic.
-          streaming={running && index === segments.length - 1}
-        />)}
-    </div>
-    {running && !produced && <TypingIndicator done={false} />}
+    {running && <TypingIndicator done={produced} />}
     {thinking && <WaitingNotice
       // Every turn opens with a progress label, so this is normally the
       // planner's own words; the fallback is for a planner that sends none.
@@ -2210,7 +2162,14 @@ function LiveRun({ view, steps, nodes, onOpenInStudio }: { view: RunView; steps:
       {...(view.status?.detail === undefined ? {} : { detail: view.status.detail })}
       output={view.outputTokens}
     />}
+    <TaskList tasks={view.tasks} />
+    <ActivitySection steps={steps} nodes={nodes} running={running} />
     <ResultsCard runId={view.runId} changes={view.changes} evidence={view.evidence} renderFiles={renderFiles} />
+    {answered && (running
+      // Formatted as it streams, re-rendered a few times a second rather than
+      // on every delta, which would make a long reply quadratic.
+      ? <StreamingMarkdown text={view.text.trim()} className="result-copy streaming-copy" />
+      : <Markdown text={view.text.trim()} className="result-copy" />)}
     {appliedAndVerified && <AppliedStatus />}
     {view.outcome !== null && showOutcome && <OutcomeCard
       outcome={view.outcome}
@@ -2840,24 +2799,12 @@ function RunRecordView({ record, text, latest, onOpenInStudio }: { record: RunRe
     record.finishedAt,
   );
   const steps = useMemo(() => recordSteps(record), [record]);
-  const segments = useMemo(() => recordTranscriptSegments(record), [record]);
   const renderFiles = useCallback((files: ChangeGroup[], expansion: FileExpansion) => <ChangeSet groups={files} expansion={expansion} onOpenInStudio={onOpenInStudio} />, [onOpenInStudio]);
   return <>
     <TaskList tasks={record.tasks ?? []} settled />
-    {segments !== null
-      ? <>
-        <div className="transcript">
-          {segments.map((segment) => segment.type === "steps"
-            ? <InlineSteps key={segment.key} steps={segment.steps} />
-            : <TranscriptText key={segment.key} text={segment.text} streaming={false} />)}
-        </div>
-        <ResultsCard runId={record.runId} changes={record.changes} evidence={record.evidence} collapsed={!latest} renderFiles={renderFiles} />
-      </>
-      : <>
-        <ActivitySection steps={steps} running={false} />
-        <ResultsCard runId={record.runId} changes={record.changes} evidence={record.evidence} collapsed={!latest} renderFiles={renderFiles} />
-        <Markdown text={text} className="result-copy" />
-      </>}
+    <ActivitySection steps={steps} running={false} />
+    <ResultsCard runId={record.runId} changes={record.changes} evidence={record.evidence} collapsed={!latest} renderFiles={renderFiles} />
+    <Markdown text={text} className="result-copy" />
     {appliedAndVerified && <AppliedStatus />}
     {showOutcome && <OutcomeCard
       outcome={record.outcome}

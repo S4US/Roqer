@@ -1084,10 +1084,6 @@ a.small-button:focus-visible { outline: 2px solid var(--accent); outline-offset:
  */
 .markdown { color: var(--ink-secondary); font-size: var(--type-body); line-height: 1.7; }
 .markdown.result-copy { margin: 5px 0 4px; }
-.transcript { display: flex; flex-direction: column; }
-.transcript > .markdown.result-copy { margin: 6px 0; }
-.activity-timeline.inline-steps { margin: 4px 0; padding: 2px 0; border-left: 2px solid var(--border); padding-left: 8px; }
-.transcript > :first-child { margin-top: 0; }
 /* The reply reads as the conclusion of the diff above it, not as a caption
  * stuck to its edge, so it is given room to separate from the card. */
 .results-card + .markdown.result-copy { margin-top: 16px; }
