@@ -57,13 +57,12 @@ export function parseImageModels(payload: unknown): OpenRouterImageModel[] {
   for (const entry of payload.data) {
     if (!isRecord(entry) || typeof entry.id !== "string") continue;
     const parameters = isRecord(entry.supported_parameters) ? entry.supported_parameters : {};
-    const enumOf = (name: string) => isRecord(parameters[name]) ? strings((parameters[name] as Record<string, unknown>).enum) : undefined;
+    // OpenRouter writes these as { type: "enum", values: [...] } and { type: "range", min, max }.
+    const enumOf = (name: string) => isRecord(parameters[name]) ? strings((parameters[name] as Record<string, unknown>).values) : undefined;
     const maxOf = (name: string) => {
       const parameter = parameters[name];
       if (!isRecord(parameter)) return undefined;
-      const range = Array.isArray(parameter.range) ? parameter.range : undefined;
-      const max = range !== undefined ? range[range.length - 1] : parameter.max;
-      return typeof max === "number" && Number.isFinite(max) ? max : undefined;
+      return typeof parameter.max === "number" && Number.isFinite(parameter.max) ? parameter.max : undefined;
     };
     const capabilities: OpenRouterCapabilities = {
       ...(enumOf("aspect_ratio") === undefined ? {} : { aspectRatios: enumOf("aspect_ratio") }),

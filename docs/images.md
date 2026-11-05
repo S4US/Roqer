@@ -146,6 +146,10 @@ in a `.json` file, so an upload can say where its picture came from.
   result's family line says; OpenAI's image models through OpenRouter take
   it as a field. A model that makes one picture a call is asked once per
   picture.
+- On OpenRouter, a size reaches the model as an aspect ratio and, when the
+  model lists them, a resolution tier. A model with no tiers chooses its own
+  pixel size, so a `512x512` request can come back larger. The result reports
+  the size Roqer measured.
 - Roqer sends the prompt as the agent wrote it, with the background added in
   words for servers that take no background field. The provider's own
   rewording, when it reports one, is shown to the agent.
