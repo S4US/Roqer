@@ -10,7 +10,7 @@ import { Fragment, memo, useCallback, useEffect, useId, useLayoutEffect, useMemo
 import { createPortal } from "react-dom";
 import { ClipTrimDialog } from "./clip-trim-dialog";
 import { VIDEO_EXTENSIONS, type ClipSelection } from "../shared/reference-clip";
-import { describeSelection, selectionChipParts, selectionKey, type StudioSelection } from "../shared/studio-selection";
+import { describeSelection, selectionChipParts, selectionKey, selectionToOffer, type StudioSelection } from "../shared/studio-selection";
 import {
   appendMessage, createChat, createId, createInitialWorkspace, createProject, undeliverNotes, withMessageSelection,
   deleteChat, deleteProject, modelPreference, normalizeWorkspace, renameChat,
@@ -709,9 +709,10 @@ function App() {
     const target = chatStudioTarget(workspace, workspace.selectedProjectId, workspace.selectedChatId);
     return resolveInstanceId(studioStatus, target.instanceId, target.pinned);
   }, [studioStatus, workspace]);
+  const useSelection = workspace.preferences.useStudioSelection;
   useEffect(() => {
-    if (selectionPlace === null) setStudioSelection(null);
-    if (!hydrated || !windowFocused || isRunning || selectionPlace === null || !hasDesktopRuntime()) return;
+    if (selectionPlace === null || !useSelection) setStudioSelection(null);
+    if (!useSelection || !hydrated || !windowFocused || isRunning || selectionPlace === null || !hasDesktopRuntime()) return;
     let cancelled = false;
     const read = async () => {
       const selection = await getStudioSelection(workspace.preferences.mcpEndpoint, selectionPlace);
@@ -720,11 +721,8 @@ function App() {
     void read();
     const interval = window.setInterval(() => void read(), 4_000);
     return () => { cancelled = true; window.clearInterval(interval); };
-  }, [hydrated, windowFocused, isRunning, selectionPlace, workspace.preferences.mcpEndpoint]);
-  const selectionChip = !isRunning && studioSelection !== null && studioSelection.count > 0 &&
-    selectionKey(studioSelection) !== dismissedSelectionKey
-    ? studioSelection
-    : null;
+  }, [useSelection, hydrated, windowFocused, isRunning, selectionPlace, workspace.preferences.mcpEndpoint]);
+  const selectionChip = selectionToOffer(studioSelection, { enabled: useSelection, running: isRunning, dismissedKey: dismissedSelectionKey });
 
   const compactedFrom = selectedChat?.compaction?.folded ?? 0;
   const compactedUsage = compactUsageNote(selectedChat?.compaction?.usedTokens, selectedChat?.compaction?.windowTokens);

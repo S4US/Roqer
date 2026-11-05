@@ -97,7 +97,10 @@ the selection again at that moment and adds one line beside your message,
 naming the selected instances by path, so "make this open" needs no path. The
 window never writes that line: the main process reads it from Studio, as it
 reads Studio's status, and records it under your message. Dismiss the chip to
-send without it; the next message shows it again.
+send without it; the next message shows it again. Turn off **Use your Studio
+selection** in Settings → Roblox and Roqer stops showing the chip, reading the
+selection for it and adding the line. The agent's own `selection` tool is a
+separate read of Studio and stays available.
 
 Sounds a run fetched from the Creator Store with `preview_asset`, and sound
 files it uploaded from Roqer's own folders (a Blender job's output, a file an

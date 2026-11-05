@@ -205,6 +205,9 @@ export function SettingsPage({ preferences, studioStatus, updateState, notice, o
             <SettingsRow title="Roblox Studio" detail={studioStatus.message}>
               <button type="button" className="small-button" onClick={onStudioRefresh}>Check</button>
             </SettingsRow>
+            <SettingsRow title="Use your Studio selection" detail="Show what is selected in Studio above the message box, and tell the model when you send.">
+              <SettingsSwitch label="Use your Studio selection" checked={preferences.useStudioSelection} onChange={(useStudioSelection) => onPreferences({ useStudioSelection })} />
+            </SettingsRow>
           </SettingsGroup>
           <SettingsGroup title="Publishing">
             <OpenCloudSettings />

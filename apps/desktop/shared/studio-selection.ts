@@ -104,6 +104,19 @@ export function describeSelection(selection: StudioSelection): string {
 }
 
 /**
+ * The selection the composer offers to send, or null when it offers none. A
+ * message carries a selection only while this returns one, so the setting that
+ * turns the feature off, a running chat and a dismissed chip all stop it here.
+ */
+export function selectionToOffer(
+  selection: StudioSelection | null,
+  options: Readonly<{ enabled: boolean; running: boolean; dismissedKey: string | null }>,
+): StudioSelection | null {
+  if (!options.enabled || options.running || selection === null || selection.count === 0) return null;
+  return selectionKey(selection) === options.dismissedKey ? null : selection;
+}
+
+/**
  * The composer chip's short form: the first instance's own name rather than its
  * whole path, which the chip's tooltip lists. A name holding a dot shows only
  * its last part. Only a count when Studio listed no instance.

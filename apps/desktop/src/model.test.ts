@@ -452,6 +452,17 @@ test("a saved Record playtests choice from a build that had the switch loads and
   assert.equal(saved.preferences.autoPlaytest, workspace.preferences.autoPlaytest);
 });
 
+test("the Studio selection is on unless the user turned it off, and a saved choice is kept", () => {
+  const workspace = normalizeWorkspace(createInitialWorkspace());
+  assert.equal(workspace.preferences.useStudioSelection, true);
+  const off = normalizeWorkspace({ ...workspace, preferences: { ...workspace.preferences, useStudioSelection: false } });
+  assert.equal(off.preferences.useStudioSelection, false);
+  const older: Record<string, unknown> = { ...workspace.preferences };
+  delete older.useStudioSelection;
+  assert.equal(normalizeWorkspace({ ...workspace, preferences: older }).preferences.useStudioSelection, true);
+  assert.equal(normalizeWorkspace({ ...workspace, preferences: { ...workspace.preferences, useStudioSelection: "no" } }).preferences.useStudioSelection, true);
+});
+
 test("web search is off unless the user turned it on, and a saved choice to turn it on is kept", () => {
   const workspace = normalizeWorkspace(createInitialWorkspace());
   assert.equal(workspace.preferences.webSearch, false);

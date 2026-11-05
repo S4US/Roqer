@@ -3,6 +3,7 @@ import { test } from "node:test";
 import {
   describeSelection,
   selectionChipParts,
+  selectionToOffer,
   isStudioSelection,
   isStudioSelectionResult,
   MAX_SELECTION_ITEMS,
@@ -79,6 +80,18 @@ test("the model's line names where the paths came from, and says nothing for an 
   assert.equal(selectionContextText({ items: [], count: 0 }), undefined);
   assert.equal(describeSelection(one), "game.Workspace.Tower (Model)");
   assert.equal(describeSelection({ items: [], count: 0 }), "Nothing selected");
+});
+
+test("a selection is offered only while the setting is on, the chat is idle and the chip was not dismissed", () => {
+  const selection = { items: [{ path: "game.Workspace.Door", className: "Part" }], count: 1 };
+  const idle = { enabled: true, running: false, dismissedKey: null };
+  assert.equal(selectionToOffer(selection, idle), selection);
+  assert.equal(selectionToOffer(selection, { ...idle, enabled: false }), null);
+  assert.equal(selectionToOffer(selection, { ...idle, running: true }), null);
+  assert.equal(selectionToOffer(selection, { ...idle, dismissedKey: selectionKey(selection) }), null);
+  assert.equal(selectionToOffer(selection, { ...idle, dismissedKey: "another" }), selection);
+  assert.equal(selectionToOffer({ items: [], count: 0 }, idle), null);
+  assert.equal(selectionToOffer(null, idle), null);
 });
 
 test("the composer chip shows the first instance's own name, its class and how many more", () => {
