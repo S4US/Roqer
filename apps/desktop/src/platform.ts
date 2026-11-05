@@ -1,3 +1,4 @@
+import type { EvidenceSoundResult } from "../shared/evidence-sound";
 import type { StudioSelection } from "../shared/studio-selection";
 import { normalizeWorkspace, type AssetAttachment, type WorkspaceState } from "./model";
 import type { StorageStatus } from "../shared/workspace-storage";
@@ -249,6 +250,11 @@ export async function loadModelPreview(id: string): Promise<ModelPreviewResult> 
  */
 export async function loadEvidencePicture(ref: string): Promise<EvidencePictureResult> {
   return window.workbenchDesktop?.previews.loadPicture(ref) ?? { ok: false, reason: "refused" };
+}
+
+/** A saved run's sound, from the store beside the chats; a browser has none. */
+export async function loadEvidenceSound(ref: string): Promise<EvidenceSoundResult> {
+  return window.workbenchDesktop?.previews.loadSound(ref) ?? { ok: false, reason: "refused" };
 }
 
 /**

@@ -1807,6 +1807,76 @@ function completedBatchUploads(outcome: McpToolOutcome): Array<Omit<RunChange, "
   });
 }
 
+/**
+ * Sounds the user can hear beside the answer: the audio a Creator Store preview
+ * fetched, and the file an upload sent to Roblox as a sound. Each is kept
+ * beside the chat through the host, which bounds how many a run keeps and
+ * which files it will open; the model is told nothing new, since the result
+ * already names them.
+ */
+async function recordSounds(context: PlannerContext, operation: string, args: JsonRecord, outcome: McpToolOutcome): Promise<void> {
+  if (!outcome.ok) return;
+  if (operation === "preview_asset" && context.storeSound !== undefined && outcome.audio !== undefined) {
+    const items = audioPreviewItems(outcome.data);
+    const about = typeof args.assetId === "number" || typeof args.assetId === "string" ? String(args.assetId) : undefined;
+    for (const [index, sound] of outcome.audio.entries()) {
+      const ref = await context.storeSound(sound);
+      if (ref === undefined) continue;
+      const item = items.find((entry) => entry.contentIndex === index + 1);
+      const assetId = item === undefined ? undefined : stringField(item, "assetId") ?? (typeof item.assetId === "number" ? String(item.assetId) : undefined);
+      context.recordEvidence({
+        kind: "inspection",
+        title: assetId === undefined ? `Sound preview ${index + 1}` : `Sound ${assetId}`,
+        detail: `Fetched from the Creator Store${about === undefined ? "" : ` while previewing asset ${about}`}: ${describeSound(sound.mediaType, sound.data.length)}.`,
+        soundRef: ref,
+      });
+    }
+  }
+  if (context.storeSoundFile === undefined) return;
+  const uploads: Array<{ filePath: string; displayName?: string; assetId?: string }> = [];
+  if (operation === "upload_asset" && args.assetType === "Audio" && typeof args.filePath === "string") {
+    const upload = completedUpload(args, outcome);
+    if (upload?.assetId !== undefined) {
+      uploads.push({ filePath: args.filePath, displayName: typeof args.displayName === "string" ? args.displayName : undefined, assetId: upload.assetId });
+    }
+  }
+  if (operation === UPLOAD_ASSETS_OPERATION && isRecord(outcome.data) && Array.isArray(outcome.data.uploads)) {
+    for (const upload of outcome.data.uploads) {
+      if (!isRecord(upload) || upload.status !== "complete" || upload.assetType !== "Audio" || typeof upload.filePath !== "string") continue;
+      uploads.push({ filePath: upload.filePath, displayName: stringField(upload, "displayName"), assetId: stringField(upload, "assetId") });
+    }
+  }
+  for (const upload of uploads) {
+    const ref = await context.storeSoundFile(upload.filePath);
+    if (ref === undefined) continue;
+    context.recordEvidence({
+      kind: "inspection",
+      title: upload.displayName ?? "Uploaded sound",
+      detail: `The file uploaded to Roblox${upload.assetId === undefined ? "" : ` as audio asset ${upload.assetId}`}, as it was sent.`,
+      soundRef: ref,
+    });
+  }
+}
+
+/** The preview's list of the sounds it fetched, wherever the result keeps it: each names its content block. */
+function audioPreviewItems(data: unknown): JsonRecord[] {
+  if (!isRecord(data)) return [];
+  const candidates = [data, ...Object.values(data).filter(isRecord)];
+  for (const candidate of candidates) {
+    if (Array.isArray(candidate.items) && candidate.items.some((item) => isRecord(item) && typeof item.contentIndex === "number")) {
+      return candidate.items.filter(isRecord);
+    }
+  }
+  return [];
+}
+
+function describeSound(mediaType: string, base64Length: number): string {
+  const bytes = Math.floor(base64Length * 3 / 4);
+  const size = bytes >= 1_048_576 ? `${(bytes / 1_048_576).toFixed(1)} MB` : `${Math.max(1, Math.round(bytes / 1_024))} KB`;
+  const format = mediaType === "audio/mpeg" ? "MP3" : mediaType === "audio/ogg" ? "OGG" : mediaType === "audio/wav" ? "WAV" : "FLAC";
+  return `${format}, ${size}`;
+}
+
 function uploadChange(upload: {
   assetId: string;
   displayName?: string;
@@ -2367,6 +2437,7 @@ export function createStudioToolRunner(context: PlannerContext, options: StudioT
         context.recordChange(upload);
       }
     }
+    await recordSounds(context, operation, args, outcome);
 
     return {
       ok: outcome.ok && !refused,

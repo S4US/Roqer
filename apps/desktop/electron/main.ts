@@ -46,6 +46,7 @@ import { uploadAssets } from "../runtime/upload-assets";
 import { linkRojoProject } from "../runtime/link-rojo-project";
 import { withLocalOperations, type LocalOperation } from "../runtime/local-operations";
 import { readStudioSelection } from "../runtime/selection-context";
+import { readSoundFileInside } from "../runtime/picture-store";
 import { CAPTURE_MOMENTS_OPERATION, LINK_ROJO_PROJECT_OPERATION, UPLOAD_ASSETS_OPERATION } from "../shared/gateway-operations";
 import type { McpCallOptions, McpToolOutcome } from "../runtime/mcp-types";
 import { BLENDER_OPERATION, type BlenderSettingsResult, type BlenderSettingsView } from "../shared/blender";
@@ -55,6 +56,7 @@ import {
 import type { RojoPickOutcome, RojoResult } from "../shared/rojo";
 import type { ModelPreviewResult } from "../shared/model-preview";
 import type { EvidencePictureResult } from "../shared/evidence-picture";
+import type { EvidenceSoundResult } from "../shared/evidence-sound";
 import { OpenCloudStore, type OpenCloudResolved } from "../runtime/open-cloud-store";
 import {
   parseOpenCloudSave,
@@ -803,6 +805,12 @@ async function loadModelPreview(event: IpcMainInvokeEvent, id: unknown): Promise
 async function loadEvidencePicture(event: IpcMainInvokeEvent, ref: unknown): Promise<EvidencePictureResult> {
   if (!isTrusted(event.sender)) return { ok: false, reason: "refused" };
   return store().pictures.read(ref);
+}
+
+/** A saved run's sound, by the ref its evidence carries, read and checked like a picture. */
+async function loadEvidenceSound(event: IpcMainInvokeEvent, ref: unknown): Promise<EvidenceSoundResult> {
+  if (!isTrusted(event.sender)) return { ok: false, reason: "refused" };
+  return store().pictures.readSound(ref);
 }
 
 async function blenderResult(operation: () => Promise<BlenderSettingsView>): Promise<BlenderSettingsResult> {
@@ -2357,6 +2365,27 @@ async function startRun(event: IpcMainInvokeEvent, payload: unknown): Promise<Ru
         }
         return ref;
       },
+      // Sounds are kept beside the pictures, and held for the run the same way.
+      storeSound: async (audio) => {
+        const ref = await store().pictures.putSound(Buffer.from(audio.data, "base64"));
+        if (ref !== undefined && !heldPictures.has(ref)) {
+          heldPictures.add(ref);
+          store().pictures.hold([ref]);
+        }
+        return ref;
+      },
+      // A file the agent uploaded is copied only from Roqer's own folders: the
+      // path is the model's word, and the user's disk is not the agent's to read.
+      storeSoundFile: async (filePath) => {
+        const bytes = await readSoundFileInside(filePath, [app.getPath("userData")]);
+        if (bytes === undefined) return undefined;
+        const ref = await store().pictures.putSound(bytes);
+        if (ref !== undefined && !heldPictures.has(ref)) {
+          heldPictures.add(ref);
+          store().pictures.hold([ref]);
+        }
+        return ref;
+      },
       emit: (runEvent: RunEvent) => {
         runJournal().record(runEvent);
         if (runEvent.type === "run-completed") completedRuns.add(runId);
@@ -2947,6 +2976,7 @@ app.whenReady().then(async () => {
   ipcMain.handle("rojo:open-folder", openRojoFolder);
   ipcMain.handle("previews:model", loadModelPreview);
   ipcMain.handle("previews:picture", loadEvidencePicture);
+  ipcMain.handle("previews:sound", loadEvidenceSound);
   ipcMain.handle("chat:compact-model", compactChat);
   ipcMain.handle("run:start", startRun);
   ipcMain.handle("chat:compact", compactChatSessions);

@@ -5,6 +5,7 @@ import {
 import type { RunChange, RunEvidence } from "../shared/run-events";
 import type { ChangeGroup } from "./diff-view";
 import { PreviewsPanel } from "./evidence-previews";
+import { EvidenceSound } from "./evidence-sound";
 import {
   arrivedTab, initialResultsView, rememberResults, resultsSummary, runResults, settleFileDefaults, shownTab, TAB_NAME, uploadEntry,
   type ResultsTab, type ResultsTabInfo, type ResultsViewState, type UploadEntry,
@@ -15,6 +16,7 @@ const TAB_ICON: Record<ResultsTab, ReactNode> = {
   uploads: <CloudUpload size={14} aria-hidden="true" />,
   screenshots: <Camera size={14} aria-hidden="true" />,
   previews: <Box size={14} aria-hidden="true" />,
+  sounds: <AudioLines size={14} aria-hidden="true" />,
 };
 
 /** Every run's card as the reader left it, by run id. See `ResultsViewState`. */
@@ -160,6 +162,7 @@ export const ResultsCard = memo(function ResultsCard({ runId, changes, evidence,
     >
       {tab.id === "changes" && renderFiles(results.files, expansion)}
       {tab.id === "uploads" && <UploadsPanel uploads={results.uploads} />}
+      {tab.id === "sounds" && <SoundsPanel evidence={evidence} />}
       {(tab.id === "screenshots" || tab.id === "previews") && <PreviewsPanel
         category={tab.id}
         evidence={evidence}
@@ -181,6 +184,25 @@ const UploadsPanel = memo(function UploadsPanel({ uploads }: { uploads: readonly
   const entries = useMemo(() => uploads.map(uploadEntry), [uploads]);
   return <ul className="upload-grid">
     {entries.map((entry) => <UploadTile key={entry.key} entry={entry} />)}
+  </ul>;
+});
+
+/**
+ * The sounds a run previewed or uploaded, each with a player: what the agent
+ * heard about from the Creator Store, and the file it sent to Roblox, so the
+ * person can judge a sound without opening Studio.
+ */
+const SoundsPanel = memo(function SoundsPanel({ evidence }: { evidence: readonly RunEvidence[] }) {
+  const sounds = useMemo(() => evidence.filter((item) => item.soundRef !== undefined), [evidence]);
+  return <ul className="sound-list">
+    {sounds.map((item) => <li key={item.id} className="sound-row">
+      <span className="upload-icon"><AudioLines size={16} aria-hidden="true" /></span>
+      <div className="sound-text">
+        <strong title={item.title}>{item.title}</strong>
+        {item.detail && <span>{item.detail}</span>}
+      </div>
+      <EvidenceSound evidence={item} />
+    </li>)}
   </ul>;
 });
 

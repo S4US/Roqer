@@ -161,6 +161,13 @@ export type RunEvidence = {
    */
   imageRef?: string;
   /**
+   * A sound this evidence is about, by its name in the store beside the chat
+   * (`isEvidenceSoundRef`): a Creator Store preview the agent fetched, or the
+   * file it uploaded as a sound. Only the ref, live or saved: a sound is asked
+   * for when someone presses play.
+   */
+  soundRef?: string;
+  /**
    * The 3D preview of a Blender result, by the opaque id the main process
    * serves it under. Never a path; the preview may have expired since.
    */
@@ -551,6 +558,12 @@ export const MAX_RECORDED_EVIDENCE_IMAGES = 40;
 export const MAX_INLINE_EVIDENCE_IMAGES = 6;
 
 /**
+ * How many sounds one run keeps beside the chat: enough for a set of effect
+ * sounds, and a bound on the disk a run can fill with them.
+ */
+export const MAX_RECORDED_EVIDENCE_SOUNDS = 12;
+
+/**
  * A stored preview's name in the picture store: the SHA-256 of its bytes and
  * its type. It names a picture by its content, never a path, so the renderer
  * can ask for a picture but cannot name a file, and the main process can check
@@ -560,6 +573,13 @@ const EVIDENCE_PICTURE_REF = /^[0-9a-f]{64}\.(jpg|png)$/;
 
 export function isEvidencePictureRef(value: unknown): value is string {
   return typeof value === "string" && EVIDENCE_PICTURE_REF.test(value);
+}
+
+/** A stored sound's name: the SHA-256 of its bytes and its format, like a picture's. */
+const EVIDENCE_SOUND_REF = /^[0-9a-f]{64}\.(mp3|ogg|wav|flac)$/;
+
+export function isEvidenceSoundRef(value: unknown): value is string {
+  return typeof value === "string" && EVIDENCE_SOUND_REF.test(value);
 }
 
 /**
@@ -701,6 +721,7 @@ function isEvidence(value: unknown): value is RunEvidence {
     isOptionalString(value.afterChangeId) &&
     (value.imageDataUrl === undefined || isEvidenceImage(value.imageDataUrl)) &&
     (value.imageRef === undefined || isEvidencePictureRef(value.imageRef)) &&
+    (value.soundRef === undefined || isEvidenceSoundRef(value.soundRef)) &&
     (value.modelPreviewId === undefined || isModelPreviewId(value.modelPreviewId)) &&
     (value.previewNotKept === undefined || value.previewNotKept === true) &&
     (value.subject === undefined || (isString(value.subject) && value.subject.length > 0 && value.subject.length <= MAX_EVIDENCE_SUBJECT_CHARS)) &&

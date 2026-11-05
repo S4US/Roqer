@@ -16,6 +16,7 @@ import type { McpServerSave, McpServersResult, McpServerTestResult } from "../sh
 import type { RojoResult } from "../shared/rojo";
 import type { ModelPreviewResult } from "../shared/model-preview";
 import type { EvidencePictureResult } from "../shared/evidence-picture";
+import type { EvidenceSoundResult } from "../shared/evidence-sound";
 import type { ClipSelection } from "../shared/reference-clip";
 
 type ProviderConnector = {
@@ -86,6 +87,7 @@ declare global {
       previews: {
         loadModel(id: string): Promise<ModelPreviewResult>;
         loadPicture(ref: string): Promise<EvidencePictureResult>;
+        loadSound(ref: string): Promise<EvidenceSoundResult>;
       };
       blender: {
         get(): Promise<BlenderSettingsResult>;

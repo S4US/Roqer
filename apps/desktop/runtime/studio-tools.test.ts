@@ -2414,3 +2414,54 @@ test("a batch under a service root counts what it added, not the service", async
   assert.match(String(evidence[0].detail), /read back what it added to the service/);
   assert.deepEqual(evidence[0].metadata?.[0], { label: "Instances the batch added", value: "2" });
 });
+test("the sounds a Creator Store preview fetched are kept beside the chat as evidence, named by their asset", async () => {
+  const { context, evidence } = contextWith([{
+    ...ok({ assetId: 123, audioPreview: { items: [{ assetId: 456, status: "ok", contentIndex: 1 }, { assetId: 789, status: "unavailable" }, { assetId: 321, contentIndex: 2 }] } }),
+    audio: [{ data: "QUJD", mediaType: "audio/mpeg" }, { data: "QUJDRA==", mediaType: "audio/wav" }],
+  }]);
+  const stored: string[] = [];
+  const withSounds = {
+    ...context,
+    storeSound: async (audio: { mediaType: string }) => {
+      const ref = `${stored.length.toString().padStart(64, "0")}.${audio.mediaType === "audio/wav" ? "wav" : "mp3"}`;
+      stored.push(ref);
+      return ref;
+    },
+  };
+  const run = createStudioToolRunner(withSounds);
+  const result = await run("preview_asset", { assetId: 123 });
+  assert.equal(result.ok, true);
+  const sounds = evidence.filter((item) => item.soundRef !== undefined);
+  assert.equal(sounds.length, 2);
+  assert.equal(sounds[0].title, "Sound 456");
+  assert.equal(sounds[0].soundRef, stored[0]);
+  assert.match(sounds[0].detail ?? "", /Fetched from the Creator Store while previewing asset 123: MP3, 1 KB\./);
+  assert.equal(sounds[1].title, "Sound 321");
+  assert.match(sounds[1].detail ?? "", /WAV/);
+});
+
+test("a sound the agent uploaded is kept as the file it sent, through the host's own file reader", async () => {
+  const { context, evidence } = contextWith([
+    ok({ asset_id: "999", status: "complete", response: { assetId: "999", displayName: "Hit", assetType: "Audio" } }),
+    ok({ uploads: [
+      { filePath: "C:/roqer/mcp-downloads/run/whoosh.mp3", displayName: "Whoosh", assetType: "Audio", status: "complete", assetId: "1000" },
+      { filePath: "C:/roqer/blender-jobs/a/icon.png", displayName: "Icon", assetType: "Decal", status: "complete", assetId: "1001" },
+      { filePath: "C:/roqer/mcp-downloads/run/late.mp3", displayName: "Late", assetType: "Audio", status: "processing" },
+    ] }),
+  ]);
+  const opened: string[] = [];
+  const withFiles = {
+    ...context,
+    storeSoundFile: async (filePath: string) => {
+      opened.push(filePath);
+      return filePath.endsWith("hit.mp3") || filePath.endsWith("whoosh.mp3") ? `${"b".repeat(64)}.mp3` : undefined;
+    },
+  };
+  const run = createStudioToolRunner(withFiles);
+  await run("upload_asset", { action: "upload", filePath: "C:/roqer/mcp-downloads/run/hit.mp3", assetType: "Audio", displayName: "Hit" });
+  await run("upload_assets", { uploads: [{ filePath: "x", assetType: "Audio", displayName: "x" }] });
+  assert.deepEqual(opened, ["C:/roqer/mcp-downloads/run/hit.mp3", "C:/roqer/mcp-downloads/run/whoosh.mp3"], "only completed audio uploads are opened");
+  const sounds = evidence.filter((item) => item.soundRef !== undefined);
+  assert.deepEqual(sounds.map((item) => item.title), ["Hit", "Whoosh"]);
+  assert.match(sounds[0].detail ?? "", /as audio asset 999/);
+});

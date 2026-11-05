@@ -1599,3 +1599,11 @@ a.small-button:focus-visible { outline: 2px solid var(--accent); outline-offset:
 .selection-chip .icon-button { width: 28px; height: 28px; }
 .message-selection { display: inline-flex; align-items: center; gap: 5px; max-width: 640px; margin-top: 6px; color: var(--faint); font-size: var(--type-meta); }
 .message-selection code { overflow: hidden; color: var(--muted); font: var(--weight-regular) 11.5px/1.4 "Geist Mono Variable", monospace; text-overflow: ellipsis; white-space: nowrap; }
+.sound-list { display: flex; flex-direction: column; gap: 8px; margin: 0; padding: 10px 12px 12px; list-style: none; }
+.sound-row { display: grid; grid-template-columns: 30px minmax(0, 1fr) minmax(220px, 320px); align-items: center; gap: 12px; padding: 8px 10px; background: var(--surface-sunken); border: 1px solid var(--border-subtle); border-radius: 10px; }
+.sound-text { display: flex; flex-direction: column; min-width: 0; }
+.sound-text strong { overflow: hidden; color: var(--ink); font-size: var(--type-label); font-weight: var(--weight-medium); text-overflow: ellipsis; white-space: nowrap; }
+.sound-text span { color: var(--muted); font-size: var(--type-meta); }
+.evidence-sound { display: block; width: 100%; max-width: 320px; height: 34px; }
+.evidence-sound-pending, .evidence-sound-missing { display: inline-flex; align-items: center; gap: 6px; color: var(--faint); font-size: var(--type-meta); }
+@media (max-width: 720px) { .sound-row { grid-template-columns: 30px minmax(0, 1fr); } .sound-row .evidence-sound, .sound-row .evidence-sound-pending, .sound-row .evidence-sound-missing { grid-column: 2; } }

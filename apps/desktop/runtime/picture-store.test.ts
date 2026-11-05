@@ -129,3 +129,75 @@ test("inline pictures move to the store and back, and a workspace with none is l
   await rm(store.directory, { recursive: true, force: true });
   assert.equal(await inlineStoredPictures(moved, store), moved);
 }));
+
+// ---------------------------------------------------------------------------
+// Sounds, kept beside the pictures
+// ---------------------------------------------------------------------------
+
+const MP3_TAGGED = Buffer.from([0x49, 0x44, 0x33, 0x04, 0x00, ...Buffer.from("a tagged mp3")]);
+const MP3_BARE = Buffer.from([0xff, 0xfb, 0x90, 0x64, ...Buffer.from("a bare mp3 frame")]);
+const OGG = Buffer.from([...Buffer.from("OggS"), 0x00, 0x02, ...Buffer.from("vorbis")]);
+const WAV = Buffer.from([...Buffer.from("RIFF"), 0x24, 0x00, 0x00, 0x00, ...Buffer.from("WAVEfmt ")]);
+const FLAC = Buffer.from([...Buffer.from("fLaC"), 0x00, 0x00, 0x00, 0x22]);
+
+test("a sound is stored under the hash of its bytes, typed by its bytes, and read back as a data URL", async () => withStore(async (store) => {
+  const mp3 = await store.putSound(MP3_TAGGED);
+  assert.match(mp3 ?? "", /^[0-9a-f]{64}\.mp3$/);
+  assert.equal(await store.putSound(MP3_TAGGED), mp3, "the same sound is the same file");
+  assert.deepEqual(await store.readSound(mp3), { ok: true, dataUrl: `data:audio/mpeg;base64,${MP3_TAGGED.toString("base64")}` });
+  assert.match((await store.putSound(MP3_BARE)) ?? "", /\.mp3$/);
+  assert.match((await store.putSound(OGG)) ?? "", /\.ogg$/);
+  assert.match((await store.putSound(WAV)) ?? "", /\.wav$/);
+  const flac = await store.putSound(FLAC);
+  assert.match(flac ?? "", /\.flac$/);
+  assert.equal((await store.readSound(flac)).ok, true);
+  assert.equal(await store.putSound(Buffer.from("not a sound at all")), undefined, "bytes of no known format are refused");
+  assert.equal(await store.putSound(Buffer.alloc(0)), undefined);
+  assert.deepEqual(await store.readSound("nope"), { ok: false, reason: "invalid" });
+  assert.deepEqual(await store.readSound(`${"a".repeat(64)}.mp3`), { ok: false, reason: "missing" });
+  assert.deepEqual(await store.read(mp3), { ok: false, reason: "invalid" }, "a sound's ref is not a picture's");
+}));
+
+test("a stored sound whose file was changed is refused rather than played", async () => withStore(async (store) => {
+  const ref = await store.putSound(OGG);
+  await writeFile(join(store.directory, ref!), Buffer.from([...Buffer.from("OggS"), 0x01, 0x02, 0x03]));
+  assert.deepEqual(await store.readSound(ref), { ok: false, reason: "invalid" });
+}));
+
+test("clean-up removes sounds nothing refers to, and keeps those a chat or a run holds", async () => withStore(async (store, _root, clock) => {
+  const kept = (await store.putSound(WAV))!;
+  const held = (await store.putSound(FLAC))!;
+  const gone = (await store.putSound(OGG))!;
+  for (const name of [kept, held, gone]) await age(store, name, clock, PICTURE_GRACE_MS + 1_000);
+  store.hold([held]);
+  const referenced = pictureRefs({ projects: [{ chats: [{ messages: [{ run: { evidence: [{ id: "s", kind: "inspection", title: "Sound", soundRef: kept }] } }] }] }] });
+  assert.deepEqual([...referenced], [kept]);
+  assert.equal(await store.collect(referenced), 1);
+  const names = await readdir(store.directory);
+  assert.deepEqual(names.sort(), [held, kept].sort());
+  store.release([held]);
+  assert.equal(await store.collect(referenced), 1);
+  assert.deepEqual(await readdir(store.directory), [kept]);
+}));
+
+test("a sound file is read only from inside the given roots, as a real file of a known format within the bound", async () => {
+  const { readSoundFileInside } = await import("./picture-store");
+  const root = await mkdtemp(join(tmpdir(), "roqer-sound-root-"));
+  const elsewhere = await mkdtemp(join(tmpdir(), "roqer-sound-elsewhere-"));
+  try {
+    await writeFile(join(root, "hit.wav"), WAV);
+    await writeFile(join(root, "notes.txt"), "not audio");
+    await writeFile(join(elsewhere, "secret.wav"), WAV);
+    assert.deepEqual(await readSoundFileInside(join(root, "hit.wav"), [root]), WAV);
+    assert.equal(await readSoundFileInside(join(root, "notes.txt"), [root]), undefined, "the bytes decide, not the name");
+    assert.equal(await readSoundFileInside(join(elsewhere, "secret.wav"), [root]), undefined, "outside the roots is nothing");
+    assert.equal(await readSoundFileInside(join(root, "..", "hit.wav"), [root]), undefined);
+    assert.equal(await readSoundFileInside(root, [root]), undefined, "a folder is nothing");
+    assert.equal(await readSoundFileInside(join(root, "missing.wav"), [root]), undefined);
+    assert.equal(await readSoundFileInside("hit.wav", [root]), undefined, "a relative path is nothing");
+    assert.equal(await readSoundFileInside(join(root, "hit.wav"), [root], 4), undefined, "over the bound is nothing");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+    await rm(elsewhere, { recursive: true, force: true });
+  }
+});

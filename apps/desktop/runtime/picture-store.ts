@@ -1,10 +1,11 @@
 import { createHash, randomUUID } from "node:crypto";
-import { lstat, mkdir, readdir, readFile, rename, unlink, utimes, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { lstat, mkdir, readdir, readFile, realpath, rename, unlink, utimes, writeFile } from "node:fs/promises";
+import { join, relative, isAbsolute, sep } from "node:path";
 
 import type { EvidencePictureResult } from "../shared/evidence-picture";
+import { isEvidenceSound, MAX_EVIDENCE_SOUND_BYTES, type EvidenceSoundResult } from "../shared/evidence-sound";
 import {
-  isEvidenceImage, isEvidencePictureRef, MAX_EVIDENCE_IMAGE_CHARACTERS, type RunEvidence,
+  isEvidenceImage, isEvidencePictureRef, isEvidenceSoundRef, MAX_EVIDENCE_IMAGE_CHARACTERS, type RunEvidence,
 } from "../shared/run-events";
 
 /**
@@ -16,6 +17,9 @@ import {
  * SHA-256 of its bytes, and the chat keeps only that name. The same picture is
  * stored once, a file is never rewritten, and what is read back is checked to
  * be what was stored.
+ *
+ * Sounds a run previewed or uploaded are kept the same way, in the same
+ * folder, under their own types, so the user can hear what the agent chose.
  *
  * Nothing expires by age, as a chat's history should not. A picture goes when
  * no chat refers to it any more — its chat was deleted — and it is neither
@@ -32,9 +36,10 @@ export const PICTURE_GRACE_MS = 10 * 60 * 1000;
 const MAX_PICTURE_BYTES = Math.ceil(MAX_EVIDENCE_IMAGE_CHARACTERS * 3 / 4);
 
 const PNG_SIGNATURE = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
-const TEMPORARY = /^[0-9a-f]{64}\.(jpg|png)\.[^.]+\.tmp$/;
+const TEMPORARY = /^[0-9a-f]{64}\.(jpg|png|mp3|ogg|wav|flac)\.[^.]+\.tmp$/;
 
 type PictureType = "jpg" | "png";
+type SoundType = "mp3" | "ogg" | "wav" | "flac";
 
 function pictureType(bytes: Uint8Array): PictureType | undefined {
   if (bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) return "jpg";
@@ -42,12 +47,32 @@ function pictureType(bytes: Uint8Array): PictureType | undefined {
   return undefined;
 }
 
+const ascii = (bytes: Uint8Array, start: number, text: string): boolean =>
+  bytes.length >= start + text.length && Buffer.from(bytes.subarray(start, start + text.length)).toString("latin1") === text;
+
+/** The format a sound's own bytes say it is, which is what names it; a declared type is never trusted. */
+export function soundType(bytes: Uint8Array): SoundType | undefined {
+  if (ascii(bytes, 0, "ID3")) return "mp3";
+  // An MP3 with no tag starts at a frame: eleven sync bits, then an MPEG version other than reserved.
+  if (bytes.length >= 4 && bytes[0] === 0xff && (bytes[1] & 0xe0) === 0xe0 && (bytes[1] & 0x18) !== 0x08 && (bytes[1] & 0x06) !== 0) return "mp3";
+  if (ascii(bytes, 0, "OggS")) return "ogg";
+  if (ascii(bytes, 0, "RIFF") && ascii(bytes, 8, "WAVE")) return "wav";
+  if (ascii(bytes, 0, "fLaC")) return "flac";
+  return undefined;
+}
+
+const SOUND_MEDIA_TYPE: Readonly<Record<SoundType, string>> = { mp3: "audio/mpeg", ogg: "audio/ogg", wav: "audio/wav", flac: "audio/flac" };
+
 function sha256(bytes: Uint8Array): string {
   return createHash("sha256").update(bytes).digest("hex");
 }
 
 function dataUrl(type: PictureType, bytes: Uint8Array): string {
   return `data:image/${type === "png" ? "png" : "jpeg"};base64,${Buffer.from(bytes).toString("base64")}`;
+}
+
+function soundDataUrl(type: SoundType, bytes: Uint8Array): string {
+  return `data:${SOUND_MEDIA_TYPE[type]};base64,${Buffer.from(bytes).toString("base64")}`;
 }
 
 export class PictureStore {
@@ -73,9 +98,26 @@ export class PictureStore {
     const type = pictureType(bytes);
     if (type === undefined || bytes.length > MAX_PICTURE_BYTES) return undefined;
     const ref = `${sha256(bytes)}.${type}`;
+    return this.#keep(ref, bytes, async () => (await this.read(ref)).ok);
+  }
+
+  /**
+   * Store a sound's bytes and return its ref; undefined when the bytes are not
+   * a bounded MP3, OGG, WAV or FLAC, or the file could not be written. The
+   * bytes decide the type: a declared type is never trusted.
+   */
+  async putSound(bytes: Uint8Array): Promise<string | undefined> {
+    const type = soundType(bytes);
+    if (type === undefined || bytes.length === 0 || bytes.length > MAX_EVIDENCE_SOUND_BYTES) return undefined;
+    const ref = `${sha256(bytes)}.${type}`;
+    return this.#keep(ref, bytes, async () => (await this.readSound(ref)).ok);
+  }
+
+  /** Write a file once under its ref, or only mark a file already there fresh. */
+  async #keep(ref: string, bytes: Uint8Array, exists: () => Promise<boolean>): Promise<string | undefined> {
     const path = join(this.directory, ref);
     try {
-      if ((await this.read(ref)).ok) {
+      if (await exists()) {
         const moment = new Date(this.#now());
         await utimes(path, moment, moment);
         return ref;
@@ -114,6 +156,21 @@ export class PictureStore {
     return isEvidenceImage(url) ? { ok: true, dataUrl: url } : { ok: false, reason: "invalid" };
   }
 
+  /** A stored sound, read and checked the way a picture is. */
+  async readSound(ref: unknown): Promise<EvidenceSoundResult> {
+    if (!isEvidenceSoundRef(ref)) return { ok: false, reason: "invalid" };
+    const path = join(this.directory, ref);
+    const info = await lstat(path).catch(() => undefined);
+    if (info === undefined) return { ok: false, reason: "missing" };
+    if (!info.isFile() || info.size > MAX_EVIDENCE_SOUND_BYTES) return { ok: false, reason: "invalid" };
+    const bytes = await readFile(path).catch(() => undefined);
+    if (bytes === undefined) return { ok: false, reason: "missing" };
+    const type = soundType(bytes);
+    if (type === undefined || `${sha256(bytes)}.${type}` !== ref) return { ok: false, reason: "invalid" };
+    const url = soundDataUrl(type, bytes);
+    return isEvidenceSound(url) ? { ok: true, dataUrl: url } : { ok: false, reason: "invalid" };
+  }
+
   /** Keep these pictures through any clean-up until they are released: a run is still going. */
   hold(refs: Iterable<string>): void {
     for (const ref of refs) this.#held.set(ref, (this.#held.get(ref) ?? 0) + 1);
@@ -128,38 +185,69 @@ export class PictureStore {
   }
 
   /**
-   * Remove every stored picture no chat refers to, unless a run holds it or it
-   * is newer than the grace; and any write left half-done. Returns how many
-   * pictures it removed. Failing to remove one is left for the next time.
+   * Remove every stored picture or sound no chat refers to, unless a run holds
+   * it or it is newer than the grace; and any write left half-done. Returns
+   * how many it removed. Failing to remove one is left for the next time.
    */
   async collect(referenced: ReadonlySet<string>): Promise<number> {
     const names = await readdir(this.directory).catch(() => [] as string[]);
     const cutoff = this.#now() - PICTURE_GRACE_MS;
     let removed = 0;
     for (const name of names) {
-      const picture = isEvidencePictureRef(name);
-      if (!picture && !TEMPORARY.test(name)) continue;
-      if (picture && (referenced.has(name) || this.#held.has(name))) continue;
+      const media = isEvidencePictureRef(name) || isEvidenceSoundRef(name);
+      if (!media && !TEMPORARY.test(name)) continue;
+      if (media && (referenced.has(name) || this.#held.has(name))) continue;
       const path = join(this.directory, name);
       const info = await lstat(path).catch(() => undefined);
       if (info === undefined || !info.isFile() || info.mtimeMs >= cutoff) continue;
       try {
         await unlink(path);
-        if (picture) removed += 1;
+        if (media) removed += 1;
       } catch { /* Left for the next clean-up. */ }
     }
     return removed;
   }
 }
 
+/**
+ * The bytes of a sound file inside one of Roqer's own folders, for a copy kept
+ * with the chat of a sound the agent uploaded. A file anywhere else, a link, a
+ * folder, or a file over the bound reads as nothing: the path is the model's
+ * word, and this is the one place the host opens it.
+ */
+export async function readSoundFileInside(filePath: string, roots: readonly string[], maxBytes: number = MAX_EVIDENCE_SOUND_BYTES): Promise<Buffer | undefined> {
+  if (typeof filePath !== "string" || filePath === "" || !isAbsolute(filePath)) return undefined;
+  let resolved: string;
+  try {
+    resolved = await realpath(filePath);
+  } catch {
+    return undefined;
+  }
+  let inside = false;
+  for (const root of roots) {
+    const base = await realpath(root).catch(() => undefined);
+    if (base === undefined) continue;
+    const away = relative(base, resolved);
+    if (away !== "" && !away.startsWith(`..${sep}`) && away !== ".." && !isAbsolute(away)) inside = true;
+  }
+  if (!inside) return undefined;
+  const info = await lstat(resolved).catch(() => undefined);
+  if (info === undefined || !info.isFile() || info.size === 0 || info.size > maxBytes) return undefined;
+  const bytes = await readFile(resolved).catch(() => undefined);
+  return bytes !== undefined && soundType(bytes) !== undefined ? bytes : undefined;
+}
+
 /** Every chat's runs' evidence, in a workspace shaped like a saved one. */
 type EvidenceHolder = { projects: ReadonlyArray<{ chats: ReadonlyArray<{ messages: ReadonlyArray<{ run?: { evidence: readonly RunEvidence[] } }> }> }> };
 
-/** The pictures a workspace's chats refer to. */
+/** The pictures and sounds a workspace's chats refer to. */
 export function pictureRefs(state: EvidenceHolder): Set<string> {
   const refs = new Set<string>();
   for (const project of state.projects) for (const chat of project.chats) for (const message of chat.messages) {
-    for (const evidence of message.run?.evidence ?? []) if (isEvidencePictureRef(evidence.imageRef)) refs.add(evidence.imageRef);
+    for (const evidence of message.run?.evidence ?? []) {
+      if (isEvidencePictureRef(evidence.imageRef)) refs.add(evidence.imageRef);
+      if (isEvidenceSoundRef(evidence.soundRef)) refs.add(evidence.soundRef);
+    }
   }
   return refs;
 }

@@ -634,3 +634,36 @@ test("resolveMcpAuthToken never creates the token file", async () => {
     assert.equal(exists, false);
   });
 });
+
+test("callTool keeps a bounded number of validated audio blocks, host-only, with their type spelled one way", async () => {
+  const sound = Buffer.from("a sound preview").toString("base64");
+  const { server, endpoint } = await startServer(async (req, res) => {
+    await readBody(req);
+    respondJson(res, 200, {
+      content: [
+        { type: "text", text: "Preview of asset 123" },
+        { type: "audio", data: sound, mimeType: "audio/mpeg" },
+        { type: "audio", data: sound, mimeType: "audio/x-wav" },
+        { type: "audio", data: sound, mimeType: "audio/midi" },
+        { type: "audio", data: "not base64", mimeType: "audio/ogg" },
+        { type: "audio", data: sound, mimeType: "audio/flac" },
+        { type: "audio", data: sound, mimeType: "audio/ogg" },
+        { type: "audio", data: sound, mimeType: "audio/mpeg" },
+      ],
+    });
+  });
+  try {
+    const client = new McpClient({ endpoint, authToken: "token" });
+    const outcome = await client.callTool("preview_asset", { assetId: 123 });
+    assert.equal(outcome.ok, true);
+    assert.equal(outcome.text, "Preview of asset 123");
+    assert.deepEqual(outcome.audio, [
+      { data: sound, mediaType: "audio/mpeg" },
+      { data: sound, mediaType: "audio/wav" },
+      { data: sound, mediaType: "audio/flac" },
+    ]);
+    assert.equal(outcome.images, undefined);
+  } finally {
+    await closeServer(server);
+  }
+});

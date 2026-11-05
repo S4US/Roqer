@@ -19,7 +19,7 @@ import { evidenceImages } from "./run-view";
  * without React.
  */
 
-export type ResultsTab = "changes" | "uploads" | "screenshots" | "previews";
+export type ResultsTab = "changes" | "uploads" | "screenshots" | "previews" | "sounds";
 
 export type ResultsTabInfo = {
   id: ResultsTab;
@@ -40,9 +40,10 @@ export type RunResults = {
 
 /**
  * Tabs in the order they read, left to right: what changed, what went up, what
- * the place looks like, and what the things the run built look like.
+ * the place looks like, what the things the run built look like, and what the
+ * run heard or uploaded as sound.
  */
-const TAB_ORDER: readonly ResultsTab[] = ["changes", "uploads", "screenshots", "previews"];
+const TAB_ORDER: readonly ResultsTab[] = ["changes", "uploads", "screenshots", "previews", "sounds"];
 
 export function runResults(changes: readonly RunChange[], evidence: readonly RunEvidence[]): RunResults {
   const files = groupChangesByTarget(changes.filter((change) => change.kind !== "asset"));
@@ -63,6 +64,7 @@ export function runResults(changes: readonly RunChange[], evidence: readonly Run
 
   const counts: Record<ResultsTab, number> = {
     changes: files.length, uploads: uploads.length, screenshots: pictures("screenshots"), previews: pictures("previews"),
+    sounds: evidence.filter((item) => item.soundRef !== undefined).length,
   };
   const tabs = TAB_ORDER.filter((id) => counts[id] > 0).map((id): ResultsTabInfo => (
     id === "changes" ? { id, count: counts[id], added, removed } : { id, count: counts[id] }
@@ -75,7 +77,7 @@ export function runResults(changes: readonly RunChange[], evidence: readonly Run
  * any, then its screenshots, since pictures show what the run made; otherwise
  * the code; otherwise the uploads.
  */
-const OPENING_PRIORITY: readonly ResultsTab[] = ["previews", "screenshots", "changes", "uploads"];
+const OPENING_PRIORITY: readonly ResultsTab[] = ["previews", "screenshots", "sounds", "changes", "uploads"];
 
 export function openingTab(tabs: readonly ResultsTabInfo[]): ResultsTab | null {
   return OPENING_PRIORITY.find((id) => tabs.some((tab) => tab.id === id)) ?? null;
@@ -104,6 +106,7 @@ export const TAB_NAME: Record<ResultsTab, { one: string; many: string; title: st
   uploads: { one: "upload", many: "uploads", title: "Uploads" },
   screenshots: { one: "screenshot", many: "screenshots", title: "Screenshots" },
   previews: { one: "preview", many: "previews", title: "Previews" },
+  sounds: { one: "sound", many: "sounds", title: "Sounds" },
 };
 
 /** The card's accessible summary, for a reader who cannot see the tabs: "3 files, 6 uploads, 2 screenshots, 3 previews". */

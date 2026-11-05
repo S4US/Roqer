@@ -23,6 +23,8 @@ import {
 import {
   isStudioSelectionResult, type StudioSelection, type StudioSelectionRequest, type StudioSelectionResult,
 } from "../shared/studio-selection";
+import { isEvidenceSoundResult, type EvidenceSoundResult } from "../shared/evidence-sound";
+import { isEvidenceSoundRef } from "../shared/run-events";
 import { isStorageStatus, type StorageStatus } from "../shared/workspace-storage";
 import {
   isCustomConnectionsResult,
@@ -415,6 +417,12 @@ contextBridge.exposeInMainWorld("workbenchDesktop", {
       if (!isEvidencePictureRef(ref)) return { ok: false, reason: "invalid" };
       const value: unknown = await ipcRenderer.invoke("previews:picture", ref);
       return isEvidencePictureResult(value) ? value : { ok: false, reason: "invalid" };
+    },
+    /** A saved run's sound, by the ref its evidence carries; never a path. */
+    loadSound: async (ref: string): Promise<EvidenceSoundResult> => {
+      if (!isEvidenceSoundRef(ref)) return { ok: false, reason: "invalid" };
+      const value: unknown = await ipcRenderer.invoke("previews:sound", ref);
+      return isEvidenceSoundResult(value) ? value : { ok: false, reason: "invalid" };
     },
   },
   app: {

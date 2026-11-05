@@ -43,6 +43,16 @@ export type McpToolImage = {
 };
 
 /**
+ * A validated audio content block returned by an MCP tool: a Creator Store
+ * preview's sound. Kept for the user, who can play it; no model Roqer drives
+ * listens to audio.
+ */
+export type McpToolAudio = {
+  data: string;
+  mediaType: "audio/mpeg" | "audio/ogg" | "audio/wav" | "audio/flac";
+};
+
+/**
  * The result of one tool call.
  *
  * `ok` is false for transport failures, non-2xx responses, MCP `isError`
@@ -57,6 +67,8 @@ export type McpToolOutcome = {
   text: string;
   /** Validated image content blocks. Kept out of renderer events and persisted history. */
   images?: readonly McpToolImage[];
+  /** Validated audio content blocks, host-only like the images: stored beside the chat, never sent anywhere. */
+  audio?: readonly McpToolAudio[];
   /**
    * The model file `images[0]` pictures, when Roqer's own Blender worker made
    * the picture, with the id its 3D preview is served under when one was kept.

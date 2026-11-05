@@ -99,6 +99,12 @@ window never writes that line: the main process reads it from Studio, as it
 reads Studio's status, and records it under your message. Dismiss the chip to
 send without it; the next message shows it again.
 
+Sounds a run fetched from the Creator Store with `preview_asset`, and sound
+files it uploaded from Roqer's own folders (a Blender job's output, a file an
+MCP server made), are kept beside the chat the way pictures are, and play from
+the Sounds tab of the run's results and from the activity entry that recorded
+them. A run keeps at most twelve, each at most 6 MB.
+
 The ring in the composer's corner shows how full the model's context window
 was at its latest response in the chat, as the provider reported it: Claude
 Code and Codex report both the tokens in use and the window's size, and a

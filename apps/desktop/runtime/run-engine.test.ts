@@ -1239,3 +1239,40 @@ test("a planner context has no preview encoder when the host supplied none", asy
 
   assert.equal(context?.previewImage, undefined);
 });
+
+test("a run keeps the sounds it stores, attaches only those refs to evidence, and stops at its bound", async () => {
+  const events: RunEvent[] = [];
+  const stored: string[] = [];
+  let next = 0;
+  let refused = 0;
+  const ref = () => `${(++next).toString(16).padStart(64, "0")}.mp3`;
+  const session = new RunSession({
+    caller: makeCaller(async () => outcome()),
+    planner: planner(async (ctx) => {
+      const mine = await ctx.storeSound!({ data: "QUJD", mediaType: "audio/mpeg" });
+      ctx.recordEvidence({ kind: "inspection", title: "Sound 1", soundRef: mine });
+      ctx.recordEvidence({ kind: "inspection", title: "Not mine", soundRef: `${"f".repeat(64)}.ogg` });
+      ctx.recordEvidence({ kind: "inspection", title: "Nonsense", soundRef: "../etc/passwd" as string });
+      const fromFile = await ctx.storeSoundFile!("/roqer/mcp-downloads/run/hit.wav");
+      ctx.recordEvidence({ kind: "inspection", title: "Uploaded", soundRef: fromFile });
+      for (let index = 0; index < 20; index += 1) {
+        if ((await ctx.storeSound!({ data: "QUJD", mediaType: "audio/wav" })) === undefined) refused += 1;
+      }
+      return "done";
+    }),
+    request: makeRequest(),
+    emit: (event) => events.push(event),
+    storeSound: async () => { const r = ref(); stored.push(r); return r; },
+    storeSoundFile: async (filePath) => { assert.equal(filePath, "/roqer/mcp-downloads/run/hit.wav"); const r = ref(); stored.push(r); return r; },
+  });
+  await session.execute();
+  assertAllValid(events);
+  const evidence = events.flatMap((event) => event.type === "evidence" ? [event.evidence] : []);
+  assert.equal(evidence[0].soundRef, stored[0]);
+  assert.equal(evidence[1].soundRef, undefined, "a ref this run did not store is dropped");
+  assert.equal(evidence[2].soundRef, undefined, "a ref that is not a ref is dropped");
+  assert.equal(evidence[3].soundRef, stored[1]);
+  // Twelve kept in all, two of them above: ten more are kept, ten refused.
+  assert.equal(refused, 10);
+  assert.equal(stored.length, 12);
+});

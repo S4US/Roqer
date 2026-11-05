@@ -35,6 +35,7 @@ import {
   type ActivityStep, type PendingApproval, type RunView,
 } from "./run-view";
 import { EvidencePicture, rememberEvidencePicture } from "./evidence-picture";
+import { EvidenceSound } from "./evidence-sound";
 import { QUESTION_ESCAPE_OPTION, type RunQuestion } from "../shared/question";
 import { summarizeTasks, type RunTask, type RunTaskStatus } from "../shared/tasks";
 import { Markdown, StreamingMarkdown } from "./markdown-view";
@@ -2405,10 +2406,11 @@ function ActivityGroup({ node, open, onToggle }: {
 function EvidenceDetail({ evidence }: { evidence: RunEvidence }) {
   const lines = evidence.lines ?? [];
   const metadata = evidence.metadata ?? [];
-  if (!evidence.detail && lines.length === 0 && metadata.length === 0 && !hasPicture(evidence)) return null;
+  if (!evidence.detail && lines.length === 0 && metadata.length === 0 && !hasPicture(evidence) && evidence.soundRef === undefined) return null;
   return <CardDetails label={evidenceDetailLabel(evidence.kind)}>
     {evidence.detail && <p className="evidence-note">{evidence.detail}</p>}
     {hasPicture(evidence) && <EvidencePicture className="evidence-image" evidence={evidence} alt={evidence.title} />}
+    {evidence.soundRef !== undefined && <EvidenceSound evidence={evidence} />}
     {lines.length > 0 && (evidence.format === "code"
       // A source read-back is verbatim: indentation and blank lines are part of
       // what is being shown, so it is a code block, not a list of strings.

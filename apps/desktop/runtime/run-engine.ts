@@ -14,7 +14,7 @@
  */
 
 import { createHash } from "node:crypto";
-import type { McpToolCaller, McpToolImage, McpToolOutcome } from "./mcp-types";
+import type { McpToolAudio, McpToolCaller, McpToolImage, McpToolOutcome } from "./mcp-types";
 import { decideToolPolicy, describePolicyReason } from "../shared/policy";
 import type { PolicyReason, ToolRisk } from "../shared/policy";
 import { CALL_MCP_TOOL_OPERATION } from "../shared/mcp-servers";
@@ -30,7 +30,9 @@ import type {
   RunUsage,
   ToolProposal,
 } from "../shared/run-events";
-import { isEvidenceImage, isEvidencePictureRef, isRunUsage } from "../shared/run-events";
+import {
+  isEvidenceImage, isEvidencePictureRef, isEvidenceSoundRef, isRunUsage, MAX_RECORDED_EVIDENCE_SOUNDS,
+} from "../shared/run-events";
 import type { ConversationContext } from "../shared/conversation";
 import {
   evaluateCompletion, evidenceBaselineChangeId, type CompletionVerification,
@@ -154,6 +156,17 @@ export type PlannerContext = {
    * context with nowhere to keep it; a missing preview never fails the call.
    */
   storeModelPreview?(glbBase64: string): Promise<string | undefined>;
+  /**
+   * Keep a sound a tool returned beside the chat and return its ref, for the
+   * evidence that records it; undefined when it cannot be kept, or the run has
+   * kept as many as it may. Absent in a context with nowhere to keep it.
+   */
+  storeSound?(audio: McpToolAudio): Promise<string | undefined>;
+  /**
+   * The same for a sound file the agent uploaded, by the path it named: the
+   * host decides which paths it will open. Absent where it opens none.
+   */
+  storeSoundFile?(filePath: string): Promise<string | undefined>;
   /** Replace the run's task list. Already validated by the caller. */
   setTasks(tasks: RunTask[]): void;
   /** The current task list, for a planner that needs to reread its own plan. */
@@ -226,6 +239,10 @@ export type RunEngineOptions = {
    * alone. Without it, a preview stays only inline.
    */
   storePicture?: (dataUrl: string) => Promise<string | undefined>;
+  /** Keep a sound a tool returned beside the chat; the engine bounds how many a run keeps. */
+  storeSound?: (audio: McpToolAudio) => Promise<string | undefined>;
+  /** Keep a copy of a sound file the agent uploaded, when the host is willing to open that path. */
+  storeSoundFile?: (filePath: string) => Promise<string | undefined>;
   emit: (event: RunEvent) => void;
   /** Injectable for tests; defaults to () => new Date().toISOString(). */
   now?: () => string;
@@ -371,6 +388,8 @@ export class RunSession {
   private readonly images: readonly PlannerImage[];
   private readonly previewImage: RunEngineOptions["previewImage"];
   private readonly storeModelPreview: RunEngineOptions["storeModelPreview"];
+  private readonly storeSound: PlannerContext["storeSound"];
+  private readonly storeSoundFile: PlannerContext["storeSoundFile"];
   private readonly emitRaw: (event: RunEvent) => void;
   private readonly now: () => string;
   private readonly createId: (prefix: string) => string;
@@ -404,6 +423,8 @@ export class RunSession {
   private readonly recordedEvidence: RunEvidence[] = [];
   /** Pictures stored but not yet recorded as evidence, by the picture: their refs. */
   private readonly storedPictures = new Map<string, string>();
+  /** Sounds this run stored, the only ones its evidence may name. */
+  private readonly storedSounds = new Set<string>();
   private failureCount = 0;
 
   private readonly pendingQuestions = new Map<string, {
@@ -435,6 +456,18 @@ export class RunSession {
         return url;
       };
     this.storeModelPreview = options.storeModelPreview;
+    // A run keeps a bounded number of sounds, and only a ref it stored itself
+    // is ever attached to its evidence: the planner cannot name a stored sound.
+    const keepSound = async (store: () => Promise<string | undefined>): Promise<string | undefined> => {
+      if (this.storedSounds.size >= MAX_RECORDED_EVIDENCE_SOUNDS) return undefined;
+      const ref = await store().catch(() => undefined);
+      if (ref === undefined || !isEvidenceSoundRef(ref)) return undefined;
+      this.storedSounds.add(ref);
+      return ref;
+    };
+    const { storeSound, storeSoundFile } = options;
+    this.storeSound = storeSound === undefined ? undefined : (audio) => keepSound(() => storeSound(audio));
+    this.storeSoundFile = storeSoundFile === undefined ? undefined : (filePath) => keepSound(() => storeSoundFile(filePath));
     this.emitRaw = options.emit;
     this.now = options.now ?? (() => new Date().toISOString());
     this.createId = options.createId ?? defaultIdGenerator();
@@ -524,12 +557,15 @@ export class RunSession {
         const rest = { ...evidence };
         delete rest.imageDataUrl;
         delete rest.imageRef;
+        delete rest.soundRef;
         const picture = isEvidenceImage(evidence.imageDataUrl) ? evidence.imageDataUrl : undefined;
         const imageRef = picture === undefined ? undefined : this.storedPictures.get(picture);
+        const soundRef = isEvidenceSoundRef(evidence.soundRef) && this.storedSounds.has(evidence.soundRef) ? evidence.soundRef : undefined;
         const recorded: RunEvidence = {
           ...rest,
           ...(picture === undefined ? {} : { imageDataUrl: picture }),
           ...(imageRef === undefined ? {} : { imageRef }),
+          ...(soundRef === undefined ? {} : { soundRef }),
           id: this.createId("evidence"),
           ...(taskId !== undefined ? { taskId } : {}),
           ...(afterChangeId !== undefined ? { afterChangeId } : {}),
@@ -547,6 +583,8 @@ export class RunSession {
       decisions: () => this.recordedDecisions,
       ...(this.previewImage === undefined ? {} : { previewImage: this.previewImage }),
       ...(this.storeModelPreview === undefined ? {} : { storeModelPreview: this.storeModelPreview }),
+      ...(this.storeSound === undefined ? {} : { storeSound: this.storeSound }),
+      ...(this.storeSoundFile === undefined ? {} : { storeSoundFile: this.storeSoundFile }),
       takeSteers: (options) => {
         const taken = this.pendingSteers.splice(0);
         if (taken.length > 0 && options?.confirmLater !== true) this.emit({ type: "steers-delivered", count: taken.length });
