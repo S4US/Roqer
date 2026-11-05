@@ -311,8 +311,8 @@ and checks, and where Roqer keeps its files.
 
 ### Image generation in Roqer
 
-Settings → Images turns on the opt-in `image` tool, with an OpenAI key or an
-OpenAI-compatible server's address and model. The key is encrypted with the
+Settings → Images turns on the opt-in `image` tool, with an OpenAI key, an
+OpenRouter key and model, or an OpenAI-compatible server's address and model. The key is encrypted with the
 operating system's credential store in `image-generation.json` in Roqer's
 data folder and never reaches the renderer or the model. Each call is
 irreversible, asks outside Full auto, and counts against a budget of 24

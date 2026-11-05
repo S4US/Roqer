@@ -14,10 +14,17 @@ across frames) and effect meshes still come from
 
 ## What you need
 
-- **An image model.** Either an OpenAI API key that may use the Images API
-  (the default model is `gpt-image-1`), or an OpenAI-compatible server's
-  address and, if it needs one, a key. The server must return PNG files:
-  OpenAI does when asked, and a compatible server has to be set to PNG.
+- **An image model.** One of:
+  - an OpenAI API key that may use the Images API (the default model is
+    `gpt-image-1`);
+  - an OpenRouter key, with any model in OpenRouter's image list (the
+    default is `openai/gpt-image-1`). OpenRouter has its own image API, not
+    OpenAI's, so choose **OpenRouter** rather than the compatible server;
+  - an OpenAI-compatible server's address and, if it needs one, a key.
+
+  The source must return PNG files: OpenAI does when asked, OpenRouter is
+  asked for PNG from models that offer it, and a compatible server has to be
+  set to PNG.
 - **A Roblox Open Cloud API key**, to upload the pictures into your place.
   Without one, the agent can still generate, measure and preview, but cannot
   upload. See [Roblox Open Cloud in Roqer](configuration.md#roblox-open-cloud-in-roqer).
@@ -25,9 +32,12 @@ across frames) and effect meshes still come from
 ## Turn it on
 
 1. Open **Settings → Images** in Roqer.
-2. Click **Change**, choose **OpenAI** or **OpenAI-compatible server**, name
-   the model, paste the key, and pick a default quality. **Save**.
-3. **Test** asks the server about the model without making a picture.
+2. Click **Change**, choose **OpenAI**, **OpenRouter** or **OpenAI-compatible
+   server**, name the model, paste the key, and pick a default quality.
+   **Save**.
+3. **Test** asks the server about the model without making a picture. For
+   OpenRouter it also says what the model takes: a transparent background, a
+   quality, how many pictures a call, reference pictures.
 4. Turn on **Generate images**.
 
 While it is on with what it needs, the agent is offered an `image` tool.
@@ -128,7 +138,14 @@ in a `.json` file, so an upload can say where its picture came from.
   a message saying so.
 - A reference may be an earlier output of the same chat only, named as the
   result named it (`jobId/file.png`). An edit needs a server with an
-  `/images/edits` route; OpenAI has one.
+  `/images/edits` route (OpenAI has one) or, on OpenRouter, a model that
+  takes reference pictures.
+- On OpenRouter, Roqer reads the model's capabilities first and sends only
+  the fields it takes. A model with no transparent background gets the
+  background asked for in words and returns an opaque picture, which the
+  result's family line says; OpenAI's image models through OpenRouter take
+  it as a field. A model that makes one picture a call is asked once per
+  picture.
 - Roqer sends the prompt as the agent wrote it, with the background added in
   words for servers that take no background field. The provider's own
   rewording, when it reports one, is shown to the agent.

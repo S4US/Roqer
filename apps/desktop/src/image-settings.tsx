@@ -1,8 +1,8 @@
 import { useEffect, useState } from "react";
 
 import {
-  DEFAULT_IMAGE_BASE_URL, DEFAULT_IMAGE_MODEL, IMAGE_QUALITIES, type ImageQuality, type ImageSettingsResult, type ImageSettingsView,
-  type ImageSourceKind,
+  defaultImageBaseUrl, defaultImageModel, IMAGE_QUALITIES, imageSourceLabel, isImageSourceKind, type ImageQuality, type ImageSettingsResult,
+  type ImageSettingsView, type ImageSourceKind,
 } from "../shared/image-generation";
 import { getImageSettings, saveImageSettings, testImageSettings } from "./platform";
 import { SettingsGroup, SettingsRow, SettingsSwitch } from "./settings-parts";
@@ -21,8 +21,21 @@ const draftFrom = (settings: ImageSettingsView): Draft => ({
 const QUALITY_LABELS: Record<ImageQuality, string> = { low: "Low (drafts)", medium: "Medium", high: "High (settled textures)" };
 
 function sourceSummary(settings: ImageSettingsView): string {
-  const where = settings.source === "openai" ? "OpenAI" : settings.baseUrl;
+  const where = settings.source === "openai-compatible" ? settings.baseUrl : imageSourceLabel(settings.source);
   return `${settings.model} at ${where} · ${settings.hasKey ? "key saved" : "no key"} · quality ${settings.quality}`;
+}
+
+const KEY_HINTS: Record<ImageSourceKind, string> = {
+  openai: "(from platform.openai.com → API keys)",
+  openrouter: "(from openrouter.ai → Keys)",
+  "openai-compatible": "(if the server needs one)",
+};
+
+/** Moving between sources: each takes its own address and model unless the user typed one for it. */
+function switchSource(draft: Draft, source: ImageSourceKind): Draft {
+  const previousDefault = defaultImageModel(draft.source);
+  const model = draft.model.trim() === "" || draft.model === previousDefault ? defaultImageModel(source) ?? draft.model : draft.model;
+  return { ...draft, source, baseUrl: defaultImageBaseUrl(source) ?? draft.baseUrl, model };
 }
 
 /**
@@ -92,21 +105,22 @@ export function ImageSettings() {
       <div className="custom-field-pair">
         <label className="custom-field"><span>Server</span>
           <select value={draft.source} onChange={(event) => {
-            const source: ImageSourceKind = event.target.value === "openai-compatible" ? "openai-compatible" : "openai";
-            setDraft({ ...draft, source, baseUrl: source === "openai" ? DEFAULT_IMAGE_BASE_URL : draft.baseUrl, model: source === "openai" && draft.model === "" ? DEFAULT_IMAGE_MODEL : draft.model });
+            if (isImageSourceKind(event.target.value)) setDraft(switchSource(draft, event.target.value));
           }}>
             <option value="openai">OpenAI</option>
+            <option value="openrouter">OpenRouter</option>
             <option value="openai-compatible">OpenAI-compatible server</option>
           </select>
         </label>
         <label className="custom-field grow"><span>Model</span>
-          <input value={draft.model} spellCheck={false} placeholder={DEFAULT_IMAGE_MODEL} onChange={(event) => setDraft({ ...draft, model: event.target.value })} />
+          <input value={draft.model} spellCheck={false} placeholder={defaultImageModel(draft.source) ?? "flux"} onChange={(event) => setDraft({ ...draft, model: event.target.value })} />
         </label>
       </div>
       {compatible && <label className="custom-field"><span>Address (the /v1 base, with /images/generations under it)</span>
         <input value={draft.baseUrl} spellCheck={false} placeholder="http://localhost:8000/v1" onChange={(event) => setDraft({ ...draft, baseUrl: event.target.value })} />
       </label>}
-      <label className="custom-field"><span>API key {settings.hasKey && !draft.removeKey ? "(saved; paste a new one to replace it)" : compatible ? "(if the server needs one)" : "(from platform.openai.com → API keys)"}</span>
+      {draft.source === "openrouter" && <p className="custom-hint">Any model in OpenRouter's image list works. OpenAI's image models through OpenRouter take a transparent background, which particle and icon textures need; other models return opaque pictures. Test says what the chosen model takes.</p>}
+      <label className="custom-field"><span>API key {settings.hasKey && !draft.removeKey ? "(saved; paste a new one to replace it)" : KEY_HINTS[draft.source]}</span>
         <div className="custom-key-row">
           <input type="password" value={draft.apiKey} spellCheck={false} autoComplete="off" disabled={draft.removeKey} placeholder={settings.hasKey && !draft.removeKey ? "••••••••" : "Paste the key"} onChange={(event) => setDraft({ ...draft, apiKey: event.target.value })} />
           {settings.hasKey && <button className="small-button" onClick={() => setDraft({ ...draft, removeKey: !draft.removeKey, apiKey: "" })}>{draft.removeKey ? "Keep key" : "Remove key"}</button>}

@@ -4,7 +4,7 @@ import path from "node:path";
 
 import {
   DEFAULT_IMAGE_BASE_URL, DEFAULT_IMAGE_MODEL, isImageQuality, isImageSourceKind, MAX_IMAGE_KEY_CHARACTERS, MAX_IMAGE_MODEL_CHARS,
-  type ImageQuality, type ImageSettingsSave, type ImageSettingsView, type ImageSourceKind,
+  type ImageQuality, type ImageSettingsSave, type ImageSettingsView, type ImageSourceKind, defaultImageBaseUrl, imageSourceLabel, imageSourceNeedsKey,
 } from "../shared/image-generation";
 import type { SecretProtector } from "./secret-protector";
 
@@ -90,11 +90,11 @@ function parseStoredFile(value: unknown): StoredFile | undefined {
 
 function view(file: StoredFile, damagedNotice?: string): ImageSettingsView {
   const hasKey = file.encryptedApiKey !== undefined;
-  const needsKey = file.source === "openai" && !hasKey;
+  const needsKey = imageSourceNeedsKey(file.source) && !hasKey;
   const state = needsKey ? "missing" : file.enabled ? "ready" : "off";
-  const where = file.source === "openai" ? "OpenAI" : `the server at ${file.baseUrl}`;
+  const where = file.source === "openai-compatible" ? `the server at ${file.baseUrl}` : imageSourceLabel(file.source);
   const message = state === "missing"
-    ? "OpenAI needs an API key with image access; save one to turn the tool on."
+    ? `${imageSourceLabel(file.source)} needs an API key${file.source === "openai" ? " with image access" : ""}; save one to turn the tool on.`
     : state === "ready"
       ? `On: the agent can ask ${where} for images with ${file.model}, after an approval outside Full auto.`
       : `Off. When on, the agent can ask ${where} for images with ${file.model}.`;
@@ -215,8 +215,10 @@ export class ImageSettings {
     return this.enqueue(async () => {
       const current = await this.read();
       const source = save.source ?? current.source;
-      const rawBaseUrl = save.baseUrl ?? (save.source !== undefined && save.source !== current.source && save.baseUrl === undefined
-        ? (source === "openai" ? DEFAULT_IMAGE_BASE_URL : current.baseUrl)
+      // A change of source without an address takes the new source's own
+      // address; a compatible server keeps whatever was there to edit.
+      const rawBaseUrl = save.baseUrl ?? (save.source !== undefined && save.source !== current.source
+        ? (defaultImageBaseUrl(source) ?? current.baseUrl)
         : current.baseUrl);
       const baseUrl = normalizeImageBaseUrl(rawBaseUrl);
       if (baseUrl === undefined) throw new ImageSettingsError("The server address must be an http or https address, such as https://api.openai.com/v1.");

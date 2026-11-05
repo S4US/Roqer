@@ -72,3 +72,22 @@ test("without encrypted storage a key cannot be kept, and the setting says so", 
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test("OpenRouter takes its own address when chosen, needs a key, and a compatible server keeps the address it had", async () => withStore(async (store) => {
+  const chosen = await store.save({ source: "openrouter", model: "openai/gpt-image-1" });
+  assert.equal(chosen.baseUrl, "https://openrouter.ai/api/v1");
+  assert.equal(chosen.state, "missing");
+  assert.match(chosen.message, /OpenRouter needs an API key/);
+  const keyed = await store.save({ apiKey: "sk-or-test-1234567890", enabled: true });
+  assert.equal(keyed.state, "ready");
+  assert.match(keyed.message, /ask OpenRouter for images with openai\/gpt-image-1/);
+  assert.deepEqual(await store.ready(), { source: "openrouter", baseUrl: "https://openrouter.ai/api/v1", model: "openai/gpt-image-1", quality: "medium", apiKey: "sk-or-test-1234567890" });
+  // Back to a compatible server: the address stays to be edited, and the key is not needed.
+  const local = await store.save({ source: "openai-compatible", apiKey: null });
+  assert.equal(local.baseUrl, "https://openrouter.ai/api/v1");
+  assert.equal(local.state, "ready");
+  // And to OpenAI: its own address, no key again.
+  const openai = await store.save({ source: "openai" });
+  assert.equal(openai.baseUrl, "https://api.openai.com/v1");
+  assert.equal(openai.state, "missing");
+}));

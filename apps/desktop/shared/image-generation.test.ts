@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
-  defaultBackground, defaultSize, isImageSettingsResult, isImageTestResult, MAX_IMAGE_KEY_CHARACTERS, parseImageSettingsSave,
+  defaultBackground, defaultImageBaseUrl, defaultImageModel, defaultSize, imageSourceLabel, imageSourceNeedsKey, isImageSettingsResult, isImageTestResult,
+  MAX_IMAGE_KEY_CHARACTERS, parseImageSettingsSave,
 } from "./image-generation";
 
 test("each kind of image has the background and size the guidance expects", () => {
@@ -34,4 +35,17 @@ test("the results the window accepts are checked for shape", () => {
   assert.equal(isImageSettingsResult({ ok: false }), false);
   assert.equal(isImageTestResult({ ok: true, message: "fine" }), true);
   assert.equal(isImageTestResult({ ok: "yes", message: "fine" }), false);
+});
+
+test("each source has its own address and model unless the user names one, and says whether it needs a key", () => {
+  assert.equal(defaultImageBaseUrl("openai"), "https://api.openai.com/v1");
+  assert.equal(defaultImageBaseUrl("openrouter"), "https://openrouter.ai/api/v1");
+  assert.equal(defaultImageBaseUrl("openai-compatible"), undefined);
+  assert.equal(defaultImageModel("openrouter"), "openai/gpt-image-1");
+  assert.equal(defaultImageModel("openai-compatible"), undefined);
+  assert.equal(imageSourceNeedsKey("openai"), true);
+  assert.equal(imageSourceNeedsKey("openrouter"), true);
+  assert.equal(imageSourceNeedsKey("openai-compatible"), false);
+  assert.equal(imageSourceLabel("openrouter"), "OpenRouter");
+  assert.deepEqual(parseImageSettingsSave({ source: "openrouter" }), { save: { source: "openrouter" } });
 });

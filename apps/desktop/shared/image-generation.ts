@@ -61,13 +61,38 @@ export function defaultSize(kind: ImageKind): ImageSize {
   return kind === "icon" ? "512x512" : "1024x1024";
 }
 
-/** Where pictures come from: OpenAI's image API, or any server that speaks the same shape (a local one included). */
-export const IMAGE_SOURCE_KINDS = ["openai", "openai-compatible"] as const;
+/**
+ * Where pictures come from: OpenAI's image API; OpenRouter's image API, which
+ * fronts many image models under one key; or any server that speaks OpenAI's
+ * shape (a local one included).
+ */
+export const IMAGE_SOURCE_KINDS = ["openai", "openrouter", "openai-compatible"] as const;
 export type ImageSourceKind = typeof IMAGE_SOURCE_KINDS[number];
 export const isImageSourceKind = (value: unknown): value is ImageSourceKind => IMAGE_SOURCE_KINDS.includes(value as ImageSourceKind);
 
 export const DEFAULT_IMAGE_BASE_URL = "https://api.openai.com/v1";
 export const DEFAULT_IMAGE_MODEL = "gpt-image-1";
+export const DEFAULT_OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";
+/** OpenAI's image model through OpenRouter: it takes a transparent background, which the light and matter kinds need. */
+export const DEFAULT_OPENROUTER_MODEL = "openai/gpt-image-1";
+
+/** The address a source is reached at unless the user names one; a compatible server has no default. */
+export function defaultImageBaseUrl(source: ImageSourceKind): string | undefined {
+  return source === "openai" ? DEFAULT_IMAGE_BASE_URL : source === "openrouter" ? DEFAULT_OPENROUTER_BASE_URL : undefined;
+}
+
+export function defaultImageModel(source: ImageSourceKind): string | undefined {
+  return source === "openai" ? DEFAULT_IMAGE_MODEL : source === "openrouter" ? DEFAULT_OPENROUTER_MODEL : undefined;
+}
+
+/** OpenAI and OpenRouter refuse a call without a key; a server of the user's own may take none. */
+export function imageSourceNeedsKey(source: ImageSourceKind): boolean {
+  return source === "openai" || source === "openrouter";
+}
+
+export function imageSourceLabel(source: ImageSourceKind): string {
+  return source === "openai" ? "OpenAI" : source === "openrouter" ? "OpenRouter" : "the image server";
+}
 export const MAX_IMAGE_MODEL_CHARS = 100;
 /** Keys run to a couple of hundred characters; this bounds what is kept, not what is typical. */
 export const MAX_IMAGE_KEY_CHARACTERS = 4_096;
@@ -76,7 +101,7 @@ export const MAX_IMAGE_KEY_CHARACTERS = 4_096;
  * Where the image tool stands.
  * - `ready`: on, with a source that can be called.
  * - `off`: set up but not turned on.
- * - `missing`: on or off, but OpenAI's API needs a key and none is saved.
+ * - `missing`: on or off, but the source needs a key and none is saved.
  */
 export type ImageSettingsState = "ready" | "off" | "missing";
 
@@ -141,7 +166,7 @@ export function parseImageSettingsSave(value: unknown): { save: ImageSettingsSav
     save.enabled = value.enabled;
   }
   if (value.source !== undefined) {
-    if (!isImageSourceKind(value.source)) return { message: "Choose OpenAI or an OpenAI-compatible server." };
+    if (!isImageSourceKind(value.source)) return { message: "Choose OpenAI, OpenRouter or an OpenAI-compatible server." };
     save.source = value.source;
   }
   if (value.baseUrl !== undefined) {

@@ -36,9 +36,9 @@ import { BlenderSettings } from "../runtime/blender-settings";
 import { BlenderWorker, scriptEnvironment } from "../runtime/blender-worker";
 import { ImageSettings } from "../runtime/image-settings";
 import { ImageWorker } from "../runtime/image-worker";
-import { checkImageSource, OpenAiImageSource } from "../runtime/image-sources/openai-images";
+import { createImageSource, testImageSource } from "../runtime/image-sources";
 import {
-  IMAGE_OPERATION, MAX_IMAGES_PER_RUN, parseImageSettingsSave, type ImageSettingsResult, type ImageTestResult,
+  IMAGE_OPERATION, imageSourceNeedsKey, MAX_IMAGES_PER_RUN, parseImageSettingsSave, type ImageSettingsResult, type ImageTestResult,
 } from "../shared/image-generation";
 import { RojoConnection } from "../runtime/rojo-connection";
 import { RojoLinksStore } from "../runtime/rojo-links";
@@ -875,7 +875,7 @@ async function runImageJob(args: Record<string, unknown>, options: McpCallOption
   }
   budget.made += count;
   const worker = new ImageWorker({
-    source: new OpenAiImageSource({ source: ready.source, baseUrl: ready.baseUrl, model: ready.model, apiKey: ready.apiKey }),
+    source: createImageSource(ready),
     jobsRoot: imageJobsRoot(),
     scope: createHash("sha256").update(chatId).digest("hex").slice(0, 32),
     defaultQuality: ready.quality,
@@ -923,8 +923,8 @@ async function testImageSettings(event: IpcMainInvokeEvent): Promise<ImageTestRe
   if (!isTrusted(event.sender)) return { ok: false, message: "This window may not test the image settings." };
   try {
     const resolved = await imageSettings().resolved();
-    if (resolved.source === "openai" && resolved.apiKey === null) return { ok: false, message: "Save an API key first." };
-    return await checkImageSource(resolved, AbortSignal.timeout(20_000));
+    if (imageSourceNeedsKey(resolved.source) && resolved.apiKey === null) return { ok: false, message: "Save an API key first." };
+    return await testImageSource(resolved, AbortSignal.timeout(20_000));
   } catch (error) {
     return storeFailure(error, "The image settings could not be tested.");
   }
