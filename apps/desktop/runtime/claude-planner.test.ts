@@ -1117,6 +1117,49 @@ test("with Blender on, Claude may call the blender tool, and a call is one engin
   assert.match(blenderResult, /Blender job finished/);
 });
 
+test("with an image source on, Claude may call the image tool, and a call is one engine operation", async () => {
+  const controller = new AbortController();
+  const { context, recorded } = makeContext(controller, () => ({
+    ok: true, data: { jobId: "0a1b2c3d", images: [] }, text: "Image job 0a1b2c3d: 1 image.", httpStatus: 200, durationMs: 1,
+  }));
+  let launchArgs: string[] = [];
+  let imageResult = "";
+  const planner = createClaudePlanner({
+    ...AGENT_OPTIONS,
+    imageGeneration: true,
+    launcher: {
+      launch: async (args) => {
+        launchArgs = args;
+        const child = new FakeChildProcess();
+        void (async () => {
+          child.writeLine({
+            type: "system",
+            subtype: "init",
+            tools: [...PROVIDER_TOOLS, "mcp__workbench__image"],
+            mcp_servers: [{ name: "workbench", status: "connected" }],
+          });
+          imageResult = await callTool(await mcpTarget(args), { prompt: "a soft white glow", kind: "light", name: "glow" }, "image");
+          child.writeLine({ type: "result", subtype: "success", is_error: false, result: "Generated." });
+          child.finish(0);
+        })();
+        return child.asChild();
+      },
+    },
+    getStatus: async () => ({ kind: "signed-in", message: "Pro connected through Claude Code", planType: "pro" }),
+    cwd: process.cwd(),
+    model: "opus",
+    effort: "high",
+  });
+
+  assert.equal(await planner.run(context), "Generated.");
+  assert.equal(
+    launchArgs[launchArgs.indexOf("--allowedTools") + 1],
+    [...PROVIDER_TOOLS, "mcp__workbench__image"].join(","),
+  );
+  assert.deepEqual(recorded.calls, ["generate_image"]);
+  assert.match(imageResult, /Image job 0a1b2c3d/);
+});
+
 test("in a chat with reference clips, Claude may look closer at one, and a call is one engine read", async () => {
   const controller = new AbortController();
   const { context, recorded } = makeContext(controller, () => ({

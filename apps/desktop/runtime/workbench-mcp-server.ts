@@ -91,12 +91,18 @@ function send(response: ServerResponse, status: number, payload?: JsonRecord): v
   response.end(body);
 }
 
+/**
+ * The most tools the server lists: the five every run has, and one for each
+ * optional capability the user has turned on, with room for a few more.
+ */
+export const MAX_WORKBENCH_TOOLS = 12;
+
 /** Start the server. Resolves once it is listening and ready for a provider. */
 export async function startWorkbenchMcpServer(
   options: WorkbenchMcpServerOptions,
 ): Promise<WorkbenchMcpServerHandle> {
-  if (options.tools.length === 0 || options.tools.length > 8) {
-    throw new Error("Roqer MCP must expose between one and eight tools.");
+  if (options.tools.length === 0 || options.tools.length > MAX_WORKBENCH_TOOLS) {
+    throw new Error(`Roqer MCP must expose between one and ${MAX_WORKBENCH_TOOLS} tools.`);
   }
   const tools = new Map(options.tools.map((tool) => [tool.name, tool]));
   if (tools.size !== options.tools.length) throw new Error("Roqer MCP tool names must be unique.");

@@ -94,6 +94,8 @@ export type ClaudePlannerOptions = {
   referenceClips?: boolean;
   /** Offer `external_mcp`: only while the user has at least one MCP server turned on. */
   externalMcp?: boolean;
+  /** Offer `image`: only while the user has an image source set up and turned on. */
+  imageGeneration?: boolean;
   /** Where each chat's saved Claude Code session is recorded. Without it, sessions are not saved. */
   registry?: ClaudeSessionRegistry;
 };
@@ -796,7 +798,7 @@ function sessionKey(
     instanceId,
     options.model, options.supportsEffort ? options.effort : null, autoPlaytest,
     options.agent.id, options.agent.version, options.blender === true, options.referenceClips === true,
-    options.externalMcp === true, webSearch === true,
+    options.externalMcp === true, webSearch === true, options.imageGeneration === true,
   ]);
 }
 

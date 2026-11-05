@@ -34,6 +34,12 @@ import { RunHolds, STUDIO_PLACE_BUSY, type RunHold } from "../runtime/run-claims
 import { bridgeEnvironment, checkOpenCloudKey } from "../runtime/open-cloud";
 import { BlenderSettings } from "../runtime/blender-settings";
 import { BlenderWorker, scriptEnvironment } from "../runtime/blender-worker";
+import { ImageSettings } from "../runtime/image-settings";
+import { ImageWorker } from "../runtime/image-worker";
+import { checkImageSource, OpenAiImageSource } from "../runtime/image-sources/openai-images";
+import {
+  IMAGE_OPERATION, MAX_IMAGES_PER_RUN, parseImageSettingsSave, type ImageSettingsResult, type ImageTestResult,
+} from "../shared/image-generation";
 import { RojoConnection } from "../runtime/rojo-connection";
 import { RojoLinksStore } from "../runtime/rojo-links";
 import {
@@ -803,6 +809,97 @@ async function runBlenderJob(args: Record<string, unknown>, options: McpCallOpti
 
 function blenderJobsRoot(): string {
   return path.join(app.getPath("userData"), "blender-jobs");
+}
+
+// -- Image generation ---------------------------------------------------------
+
+let imageSettingsStore: ImageSettings | null = null;
+
+/** Whether the image tool is on, which server it calls, with which model and key; the key encrypted by the OS. */
+function imageSettings(): ImageSettings {
+  imageSettingsStore ??= new ImageSettings({ file: path.join(app.getPath("userData"), "image-generation.json"), protector: electronSecretProtector });
+  return imageSettingsStore;
+}
+
+function imageJobsRoot(): string {
+  return path.join(app.getPath("userData"), "image-jobs");
+}
+
+/**
+ * One approved image call. The engine has already classified and approved it;
+ * this reads the settings again, so turning the tool off mid-run stops new
+ * calls, then runs it in its own job folder. A reference may name only this
+ * chat's earlier outputs, so the chat is the worker's scope, hashed like
+ * Blender's so the folders do not carry the chat's own id.
+ */
+async function runImageJob(args: Record<string, unknown>, options: McpCallOptions, chatId: string, budget: { made: number }): Promise<McpToolOutcome> {
+  const refused = (message: string, errorCode: string): McpToolOutcome =>
+    ({ ok: false, data: undefined, text: message, httpStatus: 200, errorCode, message, durationMs: 0 });
+  const ready = await imageSettings().ready().catch(() => undefined);
+  if (ready === undefined) {
+    return refused("Image generation is turned off in Roqer's Settings, or has no key, so no picture was made. Ask the user to set it up under Settings → Images, or draw the texture in Blender instead.", "image_off");
+  }
+  // One run may make only so many pictures, so a Full auto run that keeps
+  // retrying a texture cannot spend without end.
+  const count = typeof args.count === "number" && Number.isInteger(args.count) && args.count > 0 ? args.count : 1;
+  if (budget.made + count > MAX_IMAGES_PER_RUN) {
+    return refused(`This run has made ${budget.made} of the ${MAX_IMAGES_PER_RUN} images one run may make, so this call was not sent. Use what was made, draw the texture in Blender, or ask the user to start a new run.`, "image_budget_spent");
+  }
+  budget.made += count;
+  const worker = new ImageWorker({
+    source: new OpenAiImageSource({ source: ready.source, baseUrl: ready.baseUrl, model: ready.model, apiKey: ready.apiKey }),
+    jobsRoot: imageJobsRoot(),
+    scope: createHash("sha256").update(chatId).digest("hex").slice(0, 32),
+    defaultQuality: ready.quality,
+  });
+  const outcome = await worker.run(args, options);
+  // A call the provider refused made nothing, so it does not count.
+  if (!outcome.ok) budget.made -= count;
+  return outcome;
+}
+
+async function imageSettingsResult(): Promise<ImageSettingsResult> {
+  const settings = await imageSettings().get();
+  const preserved = imageSettings().takeDamagedNotice();
+  return {
+    ok: true,
+    settings: preserved === undefined
+      ? settings
+      : { ...settings, damagedNotice: `Your saved image settings could not be read and were set aside at ${preserved}. Enter them again.` },
+  };
+}
+
+async function getImageSettings(event: IpcMainInvokeEvent): Promise<ImageSettingsResult> {
+  if (!isTrusted(event.sender)) return { ok: false, message: "This window may not read the image settings." };
+  try {
+    return await imageSettingsResult();
+  } catch (error) {
+    return storeFailure(error, "Your image settings could not be read.");
+  }
+}
+
+async function saveImageSettings(event: IpcMainInvokeEvent, payload: unknown): Promise<ImageSettingsResult> {
+  if (!isTrusted(event.sender)) return { ok: false, message: "This window may not change the image settings." };
+  const parsed = parseImageSettingsSave(payload);
+  if ("message" in parsed) return { ok: false, message: parsed.message };
+  try {
+    await imageSettings().save(parsed.save);
+  } catch (error) {
+    return storeFailure(error, "Your image settings could not be saved.");
+  }
+  return imageSettingsResult().catch((error) => storeFailure(error, "Your image settings could not be read."));
+}
+
+/** Asks the server about the saved model without making a picture, so a test spends nothing. */
+async function testImageSettings(event: IpcMainInvokeEvent): Promise<ImageTestResult> {
+  if (!isTrusted(event.sender)) return { ok: false, message: "This window may not test the image settings." };
+  try {
+    const resolved = await imageSettings().resolved();
+    if (resolved.source === "openai" && resolved.apiKey === null) return { ok: false, message: "Save an API key first." };
+    return await checkImageSource(resolved, AbortSignal.timeout(20_000));
+  } catch (error) {
+    return storeFailure(error, "The image settings could not be tested.");
+  }
 }
 
 /**
@@ -1897,7 +1994,7 @@ async function resolveCustomRun(modelKey: string | null): Promise<CustomRun | { 
 /** The agent that drives a run, chosen by the provider the user connected. */
 function plannerFor(
   request: RunStartRequest, agentRuntime: AgentRuntime, runId: string, modelName: string | undefined, custom?: CustomRun, blender = false, referenceClips = false,
-  externalMcp = false,
+  externalMcp = false, imageGeneration = false,
 ): Planner {
   const cwd = app.getPath("userData");
   // A conversation kept by one provider has not seen what another provider
@@ -1930,6 +2027,7 @@ function plannerFor(
       blender,
       referenceClips,
       externalMcp,
+      imageGeneration,
       chatId: request.chatId,
       sessions: customConversations,
       transportKey: customTransportKey(custom),
@@ -1955,6 +2053,7 @@ function plannerFor(
       blender,
       referenceClips,
       externalMcp,
+      imageGeneration,
     });
   }
   if (request.provider === "antigravity") {
@@ -1973,6 +2072,7 @@ function plannerFor(
       blender,
       referenceClips,
       externalMcp,
+      imageGeneration,
     });
   }
   if (request.provider !== "chatgpt") throw new Error(`No planner drives ${providerLabel(request.provider)}.`);
@@ -1989,6 +2089,7 @@ function plannerFor(
     blender,
     referenceClips,
     externalMcp,
+    imageGeneration,
   });
 }
 
@@ -2356,9 +2457,15 @@ async function startRun(event: IpcMainInvokeEvent, payload: unknown): Promise<Ru
     // Reading them here also loads what the engine classifies calls against.
     const externalMcp = !smokeTest && (await mcpServers().list().catch(() => [])).some((server) => server.enabled);
     if (cancelled()) return stopped;
+    // The image tool is offered while an image source is on with what it
+    // needs; each call reads the settings again, so turning it off stops new calls.
+    const imageGeneration = !smokeTest && (await imageSettings().ready().catch(() => undefined)) !== undefined;
+    /** How many pictures this run's image calls have made, against the run's budget. */
+    const imageBudget = { made: 0 };
+    if (cancelled()) return stopped;
     const planner = smokeTest
       ? createInspectionPlanner()
-      : plannerFor(resolvedRequest, agentRuntime, runId, modelName, customRun, blender, clips, externalMcp);
+      : plannerFor(resolvedRequest, agentRuntime, runId, modelName, customRun, blender, clips, externalMcp, imageGeneration);
     journalId = runId;
     await runJournal().start(runId, request, request.prompt, request.approvalMode);
     if (cancelled()) return stopped;
@@ -2415,6 +2522,7 @@ async function startRun(event: IpcMainInvokeEvent, payload: unknown): Promise<Ru
           (instanceId) => pickRojoProject(BrowserWindow.fromWebContents(sender), instanceId),
         )],
         ...(blender ? [[BLENDER_OPERATION, (args, options) => runBlenderJob(args, options, request.chatId)] as [string, LocalOperation]] : []),
+        ...(imageGeneration ? [[IMAGE_OPERATION, (args, options) => runImageJob(args, options, request.chatId, imageBudget)] as [string, LocalOperation]] : []),
         ...(clips
           ? [[REFERENCE_CLIP_OPERATION, (args, options) => readReferenceClip(args, options, chatClips(request.chatId), composeClipSheet)] as [string, LocalOperation]]
           : []),
@@ -3054,6 +3162,9 @@ app.whenReady().then(async () => {
   ipcMain.handle("blender:set-enabled", setBlenderEnabled);
   ipcMain.handle("blender:choose", chooseBlender);
   ipcMain.handle("blender:redetect", redetectBlender);
+  ipcMain.handle("image:get", getImageSettings);
+  ipcMain.handle("image:save", saveImageSettings);
+  ipcMain.handle("image:test", testImageSettings);
   ipcMain.handle("rojo:get", getRojo);
   ipcMain.handle("rojo:choose", chooseRojo);
   ipcMain.handle("rojo:link-recent", linkRecentRojo);

@@ -980,6 +980,34 @@ test("a preview that cannot be made leaves the evidence and the call intact", as
   assert.equal(withoutEncoder.evidence[0].imageDataUrl, undefined);
 });
 
+test("an image job's picture is shown as a preview of the named texture and never counts as Studio evidence", async () => {
+  const picture = { data: "QUJD", mediaType: "image/png" as const };
+  const made = (names: string[]) => ({
+    ...ok({ jobId: "0a1b2c3d", model: "gpt-image-1", images: names.map((name) => ({ name, path: `C:/jobs/${name}` })) }),
+    text: "Image job 0a1b2c3d.", images: [picture],
+  });
+  const { context, evidence } = contextWith([made(["glow.png", "glow_2.png"]), made(["glow.png"]), { ...ok({}), text: "Image job failed." }]);
+  context.previewImage = async () => PREVIEW;
+  const run = createStudioToolRunner(context);
+
+  await run("generate_image", { prompt: "a soft white glow", kind: "light", name: "glow", count: 2 });
+  await run("generate_image", { prompt: "a softer white glow", kind: "light", name: "glow", count: 1 });
+  await run("generate_image", { prompt: "a puff", kind: "matter", name: "puff" });
+
+  assert.equal(evidence.length, 2, "a job that returned no picture records nothing");
+  assert.equal(evidence[0].kind, "inspection");
+  assert.equal(evidence[0].title, "Generated image, before upload");
+  assert.equal(evidence[0].requirement, undefined);
+  assert.equal(evidence[0].passed, undefined);
+  assert.equal(evidence[0].imageDataUrl, PREVIEW);
+  assert.equal(evidence[0].subject, "image:glow");
+  assert.deepEqual(evidence[0].metadata, [
+    { label: "Image", value: "glow" }, { label: "Kind", value: "light" }, { label: "Image model", value: "gpt-image-1" }, { label: "Pictures", value: "2" },
+  ]);
+  // A second take of the same texture is a version of it: the same subject.
+  assert.equal(evidence[1].subject, "image:glow");
+});
+
 test("a Blender preview is shown as the job's output and never counts as Studio evidence", async () => {
   const job = { ...ok({}), text: "Exported model.glb", images: [{ data: "QUJD", mediaType: "image/png" as const }] };
   const { context, evidence } = contextWith([job, { ...ok({}), text: "Exported model.glb" }]);

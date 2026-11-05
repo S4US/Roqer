@@ -98,6 +98,7 @@ const KIND_BY_TOOL: Readonly<Record<string, ToolActivityKind>> = {
   simulate_keyboard_input: "run",
   // Roqer's own operations, not Studio tools.
   run_blender_script: "run",
+  generate_image: "run",
   capture_moments: "run",
   // A call to one of the user's MCP servers is left out: what it does is the
   // server's, so it reads as "run", the conservative default.
@@ -299,6 +300,7 @@ export function activityLabel(tool: string, target: string | null, past: boolean
   if (tool === "upload_assets") return past ? "Uploaded assets" : "Uploading assets";
   if (tool === "list_uploads") return past ? "Listed earlier uploads" : "Listing earlier uploads";
   if (tool === "run_blender_script") return past ? "Modeled in Blender" : "Modeling in Blender";
+  if (tool === "generate_image") return past ? "Generated images" : "Generating images";
   if (tool === "capture_moments") return past ? "Captured an effect at several moments" : "Capturing an effect at several moments";
   if (tool === "read_reference_clip") return past ? "Looked closer at the reference clip" : "Looking closer at the reference clip";
   if (tool === "list_mcp_tools") {

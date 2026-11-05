@@ -1,4 +1,5 @@
 import { GATEWAY_TOOL_RISK, isGatewayOperation } from "./gateway-operations";
+import { IMAGE_OPERATION } from "./image-generation";
 import { CALL_MCP_TOOL_OPERATION, DOWNLOAD_MCP_FILE_OPERATION, LIST_MCP_TOOLS_OPERATION } from "./mcp-servers";
 import type { ToolRisk } from "./policy";
 
@@ -114,6 +115,9 @@ export const LOCAL_TOOL_RISK: Readonly<Record<string, ToolRisk>> = {
   // change on this computer, though not to the project, so Read only refuses
   // it and Ask first asks.
   [DOWNLOAD_MCP_FILE_OPERATION]: "mutation",
+  // Sends the prompt to the user's image provider and spends their key or
+  // plan, like `generate_model` spends Roblox credit.
+  [IMAGE_OPERATION]: "irreversible",
 };
 
 /**
@@ -231,6 +235,9 @@ const TOOL_TIMEOUT_MS: Readonly<Record<string, number>> = {
   [CALL_MCP_TOOL_OPERATION]: 120_000,
   // Up to 50 MB from wherever the link points.
   [DOWNLOAD_MCP_FILE_OPERATION]: 120_000,
+  // The worker gives the image provider 220 s for up to four pictures at high
+  // quality, then measures and writes them; the budget sits a little above.
+  [IMAGE_OPERATION]: 240_000,
 };
 
 /**
@@ -454,6 +461,14 @@ export function summarizeToolCall(tool: string, args: Record<string, unknown>): 
   }
   if (tool === "animation") return summarizeAnimation(args);
   if (tool === "upload_assets") return summarizeUploads(args);
+  // An image call is named by what it is for and the files it makes; the
+  // card shows the prompt itself.
+  if (tool === IMAGE_OPERATION) {
+    const kind = typeof args.kind === "string" ? args.kind : undefined;
+    const name = typeof args.name === "string" ? args.name : undefined;
+    const count = typeof args.count === "number" && args.count > 1 ? ` ×${args.count}` : "";
+    return name === undefined ? tool : `${tool} · ${kind === undefined ? "" : `${kind} `}${truncate(name, 40)}${count}`;
+  }
   for (const key of IDENTIFYING_ARGUMENTS) {
     const value = args[key];
     if (typeof value === "string" && value !== "") {

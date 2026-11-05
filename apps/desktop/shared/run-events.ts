@@ -596,6 +596,20 @@ export function isEvidenceSoundRef(value: unknown): value is string {
 export const BLENDER_PREVIEW_TITLE = "Blender result, before upload";
 
 /**
+ * The title of a generated image's preview: the picture, or the review sheet
+ * of several, that the image tool made, seen before any upload. A picture of
+ * a file, like a Blender render, is not evidence of anything in Studio.
+ */
+export const IMAGE_PREVIEW_TITLE = "Generated image, before upload";
+
+/**
+ * Metadata on a generated image's preview: the file stem the call named.
+ * Previews of one name are versions of one texture, and the card shows them
+ * as one; the host also records that as the evidence's `subject`.
+ */
+export const IMAGE_NAME_LABEL = "Image";
+
+/**
  * The title of an animation's preview: the contact sheet the animation tool
  * drew, whose 3D view plays the same box rig.
  */

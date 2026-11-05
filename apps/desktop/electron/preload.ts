@@ -47,6 +47,9 @@ import {
 } from "../shared/open-cloud";
 import { isBlenderSettingsResult, type BlenderSettingsResult } from "../shared/blender";
 import {
+  isImageSettingsResult, isImageTestResult, type ImageSettingsResult, type ImageSettingsSave, type ImageTestResult,
+} from "../shared/image-generation";
+import {
   isMcpServersResult, isMcpServerTestResult, type McpServerSave, type McpServersResult, type McpServerTestResult,
 } from "../shared/mcp-servers";
 import { isRojoResult, type RojoResult } from "../shared/rojo";
@@ -213,6 +216,25 @@ const blender = {
   setEnabled: (enabled: boolean) => blenderRequest("blender:set-enabled", enabled),
   choose: () => blenderRequest("blender:choose"),
   redetect: () => blenderRequest("blender:redetect"),
+};
+
+async function imagesRequest(channel: string, ...args: unknown[]): Promise<ImageSettingsResult> {
+  const value: unknown = await ipcRenderer.invoke(channel, ...args);
+  return isImageSettingsResult(value) ? value : { ok: false, message: "Roqer returned invalid image settings." };
+}
+
+/**
+ * The image model the agent may generate pictures with. As with Open Cloud,
+ * the key goes in with `save` and never comes back out; `test` asks the server
+ * about the model without making a picture.
+ */
+const images = {
+  get: () => imagesRequest("image:get"),
+  save: (save: ImageSettingsSave) => imagesRequest("image:save", save),
+  test: async (): Promise<ImageTestResult> => {
+    const value: unknown = await ipcRenderer.invoke("image:test");
+    return isImageTestResult(value) ? value : { ok: false, message: "The image test returned an invalid result." };
+  },
 };
 
 async function mcpServersRequest(channel: string, ...args: unknown[]): Promise<McpServersResult> {
@@ -420,6 +442,7 @@ contextBridge.exposeInMainWorld("workbenchDesktop", {
     },
   },
   blender,
+  images,
   mcpServers,
   rojo,
   runs,

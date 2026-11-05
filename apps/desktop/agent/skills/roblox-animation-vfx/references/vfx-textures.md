@@ -3,7 +3,8 @@
 Load this with `vfx-design.md` and `vfx-craft.md` when an effect draws its own
 textures, which most effects should: what the studied textures look like,
 drawing textures and flipbooks in a Blender job, previewing them in Studio, and
-uploading the settled set.
+uploading the settled set. With the `image` tool offered, a single shape can
+be generated instead: see `vfx-generated-textures.md`.
 
 ## A Blender job
 

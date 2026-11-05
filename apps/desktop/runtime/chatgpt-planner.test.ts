@@ -404,7 +404,7 @@ function lifecycleRun(
   signal = new AbortController().signal,
   overrides: {
     stallMs?: number; askUser?: PlannerContext["askUser"]; status?: PlannerContext["status"]; call?: PlannerContext["call"];
-    skillLibrary?: SkillLibrary;
+    skillLibrary?: SkillLibrary; imageGeneration?: boolean;
   } = {},
 ) {
   const context: PlannerContext = {
@@ -420,8 +420,56 @@ function lifecycleRun(
   return createChatGptPlanner({
     appServer, cwd: "C:\\workbench", model: "gpt-test", effort: "medium", agent: AGENT, skillLibrary: overrides.skillLibrary ?? SKILLS,
     ...(overrides.stallMs === undefined ? {} : { stallMs: overrides.stallMs }),
+    ...(overrides.imageGeneration === undefined ? {} : { imageGeneration: overrides.imageGeneration }),
   }).run(context);
 }
+
+test("ChatGPT is given the image tool only while an image source is on, and a call is one engine operation", async () => {
+  const appServer = new ManualAppServer();
+  const calls: string[] = [];
+  const run = lifecycleRun(appServer, undefined, {
+    imageGeneration: true,
+    call: async (tool) => {
+      calls.push(tool);
+      return { ok: true, data: { jobId: "0a1b2c3d", images: [] }, text: "Image job 0a1b2c3d: 1 image.", httpStatus: 200, durationMs: 1 };
+    },
+  });
+  await appServer.turnStarted.promise;
+  const threadStart = appServer.requests.find((request) => request.method === "thread/start");
+  assert.deepEqual(
+    ((threadStart?.params as Record<string, unknown>).dynamicTools as Array<{ name: string }>).map((tool) => tool.name),
+    ["roblox_studio", "load_skill", "resolve_icon", "update_task_list", "ask_user", "image"],
+  );
+  appServer.turnResponse.resolve({ turn: { id: "turn-1" } });
+  await new Promise((resolve) => setImmediate(resolve));
+  const handler = appServer.requestHandler;
+  assert.ok(handler);
+  const result = await handler({
+    id: "call-1",
+    method: "item/tool/call",
+    params: { threadId: "thread-1", turnId: "turn-1", callId: "call-1", tool: "image", arguments: { prompt: "a soft white glow", kind: "light", name: "glow" } },
+  }) as { success: boolean; contentItems: Array<{ text: string }> };
+  assert.equal(result.success, true);
+  assert.match(result.contentItems[0].text, /Image job 0a1b2c3d/);
+  assert.deepEqual(calls, ["generate_image"]);
+  appServer.notificationListener?.({
+    method: "turn/completed", params: { threadId: "thread-1", turn: { id: "turn-1", status: "completed" } },
+  });
+  assert.equal(await run, "ChatGPT turn completed.");
+
+  // Off: the tool is not listed, and a call naming it is not a Roqer tool.
+  const off = new ManualAppServer();
+  const offRun = lifecycleRun(off);
+  await off.turnStarted.promise;
+  const offStart = off.requests.find((request) => request.method === "thread/start");
+  assert.equal(((offStart?.params as Record<string, unknown>).dynamicTools as Array<{ name: string }>).some((tool) => tool.name === "image"), false);
+  off.turnResponse.resolve({ turn: { id: "turn-1" } });
+  await new Promise((resolve) => setImmediate(resolve));
+  off.notificationListener?.({
+    method: "turn/completed", params: { threadId: "thread-1", turn: { id: "turn-1", status: "completed" } },
+  });
+  assert.equal(await offRun, "ChatGPT turn completed.");
+});
 
 test("ChatGPT tells the model, and the user, when Codex will not take a tool's images", async () => {
   const appServer = new ManualAppServer();

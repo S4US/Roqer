@@ -7,6 +7,8 @@ import { REFERENCE_CLIP_TOOL_NAME } from "../shared/reference-clip";
 import { parseReferenceClipToolInput, referenceClipToolDefinition } from "./reference-clip";
 import { EXTERNAL_MCP_TOOL_NAME } from "../shared/mcp-servers";
 import { externalMcpToolDefinition, parseExternalMcpToolInput } from "./external-mcp-tool";
+import { IMAGE_TOOL_NAME } from "../shared/image-generation";
+import { imageToolDefinition, parseImageToolInput } from "./image-tool";
 import { skillToolDefinition, SKILL_TOOL_NAME, type SkillToolRunner } from "./skill-tool";
 import {
   createStudioToolRunner, MalformedToolCallError, malformedCallsEndRun, MAX_CONSECUTIVE_MALFORMED_CALLS, parseStudioToolInput, studioToolDescription, studioToolInputSchema,
@@ -35,6 +37,8 @@ export type WorkbenchToolOptions = {
   referenceClips?: boolean;
   /** Offer `external_mcp`: only while the user has at least one MCP server turned on. */
   externalMcp?: boolean;
+  /** Offer `image`: only while the user has an image source set up and turned on. */
+  imageGeneration?: boolean;
 };
 
 /** Every tool granted for these options, in the order they are announced. */
@@ -42,6 +46,7 @@ export function workbenchToolNames(options: WorkbenchToolOptions): string[] {
   return [
     STUDIO_TOOL_NAME, SKILL_TOOL_NAME, ICON_TOOL_NAME, TASK_TOOL_NAME, QUESTION_TOOL_NAME,
     ...(options.blender === true ? [BLENDER_TOOL_NAME] : []),
+    ...(options.imageGeneration === true ? [IMAGE_TOOL_NAME] : []),
     ...(options.referenceClips === true ? [REFERENCE_CLIP_TOOL_NAME] : []),
     ...(options.externalMcp === true ? [EXTERNAL_MCP_TOOL_NAME] : []),
   ];
@@ -53,6 +58,7 @@ export function workbenchMcpTools(options: WorkbenchToolOptions): WorkbenchMcpTo
     { name: STUDIO_TOOL_NAME, description: studioToolDescription(), inputSchema: studioToolInputSchema() },
     skillToolDefinition(options.skillLibrary), iconToolDefinition(), taskToolDefinition(), questionToolDefinition(),
     ...(options.blender === true ? [blenderToolDefinition()] : []),
+    ...(options.imageGeneration === true ? [imageToolDefinition()] : []),
     ...(options.referenceClips === true ? [referenceClipToolDefinition()] : []),
     ...(options.externalMcp === true ? [externalMcpToolDefinition()] : []),
   ];
@@ -80,7 +86,7 @@ const failure = (error: unknown): WorkbenchMcpToolResult => ({
 export function createWorkbenchToolInvoker(context: PlannerContext, options: WorkbenchToolInvokerOptions): WorkbenchToolInvoker {
   const runStudioTool = createStudioToolRunner(context, { templates: options.skillLibrary });
   const runIconTool = createIconToolRunner(options.skillLibrary);
-  /** Malformed Studio or Blender calls since the last well-formed one. */
+  /** Malformed Studio, Blender or image calls since the last well-formed one. */
   let malformedCalls = 0;
 
   return async (name, args) => {
@@ -116,11 +122,13 @@ export function createWorkbenchToolInvoker(context: PlannerContext, options: Wor
     try {
       call = options.blender === true && name === BLENDER_TOOL_NAME
         ? parseBlenderToolInput(args)
-        : options.referenceClips === true && name === REFERENCE_CLIP_TOOL_NAME
-          ? parseReferenceClipToolInput(args)
-          : options.externalMcp === true && name === EXTERNAL_MCP_TOOL_NAME
-            ? parseExternalMcpToolInput(args)
-            : parseStudioToolInput(args);
+        : options.imageGeneration === true && name === IMAGE_TOOL_NAME
+          ? parseImageToolInput(args)
+          : options.referenceClips === true && name === REFERENCE_CLIP_TOOL_NAME
+            ? parseReferenceClipToolInput(args)
+            : options.externalMcp === true && name === EXTERNAL_MCP_TOOL_NAME
+              ? parseExternalMcpToolInput(args)
+              : parseStudioToolInput(args);
     } catch (error) {
       // A malformed call is the model's mistake to correct, answered like
       // any failed call; only a run of them that is not converging ends it.

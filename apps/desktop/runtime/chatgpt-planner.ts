@@ -12,6 +12,8 @@ import { REFERENCE_CLIP_TOOL_NAME } from "../shared/reference-clip";
 import { parseReferenceClipToolInput, referenceClipToolDefinition } from "./reference-clip";
 import { EXTERNAL_MCP_TOOL_NAME } from "../shared/mcp-servers";
 import { externalMcpToolDefinition, parseExternalMcpToolInput } from "./external-mcp-tool";
+import { IMAGE_TOOL_NAME } from "../shared/image-generation";
+import { imageToolDefinition, parseImageToolInput } from "./image-tool";
 import {
   createSkillToolRunner, skillToolDefinition, SKILL_TOOL_NAME, STEERED_BATCH_CHARACTERS,
   type SkillDelivery, type SkillToolRunner,
@@ -59,6 +61,8 @@ export type ChatGptPlannerOptions = {
   referenceClips?: boolean;
   /** Offer `external_mcp`: only while the user has at least one MCP server turned on. */
   externalMcp?: boolean;
+  /** Offer `image`: only while the user has an image source set up and turned on. */
+  imageGeneration?: boolean;
 };
 
 export interface ChatGptAppServer {
@@ -339,10 +343,20 @@ function skillGuidanceNote(delivery: SkillDelivery): string {
   return `${note}\n\nNot loaded in this call:\n${delivery.notLoaded.map((line) => `- ${line}`).join("\n")}`;
 }
 
-function parseDynamicCall(request: AppServerRequest, threadId: string, blender: boolean, referenceClips = false, externalMcp = false):
+type DynamicToolSet = Readonly<{ blender: boolean; referenceClips: boolean; externalMcp: boolean; imageGeneration: boolean }>;
+
+function dynamicToolSet(options: ChatGptPlannerOptions): DynamicToolSet {
+  return {
+    blender: options.blender === true, referenceClips: options.referenceClips === true,
+    externalMcp: options.externalMcp === true, imageGeneration: options.imageGeneration === true,
+  };
+}
+
+function parseDynamicCall(request: AppServerRequest, threadId: string, { blender, referenceClips, externalMcp, imageGeneration }: DynamicToolSet):
   { operation: string; args: JsonRecord } | null {
   if (request.method !== "item/tool/call" || request.params.threadId !== threadId) return null;
   if (blender && request.params.tool === BLENDER_TOOL_NAME) return parseBlenderToolInput(request.params.arguments);
+  if (imageGeneration && request.params.tool === IMAGE_TOOL_NAME) return parseImageToolInput(request.params.arguments);
   if (referenceClips && request.params.tool === REFERENCE_CLIP_TOOL_NAME) return parseReferenceClipToolInput(request.params.arguments);
   if (externalMcp && request.params.tool === EXTERNAL_MCP_TOOL_NAME) return parseExternalMcpToolInput(request.params.arguments);
   if (request.params.tool !== STUDIO_TOOL_NAME) return null;
@@ -380,7 +394,7 @@ function threadKey(
 ): string {
   return JSON.stringify([
     instanceId, autoPlaytest, options.agent.id, options.agent.version, options.blender === true, options.referenceClips === true,
-    options.externalMcp === true, webSearch === true,
+    options.externalMcp === true, webSearch === true, options.imageGeneration === true,
   ]);
 }
 
@@ -408,6 +422,7 @@ async function startThread(options: ChatGptPlannerOptions, autoPlaytest: boolean
       { type: "function", ...taskToolDefinition() },
       { type: "function", ...questionToolDefinition() },
       ...(options.blender === true ? [{ type: "function", ...blenderToolDefinition() }] : []),
+      ...(options.imageGeneration === true ? [{ type: "function", ...imageToolDefinition() }] : []),
       ...(options.referenceClips === true ? [{ type: "function", ...referenceClipToolDefinition() }] : []),
       ...(options.externalMcp === true ? [{ type: "function", ...externalMcpToolDefinition() }] : []),
     ],
@@ -639,7 +654,7 @@ export function createChatGptPlanner(options: ChatGptPlannerOptions): Planner {
         }
         let call: ReturnType<typeof parseDynamicCall>;
         try {
-          call = parseDynamicCall(request, threadId, options.blender === true, options.referenceClips === true, options.externalMcp === true);
+          call = parseDynamicCall(request, threadId, dynamicToolSet(options));
         } catch (error) {
           if (!(error instanceof MalformedToolCallError)) {
             fail(error);

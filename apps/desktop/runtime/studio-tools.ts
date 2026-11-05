@@ -1,4 +1,5 @@
 import { BLENDER_OPERATION } from "../shared/blender";
+import { IMAGE_OPERATION } from "../shared/image-generation";
 import { AUDITED_AFTER_LABEL, REVISION_AFTER_LABEL, UI_AUDIT_TITLE } from "../shared/completion";
 import {
   CAPTURE_MOMENTS_OPERATION, GATEWAY_TOOL_RISK, isGatewayOperation, LIST_UPLOADS_OPERATION, UPLOAD_ASSETS_OPERATION,
@@ -18,7 +19,7 @@ import {
   ANIMATION_ALL_CHECKS_PASSED, ANIMATION_CHECKED_AS_GAIT, ANIMATION_GAIT_CHECKS_LABEL, ANIMATION_MOTION_CHECKS_LABEL,
   ANIMATION_DESCRIBED_BY_BAKE, ANIMATION_DESCRIBED_BY_LABEL, MODEL_STATE_WIRED, modelStateLabel,
   ANIMATION_BOXES_LABEL, ANIMATION_NAME_LABEL, ANIMATION_PLAYED_FROM_LABEL, ANIMATION_PLAYED_PUBLISHED, ANIMATION_PREVIEW_TITLE, ANIMATION_RIG_LABEL, animationSlotLabel, RIG_RANGE_SHEET_TITLE,
-  BLENDER_MODEL_LABEL, BLENDER_PREVIEW_TITLE, MAX_EVIDENCE_SUBJECT_CHARS, MODEL_MOVED_BY_GAME, MODEL_MOVED_BY_LABEL,
+  BLENDER_MODEL_LABEL, BLENDER_PREVIEW_TITLE, IMAGE_NAME_LABEL, IMAGE_PREVIEW_TITLE, MAX_EVIDENCE_SUBJECT_CHARS, MODEL_MOVED_BY_GAME, MODEL_MOVED_BY_LABEL,
   MODEL_MOVED_BY_VERIFY, MODEL_WHILE_MOVING_LABEL, MODEL_WHILE_STANDING_LABEL, ROJO_SAVE_DIVERGED_SUFFIX, ROJO_SAVE_PENDING_SUFFIX,
   SCREENSHOT_VIEW_LABEL, SCREENSHOT_VIEW_PLAYTEST,
   type RunChange, type RunEvidence, type RunMetadata,
@@ -593,6 +594,35 @@ const BLENDER_PREVIEW_EVIDENCE: ObservationEvidence = {
   title: BLENDER_PREVIEW_TITLE,
   detail: "Rendered by Blender from the job's output. A Studio screenshot shows what is in the place.",
 };
+
+/**
+ * What an image job's preview is: the picture it made, or the review sheet of
+ * several, seen before upload. Like a Blender preview it is an inspection with
+ * no requirement: a picture of a file is not evidence of anything in Studio.
+ */
+const IMAGE_PREVIEW_EVIDENCE: ObservationEvidence = {
+  kind: "inspection",
+  title: IMAGE_PREVIEW_TITLE,
+  detail: "Made by the image model from the prompt; transparent pictures are shown over a dark ground. A Studio screenshot shows what is in the place.",
+};
+
+/**
+ * What an image preview is of, so every take of one texture is a version of
+ * it: the file stem the call named, which a later call for the same texture
+ * names again. The labels carry what the model asked for and what answered.
+ */
+function imagePreviewFacts(args: JsonRecord, outcome: McpToolOutcome): Pick<ObservationEvidence, "subject" | "metadata"> {
+  const name = typeof args.name === "string" && args.name !== "" ? args.name : undefined;
+  const data = isRecord(outcome.data) ? outcome.data : {};
+  const images = Array.isArray(data.images) ? data.images.length : 0;
+  const metadata: RunMetadata[] = [
+    ...(name === undefined ? [] : [{ label: IMAGE_NAME_LABEL, value: name.slice(0, MAX_MODEL_NAME_CHARS) }]),
+    ...(typeof args.kind === "string" ? [{ label: "Kind", value: args.kind }] : []),
+    ...(typeof data.model === "string" && data.model !== "" ? [{ label: "Image model", value: data.model.slice(0, MAX_MODEL_NAME_CHARS) }] : []),
+    ...(images > 0 ? [{ label: "Pictures", value: String(images) }] : []),
+  ];
+  return { ...(name === undefined ? {} : { subject: `image:${name}`.slice(0, MAX_EVIDENCE_SUBJECT_CHARS) }), metadata };
+}
 
 /** A model's file name, as the preview records it; Blender's own are far shorter. */
 const MAX_MODEL_NAME_CHARS = 120;
@@ -2252,14 +2282,16 @@ export function createStudioToolRunner(context: PlannerContext, options: StudioT
       }
     }
     const observed = observationEvidence(operation, args, outcome, playtestRunning);
-    const preview = observed !== undefined || operation === BLENDER_OPERATION
+    const preview = observed !== undefined || operation === BLENDER_OPERATION || operation === IMAGE_OPERATION
       ? await evidencePreview(context, outcome)
       : undefined;
     const subject = outcome.ok && operation === BLENDER_OPERATION ? blenderLineage.follow(outcome) : undefined;
     const observation = observed !== undefined
       ? { ...observed, ...(preview === undefined ? {} : { imageDataUrl: preview }) }
       : preview !== undefined
-        ? { ...BLENDER_PREVIEW_EVIDENCE, ...blenderModelFacts(outcome), ...(subject === undefined ? {} : { subject }), imageDataUrl: preview }
+        ? operation === IMAGE_OPERATION
+          ? { ...IMAGE_PREVIEW_EVIDENCE, ...imagePreviewFacts(args, outcome), imageDataUrl: preview }
+          : { ...BLENDER_PREVIEW_EVIDENCE, ...blenderModelFacts(outcome), ...(subject === undefined ? {} : { subject }), imageDataUrl: preview }
         : undefined;
     if (observation?.title === UI_AUDIT_TITLE) {
       // Which changes the audit saw, so the gate can tell an interface change made after it.

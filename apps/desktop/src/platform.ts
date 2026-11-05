@@ -13,6 +13,7 @@ import type {
 } from "../shared/custom-providers";
 import type { OpenCloudCheckResult, OpenCloudSave, OpenCloudSettingsResult } from "../shared/open-cloud";
 import type { BlenderSettingsResult } from "../shared/blender";
+import type { ImageSettingsResult, ImageSettingsSave, ImageTestResult } from "../shared/image-generation";
 import type { McpServerSave, McpServersResult, McpServerTestResult } from "../shared/mcp-servers";
 import type { RojoResult } from "../shared/rojo";
 import type { ModelPreviewResult } from "../shared/model-preview";
@@ -182,6 +183,20 @@ export async function chooseBlender(): Promise<BlenderSettingsResult> {
 
 export async function redetectBlender(): Promise<BlenderSettingsResult> {
   return window.workbenchDesktop?.blender.redetect() ?? { ok: false, message: NO_DESKTOP_BLENDER };
+}
+
+const NO_DESKTOP_IMAGES = "Image generation needs the desktop app.";
+
+export async function getImageSettings(): Promise<ImageSettingsResult> {
+  return window.workbenchDesktop?.images.get() ?? { ok: false, message: NO_DESKTOP_IMAGES };
+}
+
+export async function saveImageSettings(save: ImageSettingsSave): Promise<ImageSettingsResult> {
+  return window.workbenchDesktop?.images.save(save) ?? { ok: false, message: NO_DESKTOP_IMAGES };
+}
+
+export async function testImageSettings(): Promise<ImageTestResult> {
+  return window.workbenchDesktop?.images.test() ?? { ok: false, message: NO_DESKTOP_IMAGES };
 }
 
 const NO_DESKTOP_MCP_SERVERS = "Your own MCP servers need the desktop app.";

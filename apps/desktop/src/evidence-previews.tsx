@@ -112,6 +112,7 @@ function BoxesNote({ note }: { note: string }) {
 function SourceIcon({ evidence, size }: { evidence: RunEvidence; size: number }) {
   switch (previewSource(evidence)) {
     case "blender": return <Box size={size} aria-hidden="true" />;
+    case "image": return <ImageIcon size={size} aria-hidden="true" />;
     case "animation":
     case "rig": return <PersonStanding size={size} aria-hidden="true" />;
     case "playtest": return <Gamepad2 size={size} aria-hidden="true" />;

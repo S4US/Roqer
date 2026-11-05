@@ -41,6 +41,16 @@ test("a Blender job reads as modeling, not as its operation name", () => {
   assert.equal(activityKind("run_blender_script"), "run");
 });
 
+test("an image job reads as generating, is approved like a spend, and is summarised by what it is for", () => {
+  assert.equal(activityLabel("generate_image", null, false), "Generating images");
+  assert.equal(activityLabel("generate_image", null, true), "Generated images");
+  assert.equal(activityKind("generate_image"), "run");
+  assert.equal(LOCAL_TOOL_RISK.generate_image, "irreversible");
+  assert.equal(summarizeToolCall("generate_image", { prompt: "a soft glow", kind: "light", name: "rune_ring", count: 3 }), "generate_image · light rune_ring ×3");
+  assert.equal(summarizeToolCall("generate_image", { prompt: "a soft glow", kind: "icon", name: "sword", count: 1 }), "generate_image · icon sword");
+  assert.equal(summarizeToolCall("generate_image", { prompt: "a soft glow" }), "generate_image");
+});
+
 test("a closer look at a reference clip reads as looking, not as its operation name", () => {
   assert.equal(activityLabel("read_reference_clip", null, false), "Looking closer at the reference clip");
   assert.equal(activityLabel("read_reference_clip", null, true), "Looked closer at the reference clip");

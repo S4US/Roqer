@@ -309,6 +309,16 @@ Settings → Blender turns on the opt-in local Blender worker.
 [3D modeling with Blender](blender.md) covers setting it up, what a job runs
 and checks, and where Roqer keeps its files.
 
+### Image generation in Roqer
+
+Settings → Images turns on the opt-in `image` tool, with an OpenAI key or an
+OpenAI-compatible server's address and model. The key is encrypted with the
+operating system's credential store in `image-generation.json` in Roqer's
+data folder and never reaches the renderer or the model. Each call is
+irreversible, asks outside Full auto, and counts against a budget of 24
+pictures a run. [Image generation](images.md) covers what a call makes, what
+Roqer measures, previewing in Studio, and where the files go.
+
 ### Web search
 
 The run menu beside the composer has a Web search switch, off by default.

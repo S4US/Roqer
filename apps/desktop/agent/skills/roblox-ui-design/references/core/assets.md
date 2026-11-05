@@ -38,7 +38,7 @@ Keep the shortlist bounded. Choose by subject, slot, visual style, aspect ratio,
 
 ## Made for this game
 
-When no catalog or store image fits and the item exists as a model, the `blender` tool (when offered) can render a matching icon; `roblox-building` `references/blender.md` has the recipe. A rendered or user-supplied PNG is uploaded with `upload_asset` as a `Decal`: use the result's `imageId`, never its `decalId`, and if `imageId` is null check the upload again with action `status`.
+When no catalog or store image fits and the item exists as a model, the `blender` tool (when offered) can render a matching icon; `roblox-building` `references/blender.md` has the recipe. When the `image` tool is offered, custom icons and item art can be generated with `kind: "icon"` (512, transparent): one subject, centred, in the theme's style and line weight, no text; ask for the set's icons in one style, compare variants with `count`, and read the measured lines before using one. Each call spends the user's key and is approved outside Full auto. A rendered, generated or user-supplied PNG is uploaded with `upload_asset` as a `Decal`: use the result's `imageId`, never its `decalId`, and if `imageId` is null check the upload again with action `status`.
 
 ## Rendering
 

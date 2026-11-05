@@ -9,6 +9,7 @@ import type { StudioStatus } from "../shared/studio-status";
 import type { WorkspaceState } from "./model";
 import { accountDetail } from "./account-detail";
 import { BlenderSettings } from "./blender-settings";
+import { ImageSettings } from "./image-settings";
 import { DiagnosticsActions } from "./diagnostics-actions";
 import { EndpointPage, endpointDetail, useCustomConnections } from "./custom-connections";
 import { McpServerSettings, type McpServerVisit } from "./mcp-server-settings";
@@ -34,12 +35,13 @@ import { SettingsGroup, SettingsRow, SettingsSwitch } from "./settings-parts";
  * beside the model. This page only says what is available to choose from.
  */
 
-export type SettingsSectionId = "models" | "roblox" | "blender" | "mcp" | "app";
+export type SettingsSectionId = "models" | "roblox" | "blender" | "images" | "mcp" | "app";
 
 const SECTIONS: ReadonlyArray<{ id: SettingsSectionId; label: string }> = [
   { id: "models", label: "Models" },
   { id: "roblox", label: "Roblox" },
   { id: "blender", label: "Blender" },
+  { id: "images", label: "Images" },
   { id: "mcp", label: "MCP servers" },
   { id: "app", label: "App" },
 ];
@@ -215,6 +217,11 @@ export function SettingsPage({ preferences, studioStatus, updateState, notice, o
         {section === "blender" && <>
           <PageHead title="Blender" lede="Let the agent model props and buildings in Blender, then bring them into Studio." />
           <BlenderSettings />
+        </>}
+
+        {section === "images" && <>
+          <PageHead title="Images" lede="Let the agent generate particle textures, icons, decals and tiles with an image model you pay for, then check and upload them." />
+          <ImageSettings />
         </>}
 
         {section === "mcp" && <McpServerSettings
