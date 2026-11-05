@@ -580,6 +580,7 @@ button:focus-visible, textarea:focus-visible, select:focus-visible, input:focus-
 .composer-expand { position: absolute; top: 10px; right: 10px; z-index: 1; width: 30px; height: 30px; }
 .composer-card:has(> .composer-expand) > textarea, .composer-card:has(> .composer-expand) > .pasted-block:first-of-type { margin-right: 44px; }
 .composer-card:has(> .composer-expand) > textarea { width: calc(100% - 44px); }
+.composer-card:has(> .composer-expand) > .composer-status { margin-right: 44px; }
 /* The larger editor fills the workspace below the top bar, and
    Escape or Collapse gives the chat back. */
 .composer-dock.expanded { top: 76px; display: flex; flex-direction: column; padding-top: 20px; background: var(--canvas); }

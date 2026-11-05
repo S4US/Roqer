@@ -1773,6 +1773,7 @@ function App() {
             {/* A disabled composer with no reason reads as a broken one. This
                 says where the run is and offers the two things that can be done
                 about it from here: go to it, or stop it. */}
+            {compactNotice?.chatId === workspace.selectedChatId && <div className="composer-status" role="status"><span>{compactNotice.text}</span></div>}
             {draggingImage && <div className="composer-drop-hint">Drop an image or a video to attach it</div>}
             {sendAfterCompact !== null && sendAfterCompact === workspace.selectedChatId && <div className="attachment-notice compact-queued" role="status">
               <span><Loader2 size={13} className="spin" aria-hidden="true" /> Queued: your message sends as soon as compacting finishes. You can keep editing it.</span>
@@ -1861,7 +1862,6 @@ function App() {
               />
               <div className="toolbar-spacer" />
               {composerHint !== null && <span className="composer-hint">{composerHint}</span>}
-              {composerHint === null && compactNotice?.chatId === workspace.selectedChatId && <span className="composer-hint">{compactNotice.text}</span>}
               <ContextMeter
                 view={contextView}
                 modelName={selectedModel?.displayName ?? null}
