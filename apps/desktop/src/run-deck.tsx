@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type KeyboardEvent, type PointerEvent, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { AlertCircle, Check, ChevronRight, CircleDot, Loader2, PanelRight, X } from "lucide-react";
 
@@ -6,7 +6,7 @@ import type { RunChange, RunEvidence } from "../shared/run-events";
 import type { ChangeGroup } from "./diff-view";
 import { ResultsCard, type FileExpansion } from "./results-card";
 import { resultsSummary, runResults } from "./results-model";
-import { DECK_INLINE_MIN_WIDTH, deckTarget, type DeckStatus } from "./run-deck-model";
+import { clampDeckWidth, DECK_INLINE_MIN_WIDTH, deckTarget, type DeckStatus } from "./run-deck-model";
 
 /**
  * The Run Deck: a run's results beside the chat.
@@ -86,6 +86,53 @@ const STATUS_ICON: Record<DeckStatus["tone"], ReactNode> = {
   neutral: <CircleDot size={15} aria-hidden="true" />,
 };
 
+/** What the chat must keep when the deck grows. */
+const CHAT_MIN_WIDTH = 480;
+const KEY_STEP = 24;
+
+/**
+ * The deck's left edge, dragged to give a long diff more room. The width lives on
+ * the deck's element for this window only: it is a passing preference, not a
+ * setting worth storing.
+ */
+function DeckResizer({ host }: { host: HTMLElement }) {
+  const drag = useRef<{ startX: number; startWidth: number } | null>(null);
+  const [width, setWidth] = useState(() => Math.round(host.getBoundingClientRect().width));
+  const room = () => (host.previousElementSibling?.getBoundingClientRect().width ?? 0) + host.getBoundingClientRect().width - CHAT_MIN_WIDTH;
+  const apply = (next: number) => {
+    const clamped = clampDeckWidth(next, room());
+    host.style.setProperty("--deck-width", `${clamped}px`);
+    setWidth(clamped);
+  };
+  const onPointerDown = (event: PointerEvent<HTMLDivElement>) => {
+    event.currentTarget.setPointerCapture(event.pointerId);
+    drag.current = { startX: event.clientX, startWidth: host.getBoundingClientRect().width };
+  };
+  const onPointerMove = (event: PointerEvent<HTMLDivElement>) => {
+    if (drag.current !== null) apply(drag.current.startWidth + drag.current.startX - event.clientX);
+  };
+  const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+    event.preventDefault();
+    apply(host.getBoundingClientRect().width + (event.key === "ArrowLeft" ? KEY_STEP : -KEY_STEP));
+  };
+  return <div
+    className="run-deck-resizer"
+    role="separator"
+    aria-orientation="vertical"
+    aria-label="Resize the Run Deck"
+    aria-valuenow={width}
+    tabIndex={0}
+    title="Drag to resize"
+    onPointerDown={onPointerDown}
+    onPointerMove={onPointerMove}
+    onPointerUp={() => { drag.current = null; }}
+    onPointerCancel={() => { drag.current = null; }}
+    onDoubleClick={() => { host.style.removeProperty("--deck-width"); setWidth(Math.round(host.getBoundingClientRect().width)); }}
+    onKeyDown={onKeyDown}
+  />;
+}
+
 /** A run's results: a summary line in the chat, and the card itself in the deck while it shows this run. */
 export function RunResults({ runId, changes, evidence, latest, status, renderFiles }: {
   runId: string;
@@ -116,6 +163,7 @@ export function RunResults({ runId, changes, evidence, latest, status, renderFil
       <ChevronRight size={14} aria-hidden="true" />
     </button>}
     {showing && deck.host !== null && createPortal(<>
+      {deck.inline && <DeckResizer host={deck.host} />}
       <header className="run-deck-head" data-tone={status.tone}>
         {STATUS_ICON[status.tone]}
         <strong>{status.label}</strong>

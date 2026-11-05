@@ -112,7 +112,7 @@
 .node-row[data-status="failed"] .node-finding { color: var(--danger); }
 
 /* The Run Deck: beside the chat from 1,240 px, and over it below that, stopping above the composer so Stop stays reachable. */
-.run-deck { display: flex; flex: 0 0 clamp(340px, 31vw, 520px); flex-direction: column; min-width: 0; height: 100%; overflow: hidden; background: var(--surface); border: 1px solid var(--border-subtle); border-radius: 14px; box-shadow: var(--shadow-sm); }
+.run-deck { position: relative; display: flex; flex: 0 0 var(--deck-width, clamp(360px, 32vw, 560px)); flex-direction: column; min-width: 0; max-width: calc(100% - 732px); height: 100%; overflow: hidden; container: deck / inline-size; background: var(--surface); border: 1px solid var(--border-subtle); border-radius: 14px; box-shadow: var(--shadow-sm); }
 .run-deck:empty { display: none; }
 .app-shell { position: relative; }
 .run-deck-head { display: flex; flex: none; align-items: center; gap: 8px; min-height: 56px; padding: 0 8px 0 16px; border-bottom: 1px solid var(--border-subtle); }
@@ -126,7 +126,7 @@
 .run-deck-head[data-tone="failed"] > svg { color: var(--danger); }
 .run-deck-spin { animation: spin .9s linear infinite; }
 .run-deck .results-card { display: flex; flex: 1; flex-direction: column; min-height: 0; margin: 0; overflow: hidden; background: transparent; border: 0; border-radius: 0; box-shadow: none; }
-.run-deck .results-header { flex: none; padding: 0 8px; }
+.run-deck .results-header, .run-deck .results-card[data-open="true"] > .results-header { flex: none; min-height: 0; padding: 8px; border-bottom: 1px solid var(--border-subtle); }
 .run-deck .results-panel:not([hidden]) { flex: 1; min-height: 0; overflow: auto; }
 .run-summary { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 40px; margin-top: 12px; padding: 0 10px 0 12px; color: var(--ink-secondary); background: transparent; border: 1px solid var(--border-subtle); border-radius: 11px; font-size: var(--type-label); text-align: left; }
 .run-summary > span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -135,7 +135,7 @@
 .run-summary[aria-pressed="true"] { background: var(--surface-raised); border-color: var(--border); }
 
 @media (max-width: 1239px) {
-  .run-deck { position: absolute; top: 72px; right: 20px; bottom: calc(var(--dock-height, 180px) + 12px); z-index: 14; width: min(420px, calc(100% - 40px)); height: auto; border-color: var(--border-strong); box-shadow: var(--shadow-lg); }
+  .run-deck { max-width: none; position: absolute; top: 72px; right: 20px; bottom: calc(var(--dock-height, 180px) + 12px); z-index: 14; width: min(420px, calc(100% - 40px)); height: auto; border-color: var(--border-strong); box-shadow: var(--shadow-lg); }
 }
 
 /* A menu opening from the mid-pane composer goes over the top bar, and scrolls rather than leave the window. */
@@ -147,3 +147,38 @@
 .topbar .chat-heading { flex: 1; }
 .topbar-actions { flex: none; margin-left: 8px; }
 .app-shell[data-deck="open"] .connection-detail { display: none; }
+
+/* The deck's tabs always fit. Every tab shows its icon and count; the open one adds its name, and the rest join in when the deck has room. */
+.run-deck .results-tabs { gap: 2px; padding: 2px; overflow: visible; background: var(--surface-sunken); border: 1px solid var(--border-subtle); border-radius: 10px; }
+.run-deck .results-tab { flex: 1 1 auto; justify-content: center; gap: 5px; height: 30px; padding: 0 8px; border: 0; border-radius: 7px; font-size: var(--type-label); }
+.run-deck .results-card[data-open="true"] .results-tab[aria-selected="true"] { color: var(--ink); background: var(--surface-raised); box-shadow: var(--shadow-sm); }
+.run-deck .results-tab-count { min-width: 0; height: auto; padding: 0; color: var(--faint); background: transparent; font-size: var(--type-meta); }
+.run-deck .results-tab .diff-summary { display: none; }
+.run-deck .results-tab-name { display: none; }
+.run-deck .results-tab[aria-selected="true"] .results-tab-name, .run-deck .results-tabs[data-count="1"] .results-tab-name, .run-deck .results-tabs[data-count="2"] .results-tab-name { display: inline; }
+@container deck (min-width: 430px) { .run-deck .results-tabs[data-count="3"] .results-tab-name { display: inline; } }
+@container deck (min-width: 540px) { .run-deck .results-tabs[data-count="4"] .results-tab-name { display: inline; } }
+@container deck (min-width: 640px) { .run-deck .results-tabs[data-count="5"] .results-tab-name { display: inline; } }
+
+/* The deck's edge, for a long diff. */
+.run-deck-resizer { position: absolute; top: 0; bottom: 0; left: 0; z-index: 2; width: 7px; cursor: col-resize; touch-action: none; }
+.run-deck-resizer::after { position: absolute; top: 50%; left: 2px; width: 3px; height: 36px; background: var(--border-strong); border-radius: 3px; opacity: 0; content: ""; transform: translateY(-50%); transition: opacity .12s ease; }
+.run-deck-resizer:hover::after, .run-deck-resizer:active::after, .run-deck-resizer:focus-visible::after { background: var(--accent); opacity: 1; }
+.run-deck-resizer:focus-visible { outline: 0; }
+
+/* Files in the deck: the name first, where it lives after it, and an icon for opening it. */
+.diff-file code { font-family: inherit; font-size: var(--type-label); font-weight: var(--weight-medium); }
+.diff-file-parent { margin-left: 8px; color: var(--faint); font-size: var(--type-meta); font-weight: var(--weight-regular); }
+.run-deck .open-studio-action { justify-content: center; width: 26px; padding: 0; }
+.run-deck .open-studio-action > span { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+
+/* Sounds in the deck: the name on one line, and the player under it at full width. */
+.run-deck .sound-row { grid-template-columns: 30px minmax(0, 1fr); }
+.run-deck .sound-row > :last-child { grid-column: 1 / -1; max-width: none; }
+/* Panels fill the deck's width, and small tiles drop their repeated source label. */
+.run-deck .upload-grid { grid-template-columns: minmax(0, 1fr); }
+.run-deck .preview-grid[data-layout="single"] { grid-template-columns: minmax(0, 1fr); }
+.run-deck .preview-tile[data-role="rail"] .preview-chip > span:last-child { display: none; }
+.run-deck .preview-caption { flex-wrap: wrap; row-gap: 2px; min-width: 0; }
+.run-deck .results-panel:not([hidden]) { overflow-x: hidden; }
+.run-deck .diff-body { overflow-x: auto; }

@@ -122,7 +122,7 @@ export const ResultsCard = memo(function ResultsCard({ runId, changes, evidence,
       >
         <ChevronRight size={14} aria-hidden="true" />
       </button>}
-      <div className="results-tabs" role="tablist" aria-label="Results" onKeyDown={onKeyDown}>
+      <div className="results-tabs" role="tablist" aria-label="Results" data-count={tabs.length} onKeyDown={onKeyDown}>
         {tabs.map((tab) => {
           const selected = tab.id === active;
           const noun = tab.count === 1 ? TAB_NAME[tab.id].one : TAB_NAME[tab.id].many;
@@ -136,6 +136,7 @@ export const ResultsCard = memo(function ResultsCard({ runId, changes, evidence,
             aria-selected={selected}
             aria-controls={view.visited.includes(tab.id) ? panelId(tab.id) : undefined}
             aria-label={`${TAB_NAME[tab.id].title}, ${tab.count} ${noun}`}
+            title={TAB_NAME[tab.id].title}
             tabIndex={selected ? 0 : -1}
             onClick={() => choose(tab.id)}
           >

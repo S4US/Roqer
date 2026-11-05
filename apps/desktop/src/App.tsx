@@ -43,7 +43,7 @@ import { SettingsPage } from "./settings-page";
 import { DiagnosticsActions } from "./diagnostics-actions";
 import { sendBlockedNotice } from "./send-blocked";
 import type { FileExpansion } from "./results-card";
-import { finishedDeckStatus, type DeckStatus } from "./run-deck-model";
+import { finishedDeckStatus, targetLabel, type DeckStatus } from "./run-deck-model";
 import { RunDeckProvider, RunDeckToggle, RunResults, useRunDeck } from "./run-deck";
 import { ModelMenu, RunMenu } from "./composer-menus";
 import { ContextMeter } from "./context-meter";
@@ -2712,9 +2712,10 @@ function ArtifactCard({ group, expanded, onExpandedChange, onOpenInStudio }: {
     if ((event.target as HTMLElement).closest("button, a") !== null) return;
     onExpandedChange(!expanded);
   };
+  const fileLabel = targetLabel(group.target);
   return <article className="diff-artifact">
     <div className="diff-header" onClick={toggleFromHeader}>
-      <div className="diff-file">{assetChange ? <FileBox size={14} /> : <FileCode2 size={14} />}<code title={group.target}>{group.target}</code></div>
+      <div className="diff-file">{assetChange ? <FileBox size={14} /> : <FileCode2 size={14} />}<code title={group.target}>{fileLabel.name}{fileLabel.parent !== undefined && <span className="diff-file-parent">{fileLabel.parent}</span>}</code></div>
       <div className="diff-actions">
         {openableInStudio && <button className={`open-studio-action state-${openState.kind}`} type="button" onClick={() => void openScript()} disabled={openState.kind === "opening"} title={openState.message ?? "Open this script in Roblox Studio"}>
           {openState.kind === "opened" ? <Check size={13} /> : openState.kind === "error" ? <AlertCircle size={13} /> : <ExternalLink size={13} />}

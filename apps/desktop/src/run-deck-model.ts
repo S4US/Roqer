@@ -26,6 +26,25 @@ export function deckTarget({ picked, offered, closed, inline }: DeckChoice): str
   return closed || !inline ? null : offered;
 }
 
+/** The narrowest deck whose tabs and file rows still read. */
+export const DECK_MIN_WIDTH = 360;
+
+/** A width the reader dragged to, kept between the narrowest deck and what the chat can give up. */
+export function clampDeckWidth(width: number, room: number): number {
+  return Math.round(Math.max(DECK_MIN_WIDTH, Math.min(width, Math.max(room, DECK_MIN_WIDTH))));
+}
+
+/**
+ * A file's name and where it lives. In a narrow panel the end of a path is the
+ * part that identifies it, so the name comes first and the rest can shorten.
+ */
+export function targetLabel(target: string): { name: string; parent?: string } {
+  if (!target.startsWith("game.")) return { name: target };
+  const path = target.slice("game.".length);
+  const at = path.lastIndexOf(".");
+  return at < 0 ? { name: path } : { name: path.slice(at + 1), parent: path.slice(0, at) };
+}
+
 /** What the deck's heading says about a run. */
 export type DeckStatus = Readonly<{ label: string; detail?: string; tone: "working" | "waiting" | "done" | "warning" | "failed" | "neutral" }>;
 
