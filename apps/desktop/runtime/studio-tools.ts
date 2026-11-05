@@ -1,5 +1,6 @@
 import { BLENDER_OPERATION } from "../shared/blender";
 import { IMAGE_OPERATION } from "../shared/image-generation";
+import { recordingMetadata, recordingOf } from "./playtest-recording";
 import { AUDITED_AFTER_LABEL, REVISION_AFTER_LABEL, UI_AUDIT_TITLE } from "../shared/completion";
 import {
   CAPTURE_MOMENTS_OPERATION, GATEWAY_TOOL_RISK, isGatewayOperation, LIST_UPLOADS_OPERATION, UPLOAD_ASSETS_OPERATION,
@@ -2286,13 +2287,26 @@ export function createStudioToolRunner(context: PlannerContext, options: StudioT
       ? await evidencePreview(context, outcome)
       : undefined;
     const subject = outcome.ok && operation === BLENDER_OPERATION ? blenderLineage.follow(outcome) : undefined;
-    const observation = observed !== undefined
+    let observation = observed !== undefined
       ? { ...observed, ...(preview === undefined ? {} : { imageDataUrl: preview }) }
       : preview !== undefined
         ? operation === IMAGE_OPERATION
           ? { ...IMAGE_PREVIEW_EVIDENCE, ...imagePreviewFacts(args, outcome), imageDataUrl: preview }
           : { ...BLENDER_PREVIEW_EVIDENCE, ...blenderModelFacts(outcome), ...(subject === undefined ? {} : { subject }), imageDataUrl: preview }
         : undefined;
+    // The host's recording of a playtest rides on the stop's own evidence:
+    // the clip, kept only through the host's own file reader, and a line on
+    // what was recorded or why nothing was. The sheet of its frames is the
+    // stop result's first image, so it is already the evidence's picture.
+    const recording = observation !== undefined && PLAYTEST_OPERATIONS.has(operation) ? recordingOf(outcome.data) : undefined;
+    if (observation !== undefined && recording !== undefined) {
+      const clipRef = "skipped" in recording || context.storeClipFile === undefined ? undefined : await context.storeClipFile(recording.path);
+      observation = {
+        ...observation,
+        ...(clipRef === undefined ? {} : { clipRef }),
+        metadata: [...(observation.metadata ?? []), recordingMetadata(recording)],
+      };
+    }
     if (observation?.title === UI_AUDIT_TITLE) {
       // Which changes the audit saw, so the gate can tell an interface change made after it.
       const latest = context.changes().at(-1)?.id ?? "none";

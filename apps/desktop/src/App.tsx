@@ -36,6 +36,7 @@ import {
 } from "./run-view";
 import { EvidencePicture, rememberEvidencePicture } from "./evidence-picture";
 import { EvidenceSound } from "./evidence-sound";
+import { EvidenceClip } from "./evidence-clip";
 import { QUESTION_ESCAPE_OPTION, type RunQuestion } from "../shared/question";
 import { summarizeTasks, type RunTask, type RunTaskStatus } from "../shared/tasks";
 import { Markdown, StreamingMarkdown } from "./markdown-view";
@@ -910,6 +911,7 @@ function App() {
       approvalMode: next.preferences.approvalMode,
       autoPlaytest: next.preferences.autoPlaytest,
       webSearch: next.preferences.webSearch,
+      recordPlaytest: next.preferences.recordPlaytests,
       endpoint: next.preferences.mcpEndpoint,
       instanceId: (() => {
         const target = chatStudioTarget(next, projectId, chatId);
@@ -1851,6 +1853,8 @@ function App() {
                 onAutoPlaytest={(on) => updatePreferences({ autoPlaytest: on })}
                 webSearch={workspace.preferences.webSearch}
                 onWebSearch={(on) => updatePreferences({ webSearch: on })}
+                recordPlaytests={workspace.preferences.recordPlaytests}
+                onRecordPlaytests={(on) => updatePreferences({ recordPlaytests: on })}
               />
               <div className="toolbar-spacer" />
               {composerHint !== null && <span className="composer-hint">{composerHint}</span>}
@@ -2409,11 +2413,12 @@ function ActivityGroup({ node, open, onToggle }: {
 function EvidenceDetail({ evidence }: { evidence: RunEvidence }) {
   const lines = evidence.lines ?? [];
   const metadata = evidence.metadata ?? [];
-  if (!evidence.detail && lines.length === 0 && metadata.length === 0 && !hasPicture(evidence) && evidence.soundRef === undefined) return null;
+  if (!evidence.detail && lines.length === 0 && metadata.length === 0 && !hasPicture(evidence) && evidence.soundRef === undefined && evidence.clipRef === undefined) return null;
   return <CardDetails label={evidenceDetailLabel(evidence.kind)}>
     {evidence.detail && <p className="evidence-note">{evidence.detail}</p>}
     {hasPicture(evidence) && <EvidencePicture className="evidence-image" evidence={evidence} alt={evidence.title} />}
     {evidence.soundRef !== undefined && <EvidenceSound evidence={evidence} />}
+    {evidence.clipRef !== undefined && <EvidenceClip evidence={evidence} />}
     {lines.length > 0 && (evidence.format === "code"
       // A source read-back is verbatim: indentation and blank lines are part of
       // what is being shown, so it is a code block, not a list of strings.

@@ -106,6 +106,12 @@ export type Preferences = {
    * model's words out of the machine.
    */
   webSearch: boolean;
+  /**
+   * Whether Roqer records the Studio window during each playtest a run
+   * starts. Off by default: it reads the screen, and a clip is the largest
+   * thing a chat keeps.
+   */
+  recordPlaytests: boolean;
   mcpEndpoint: string;
   /**
    * The Studio place runs go to, or `null` to use whichever connected first.
@@ -226,6 +232,7 @@ export function createInitialWorkspace(theme: Theme = "dark"): WorkspaceState {
       approvalMode: DEFAULT_APPROVAL_MODE,
       autoPlaytest: true,
       webSearch: false,
+      recordPlaytests: false,
       mcpEndpoint: DEFAULT_MCP_ENDPOINT,
       studioInstanceId: null,
       discordPresence: true,
@@ -381,6 +388,8 @@ export function normalizeWorkspace(value: unknown, themeFallback: Theme = "dark"
     // Off unless the user turned it on: a workspace saved before the switch
     // existed never agreed to send anything to a search engine.
     webSearch: rawPreferences.webSearch === true,
+    // Off unless the user turned it on, for the same reason.
+    recordPlaytests: rawPreferences.recordPlaytests === true,
     mcpEndpoint: typeof rawPreferences.mcpEndpoint === "string" && rawPreferences.mcpEndpoint !== ""
       ? rawPreferences.mcpEndpoint
       : DEFAULT_MCP_ENDPOINT,

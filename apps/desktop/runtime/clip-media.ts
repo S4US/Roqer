@@ -2,6 +2,8 @@ import { createReadStream } from "node:fs";
 import { stat } from "node:fs/promises";
 import { Readable } from "node:stream";
 
+import { EVIDENCE_CLIP_HOST } from "../shared/evidence-clip";
+
 /**
  * Serving an attached clip to the chat window's preview player.
  *
@@ -43,8 +45,16 @@ export function parseByteRange(header: string | null | undefined, size: number):
 
 const notFound = () => new Response(null, { status: 404 });
 
-/** Answer one request for an attached clip's bytes. */
-export async function serveClipMedia(request: Request, lookup: (attachmentId: string) => ClipMedia | undefined): Promise<Response> {
+/**
+ * Answer one request for a clip's bytes: an attached clip under the `media`
+ * host, by its attachment id; a run's stored playtest recording under the
+ * `evidence` host, by its ref, when `stored` is given.
+ */
+export async function serveClipMedia(
+  request: Request,
+  lookup: (attachmentId: string) => ClipMedia | undefined,
+  stored?: (ref: string) => Promise<ClipMedia | undefined>,
+): Promise<Response> {
   if (request.method !== "GET" && request.method !== "HEAD") return new Response(null, { status: 405 });
   let url: URL;
   try {
@@ -52,14 +62,16 @@ export async function serveClipMedia(request: Request, lookup: (attachmentId: st
   } catch {
     return notFound();
   }
-  if (url.hostname !== "media") return notFound();
+  if (url.hostname !== "media" && url.hostname !== EVIDENCE_CLIP_HOST) return notFound();
   let id: string;
   try {
     id = decodeURIComponent(url.pathname.replace(/^\//, ""));
   } catch {
     return notFound();
   }
-  const media = id === "" ? undefined : lookup(id);
+  const media = id === ""
+    ? undefined
+    : url.hostname === "media" ? lookup(id) : stored === undefined ? undefined : await stored(id);
   if (media === undefined) return notFound();
 
   let size: number;

@@ -3,9 +3,10 @@ import { lstat, mkdir, readdir, readFile, realpath, rename, unlink, utimes, writ
 import { join, relative, isAbsolute, sep } from "node:path";
 
 import type { EvidencePictureResult } from "../shared/evidence-picture";
+import { isWebm, MAX_EVIDENCE_CLIP_BYTES } from "../shared/evidence-clip";
 import { isEvidenceSound, MAX_EVIDENCE_SOUND_BYTES, type EvidenceSoundResult } from "../shared/evidence-sound";
 import {
-  isEvidenceImage, isEvidencePictureRef, isEvidenceSoundRef, MAX_EVIDENCE_IMAGE_CHARACTERS, type RunEvidence,
+  isEvidenceClipRef, isEvidenceImage, isEvidencePictureRef, isEvidenceSoundRef, MAX_EVIDENCE_IMAGE_CHARACTERS, type RunEvidence,
 } from "../shared/run-events";
 
 /**
@@ -19,7 +20,8 @@ import {
  * be what was stored.
  *
  * Sounds a run previewed or uploaded are kept the same way, in the same
- * folder, under their own types, so the user can hear what the agent chose.
+ * folder, under their own types, so the user can hear what the agent chose;
+ * so are the playtests a run recorded, as WebM files the window streams.
  *
  * Nothing expires by age, as a chat's history should not. A picture goes when
  * no chat refers to it any more — its chat was deleted — and it is neither
@@ -36,7 +38,7 @@ export const PICTURE_GRACE_MS = 10 * 60 * 1000;
 const MAX_PICTURE_BYTES = Math.ceil(MAX_EVIDENCE_IMAGE_CHARACTERS * 3 / 4);
 
 const PNG_SIGNATURE = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
-const TEMPORARY = /^[0-9a-f]{64}\.(jpg|png|mp3|ogg|wav|flac)\.[^.]+\.tmp$/;
+const TEMPORARY = /^[0-9a-f]{64}\.(jpg|png|mp3|ogg|wav|flac|webm)\.[^.]+\.tmp$/;
 
 type PictureType = "jpg" | "png";
 type SoundType = "mp3" | "ogg" | "wav" | "flac";
@@ -75,11 +77,16 @@ function soundDataUrl(type: SoundType, bytes: Uint8Array): string {
   return `data:${SOUND_MEDIA_TYPE[type]};base64,${Buffer.from(bytes).toString("base64")}`;
 }
 
+/** A stored recording, as the clip protocol serves it: a checked file and its size. */
+export type StoredClip = Readonly<{ path: string; size: number }>;
+
 export class PictureStore {
   readonly directory: string;
   readonly #now: () => number;
   /** Refs a run still going has stored, counted, so two runs can hold one picture. */
   readonly #held = new Map<string, number>();
+  /** Recordings whose bytes were hashed and matched their name, by the file's size and time, so a seek does not hash 48 MB again. */
+  readonly #verifiedClips = new Map<string, Readonly<{ size: number; mtimeMs: number }>>();
 
   constructor(root: string, now: () => number = Date.now) {
     this.directory = join(root, PICTURE_DIRECTORY);
@@ -111,6 +118,34 @@ export class PictureStore {
     if (type === undefined || bytes.length === 0 || bytes.length > MAX_EVIDENCE_SOUND_BYTES) return undefined;
     const ref = `${sha256(bytes)}.${type}`;
     return this.#keep(ref, bytes, async () => (await this.readSound(ref)).ok);
+  }
+
+  /**
+   * Store a playtest recording's bytes and return its ref; undefined when they
+   * are not a bounded WebM, or the file could not be written.
+   */
+  async putClip(bytes: Uint8Array): Promise<string | undefined> {
+    if (!isWebm(bytes) || bytes.length > MAX_EVIDENCE_CLIP_BYTES) return undefined;
+    const ref = `${sha256(bytes)}.webm`;
+    return this.#keep(ref, bytes, async () => (await this.clip(ref)) !== undefined);
+  }
+
+  /**
+   * A stored recording's file, for streaming to the window: a file (never a
+   * link), no larger than a clip may be, whose bytes hash to its name. Hashed
+   * once per file; a file changed since is hashed again.
+   */
+  async clip(ref: unknown): Promise<StoredClip | undefined> {
+    if (!isEvidenceClipRef(ref)) return undefined;
+    const path = join(this.directory, ref);
+    const info = await lstat(path).catch(() => undefined);
+    if (info === undefined || !info.isFile() || info.size === 0 || info.size > MAX_EVIDENCE_CLIP_BYTES) return undefined;
+    const verified = this.#verifiedClips.get(ref);
+    if (verified !== undefined && verified.size === info.size && verified.mtimeMs === info.mtimeMs) return { path, size: info.size };
+    const bytes = await readFile(path).catch(() => undefined);
+    if (bytes === undefined || !isWebm(bytes) || `${sha256(bytes)}.webm` !== ref) return undefined;
+    this.#verifiedClips.set(ref, { size: info.size, mtimeMs: info.mtimeMs });
+    return { path, size: info.size };
   }
 
   /** Write a file once under its ref, or only mark a file already there fresh. */
@@ -185,16 +220,16 @@ export class PictureStore {
   }
 
   /**
-   * Remove every stored picture or sound no chat refers to, unless a run holds
-   * it or it is newer than the grace; and any write left half-done. Returns
-   * how many it removed. Failing to remove one is left for the next time.
+   * Remove every stored picture, sound or recording no chat refers to, unless a
+   * run holds it or it is newer than the grace; and any write left half-done.
+   * Returns how many it removed. Failing to remove one is left for the next time.
    */
   async collect(referenced: ReadonlySet<string>): Promise<number> {
     const names = await readdir(this.directory).catch(() => [] as string[]);
     const cutoff = this.#now() - PICTURE_GRACE_MS;
     let removed = 0;
     for (const name of names) {
-      const media = isEvidencePictureRef(name) || isEvidenceSoundRef(name);
+      const media = isEvidencePictureRef(name) || isEvidenceSoundRef(name) || isEvidenceClipRef(name);
       if (!media && !TEMPORARY.test(name)) continue;
       if (media && (referenced.has(name) || this.#held.has(name))) continue;
       const path = join(this.directory, name);
@@ -202,7 +237,10 @@ export class PictureStore {
       if (info === undefined || !info.isFile() || info.mtimeMs >= cutoff) continue;
       try {
         await unlink(path);
-        if (media) removed += 1;
+        if (media) {
+          removed += 1;
+          this.#verifiedClips.delete(name);
+        }
       } catch { /* Left for the next clean-up. */ }
     }
     return removed;
@@ -216,6 +254,17 @@ export class PictureStore {
  * word, and this is the one place the host opens it.
  */
 export async function readSoundFileInside(filePath: string, roots: readonly string[], maxBytes: number = MAX_EVIDENCE_SOUND_BYTES): Promise<Buffer | undefined> {
+  const bytes = await readFileInside(filePath, roots, maxBytes);
+  return bytes !== undefined && soundType(bytes) !== undefined ? bytes : undefined;
+}
+
+/** The bytes of a playtest recording inside one of Roqer's own folders, checked the same way; a WebM or nothing. */
+export async function readClipFileInside(filePath: string, roots: readonly string[], maxBytes: number = MAX_EVIDENCE_CLIP_BYTES): Promise<Buffer | undefined> {
+  const bytes = await readFileInside(filePath, roots, maxBytes);
+  return bytes !== undefined && isWebm(bytes) ? bytes : undefined;
+}
+
+async function readFileInside(filePath: string, roots: readonly string[], maxBytes: number): Promise<Buffer | undefined> {
   if (typeof filePath !== "string" || filePath === "" || !isAbsolute(filePath)) return undefined;
   let resolved: string;
   try {
@@ -233,20 +282,20 @@ export async function readSoundFileInside(filePath: string, roots: readonly stri
   if (!inside) return undefined;
   const info = await lstat(resolved).catch(() => undefined);
   if (info === undefined || !info.isFile() || info.size === 0 || info.size > maxBytes) return undefined;
-  const bytes = await readFile(resolved).catch(() => undefined);
-  return bytes !== undefined && soundType(bytes) !== undefined ? bytes : undefined;
+  return readFile(resolved).catch(() => undefined);
 }
 
 /** Every chat's runs' evidence, in a workspace shaped like a saved one. */
 type EvidenceHolder = { projects: ReadonlyArray<{ chats: ReadonlyArray<{ messages: ReadonlyArray<{ run?: { evidence: readonly RunEvidence[] } }> }> }> };
 
-/** The pictures and sounds a workspace's chats refer to. */
+/** The pictures, sounds and recordings a workspace's chats refer to. */
 export function pictureRefs(state: EvidenceHolder): Set<string> {
   const refs = new Set<string>();
   for (const project of state.projects) for (const chat of project.chats) for (const message of chat.messages) {
     for (const evidence of message.run?.evidence ?? []) {
       if (isEvidencePictureRef(evidence.imageRef)) refs.add(evidence.imageRef);
       if (isEvidenceSoundRef(evidence.soundRef)) refs.add(evidence.soundRef);
+      if (isEvidenceClipRef(evidence.clipRef)) refs.add(evidence.clipRef);
     }
   }
   return refs;

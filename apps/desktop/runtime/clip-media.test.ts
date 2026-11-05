@@ -63,3 +63,24 @@ test("only a clip the registry knows is served, whole or by range", async () => 
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+test("a stored recording is served under the evidence host, by its ref alone, and only when the host offers them", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "clip-media-"));
+  try {
+    const path = join(dir, "playtest.webm");
+    await writeFile(path, Buffer.from("webm-bytes"));
+    const ref = `${"c".repeat(64)}.webm`;
+    const stored = async (name: string): Promise<ClipMedia | undefined> => name === ref ? { path, mediaType: "video/webm" } : undefined;
+    const none = () => undefined;
+    const served = await serveClipMedia(new Request(`roqer-clip://evidence/${ref}`, { headers: { range: "bytes=0-3" } }), none, stored);
+    assert.equal(served.status, 206);
+    assert.equal(served.headers.get("content-type"), "video/webm");
+    assert.equal(await served.text(), "webm");
+    assert.equal((await serveClipMedia(new Request(`roqer-clip://evidence/${"d".repeat(64)}.webm`), none, stored)).status, 404);
+    assert.equal((await serveClipMedia(new Request(`roqer-clip://evidence/${ref}`), none)).status, 404, "no stored lookup, nothing served");
+    assert.equal((await serveClipMedia(new Request(`roqer-clip://elsewhere/${ref}`), none, stored)).status, 404);
+    assert.equal((await serveClipMedia(new Request(`roqer-clip://media/${ref}`), none, stored)).status, 404, "a ref is not an attachment id");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});

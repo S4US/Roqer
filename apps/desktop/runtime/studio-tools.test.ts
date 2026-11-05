@@ -1008,6 +1008,42 @@ test("an image job's picture is shown as a preview of the named texture and neve
   assert.equal(evidence[1].subject, "image:glow");
 });
 
+test("a playtest's recording rides on the stop's evidence: the clip through the host's file reader, the sheet as its picture, and a line on what was recorded", async () => {
+  const sheet = { data: "QUJD", mediaType: "image/jpeg" as const };
+  const recording = { path: "C:/roqer/playtest-recordings/run/playtest-1.webm", durationSeconds: 8.5, width: 1280, height: 720, bytes: 2 * 1024 * 1024, frames: [1, 3, 5, 7] };
+  const { context, evidence } = contextWith([
+    { ...ok({ status: "stopped", recording }), text: "Stopped.", images: [sheet] },
+    ok({ status: "stopped", recording: { skipped: "no-window" } }),
+    { ...ok({ status: "stopped", recording }), text: "Stopped." },
+  ]);
+  const opened: string[] = [];
+  const withClips = {
+    ...context,
+    previewImage: async () => PREVIEW,
+    storeClipFile: async (filePath: string) => { opened.push(filePath); return `${"c".repeat(64)}.webm`; },
+  };
+  const run = createStudioToolRunner(withClips);
+  await run("solo_playtest", { action: "stop" });
+  await run("solo_playtest", { action: "stop" });
+  const withoutHost = createStudioToolRunner({ ...context, previewImage: async () => PREVIEW });
+  await withoutHost("solo_playtest", { action: "stop" });
+
+  assert.deepEqual(opened, [recording.path], "only a stop that carries a recording opens its file");
+  const stops = evidence.filter((item) => item.title === "Solo playtest stop");
+  assert.equal(stops.length, 3);
+  const stop = stops[0];
+  assert.equal(stop.kind, "playtest");
+  assert.equal(stop.clipRef, `${"c".repeat(64)}.webm`);
+  assert.equal(stop.imageDataUrl, PREVIEW, "the sheet of frames is the evidence's picture");
+  assert.deepEqual(stop.metadata?.at(-1), { label: "Recording", value: "8.5s · 1280×720 · 2.0 MB" });
+  const skipped = stops[1];
+  assert.equal(skipped.clipRef, undefined);
+  assert.deepEqual(skipped.metadata?.at(-1), { label: "Recording", value: "Not recorded: no Roblox Studio window was found to record." });
+  const unkept = stops[2];
+  assert.equal(unkept.clipRef, undefined, "a context with nowhere to keep a clip records none");
+  assert.equal(unkept.metadata?.at(-1)?.label, "Recording");
+});
+
 test("a Blender preview is shown as the job's output and never counts as Studio evidence", async () => {
   const job = { ...ok({}), text: "Exported model.glb", images: [{ data: "QUJD", mediaType: "image/png" as const }] };
   const { context, evidence } = contextWith([job, { ...ok({}), text: "Exported model.glb" }]);

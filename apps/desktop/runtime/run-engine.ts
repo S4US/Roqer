@@ -31,7 +31,7 @@ import type {
   ToolProposal,
 } from "../shared/run-events";
 import {
-  isEvidenceImage, isEvidencePictureRef, isEvidenceSoundRef, isRunUsage, MAX_RECORDED_EVIDENCE_SOUNDS,
+  isEvidenceClipRef, isEvidenceImage, isEvidencePictureRef, isEvidenceSoundRef, isRunUsage, MAX_RECORDED_EVIDENCE_CLIPS, MAX_RECORDED_EVIDENCE_SOUNDS,
 } from "../shared/run-events";
 import type { ConversationContext } from "../shared/conversation";
 import {
@@ -110,6 +110,8 @@ export type PlannerContext = {
    * before the switch existed reads as a run without search.
    */
   webSearch?: boolean;
+  /** Whether Roqer records the Studio window during the run's playtests; absent means it does not. */
+  recordPlaytest?: boolean;
   signal: AbortSignal;
   /** Run a read or write tool. Policy and approval are applied by the engine. */
   call(tool: string, args: Record<string, unknown>): Promise<McpToolOutcome>;
@@ -173,6 +175,12 @@ export type PlannerContext = {
    * host decides which paths it will open. Absent where it opens none.
    */
   storeSoundFile?(filePath: string): Promise<string | undefined>;
+  /**
+   * Keep a recording of a playtest the host made, by the path it wrote it
+   * under, and return its ref for the evidence; undefined when it cannot be
+   * kept or the run has kept as many as it may. Absent where none are made.
+   */
+  storeClipFile?(filePath: string): Promise<string | undefined>;
   /** Replace the run's task list. Already validated by the caller. */
   setTasks(tasks: RunTask[]): void;
   /** The current task list, for a planner that needs to reread its own plan. */
@@ -249,6 +257,8 @@ export type RunEngineOptions = {
   storeSound?: (audio: McpToolAudio) => Promise<string | undefined>;
   /** Keep a copy of a sound file the agent uploaded, when the host is willing to open that path. */
   storeSoundFile?: (filePath: string) => Promise<string | undefined>;
+  /** Keep a playtest recording the host wrote into its own folder; the engine bounds how many a run keeps. */
+  storeClipFile?: (filePath: string) => Promise<string | undefined>;
   emit: (event: RunEvent) => void;
   /** Injectable for tests; defaults to () => new Date().toISOString(). */
   now?: () => string;
@@ -396,6 +406,8 @@ export class RunSession {
   private readonly storeModelPreview: RunEngineOptions["storeModelPreview"];
   private readonly storeSound: PlannerContext["storeSound"];
   private readonly storeSoundFile: PlannerContext["storeSoundFile"];
+  private readonly storeClipFile: PlannerContext["storeClipFile"];
+  private readonly storedClips = new Set<string>();
   private readonly emitRaw: (event: RunEvent) => void;
   private readonly now: () => string;
   private readonly createId: (prefix: string) => string;
@@ -474,6 +486,15 @@ export class RunSession {
     const { storeSound, storeSoundFile } = options;
     this.storeSound = storeSound === undefined ? undefined : (audio) => keepSound(() => storeSound(audio));
     this.storeSoundFile = storeSoundFile === undefined ? undefined : (filePath) => keepSound(() => storeSoundFile(filePath));
+    // Recordings the same way: a bounded number, and only a ref kept here.
+    const { storeClipFile } = options;
+    this.storeClipFile = storeClipFile === undefined ? undefined : async (filePath) => {
+      if (this.storedClips.size >= MAX_RECORDED_EVIDENCE_CLIPS) return undefined;
+      const ref = await storeClipFile(filePath).catch(() => undefined);
+      if (ref === undefined || !isEvidenceClipRef(ref)) return undefined;
+      this.storedClips.add(ref);
+      return ref;
+    };
     this.emitRaw = options.emit;
     this.now = options.now ?? (() => new Date().toISOString());
     this.createId = options.createId ?? defaultIdGenerator();
@@ -490,6 +511,7 @@ export class RunSession {
       approvalMode: this.request.approvalMode,
       autoPlaytest: this.request.autoPlaytest,
       ...(this.request.webSearch === undefined ? {} : { webSearch: this.request.webSearch }),
+      ...(this.request.recordPlaytest === undefined ? {} : { recordPlaytest: this.request.recordPlaytest }),
       endpoint: this.request.endpoint,
       instanceId: this.request.instanceId,
       model: this.request.model,
@@ -504,6 +526,7 @@ export class RunSession {
       instanceId: this.request.instanceId,
       autoPlaytest: this.request.autoPlaytest,
       webSearch: this.request.webSearch === true,
+      recordPlaytest: this.request.recordPlaytest === true,
       signal: this.abortController.signal,
       call: (tool, args) => this.callTool(tool, args),
       say: (text) => this.emit({ type: "message-delta", text }),
@@ -566,14 +589,17 @@ export class RunSession {
         delete rest.imageDataUrl;
         delete rest.imageRef;
         delete rest.soundRef;
+        delete rest.clipRef;
         const picture = isEvidenceImage(evidence.imageDataUrl) ? evidence.imageDataUrl : undefined;
         const imageRef = picture === undefined ? undefined : this.storedPictures.get(picture);
         const soundRef = isEvidenceSoundRef(evidence.soundRef) && this.storedSounds.has(evidence.soundRef) ? evidence.soundRef : undefined;
+        const clipRef = isEvidenceClipRef(evidence.clipRef) && this.storedClips.has(evidence.clipRef) ? evidence.clipRef : undefined;
         const recorded: RunEvidence = {
           ...rest,
           ...(picture === undefined ? {} : { imageDataUrl: picture }),
           ...(imageRef === undefined ? {} : { imageRef }),
           ...(soundRef === undefined ? {} : { soundRef }),
+          ...(clipRef === undefined ? {} : { clipRef }),
           id: this.createId("evidence"),
           ...(taskId !== undefined ? { taskId } : {}),
           ...(afterChangeId !== undefined ? { afterChangeId } : {}),
@@ -593,6 +619,7 @@ export class RunSession {
       ...(this.storeModelPreview === undefined ? {} : { storeModelPreview: this.storeModelPreview }),
       ...(this.storeSound === undefined ? {} : { storeSound: this.storeSound }),
       ...(this.storeSoundFile === undefined ? {} : { storeSoundFile: this.storeSoundFile }),
+      ...(this.storeClipFile === undefined ? {} : { storeClipFile: this.storeClipFile }),
       takeSteers: (options) => {
         const taken = this.pendingSteers.splice(0);
         if (taken.length > 0 && options?.confirmLater !== true) this.emit({ type: "steers-delivered", count: taken.length });

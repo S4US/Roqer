@@ -390,15 +390,16 @@ export type CodexThreadStore = ProviderSessionStore<CodexThread>;
  * them into a run against another.
  */
 function threadKey(
-  options: ChatGptPlannerOptions, { autoPlaytest, instanceId, webSearch }: Pick<PlannerContext, "autoPlaytest" | "instanceId" | "webSearch">,
+  options: ChatGptPlannerOptions,
+  { autoPlaytest, instanceId, webSearch, recordPlaytest }: Pick<PlannerContext, "autoPlaytest" | "instanceId" | "webSearch" | "recordPlaytest">,
 ): string {
   return JSON.stringify([
     instanceId, autoPlaytest, options.agent.id, options.agent.version, options.blender === true, options.referenceClips === true,
-    options.externalMcp === true, webSearch === true, options.imageGeneration === true,
+    options.externalMcp === true, webSearch === true, options.imageGeneration === true, recordPlaytest === true,
   ]);
 }
 
-async function startThread(options: ChatGptPlannerOptions, autoPlaytest: boolean, webSearch = false): Promise<string> {
+async function startThread(options: ChatGptPlannerOptions, autoPlaytest: boolean, webSearch = false, recordPlaytest = false): Promise<string> {
   const started = await options.appServer.request("thread/start", {
     model: options.model,
     modelProvider: "openai",
@@ -409,7 +410,7 @@ async function startThread(options: ChatGptPlannerOptions, autoPlaytest: boolean
     ephemeral: true,
     serviceName: "studio_workbench",
     baseInstructions: options.agent.systemInstructions,
-    developerInstructions: runDeveloperInstructions(options.agent.developerInstructions, autoPlaytest, webSearch),
+    developerInstructions: runDeveloperInstructions(options.agent.developerInstructions, autoPlaytest, webSearch, recordPlaytest),
     // The app server starts with web search disabled for every thread (see
     // CODEX_LOCKDOWN_ARGS); a chat the user turned it on for asks for it on
     // its own thread. A Codex that takes no per-thread override leaves the
@@ -463,7 +464,7 @@ export function createChatGptPlanner(options: ChatGptPlannerOptions): Planner {
         ? kept
         : undefined;
       const resumed = current !== undefined;
-      const threadId = current !== undefined ? current.threadId : await startThread(options, context.autoPlaytest, context.webSearch);
+      const threadId = current !== undefined ? current.threadId : await startThread(options, context.autoPlaytest, context.webSearch, context.recordPlaytest);
       checkCancelled();
 
       const completion = deferred<{ status: string; summary: string }>();

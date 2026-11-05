@@ -52,6 +52,21 @@ export async function buildDesktopRuntime() {
       path.join(desktopRoot, "electron", "clip-decoder.html"),
       path.join(desktopRoot, "dist-electron", "clip-decoder.html"),
     ),
+    // The hidden playtest recorder's page, built and carried the same way.
+    build({
+      absWorkingDir: desktopRoot,
+      bundle: true,
+      platform: "browser",
+      target: "chrome130",
+      format: "iife",
+      logLevel: "warning",
+      entryPoints: ["electron/playtest-recorder-page.ts"],
+      outfile: "dist-electron/playtest-recorder.js",
+    }),
+    fs.cp(
+      path.join(desktopRoot, "electron", "playtest-recorder.html"),
+      path.join(desktopRoot, "dist-electron", "playtest-recorder.html"),
+    ),
     fs.cp(agentSource, agentOutput, { recursive: true }),
     // The Windows window/taskbar icon is read from beside the compiled main at
     // runtime, so it has to travel with it rather than being resolved out of

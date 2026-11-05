@@ -1277,6 +1277,53 @@ test("a run keeps the sounds it stores, attaches only those refs to evidence, an
   assert.equal(stored.length, 12);
 });
 
+test("a run keeps the playtest recordings it stores, attaches only those refs, and stops at its bound", async () => {
+  const events: RunEvent[] = [];
+  const stored: string[] = [];
+  let next = 0;
+  let refused = 0;
+  const ref = () => `${(++next).toString(16).padStart(64, "0")}.webm`;
+  const session = new RunSession({
+    caller: makeCaller(async () => outcome()),
+    planner: planner(async (ctx) => {
+      const mine = await ctx.storeClipFile!("/roqer/playtest-recordings/run/playtest-1.webm");
+      ctx.recordEvidence({ kind: "playtest", title: "Solo playtest stop", passed: true, clipRef: mine });
+      ctx.recordEvidence({ kind: "playtest", title: "Not mine", passed: true, clipRef: `${"f".repeat(64)}.webm` });
+      ctx.recordEvidence({ kind: "playtest", title: "Nonsense", passed: true, clipRef: "../etc/passwd" as string });
+      for (let index = 0; index < 8; index += 1) {
+        if ((await ctx.storeClipFile!("/roqer/playtest-recordings/run/playtest-2.webm")) === undefined) refused += 1;
+      }
+      return "done";
+    }),
+    request: makeRequest({ recordPlaytest: true }),
+    emit: (event) => events.push(event),
+    storeClipFile: async (filePath) => { assert.match(filePath, /playtest-recordings/); const r = ref(); stored.push(r); return r; },
+  });
+  await session.execute();
+  assertAllValid(events);
+  const evidence = events.flatMap((event) => event.type === "evidence" ? [event.evidence] : []);
+  assert.equal(evidence[0].clipRef, stored[0]);
+  assert.equal(evidence[1].clipRef, undefined, "a ref this run did not store is dropped");
+  assert.equal(evidence[2].clipRef, undefined, "a ref that is not a ref is dropped");
+  // Four kept in all, one of them above: three more are kept, five refused.
+  assert.equal(refused, 5);
+  assert.equal(stored.length, 4);
+  const started = events[0];
+  assert.ok(started.type === "run-started" && started.recordPlaytest === true);
+});
+
+test("without a host that keeps recordings, the context offers no way to, and the switch is off by default", async () => {
+  let seen: PlannerContext | undefined;
+  await new RunSession({
+    caller: makeCaller(async () => outcome()),
+    planner: planner(async (ctx) => { seen = ctx; return "done"; }),
+    request: makeRequest(),
+    emit: () => undefined,
+  }).execute();
+  assert.equal(seen?.storeClipFile, undefined);
+  assert.equal(seen?.recordPlaytest, false);
+});
+
 test("the web search switch reaches the planner's context and the run's first event", async () => {
   const events: RunEvent[] = [];
   let seen: boolean | undefined;

@@ -5,7 +5,9 @@ import {
 import type { RunChange, RunEvidence } from "../shared/run-events";
 import type { ChangeGroup } from "./diff-view";
 import { PreviewsPanel } from "./evidence-previews";
+import { EvidenceClip } from "./evidence-clip";
 import { EvidenceSound } from "./evidence-sound";
+import { PLAYTEST_RECORDING_LABEL } from "../shared/run-events";
 import {
   arrivedTab, initialResultsView, rememberResults, resultsSummary, runResults, settleFileDefaults, shownTab, TAB_NAME, uploadEntry,
   type ResultsTab, type ResultsTabInfo, type ResultsViewState, type UploadEntry,
@@ -16,6 +18,7 @@ const TAB_ICON: Record<ResultsTab, ReactNode> = {
   uploads: <CloudUpload size={14} aria-hidden="true" />,
   screenshots: <Camera size={14} aria-hidden="true" />,
   previews: <Box size={14} aria-hidden="true" />,
+  clips: <Film size={14} aria-hidden="true" />,
   sounds: <AudioLines size={14} aria-hidden="true" />,
 };
 
@@ -162,6 +165,7 @@ export const ResultsCard = memo(function ResultsCard({ runId, changes, evidence,
     >
       {tab.id === "changes" && renderFiles(results.files, expansion)}
       {tab.id === "uploads" && <UploadsPanel uploads={results.uploads} />}
+      {tab.id === "clips" && <ClipsPanel evidence={evidence} />}
       {tab.id === "sounds" && <SoundsPanel evidence={evidence} />}
       {(tab.id === "screenshots" || tab.id === "previews") && <PreviewsPanel
         category={tab.id}
@@ -203,6 +207,26 @@ const SoundsPanel = memo(function SoundsPanel({ evidence }: { evidence: readonly
       </div>
       <EvidenceSound evidence={item} />
     </li>)}
+  </ul>;
+});
+
+/**
+ * The playtests a run recorded, each with a player: the Studio window as it
+ * ran, so the person sees motion, timing and camera that no screenshot shows.
+ */
+const ClipsPanel = memo(function ClipsPanel({ evidence }: { evidence: readonly RunEvidence[] }) {
+  const clips = useMemo(() => evidence.filter((item) => item.clipRef !== undefined), [evidence]);
+  return <ul className="clip-list">
+    {clips.map((item) => {
+      const recording = item.metadata?.find((entry) => entry.label === PLAYTEST_RECORDING_LABEL)?.value;
+      return <li key={item.id} className="clip-row">
+        <div className="sound-text">
+          <strong title={item.title}>{item.title}</strong>
+          {recording && <span>{recording}</span>}
+        </div>
+        <EvidenceClip evidence={item} />
+      </li>;
+    })}
   </ul>;
 });
 

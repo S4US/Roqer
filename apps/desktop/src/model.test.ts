@@ -445,6 +445,16 @@ test("the only project cannot be deleted", () => {
   assert.equal(deleteProject(state, "default"), state);
 });
 
+test("playtest recording is off unless the user turned it on, and a saved choice to turn it on is kept", () => {
+  const workspace = normalizeWorkspace(createInitialWorkspace());
+  assert.equal(workspace.preferences.recordPlaytests, false);
+  const on = normalizeWorkspace({ ...workspace, preferences: { ...workspace.preferences, recordPlaytests: true } });
+  assert.equal(on.preferences.recordPlaytests, true);
+  const older: Record<string, unknown> = { ...workspace.preferences };
+  delete older.recordPlaytests;
+  assert.equal(normalizeWorkspace({ ...workspace, preferences: older }).preferences.recordPlaytests, false);
+});
+
 test("web search is off unless the user turned it on, and a saved choice to turn it on is kept", () => {
   const workspace = normalizeWorkspace(createInitialWorkspace());
   assert.equal(workspace.preferences.webSearch, false);

@@ -45,6 +45,13 @@ export type RunRequest = {
    * in records written before the switch existed.
    */
   webSearch?: boolean;
+  /**
+   * Whether Roqer records the Studio window while each playtest this run
+   * starts is running, keeps the clip with the run, and shows the model frames
+   * of it when the playtest stops. Off unless the user turned it on for the
+   * chat; absent in records written before the switch existed.
+   */
+  recordPlaytest?: boolean;
   /** Loopback MCP endpoint, e.g. http://127.0.0.1:58741 */
   endpoint: string;
   /** Studio instance to target, or null to let the server resolve a default. */
@@ -174,6 +181,13 @@ export type RunEvidence = {
    */
   soundRef?: string;
   /**
+   * A recording of the playtest this evidence is about, by its name in the
+   * store beside the chat (`isEvidenceClipRef`): the Studio window as Roqer
+   * recorded it while the playtest ran. Only the ref, live or saved: the
+   * window streams the clip from the main process when someone presses play.
+   */
+  clipRef?: string;
+  /**
    * The 3D preview of a Blender result, by the opaque id the main process
    * serves it under. Never a path; the preview may have expired since.
    */
@@ -293,6 +307,7 @@ export type RunEvent =
     approvalMode: ApprovalMode;
     autoPlaytest: boolean;
     webSearch?: boolean;
+    recordPlaytest?: boolean;
     endpoint: string;
     instanceId: string | null;
     model: string | null;
@@ -571,6 +586,13 @@ export const MAX_INLINE_EVIDENCE_IMAGES = 6;
 export const MAX_RECORDED_EVIDENCE_SOUNDS = 12;
 
 /**
+ * How many playtest recordings one run keeps beside the chat: a run that
+ * plays, fixes and plays again keeps each take, and a clip is the largest
+ * thing a run stores, so the bound is small.
+ */
+export const MAX_RECORDED_EVIDENCE_CLIPS = 4;
+
+/**
  * A stored preview's name in the picture store: the SHA-256 of its bytes and
  * its type. It names a picture by its content, never a path, so the renderer
  * can ask for a picture but cannot name a file, and the main process can check
@@ -588,6 +610,19 @@ const EVIDENCE_SOUND_REF = /^[0-9a-f]{64}\.(mp3|ogg|wav|flac)$/;
 export function isEvidenceSoundRef(value: unknown): value is string {
   return typeof value === "string" && EVIDENCE_SOUND_REF.test(value);
 }
+
+/** A stored playtest recording's name: the SHA-256 of its bytes and its container, like a picture's. */
+const EVIDENCE_CLIP_REF = /^[0-9a-f]{64}\.webm$/;
+
+export function isEvidenceClipRef(value: unknown): value is string {
+  return typeof value === "string" && EVIDENCE_CLIP_REF.test(value);
+}
+
+/**
+ * Metadata on a playtest's evidence: what Roqer recorded of it, as a length,
+ * a size and a frame size, or why it recorded nothing.
+ */
+export const PLAYTEST_RECORDING_LABEL = "Recording";
 
 /**
  * The title of a Blender job's preview. The answer labels a preview by where it
@@ -743,6 +778,7 @@ function isEvidence(value: unknown): value is RunEvidence {
     (value.imageDataUrl === undefined || isEvidenceImage(value.imageDataUrl)) &&
     (value.imageRef === undefined || isEvidencePictureRef(value.imageRef)) &&
     (value.soundRef === undefined || isEvidenceSoundRef(value.soundRef)) &&
+    (value.clipRef === undefined || isEvidenceClipRef(value.clipRef)) &&
     (value.modelPreviewId === undefined || isModelPreviewId(value.modelPreviewId)) &&
     (value.previewNotKept === undefined || value.previewNotKept === true) &&
     (value.subject === undefined || (isString(value.subject) && value.subject.length > 0 && value.subject.length <= MAX_EVIDENCE_SUBJECT_CHARS)) &&
@@ -833,6 +869,7 @@ export function isRunEvent(value: unknown): value is RunEvent {
         APPROVAL_MODES.includes(value.approvalMode as string) &&
         typeof value.autoPlaytest === "boolean" &&
         (value.webSearch === undefined || typeof value.webSearch === "boolean") &&
+        (value.recordPlaytest === undefined || typeof value.recordPlaytest === "boolean") &&
         isString(value.endpoint) &&
         isString(value.planner) &&
         (value.model === null || isString(value.model)) &&

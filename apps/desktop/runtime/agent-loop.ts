@@ -619,7 +619,7 @@ export function createAgentLoopPlanner(options: AgentLoopPlannerOptions): Planne
       const tools = loopTools(options.skillLibrary, options.blender === true, options.referenceClips === true, options.externalMcp === true, options.imageGeneration === true);
       const instructions = {
         system: options.agent.systemInstructions,
-        developer: runDeveloperInstructions(options.agent.developerInstructions, context.autoPlaytest, context.webSearch),
+        developer: runDeveloperInstructions(options.agent.developerInstructions, context.autoPlaytest, context.webSearch, context.recordPlaytest),
       };
       if (!acceptsImages && context.images.length > 0) {
         context.status(
