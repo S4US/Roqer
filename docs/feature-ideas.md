@@ -177,6 +177,10 @@ goes through the desktop portal and needs its own look.
 **Cost.** L. **Value.** High. It also produces the showcase clips the README
 is made of, from real runs.
 
+**Status.** Built, then removed on 2026-11-05 before any release: the model
+already sees timed frames with `capture_moments`, and with `live: true` from
+inside a running playtest, so the recording added little.
+
 ### 2.2 Viewpoints and before-and-after pairs
 
 **What.** Named camera positions per place, and screenshots taken from the

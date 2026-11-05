@@ -19,7 +19,7 @@ import { evidenceImages } from "./run-view";
  * without React.
  */
 
-export type ResultsTab = "changes" | "uploads" | "screenshots" | "previews" | "clips" | "sounds";
+export type ResultsTab = "changes" | "uploads" | "screenshots" | "previews" | "sounds";
 
 export type ResultsTabInfo = {
   id: ResultsTab;
@@ -40,10 +40,10 @@ export type RunResults = {
 
 /**
  * Tabs in the order they read, left to right: what changed, what went up, what
- * the place looks like, what the things the run built look like, what its
- * playtests looked like in motion, and what the run heard or uploaded as sound.
+ * the place looks like, what the things the run built look like, and what the
+ * run heard or uploaded as sound.
  */
-const TAB_ORDER: readonly ResultsTab[] = ["changes", "uploads", "screenshots", "previews", "clips", "sounds"];
+const TAB_ORDER: readonly ResultsTab[] = ["changes", "uploads", "screenshots", "previews", "sounds"];
 
 export function runResults(changes: readonly RunChange[], evidence: readonly RunEvidence[]): RunResults {
   const files = groupChangesByTarget(changes.filter((change) => change.kind !== "asset"));
@@ -64,7 +64,6 @@ export function runResults(changes: readonly RunChange[], evidence: readonly Run
 
   const counts: Record<ResultsTab, number> = {
     changes: files.length, uploads: uploads.length, screenshots: pictures("screenshots"), previews: pictures("previews"),
-    clips: evidence.filter((item) => item.clipRef !== undefined).length,
     sounds: evidence.filter((item) => item.soundRef !== undefined).length,
   };
   const tabs = TAB_ORDER.filter((id) => counts[id] > 0).map((id): ResultsTabInfo => (
@@ -74,11 +73,11 @@ export function runResults(changes: readonly RunChange[], evidence: readonly Run
 }
 
 /**
- * The tab a finished run opens on: a playtest it recorded, since motion shows
- * the most; then the previews of what it built, then its screenshots, since
- * pictures show what the run made; otherwise the code; otherwise the uploads.
+ * The tab a finished run opens on: the previews of what it built when there are
+ * any, then its screenshots, since pictures show what the run made; otherwise
+ * the code; otherwise the uploads.
  */
-const OPENING_PRIORITY: readonly ResultsTab[] = ["clips", "previews", "screenshots", "sounds", "changes", "uploads"];
+const OPENING_PRIORITY: readonly ResultsTab[] = ["previews", "screenshots", "sounds", "changes", "uploads"];
 
 export function openingTab(tabs: readonly ResultsTabInfo[]): ResultsTab | null {
   return OPENING_PRIORITY.find((id) => tabs.some((tab) => tab.id === id)) ?? null;
@@ -107,7 +106,6 @@ export const TAB_NAME: Record<ResultsTab, { one: string; many: string; title: st
   uploads: { one: "upload", many: "uploads", title: "Uploads" },
   screenshots: { one: "screenshot", many: "screenshots", title: "Screenshots" },
   previews: { one: "preview", many: "previews", title: "Previews" },
-  clips: { one: "clip", many: "clips", title: "Clips" },
   sounds: { one: "sound", many: "sounds", title: "Sounds" },
 };
 

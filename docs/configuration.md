@@ -319,24 +319,6 @@ irreversible, asks outside Full auto, and counts against a budget of 24
 pictures a run. [Image generation](images.md) covers what a call makes, what
 Roqer measures, previewing in Studio, and where the files go.
 
-### Recording playtests
-
-The run menu has a Record playtests switch, off by default. With it on, Roqer
-records the Roblox Studio window from the moment a playtest the run started
-reports ready until the run stops it, for at most two minutes and at a bounded
-size, through Electron's own window capture and WebM encoder. The clip is kept
-beside the chat like a picture, under a Clips tab in the run's results card,
-and plays from there; a run keeps at most four. When the playtest stops, the
-stop result also carries a sheet of frames spread over the recording, each
-labelled with its time, so the model can judge motion, timing, camera and
-animation, and the same sheet is the evidence's picture. Only a Studio window
-is recorded, only while a run's playtest runs, and nothing leaves the machine
-but the frames the model is shown. If no Studio window is found, or the
-capture fails on this computer, the stop result says so and the run goes on
-with screenshots and logs. The window is found by its title, so a Studio
-window that is minimised records black, and on Linux window capture depends
-on the desktop's portal.
-
 ### Web search
 
 The run menu beside the composer has a Web search switch, off by default.

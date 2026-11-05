@@ -1614,10 +1614,6 @@ a.small-button:focus-visible { outline: 2px solid var(--accent); outline-offset:
 .sound-text span { color: var(--muted); font-size: var(--type-meta); }
 .evidence-sound { display: block; width: 100%; max-width: 320px; height: 34px; }
 .evidence-sound-pending, .evidence-sound-missing { display: inline-flex; align-items: center; gap: 6px; color: var(--faint); font-size: var(--type-meta); }
-.clip-list { display: flex; flex-direction: column; gap: 10px; margin: 0; padding: 10px 12px 12px; list-style: none; }
-.clip-row { display: flex; flex-direction: column; gap: 8px; padding: 10px; background: var(--surface-sunken); border: 1px solid var(--border-subtle); border-radius: 10px; }
-.evidence-clip { display: block; width: 100%; max-width: 720px; max-height: 420px; border-radius: 8px; background: #000; }
-.evidence-clip-missing { display: inline-flex; align-items: center; gap: 6px; color: var(--faint); font-size: var(--type-meta); }
 @media (max-width: 720px) { .sound-row { grid-template-columns: 30px minmax(0, 1fr); } .sound-row .evidence-sound, .sound-row .evidence-sound-pending, .sound-row .evidence-sound-missing { grid-column: 2; } }
 .asset-filter { width: 200px; max-width: 100%; padding: 6px 9px; color: var(--ink); background: var(--surface-sunken); border: 1px solid var(--border); border-radius: 8px; font-size: var(--type-label); }
 .asset-ledger { display: flex; flex-direction: column; gap: 6px; margin: 0; padding: 4px 0 8px; list-style: none; }

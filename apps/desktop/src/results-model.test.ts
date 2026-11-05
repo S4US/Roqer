@@ -181,17 +181,6 @@ test("a lone file opens; a second file arriving starts folded and leaves the fir
   assert.deepEqual(settleFileDefaults({ "game.A": false }, ["game.A"]), { "game.A": false });
 });
 
-test("a recorded playtest gets a Clips tab, which a finished run opens on first", () => {
-  const clip = (id: string): RunEvidence => ({ id, kind: "playtest", title: "Solo playtest stop", passed: true, clipRef: `${"c".repeat(64)}.webm` });
-  const sound = (id: string): RunEvidence => ({ id, kind: "inspection", title: `Sound ${id}`, soundRef: `${"a".repeat(64)}.mp3` });
-  const results = runResults([script("c1", "game.ServerScriptService.Main", 1, 0)], [shot("p1"), clip("v1"), sound("s1")]);
-  assert.deepEqual(tabIds(results.tabs), ["changes", "screenshots", "clips", "sounds"]);
-  assert.equal(results.tabs.find((tab) => tab.id === "clips")?.count, 1);
-  assert.equal(openingTab(results.tabs), "clips");
-  assert.equal(resultsSummary(results.tabs), "1 file, 1 screenshot, 1 clip, 1 sound");
-  assert.equal(arrivedTab(runResults([], [shot("p1")]).tabs, results.tabs), "clips");
-});
-
 test("sounds a run kept get a tab of their own, after the pictures and before the code", () => {
   const sound = (id: string): RunEvidence => ({ id, kind: "inspection", title: `Sound ${id}`, soundRef: `${"a".repeat(64)}.mp3` });
   const results = runResults([script("c1", "game.ServerScriptService.Main", 1, 0)], [sound("s1"), sound("s2"), shot("p1")]);

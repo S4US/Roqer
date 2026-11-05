@@ -1,5 +1,5 @@
 import {
-  app, BrowserWindow, clipboard, desktopCapturer, dialog, ipcMain, Menu, nativeTheme, Notification, protocol, shell,
+  app, BrowserWindow, clipboard, dialog, ipcMain, Menu, nativeTheme, Notification, protocol, shell,
   type IpcMainEvent, type IpcMainInvokeEvent, type MessageBoxOptions, type WebContents,
 } from "electron";
 import { autoUpdater } from "electron-updater";
@@ -52,11 +52,7 @@ import { uploadAssets } from "../runtime/upload-assets";
 import { linkRojoProject } from "../runtime/link-rojo-project";
 import { withLocalOperations, type LocalOperation } from "../runtime/local-operations";
 import { readStudioSelection } from "../runtime/selection-context";
-import { readClipFileInside, readSoundFileInside } from "../runtime/picture-store";
-import { PlaytestRecorder } from "./playtest-recorder";
-import { PlaytestRecordingSession } from "./playtest-recording-session";
-import { pickStudioSource, PLAYTEST_TOOLS, sheetTimes } from "../runtime/playtest-recording";
-import { webmDurationMs, withWebmDuration } from "../runtime/webm-duration";
+import { readSoundFileInside } from "../runtime/picture-store";
 import { AssetLedger } from "../runtime/asset-ledger";
 import { ledgerAwareUpload, listUploads, type LedgerRunContext } from "../runtime/upload-ledger";
 import {
@@ -182,30 +178,6 @@ let runAttention: RunAttention | null = null;
 
 /** Reads frames from reference clips in a hidden window of its own; opened on first use. */
 const clipDecoder = new ClipDecoder(path.join(__dirname, "clip-decoder.html"));
-/** Records the Studio window during a run's playtests, when the user turned that on. */
-const playtestRecorder = new PlaytestRecorder(path.join(__dirname, "playtest-recorder.html"));
-
-/** The Roblox Studio window to record, found afresh for each playtest. */
-async function findStudioWindow() {
-  const sources = await desktopCapturer.getSources({ types: ["window"], thumbnailSize: { width: 0, height: 0 }, fetchWindowIcons: false });
-  return pickStudioSource(sources);
-}
-
-let recordingsRootCleaned = false;
-
-/**
- * Where a run's recordings wait between the stop that made them and the
- * engine keeping them beside the chat. A run removes its own folder; whatever
- * a crash left is removed the first time a run needs the folder again.
- */
-function playtestRecordingsRoot(): string {
-  const root = path.join(app.getPath("userData"), "playtest-recordings");
-  if (!recordingsRootCleaned) {
-    recordingsRootCleaned = true;
-    void fs.promises.rm(root, { recursive: true, force: true }).catch(() => undefined);
-  }
-  return root;
-}
 let referenceClips: ClipStore | undefined;
 
 /** The frames read from reference clips, kept per chat beside the chats. */
@@ -2276,7 +2248,7 @@ function parseStartRequest(value: unknown): RunStartRequest | null {
   if (!isRecord(value)) return null;
   const {
     projectId, chatId, prompt, conversation, approvalMode, autoPlaytest, endpoint, instanceId, provider, model, effort, startId, attachmentIds,
-    includeSelection, webSearch, recordPlaytest,
+    includeSelection, webSearch,
   } = value;
   if (typeof projectId !== "string" || projectId === "" || projectId.length > 1_000) return null;
   if (typeof chatId !== "string" || chatId === "" || chatId.length > 1_000) return null;
@@ -2285,7 +2257,6 @@ function parseStartRequest(value: unknown): RunStartRequest | null {
   if (attachmentIds !== undefined && (!Array.isArray(attachmentIds) || attachmentIds.length > 8 || !attachmentIds.every((id) => typeof id === "string" && id.length <= 100))) return null;
   if (includeSelection !== undefined && typeof includeSelection !== "boolean") return null;
   if (webSearch !== undefined && typeof webSearch !== "boolean") return null;
-  if (recordPlaytest !== undefined && typeof recordPlaytest !== "boolean") return null;
   if (!isConversationContext(conversation)) return null;
   if (!APPROVAL_MODES.includes(approvalMode as ApprovalMode)) return null;
   if (typeof autoPlaytest !== "boolean") return null;
@@ -2310,7 +2281,6 @@ function parseStartRequest(value: unknown): RunStartRequest | null {
     attachmentIds,
     includeSelection,
     webSearch,
-    recordPlaytest,
   };
 }
 
@@ -2492,17 +2462,6 @@ async function startRun(event: IpcMainInvokeEvent, payload: unknown): Promise<Ru
     const imageGeneration = !smokeTest && (await imageSettings().ready().catch(() => undefined)) !== undefined;
     /** How many pictures this run's image calls have made, against the run's budget. */
     const imageBudget = { made: 0 };
-    // With recording on, the run's playtest calls pass through a wrapper that
-    // records the Studio window between a start and its stop; the clip waits
-    // in the run's own folder until the engine keeps it beside the chat.
-    const recordingSession = !smokeTest && request.recordPlaytest === true
-      ? new PlaytestRecordingSession({
-        recorder: playtestRecorder,
-        findSource: findStudioWindow,
-        composeSheet: composeClipSheet,
-        directory: path.join(playtestRecordingsRoot(), runId),
-      })
-      : undefined;
     if (cancelled()) return stopped;
     const planner = smokeTest
       ? createInspectionPlanner()
@@ -2564,7 +2523,6 @@ async function startRun(event: IpcMainInvokeEvent, payload: unknown): Promise<Ru
         )],
         ...(blender ? [[BLENDER_OPERATION, (args, options) => runBlenderJob(args, options, request.chatId)] as [string, LocalOperation]] : []),
         ...(imageGeneration ? [[IMAGE_OPERATION, (args, options) => runImageJob(args, options, request.chatId, imageBudget)] as [string, LocalOperation]] : []),
-        ...(recordingSession === undefined ? [] : PLAYTEST_TOOLS.map((tool) => [tool, recordingSession.wrap(tool)] as [string, LocalOperation])),
         ...(clips
           ? [[REFERENCE_CLIP_OPERATION, (args, options) => readReferenceClip(args, options, chatClips(request.chatId), composeClipSheet)] as [string, LocalOperation]]
           : []),
@@ -2620,20 +2578,6 @@ async function startRun(event: IpcMainInvokeEvent, payload: unknown): Promise<Ru
         }
         return ref;
       },
-      // A playtest recording the wrapper above wrote, copied from Roqer's own
-      // folder into the store the same way, and held for the run.
-      ...(recordingSession === undefined ? {} : {
-        storeClipFile: async (filePath: string) => {
-          const bytes = await readClipFileInside(filePath, [playtestRecordingsRoot()]);
-          if (bytes === undefined) return undefined;
-          const ref = await store().pictures.putClip(bytes);
-          if (ref !== undefined && !heldPictures.has(ref)) {
-            heldPictures.add(ref);
-            store().pictures.hold([ref]);
-          }
-          return ref;
-        },
-      }),
       emit: (runEvent: RunEvent) => {
         runJournal().record(runEvent);
         if (runEvent.type === "run-completed") completedRuns.add(runId);
@@ -2655,9 +2599,6 @@ async function startRun(event: IpcMainInvokeEvent, payload: unknown): Promise<Ru
         .catch((error) => console.error("Roqer could not close the run's MCP servers:", error));
       runSessions.delete(runId);
       runHold.release();
-      // A recording still going stops with the run, and the run's folder goes:
-      // every clip the run kept is in the store by now.
-      void recordingSession?.dispose().catch((error) => console.error("Roqer could not clear the run's recordings:", error));
       // However the run ended, it waits on no one now.
       runAttention?.endRun(runId);
       // The saved chat refers to them from here on; the picture store's grace
@@ -2940,10 +2881,9 @@ function createWindow(): void {
     // started may keep touching Studio.
     cancelAllRuns();
     attachments.clear();
-    // The decoder's and recorder's hidden windows would otherwise keep the
-    // app open with no window left to use them.
+    // The decoder's hidden window would otherwise keep the app open with no
+    // window left to use it.
     void clipDecoder.close();
-    void playtestRecorder.close();
   });
 
   if (smokeTest) {
@@ -2987,30 +2927,6 @@ function createWindow(): void {
  * so teardown is covered too. An earlier version exited straight from here and
  * reported success while the real app was throwing on close.
  */
-/** Record whatever window the capturer lists first for a moment, and say what came back. */
-async function smokeRecording(): Promise<string> {
-  try {
-    const windows = await desktopCapturer.getSources({ types: ["window"], thumbnailSize: { width: 0, height: 0 }, fetchWindowIcons: false });
-    // A bare virtual display lists no windows; the screen itself then stands
-    // in, for this check alone. A run records only a Studio window.
-    const sources = windows.length > 0 ? windows : await desktopCapturer.getSources({ types: ["screen"], thumbnailSize: { width: 0, height: 0 } });
-    const started = await playtestRecorder.start(async () => sources[0]);
-    if (!started.started) return `PLAYTEST_RECORDER_SKIPPED ${started.reason}${started.detail === undefined ? "" : ` (${started.detail})`} windows=${windows.length} screens=${sources.length}`;
-    await new Promise((resolve) => setTimeout(resolve, 1_800));
-    const meta = await playtestRecorder.stop();
-    if (meta === undefined) return "PLAYTEST_RECORDER_SKIPPED stop-failed";
-    const bytes = await playtestRecorder.bytes(meta.bytes);
-    const frames = await playtestRecorder.frames(sheetTimes(meta.durationSeconds));
-    await playtestRecorder.clear();
-    if (bytes === undefined) return "PLAYTEST_RECORDER_SKIPPED bytes-failed";
-    const fixed = withWebmDuration(bytes, meta.durationSeconds * 1000);
-    const duration = webmDurationMs(fixed);
-    return `PLAYTEST_RECORDER_OK bytes=${bytes.length} seconds=${meta.durationSeconds.toFixed(2)} size=${meta.width}x${meta.height} frames=${frames.length} durationWritten=${duration === undefined ? "no" : `${Math.round(duration)}ms`}`;
-  } catch (error) {
-    return `PLAYTEST_RECORDER_SKIPPED error=${error instanceof Error ? error.message : String(error)}`;
-  }
-}
-
 function runSmokeTest(window: BrowserWindow): void {
   // Electron would otherwise swallow a shutdown exception into a dialog and
   // still exit cleanly, which is exactly how the teardown bug stayed hidden.
@@ -3150,11 +3066,6 @@ function runSmokeTest(window: BrowserWindow): void {
         app.exit(1);
         return;
       }
-      // The recorder, against a window this machine has: the capture, the
-      // encoder and the duration fix are real here, with no Studio needed.
-      // Reported, never required: a display without window capture is not a
-      // broken app.
-      if (process.env.WORKBENCH_SMOKE_RECORD !== "0") console.log(await smokeRecording());
       console.log(`WORKBENCH_SMOKE_OK events=${report.events} outcome=${report.outcome}`);
       // The real teardown path: "closed" handlers, then the quit sequence.
       window.close();
@@ -3184,15 +3095,7 @@ app.whenReady().then(async () => {
   ipcMain.handle("assets:clip-frame", clipFrame);
   ipcMain.handle("assets:clip-select", selectClip);
   // Only clips the registry issued, by attachment id, and only while attached.
-  protocol.handle(CLIP_MEDIA_SCHEME, (request) => serveClipMedia(
-    request,
-    (id) => attachments.clipMedia(id),
-    // A stored playtest recording, by its ref alone: the store finds and checks the file.
-    async (ref) => {
-      const clip = await store().pictures.clip(ref);
-      return clip === undefined ? undefined : { path: clip.path, mediaType: "video/webm" };
-    },
-  ));
+  protocol.handle(CLIP_MEDIA_SCHEME, (request) => serveClipMedia(request, (id) => attachments.clipMedia(id)));
   ipcMain.handle("update:state", (event) => {
     if (!isTrusted(event.sender)) throw new Error("This window may not read the update state.");
     return updateState;
@@ -3330,7 +3233,6 @@ app.on("before-quit", () => {
   cancelAllRuns();
   attachments.clear();
   void clipDecoder.close(true);
-  void playtestRecorder.close(true);
   clientInstalls.stop();
   void claudeSessions.closeAll();
   compactionStop.abort();

@@ -201,39 +201,3 @@ test("a sound file is read only from inside the given roots, as a real file of a
     await rm(elsewhere, { recursive: true, force: true });
   }
 });
-
-// ---------------------------------------------------------------------------
-// Playtest recordings, kept beside the pictures and streamed
-// ---------------------------------------------------------------------------
-
-const WEBM = Buffer.from([0x1a, 0x45, 0xdf, 0xa3, 0x9f, 0x42, 0x86, 0x81, 0x01, ...Buffer.from("a recorded playtest")]);
-
-test("a recording is stored under the hash of its bytes, served as a checked file, and collected with the rest", async () => withStore(async (store) => {
-  const ref = await store.putClip(WEBM);
-  assert.match(ref ?? "", /^[0-9a-f]{64}\.webm$/);
-  assert.equal(await store.putClip(WEBM), ref, "the same recording is the same file");
-  const clip = await store.clip(ref);
-  assert.equal(clip?.size, WEBM.length);
-  assert.equal(clip?.path, join(store.directory, ref!));
-  assert.equal(await store.clip("nope"), undefined);
-  assert.equal(await store.clip(`${"a".repeat(64)}.webm`), undefined);
-  assert.equal(await store.putClip(Buffer.from("not a webm")), undefined, "bytes that are not a WebM are refused");
-  assert.deepEqual(await store.read(ref), { ok: false, reason: "invalid" }, "a recording's ref is not a picture's");
-  // A file changed since it was stored is refused rather than streamed.
-  await writeFile(join(store.directory, ref!), Buffer.from([0x1a, 0x45, 0xdf, 0xa3, 0x00]));
-  assert.equal(await store.clip(ref), undefined);
-}));
-
-test("recordings are collected like pictures: kept while referenced or held, otherwise removed after the grace", async () => withStore(async (store, _root, clock) => {
-  const ref = (await store.putClip(WEBM))!;
-  const other = (await store.putClip(Buffer.concat([WEBM, Buffer.from("2")])))!;
-  const loose = (await store.putClip(Buffer.concat([WEBM, Buffer.from("3")])))!;
-  store.hold([other]);
-  clock.now += PICTURE_GRACE_MS + 1_000;
-  assert.equal(await store.collect(new Set([ref])), 1, "the unreferenced, unheld recording goes");
-  assert.equal(await store.clip(loose), undefined);
-  assert.notEqual(await store.clip(ref), undefined);
-  assert.notEqual(await store.clip(other), undefined, "held by a run, so kept");
-  const refs = pictureRefs({ projects: [{ chats: [{ messages: [{ run: { evidence: [{ id: "e", kind: "playtest", title: "Solo playtest stop", clipRef: ref }] } }] }] }] });
-  assert.ok(refs.has(ref), "a chat's recording is referenced by its clip ref");
-}));

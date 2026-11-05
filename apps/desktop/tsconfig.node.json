@@ -10,6 +10,6 @@
     "types": ["node"]
   },
   "include": ["shared", "runtime", "eval", "electron/**/*.ts"],
-  "//exclude": "The clip decoder's and the playtest recorder's pages run in a browser window, so tsconfig.json checks them with the DOM.",
-  "exclude": ["electron/clip-decoder-page.ts", "electron/playtest-recorder-page.ts"]
+  "//exclude": "The clip decoder's page runs in a browser window, so tsconfig.json checks it with the DOM.",
+  "exclude": ["electron/clip-decoder-page.ts"]
 }
