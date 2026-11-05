@@ -442,7 +442,7 @@ button:focus-visible, textarea:focus-visible, select:focus-visible, input:focus-
 .run-tag { margin: 0 0 12px; }
 .message-content > p { margin: 5px 0 17px; color: var(--ink-secondary); font-size: var(--type-body); line-height: 1.7; }
 
-.activity-card, .approval-card, .completed-run-card { overflow: hidden; margin-top: 12px; background: var(--surface-raised); border: 1px solid var(--border-subtle); border-radius: 13px; box-shadow: var(--shadow-sm); }
+.activity-card, .approval-card { overflow: hidden; margin-top: 12px; background: var(--surface-raised); border: 1px solid var(--border-subtle); border-radius: 13px; box-shadow: var(--shadow-sm); }
 .activity-card { display: flex; gap: 11px; padding: 13px; }
 .card-icon { display: grid; place-items: center; flex: 0 0 auto; width: 32px; height: 32px; border-radius: 9px; }
 .card-icon.code { color: var(--ink); background: var(--surface-sunken); }
@@ -745,7 +745,7 @@ button:focus-visible, textarea:focus-visible, select:focus-visible, input:focus-
  * recorded one — and the record as a whole is deliberately not animated,
  * because its Activity and its answer were already on screen a frame earlier.
  * The outcome is the part that is genuinely new, so it arrives on its own. */
-.completed-run-card, .applied-status { animation: enter .22s cubic-bezier(.22, .8, .26, 1) both; }
+.run-outcome, .applied-status { animation: enter .22s cubic-bezier(.22, .8, .26, 1) both; }
 /* Waiting for the answer, on the answer's own left edge. It collapses rather
  * than unmounting, so real content fades in over it instead of replacing it in
  * one frame. */
@@ -790,12 +790,6 @@ button:focus-visible, textarea:focus-visible, select:focus-visible, input:focus-
 .danger-action { color: var(--danger); background: var(--danger-soft); border: 1px solid var(--danger-border); }
 .danger-action:hover { border-color: var(--danger); }
 
-.completed-run-card { display: grid; grid-template-columns: 38px 1fr auto; align-items: center; gap: 11px; padding: 14px; border-color: var(--success-border); }
-.completion-mark { display: grid; place-items: center; width: 38px; height: 38px; color: var(--success); background: var(--success-soft); border: 1px solid var(--success-border); border-radius: 12px; }
-.completed-run-card div:nth-child(2) { display: flex; flex-direction: column; }
-.completed-run-card strong { color: var(--ink); font-size: var(--type-label); font-weight: var(--weight-medium); }
-.completed-run-card p { margin: 3px 0 0; color: var(--muted); font-size: var(--type-meta); }
-.completed-run-card > span { padding: 5px 8px; color: var(--success); background: var(--success-soft); border-radius: 99px; font-size: var(--type-meta); font-weight: var(--weight-medium); }
 /* What the completion gate found missing. Listed, not summarised: "unverified"
  * alone gives the reader nothing to go and check. */
 .gate-issues { margin: 7px 0 0; padding-left: 15px; color: var(--warning); font-size: var(--type-meta); }
@@ -1070,16 +1064,7 @@ a.small-button:focus-visible { outline: 2px solid var(--accent); outline-offset:
 .asset-result-link:hover { text-decoration: underline; }
 .diff-summary .added { color: var(--success); }
 .diff-summary .removed { color: var(--danger); }
-.outcome-cancelled, .outcome-refused { border-color: var(--border); }
-.outcome-cancelled .completion-mark, .outcome-refused .completion-mark { color: var(--muted); background: var(--surface-sunken); border-color: var(--border); }
-.outcome-cancelled > span, .outcome-refused > span { color: var(--muted); background: var(--surface-sunken); }
-.outcome-failed { border-color: var(--danger-border); }
-.outcome-failed .completion-mark { color: var(--danger); background: var(--danger-soft); border-color: var(--danger-border); }
-.outcome-failed > span { color: var(--danger); background: var(--danger-soft); }
 .run-warning { display: flex; align-items: center; gap: 6px; margin: 12px 0 0 !important; color: var(--warning) !important; font-size: var(--type-meta) !important; }
-.outcome-warnings { border-color: var(--warning-border); }
-.outcome-warnings .completion-mark { color: var(--warning); background: var(--warning-soft); border-color: var(--warning-border); }
-.outcome-warnings > span { color: var(--warning); background: var(--warning-soft); }
 
 /* -- Assistant prose ------------------------------------------------------
  * The answer, rendered from Markdown. It leads the message; the run's cards
@@ -1566,7 +1551,7 @@ a.small-button:focus-visible { outline: 2px solid var(--accent); outline-offset:
   .question-dock .question-card { animation: none; }
   .community-icon.arrived { animation: none; }
   .mock-run .message-content > *:not(.typing-indicator) { animation: fade .16s ease both; }
-  .completed-run-card, .applied-status { animation: fade .16s ease both; }
+  .run-outcome, .applied-status { animation: fade .16s ease both; }
   .conversation-scroll { scroll-behavior: auto; }
   .typing-indicator { transition: none; }
   /* The sidebar is reduced rather than removed. Cutting its travel to nothing

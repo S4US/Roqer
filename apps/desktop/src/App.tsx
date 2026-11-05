@@ -2260,9 +2260,8 @@ function LiveRun({ view, steps, nodes, onOpenInStudio }: { view: RunView; steps:
     {view.outcome !== null && showOutcome && <OutcomeCard
       outcome={view.outcome}
       warnings={runHasWarnings(view)}
-      // Once the answer is on screen, repeating it on the card says nothing.
-      summary={view.outcome === "completed" && answered ? runFacts(view) : view.summary}
-      note={failureNote(view.failures.length)}
+      // Once the answer is on screen, repeating it says nothing; Activity above has the counts.
+      summary={view.outcome === "completed" && answered ? "" : view.summary}
       issues={runGateIssues(view)}
     />}
     {!running && <CompletionLine metadata={completionNote} usage={view.usage ?? undefined} />}
@@ -2308,11 +2307,6 @@ function countLine(calls: number, changes: number, failed: number): string {
   if (changes > 0) parts.push(`${changes} ${changes === 1 ? "change" : "changes"}`);
   if (failed > 0) parts.push(`${failed} failed`);
   return parts.join(" · ");
-}
-
-function runFacts(view: RunView): string {
-  const finished = view.activities.filter((activity) => activity.state === "done" || activity.state === "failed");
-  return countLine(finished.length, view.changes.length, finished.filter((activity) => activity.state === "failed").length);
 }
 
 const KIND_ICON: Record<ActivityKind, React.ReactNode> = {
@@ -2780,18 +2774,18 @@ function AppliedStatus() {
  * script it never read back and a run that skipped a playtest it promised are
  * different problems with different fixes.
  */
-function OutcomeCard({ outcome, summary, note, warnings = false, issues = [] }: { outcome: RunOutcome; summary: string; note: string; warnings?: boolean; issues?: string[] }) {
-  const label = describeOutcome(outcome, warnings);
-  return <div className={`completed-run-card outcome-${outcome} ${warnings ? "outcome-warnings" : ""}`}>
-    <div className="completion-mark">{outcome === "completed" && !warnings ? <Check size={22} /> : <AlertCircle size={22} />}</div>
-    <div>
-      <strong>{label}</strong>
-      <p>{summary}</p>
-      {issues.length > 0 && <ul className="gate-issues">
-        {issues.map((issue, index) => <li key={index}>{issue}</li>)}
-      </ul>}
-    </div>
-    <span>{note || label}</span>
+function OutcomeCard({ outcome, summary, warnings = false, issues = [] }: { outcome: RunOutcome; summary: string; warnings?: boolean; issues?: string[] }) {
+  // A gate issue is a reason not to call the run plainly complete.
+  const warned = warnings || issues.length > 0;
+  return <div className="run-outcome" data-outcome={outcome} data-warnings={warned || undefined}>
+    <p>
+      {outcome === "completed" && !warned ? <Check size={14} aria-hidden="true" /> : <AlertCircle size={14} aria-hidden="true" />}
+      <strong>{describeOutcome(outcome, warned)}</strong>
+      {summary !== "" && <span>{summary}</span>}
+    </p>
+    {issues.length > 0 && <ul className="gate-issues">
+      {issues.map((issue, index) => <li key={index}>{issue}</li>)}
+    </ul>}
   </div>;
 }
 
@@ -2905,8 +2899,7 @@ function RunRecordView({ record, text, latest, onOpenInStudio }: { record: RunRe
     {showOutcome && <OutcomeCard
       outcome={record.outcome}
       warnings={warnings}
-      summary={countLine(record.toolCalls.length, record.changes.length, failed)}
-      note={failureNote(failed)}
+      summary={record.outcome === "completed" ? "" : countLine(record.toolCalls.length, record.changes.length, failed)}
       issues={recordGateIssues(record)}
     />}
     <CompletionLine metadata={outcomeNote} usage={record.usage} />
@@ -2985,11 +2978,6 @@ function formatBytes(value: number): string {
 
 function formatDuration(milliseconds: number): string {
   return milliseconds < 1_000 ? `${Math.round(milliseconds)}ms` : `${(milliseconds / 1_000).toFixed(1)}s`;
-}
-
-function failureNote(count: number): string {
-  if (count === 0) return "";
-  return `${count} ${count === 1 ? "issue" : "issues"}`;
 }
 
 function statusLabel(kind: StudioStatus["kind"]): string {

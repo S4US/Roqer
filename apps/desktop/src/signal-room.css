@@ -102,7 +102,16 @@
 .settings-switch[aria-checked="true"]::after { background: var(--toggle-thumb); }
 
 /* Results and endings */
-.outcome-warnings, .outcome-failed, .outcome-cancelled, .outcome-refused { border-radius: 12px; }
+/* How a run ended, in one line, in the same voice as "Applied and verified". Issues stay listed under it. */
+.run-outcome { margin-top: 11px; font-size: var(--type-meta); }
+.run-outcome > p { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 6px; margin: 0; color: var(--success); }
+.run-outcome > p > svg { flex: none; align-self: center; }
+.run-outcome strong { font-weight: var(--weight-medium); }
+.run-outcome > p > span { color: var(--muted); }
+.run-outcome[data-warnings="true"] > p { color: var(--warning); }
+.run-outcome[data-outcome="failed"] > p { color: var(--danger); }
+.run-outcome[data-outcome="cancelled"] > p, .run-outcome[data-outcome="refused"] > p { color: var(--muted); }
+.run-outcome .gate-issues { margin: 5px 0 0 20px; }
 
 /* Activity: a timeline. Failures stay under the closed section, and say when there are more. */
 .activity-timeline { padding: 8px 14px 10px; }

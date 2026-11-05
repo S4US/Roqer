@@ -58,7 +58,7 @@ export function finishedDeckStatus(outcome: string, verified: boolean, warnings:
     case "cancelled":
       return { label: "Stopped", tone: "neutral" };
     case "refused":
-      return { label: "Refused", tone: "neutral" };
+      return { label: "Not permitted", tone: "neutral" };
     default:
       return { label: "Finished", tone: "neutral" };
   }
