@@ -1,6 +1,7 @@
 import type { AssetAttachment, WorkspaceState } from "./model";
 import type { RunEvent, RunStartRequest } from "../shared/run-events";
 import type { OpenStudioScriptRequest, StudioActionResult, StudioStatus } from "../shared/studio-status";
+import type { StudioSelection, StudioSelectionRequest, StudioSelectionResult } from "../shared/studio-selection";
 import type { ProviderInstallResult, ProviderLoginResult, ProviderModelCatalog, ProviderStatus } from "../shared/provider";
 import type { ProviderLimits } from "../shared/provider-limits";
 import type { StorageStatus } from "../shared/workspace-storage";
@@ -61,6 +62,7 @@ declare global {
       };
       studio: {
         getStatus(endpoint: string): Promise<StudioStatus>;
+        getSelection(request: StudioSelectionRequest): Promise<StudioSelectionResult>;
         openScript(request: OpenStudioScriptRequest): Promise<StudioActionResult>;
       };
       providers: {
@@ -112,7 +114,7 @@ declare global {
         openFolder(instanceId: string): Promise<RojoResult>;
       };
       runs: {
-        start(request: RunStartRequest): Promise<{ ok: true; runId: string } | { ok: false; message: string }>;
+        start(request: RunStartRequest): Promise<{ ok: true; runId: string; selection?: StudioSelection } | { ok: false; message: string }>;
         respond(runId: string, callId: string, decision: "approved" | "rejected"): Promise<boolean>;
         answer(runId: string, callId: string, answerIndex: number): Promise<boolean>;
         steer(runId: string, text: string): Promise<boolean>;

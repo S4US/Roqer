@@ -3,15 +3,16 @@ import {
   CircleDot, ExternalLink, FileBox, FileCode2, FileText, Folder, FolderPlus, Gamepad2,
   HelpCircle, Info, ListChecks, Loader2, MessageSquare, MinusCircle, Moon, MoreHorizontal,
   ArrowUp, Maximize2, Minimize2, PanelLeftClose, PanelLeftOpen, Paperclip, Pencil, Play, Plus, RotateCw, Scissors, Search, Settings, Square,
-  ShieldCheck, Sparkles, Sun, Film,
+  ShieldCheck, Sparkles, Sun, Film, MousePointerClick,
   Trash2, X, Zap,
 } from "lucide-react";
 import { Fragment, memo, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { ClipTrimDialog } from "./clip-trim-dialog";
 import { VIDEO_EXTENSIONS, type ClipSelection } from "../shared/reference-clip";
+import { describeSelection, selectionKey, type StudioSelection } from "../shared/studio-selection";
 import {
-  appendMessage, createChat, createId, createInitialWorkspace, createProject, undeliverNotes,
+  appendMessage, createChat, createId, createInitialWorkspace, createProject, undeliverNotes, withMessageSelection,
   deleteChat, deleteProject, modelPreference, normalizeWorkspace, renameChat,
   renameProject, selectedModelId, setChatCompaction, setChatStudioInstance, chatStudioTarget, chatsByActivity, withdrawMessage,
   type AssetAttachment, type ChatMessage, type WorkspaceState,
@@ -22,7 +23,7 @@ import {
   answerRunQuestion, attachImage, attachVideo, ATTACHABLE_IMAGE_TYPES, ATTACHABLE_VIDEO_TYPES, selectClip, steerRun, compactChat,
   getBridgeState, restartBridge, subscribeToBridge, type McpServerState,
   getUpdateState, installUpdate, subscribeToUpdates, type AppUpdateState,
-  flushWorkspace, getProviderModels, getProviderStatus, openScriptInStudio, respondToRun, saveWorkspace, startRun,
+  flushWorkspace, getProviderModels, getProviderStatus, getStudioSelection, openScriptInStudio, respondToRun, saveWorkspace, startRun,
   subscribeToRuns,
   type ProviderModelCatalog, type ProviderStatus,
   type StudioStatus,
@@ -174,7 +175,7 @@ const COMPACT_KEEPS_MESSAGES = 2;
  * a record is written from the same view the model would have been sent.
  */
 function toConversationMessages(messages: readonly ChatMessage[]): ConversationMessage[] {
-  return messages.map(({ role, text, run, attachments: attached, note }) => {
+  return messages.map(({ role, text, run, attachments: attached, note, studioSelection }) => {
     const digest = run === undefined ? undefined : digestRun(run);
     // A replay carries the words, not the files; the count says they existed.
     // Clamped to what the main process accepts, so an odd saved message can
@@ -187,6 +188,7 @@ function toConversationMessages(messages: readonly ChatMessage[]): ConversationM
       ...(digest === undefined || digestIsEmpty(digest) ? {} : { run: digest }),
       ...(role === "user" && pictures + files > 0 ? { attachments: { pictures, files } } : {}),
       ...(note === true && role === "user" ? { note: true as const } : {}),
+      ...(role === "user" && studioSelection !== undefined && studioSelection.count > 0 ? { selection: studioSelection } : {}),
       ...(role === "assistant" && run !== undefined ? { claude: run.planner === "claude-code" } : {}),
     };
   });
@@ -681,6 +683,48 @@ function App() {
   const runStarting = selectedRun !== null && selectedRun.runId === null;
   const isRunning = runStarting || (runView !== null && runView.outcome === null);
 
+  /**
+   * The Studio selection of the chat's place, for the composer's chip. Read
+   * while the window is in front, because that is when the person is writing;
+   * while they are in Studio choosing, nothing is read, and the first read on
+   * coming back shows what they chose. The chip is a yes or no: the paths the
+   * model gets are read again by the main process when the message is sent.
+   */
+  const [studioSelection, setStudioSelection] = useState<StudioSelection | null>(null);
+  const [dismissedSelectionKey, setDismissedSelectionKey] = useState<string | null>(null);
+  const [windowFocused, setWindowFocused] = useState(() => typeof document !== "undefined" && document.hasFocus());
+  useEffect(() => {
+    const focused = () => setWindowFocused(true);
+    const blurred = () => setWindowFocused(false);
+    window.addEventListener("focus", focused);
+    window.addEventListener("blur", blurred);
+    return () => {
+      window.removeEventListener("focus", focused);
+      window.removeEventListener("blur", blurred);
+    };
+  }, []);
+  const selectionPlace = useMemo(() => {
+    if (studioStatus.kind !== "connected") return null;
+    const target = chatStudioTarget(workspace, workspace.selectedProjectId, workspace.selectedChatId);
+    return resolveInstanceId(studioStatus, target.instanceId, target.pinned);
+  }, [studioStatus, workspace]);
+  useEffect(() => {
+    if (selectionPlace === null) setStudioSelection(null);
+    if (!hydrated || !windowFocused || isRunning || selectionPlace === null || !hasDesktopRuntime()) return;
+    let cancelled = false;
+    const read = async () => {
+      const selection = await getStudioSelection(workspace.preferences.mcpEndpoint, selectionPlace);
+      if (!cancelled) setStudioSelection(selection);
+    };
+    void read();
+    const interval = window.setInterval(() => void read(), 4_000);
+    return () => { cancelled = true; window.clearInterval(interval); };
+  }, [hydrated, windowFocused, isRunning, selectionPlace, workspace.preferences.mcpEndpoint]);
+  const selectionChip = !isRunning && studioSelection !== null && studioSelection.count > 0 &&
+    selectionKey(studioSelection) !== dismissedSelectionKey
+    ? studioSelection
+    : null;
+
   const compactedFrom = selectedChat?.compaction?.folded ?? 0;
   const compactedUsage = compactUsageNote(selectedChat?.compaction?.usedTokens, selectedChat?.compaction?.windowTokens);
   const compactTo = selectedChat === undefined ? 0 : selectedChat.messages.length - COMPACT_KEEPS_MESSAGES;
@@ -861,6 +905,7 @@ function App() {
       projectId, chatId, prompt, conversation,
       startId: createId("start"),
       attachmentIds: attachments.map((attachment) => attachment.id),
+      includeSelection: selectionChip !== null,
       approvalMode: next.preferences.approvalMode,
       autoPlaytest: next.preferences.autoPlaytest,
       endpoint: next.preferences.mcpEndpoint,
@@ -967,6 +1012,13 @@ function App() {
       startId: null,
       view: buffered.reduce(applyRunEvent, createRunView(started.runId, prompt, request.approvalMode)),
     });
+    // What Roqer read when the message went, which the chip may not have shown:
+    // recorded on the message, so the chat says what the model was told.
+    if (started.selection !== undefined) {
+      const selection = started.selection;
+      setWorkspace((state) => withMessageSelection(state, projectId, chatId, messageId, selection));
+    }
+    setDismissedSelectionKey(null);
   };
 
   const answerApproval = (decision: "approved" | "rejected") => {
@@ -1725,6 +1777,11 @@ function App() {
               <button onClick={() => setSendAfterCompact(null)}>Cancel</button>
             </div>}
             {attachmentError && <div className="attachment-notice" role="alert">{attachmentError}<button onClick={() => setAttachmentError(null)} aria-label="Dismiss"><X size={14} /></button></div>}
+            {selectionChip !== null && <div className="selection-chip" role="status">
+              <MousePointerClick size={16} aria-hidden="true" />
+              <div><strong>Using your Studio selection</strong><span title={selectionChip.items.map((item) => item.path).join("\n")}>{describeSelection(selectionChip)}</span></div>
+              <button type="button" className="icon-button" onClick={() => setDismissedSelectionKey(selectionKey(selectionChip))} aria-label="Send without your selection" title="Send without your selection"><X size={14} /></button>
+            </div>}
             {attachments.length > 0 && <div className="attachment-row">{attachments.map((attachment) => <div className={`attachment-chip${attachment.clip === undefined ? "" : " clip"}`} key={attachment.id}>
               {attachment.thumbnailDataUrl ? <img className="attachment-thumbnail" src={attachment.thumbnailDataUrl} alt="" /> : attachment.clip === undefined ? <FileBox size={16} /> : <Film size={16} />}
               <div><strong>{attachment.name}</strong><span>{readingClips.has(attachment.id) && <Loader2 size={11} className="attachment-reading" />}{formatBytes(attachment.size)} · {attachmentDetail(attachment, imagesReachModel, readingClips.has(attachment.id))}</span></div>
@@ -1946,6 +2003,9 @@ const ConversationMessageView = memo(function ConversationMessageView({ message,
     <section className={`message user-message${message.note === true ? " note-message" : ""}`} key={message.id}>
       {message.note === true && <span className="note-label">Note sent while Roqer was working</span>}
       <p className="user-prompt">{message.text}</p>
+      {message.studioSelection !== undefined && message.studioSelection.count > 0 && <div className="message-selection" title={message.studioSelection.items.map((item) => item.path).join("\n")}>
+        <MousePointerClick size={12} aria-hidden="true" /> Selected in Studio: <code>{describeSelection(message.studioSelection)}</code>
+      </div>}
       {message.attachments && message.attachments.length > 0 && <div className="message-attachments">{message.attachments.map((asset) => asset.clip !== undefined
         ? <figure key={asset.id} className="message-attachment-clip" title={asset.name}>
           {asset.thumbnailDataUrl ? <img className="message-attachment-image" src={asset.thumbnailDataUrl} alt={`Attached clip: ${asset.name}`} /> : <span><FileBox size={13} />{asset.name}</span>}

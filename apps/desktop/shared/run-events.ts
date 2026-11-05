@@ -58,6 +58,12 @@ export type RunStartRequest = Omit<RunRequest, "runId"> & {
   startId?: string;
   /** Opaque handles issued by the native file picker; never filesystem paths. */
   attachmentIds?: string[];
+  /**
+   * Whether to read the user's Studio selection when the run starts and put it
+   * beside the prompt. A yes or no, never the selection itself: the main
+   * process reads the paths from Studio, so the window cannot compose them.
+   */
+  includeSelection?: boolean;
 };
 
 export type RunOutcome =

@@ -20,6 +20,9 @@ import {
   type OpenStudioScriptRequest,
   type StudioActionResult,
 } from "../shared/studio-status";
+import {
+  isStudioSelectionResult, type StudioSelection, type StudioSelectionRequest, type StudioSelectionResult,
+} from "../shared/studio-selection";
 import { isStorageStatus, type StorageStatus } from "../shared/workspace-storage";
 import {
   isCustomConnectionsResult,
@@ -55,7 +58,7 @@ import { isEvidencePictureResult, type EvidencePictureResult } from "../shared/e
  */
 
 export type RunStartResult =
-  | { ok: true; runId: string }
+  | { ok: true; runId: string; selection?: StudioSelection }
   | { ok: false; message: string };
 
 const runs = {
@@ -374,6 +377,13 @@ contextBridge.exposeInMainWorld("workbenchDesktop", {
   },
   studio: {
     getStatus: (endpoint: string) => ipcRenderer.invoke("studio:status", endpoint),
+    /** What is selected in one connected place, for the composer's chip. */
+    getSelection: async (request: StudioSelectionRequest): Promise<StudioSelectionResult> => {
+      const value: unknown = await ipcRenderer.invoke("studio:selection", request);
+      return isStudioSelectionResult(value)
+        ? value
+        : { ok: false, message: "Studio returned an invalid selection result." };
+    },
     openScript: async (request: OpenStudioScriptRequest): Promise<StudioActionResult> => {
       const value: unknown = await ipcRenderer.invoke("studio:open-script", request);
       return isStudioActionResult(value)

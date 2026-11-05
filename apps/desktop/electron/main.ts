@@ -45,9 +45,13 @@ import { captureMoments } from "../runtime/capture-moments";
 import { uploadAssets } from "../runtime/upload-assets";
 import { linkRojoProject } from "../runtime/link-rojo-project";
 import { withLocalOperations, type LocalOperation } from "../runtime/local-operations";
+import { readStudioSelection } from "../runtime/selection-context";
 import { CAPTURE_MOMENTS_OPERATION, LINK_ROJO_PROJECT_OPERATION, UPLOAD_ASSETS_OPERATION } from "../shared/gateway-operations";
 import type { McpCallOptions, McpToolOutcome } from "../runtime/mcp-types";
 import { BLENDER_OPERATION, type BlenderSettingsResult, type BlenderSettingsView } from "../shared/blender";
+import {
+  isStudioSelectionRequest, selectionContextText, type StudioSelection, type StudioSelectionResult,
+} from "../shared/studio-selection";
 import type { RojoPickOutcome, RojoResult } from "../shared/rojo";
 import type { ModelPreviewResult } from "../shared/model-preview";
 import type { EvidencePictureResult } from "../shared/evidence-picture";
@@ -1923,6 +1927,24 @@ async function getStudioStatus(event: IpcMainInvokeEvent, endpointValue: unknown
   return studioStatusAt(endpoint);
 }
 
+/**
+ * The selection of one connected place, for the composer's chip. Read through
+ * the bridge like Studio's status, and answered rather than thrown: the window
+ * polls it while it is in front.
+ */
+async function getStudioSelection(event: IpcMainInvokeEvent, value: unknown): Promise<StudioSelectionResult> {
+  if (!isTrusted(event.sender)) return { ok: false, message: "This window may not read Studio's selection." };
+  if (!isStudioSelectionRequest(value)) return { ok: false, message: "The selection request was not valid." };
+  let client: McpClient;
+  try {
+    client = clientFor(value.endpoint);
+  } catch (error) {
+    return { ok: false, message: error instanceof McpEndpointError ? error.message : "The MCP endpoint could not be used." };
+  }
+  const selection = await readStudioSelection(client, value.instanceId);
+  return selection === undefined ? { ok: false, message: "Studio did not answer." } : { ok: true, selection };
+}
+
 async function studioStatusAt(endpoint: string): Promise<StudioStatus> {
   let client: McpClient;
   try {
@@ -2046,12 +2068,16 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
 
 function parseStartRequest(value: unknown): RunStartRequest | null {
   if (!isRecord(value)) return null;
-  const { projectId, chatId, prompt, conversation, approvalMode, autoPlaytest, endpoint, instanceId, provider, model, effort, startId, attachmentIds } = value;
+  const {
+    projectId, chatId, prompt, conversation, approvalMode, autoPlaytest, endpoint, instanceId, provider, model, effort, startId, attachmentIds,
+    includeSelection,
+  } = value;
   if (typeof projectId !== "string" || projectId === "" || projectId.length > 1_000) return null;
   if (typeof chatId !== "string" || chatId === "" || chatId.length > 1_000) return null;
   if (typeof prompt !== "string" || prompt.trim() === "" || prompt.length > 64_000) return null;
   if (startId !== undefined && (typeof startId !== "string" || !/^[\w-]{1,100}$/.test(startId))) return null;
   if (attachmentIds !== undefined && (!Array.isArray(attachmentIds) || attachmentIds.length > 8 || !attachmentIds.every((id) => typeof id === "string" && id.length <= 100))) return null;
+  if (includeSelection !== undefined && typeof includeSelection !== "boolean") return null;
   if (!isConversationContext(conversation)) return null;
   if (!APPROVAL_MODES.includes(approvalMode as ApprovalMode)) return null;
   if (typeof autoPlaytest !== "boolean") return null;
@@ -2074,6 +2100,7 @@ function parseStartRequest(value: unknown): RunStartRequest | null {
     effort,
     startId,
     attachmentIds,
+    includeSelection,
   };
 }
 
@@ -2081,7 +2108,7 @@ function isTrusted(sender: WebContents): boolean {
   return trustedSenders.has(sender.id);
 }
 
-type RunStartResult = { ok: true; runId: string } | { ok: false; message: string };
+type RunStartResult = { ok: true; runId: string; selection?: StudioSelection } | { ok: false; message: string };
 
 type Settled<T> = { ok: true; value: T } | { ok: false; error: unknown };
 
@@ -2179,6 +2206,14 @@ async function startRun(event: IpcMainInvokeEvent, payload: unknown): Promise<Ru
       if (instanceId !== null && !runHold.holdPlace(instanceId)) return { ok: false, message: STUDIO_PLACE_BUSY };
     }
 
+    // The selection is read here, not in the window: the chip showed what was
+    // selected while the person wrote, and this is what was selected when they
+    // sent, read from Studio by this process and recorded on the message.
+    const selection = request.includeSelection === true && instanceId !== null && !smokeTest
+      ? await readStudioSelection(client, instanceId, { signal: pending.signal })
+      : undefined;
+    if (cancelled()) return stopped;
+
     const label = providerLabel(request.provider);
     let resolvedRequest: RunStartRequest = { ...request, instanceId };
     /** What the picker calls the model, for the waiting line. */
@@ -2249,8 +2284,13 @@ async function startRun(event: IpcMainInvokeEvent, payload: unknown): Promise<Ru
     await runJournal().start(runId, request, request.prompt, request.approvalMode);
     if (cancelled()) return stopped;
     journalRuns.add(runId);
-    if (attachmentContext.text) {
-      resolvedRequest = { ...resolvedRequest, prompt: `${request.prompt}\n\n${attachmentContext.text}` };
+    const selectionText = selection === undefined ? undefined : selectionContextText(selection);
+    const promptContext = [
+      ...(attachmentContext.text ? [attachmentContext.text] : []),
+      ...(selectionText === undefined ? [] : [selectionText]),
+    ];
+    if (promptContext.length > 0) {
+      resolvedRequest = { ...resolvedRequest, prompt: `${request.prompt}\n\n${promptContext.join("\n\n")}` };
     }
     /** The pictures this run stored, held in the picture store until it ends. */
     const heldPictures = new Set<string>();
@@ -2361,7 +2401,7 @@ async function startRun(event: IpcMainInvokeEvent, payload: unknown): Promise<Ru
     runExecutions.add(execution);
     void execution.finally(() => runExecutions.delete(execution)).catch((error) => console.error("Roqer run cleanup failed", error));
 
-    return { ok: true, runId };
+    return { ok: true, runId, ...(selectionText === undefined || selection === undefined ? {} : { selection }) };
   } catch (error) {
     return { ok: false, message: cancelled() ? "Run startup was cancelled." : error instanceof Error ? error.message : "The run could not start." };
   } finally {
@@ -2868,6 +2908,7 @@ app.whenReady().then(async () => {
     if (isTrusted(event.sender) && Array.isArray(ids) && ids.length <= 64 && ids.every((id) => typeof id === "string")) attachments.release(ids);
   });
   ipcMain.handle("studio:status", getStudioStatus);
+  ipcMain.handle("studio:selection", getStudioSelection);
   ipcMain.handle("studio:open-script", openStudioScript);
   ipcMain.handle("provider:status", getProviderStatus);
   ipcMain.handle("provider:models", getProviderModels);

@@ -1592,3 +1592,10 @@ a.small-button:focus-visible { outline: 2px solid var(--accent); outline-offset:
 .settings-button.update-progress > div > span:first-child { overflow: hidden; font-size: var(--type-label); text-overflow: ellipsis; white-space: nowrap; }
 .update-track { display: flex; height: 4px; overflow: hidden; background: var(--surface-sunken); border-radius: 999px; }
 .update-track > span { display: block; height: 100%; background: var(--accent); border-radius: 999px; transition: width .3s ease; }
+.selection-chip { display: flex; align-items: center; gap: 12px; margin: 12px 14px 0; padding: 8px 8px 8px 12px; color: var(--muted); background: var(--surface-sunken); border: 1px solid var(--border-subtle); border-radius: 11px; }
+.selection-chip > div { display: flex; flex: 1; flex-direction: column; min-width: 0; }
+.selection-chip strong { color: var(--ink); font-size: var(--type-label); font-weight: var(--weight-medium); }
+.selection-chip span { overflow: hidden; color: var(--muted); font: var(--weight-regular) 11.5px/1.4 "Geist Mono Variable", monospace; text-overflow: ellipsis; white-space: nowrap; }
+.selection-chip .icon-button { width: 28px; height: 28px; }
+.message-selection { display: inline-flex; align-items: center; gap: 5px; max-width: 640px; margin-top: 6px; color: var(--faint); font-size: var(--type-meta); }
+.message-selection code { overflow: hidden; color: var(--muted); font: var(--weight-regular) 11.5px/1.4 "Geist Mono Variable", monospace; text-overflow: ellipsis; white-space: nowrap; }

@@ -1,3 +1,4 @@
+import { selectionContextText } from "../shared/studio-selection";
 import {
   MAX_CONVERSATION_MESSAGE_CHARS, type ConversationContext, type ConversationMessage, type MessageAttachments,
 } from "../shared/conversation";
@@ -94,9 +95,12 @@ function describeAttachments({ pictures, files }: MessageAttachments): string {
 }
 
 function renderMessage(message: ConversationMessage): string {
-  const said = message.attachments === undefined
-    ? message.text
-    : `${message.text}\n${describeAttachments(message.attachments)}`;
+  const selection = message.selection === undefined ? undefined : selectionContextText(message.selection);
+  const said = [
+    message.text,
+    ...(selection === undefined ? [] : [selection]),
+    ...(message.attachments === undefined ? [] : [describeAttachments(message.attachments)]),
+  ].join("\n");
   const body = `${roleLabel(message)}:\n${said}`;
   return message.run === undefined ? body : `${body}\n\n${describeRunDigest(message.run)}`;
 }

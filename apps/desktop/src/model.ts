@@ -1,6 +1,7 @@
 import { isRunRecord, withoutMalformedUsage, type RunRecord } from "../shared/run-events";
 import { isPersistedAttachment } from "../shared/workspace-validation";
 import type { AttachmentClip } from "../shared/reference-clip";
+import { isStudioSelection, type StudioSelection } from "../shared/studio-selection";
 import {
   DEFAULT_PROVIDER_ID,
   enabledProviderOr,
@@ -51,6 +52,12 @@ export type ChatMessage = {
   run?: RunRecord;
   /** A note the user sent while a run was working, rather than a prompt that started one. */
   note?: true;
+  /**
+   * The Studio selection Roqer read when this message was sent and told the
+   * model about. What was actually sent, which the composer's chip may not
+   * have shown; absent when nothing was selected or the chip was dismissed.
+   */
+  studioSelection?: StudioSelection;
 };
 
 export type Chat = {
@@ -249,7 +256,8 @@ function isMessage(value: unknown): value is ChatMessage {
     typeof value.createdAt === "string" &&
     (value.attachments === undefined || (Array.isArray(value.attachments) && value.attachments.every(isAttachment))) &&
     (value.run === undefined || isRunRecord(value.run)) &&
-    (value.note === undefined || (value.note === true && value.role === "user"));
+    (value.note === undefined || (value.note === true && value.role === "user")) &&
+    (value.studioSelection === undefined || (value.role === "user" && isStudioSelection(value.studioSelection)));
 }
 
 /**
@@ -260,9 +268,13 @@ function isMessage(value: unknown): value is ChatMessage {
 function normalizeMessage(value: unknown): ChatMessage[] {
   if (!isRecord(value)) return [];
   const run = withoutMalformedUsage(value.run);
-  const candidate = run === undefined || isRunRecord(run)
+  const withRun = run === undefined || isRunRecord(run)
     ? (run === value.run ? value : { ...value, run })
     : { ...value, run: undefined };
+  // A damaged selection likewise costs only itself, never the words.
+  const candidate = withRun.studioSelection === undefined || isStudioSelection(withRun.studioSelection)
+    ? withRun
+    : { ...withRun, studioSelection: undefined };
   return isMessage(candidate) ? [candidate] : [];
 }
 
@@ -717,6 +729,22 @@ export function withdrawMessage(state: WorkspaceState, projectId: string, chatId
         const messages = chat.messages.filter((message) => message.id !== messageId);
         const title = messages.length === 0 && chat.titleSetByUser !== true ? UNTITLED_CHAT : chat.title;
         return { ...chat, title, messages };
+      }),
+    }),
+  };
+}
+
+/** Record on a sent message the Studio selection Roqer actually read when it went. */
+export function withMessageSelection(
+  state: WorkspaceState, projectId: string, chatId: string, messageId: string, selection: StudioSelection,
+): WorkspaceState {
+  return {
+    ...state,
+    projects: state.projects.map((project) => project.id !== projectId ? project : {
+      ...project,
+      chats: project.chats.map((chat) => chat.id !== chatId ? chat : {
+        ...chat,
+        messages: chat.messages.map((message) => message.id !== messageId ? message : { ...message, studioSelection: selection }),
       }),
     }),
   };

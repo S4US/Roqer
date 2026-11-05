@@ -91,6 +91,14 @@ subscription sign-in, so with one set a run would bill that key instead of your
 plan. A Claude chat keeps its Claude Code conversation between runs; see
 [Long Claude chats](projects.md) for what is kept and where.
 
+While the window is in front and the chat's place is connected, the composer
+shows what is selected in Studio. Send with that chip showing and Roqer reads
+the selection again at that moment and adds one line beside your message,
+naming the selected instances by path, so "make this open" needs no path. The
+window never writes that line: the main process reads it from Studio, as it
+reads Studio's status, and records it under your message. Dismiss the chip to
+send without it; the next message shows it again.
+
 The ring in the composer's corner shows how full the model's context window
 was at its latest response in the chat, as the provider reported it: Claude
 Code and Codex report both the tokens in use and the window's size, and a

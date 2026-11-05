@@ -1,3 +1,4 @@
+import type { StudioSelection } from "../shared/studio-selection";
 import { normalizeWorkspace, type AssetAttachment, type WorkspaceState } from "./model";
 import type { StorageStatus } from "../shared/workspace-storage";
 import type { McpServerState } from "../shared/mcp-server";
@@ -581,6 +582,13 @@ export async function copyDiagnostics(endpoint: string): Promise<boolean> {
 /** Show the bridge's log file in the file manager. False without the desktop app. */
 export async function showBridgeLog(): Promise<boolean> {
   return window.workbenchDesktop?.app.showBridgeLog() ?? false;
+}
+
+/** The chat place's Studio selection, for the composer's chip; null without the desktop runtime or an answer. */
+export async function getStudioSelection(endpoint: string, instanceId: string): Promise<StudioSelection | null> {
+  if (!window.workbenchDesktop) return null;
+  const result = await window.workbenchDesktop.studio.getSelection({ endpoint, instanceId });
+  return result.ok ? result.selection : null;
 }
 
 export async function getStudioStatus(endpoint: string): Promise<StudioStatus> {
