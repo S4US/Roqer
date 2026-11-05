@@ -20,18 +20,6 @@ export type ToolActivityKind = "search" | "read" | "edit" | "run";
 /** Every entry the activity layer can show, including non-tool entries. */
 export type ActivityKind = ToolActivityKind | "verify" | "inspect" | "note";
 
-/**
- * The stage of the run a step belongs to.
- *
- * Phases are what the activity layer groups by: a run that reads eight places in
- * the project is one thing happening, not eight, and the reader should be able
- * to see that as one line and open it when they want the eight. Deriving the
- * phase from the kind means a tool added to `KIND_BY_TOOL` tomorrow lands in a
- * sensible group without touching this file again.
- */
-export type ActivityPhase =
-  | "connect" | "explore" | "scripts" | "edit" | "run" | "verify" | "note";
-
 const KIND_BY_TOOL: Readonly<Record<string, ToolActivityKind>> = {
   // -- Looking for something ---------------------------------------------
   search_objects: "search",
@@ -122,63 +110,6 @@ export function activityKind(tool: string, target: string | null = null): ToolAc
 /** Tools this table classifies. Exported so the drift test can compare sets. */
 export function classifiedTools(): string[] {
   return Object.keys(KIND_BY_TOOL);
-}
-
-/**
- * Reads that are about something other than the project itself, so they do not
- * fall into the same group as walking the tree. Everything else takes the phase
- * its kind implies.
- */
-const PHASE_BY_TOOL: Readonly<Record<string, ActivityPhase>> = {
-  get_connected_instances: "connect",
-  get_place_info: "connect",
-  get_script_source: "scripts",
-  grep_scripts: "scripts",
-  get_runtime_logs: "verify",
-  capture_screenshot: "verify",
-  capture_moments: "verify",
-};
-
-const PHASE_BY_KIND: Readonly<Record<ActivityKind, ActivityPhase>> = {
-  search: "explore",
-  read: "explore",
-  inspect: "explore",
-  edit: "edit",
-  run: "run",
-  verify: "verify",
-  note: "note",
-};
-
-/** Which stage of the run a tool call belongs to. */
-export function activityPhase(tool: string, target: string | null = null): ActivityPhase {
-  return Object.prototype.hasOwnProperty.call(PHASE_BY_TOOL, tool)
-    ? PHASE_BY_TOOL[tool]
-    : PHASE_BY_KIND[activityKind(tool, target)];
-}
-
-/** Which stage a piece of evidence belongs to. */
-export function evidencePhase(kind: RunEvidence["kind"]): ActivityPhase {
-  return PHASE_BY_KIND[evidenceActivityKind(kind)];
-}
-
-/**
- * What a whole phase is called once its steps are folded into one line. The
- * present tense is used while the phase is still running, so a group reads as
- * an activity in progress rather than a finished claim.
- */
-const PHASE_TITLE: Readonly<Record<ActivityPhase, { present: string; past: string }>> = {
-  connect: { present: "Connecting to Studio", past: "Connected to Studio" },
-  explore: { present: "Understanding the project", past: "Understood the project" },
-  scripts: { present: "Inspecting scripts", past: "Inspected scripts" },
-  edit: { present: "Applying changes", past: "Applied changes" },
-  run: { present: "Running in Studio", past: "Ran in Studio" },
-  verify: { present: "Checking the result", past: "Checked the result" },
-  // A run of progress notes is titled by its latest note, never by this.
-  note: { present: "Working", past: "Worked" },
-};
-
-export function phaseTitle(phase: ActivityPhase, past: boolean): string {
-  return past ? PHASE_TITLE[phase].past : PHASE_TITLE[phase].present;
 }
 
 /**

@@ -2505,6 +2505,7 @@ const ActivitySection = memo(function ActivitySection({ steps, nodes, running }:
       {alerts.map((alert) => <li key={alert.key} className="node-row" data-status={alert.status} data-kind={alert.kind}>
         <span className="node-caret" /><NodeLine node={alert} />
       </li>)}
+      {failed > alerts.length && <li><button type="button" className="more-failed" onClick={() => setOpen(true)}>{failed - alerts.length} more failed</button></li>}
     </ul>}
   </>;
 });

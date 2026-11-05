@@ -97,12 +97,11 @@ function leaves(nodes: readonly ActivityNode[]): ActivityNode[] {
   return nodes.flatMap((node) => (node.children.length === 0 ? [node] : node.children));
 }
 
-test("a project inspection reads as a few phases, not eleven operations", () => {
+test("neighbouring reads fold into one row, not eleven", () => {
   const nodes = model(fold(...inspectProject()));
 
   assert.deepEqual(nodes.map((node) => [node.title, node.finding]), [
-    ["Connected to Studio", "2 steps · 1 instance"],
-    ["Understood the project", "5 steps · 30 instances"],
+    ["Read 7 items", "31 instances"],
   ]);
 });
 
@@ -152,10 +151,10 @@ test("every operation survives the fold, in the order it happened", () => {
   assert.deepEqual(
     leaves(nodes).map((node) => node.key),
     steps.map((step) => step.key),
-    "grouping hides operations behind a disclosure; it never drops or reorders one",
+    "merging hides operations behind a disclosure; it never drops or reorders one",
   );
   assert.deepEqual(
-    nodes[1].children.map((child) => child.title),
+    nodes[0].children.slice(-5).map((child) => child.title),
     [
       "Read the project structure",
       "Read Workspace",
@@ -167,7 +166,7 @@ test("every operation survives the fold, in the order it happened", () => {
   );
 });
 
-test("the group in flight names the operation in flight, and only that row is active", () => {
+test("a merged row in flight names the operation in flight, and only that row is active", () => {
   const nodes = model(fold(
     started,
     ...read("c1", "get_connected_instances", {}, { summary: "get_connected_instances: 1 instance" }),
@@ -182,24 +181,22 @@ test("the group in flight names the operation in flight, and only that row is ac
   const active = nodes.filter((node) => node.status === "active");
   assert.equal(active.length, 1, "exactly one row claims to be happening now");
   assert.equal(active[0].title, "Reading ServerScriptService…");
-  assert.equal(nodes[0].status, "completed");
+  assert.equal(active[0].children.filter((child) => child.status === "active").length, 1);
 });
 
-test("a phase that produced one step stays one row rather than a group of one", () => {
+test("a run of one stays one row rather than a group of one", () => {
   const nodes = model(fold(
     started,
-    ...read("c1", "get_place_info", {}, { summary: "get_place_info: 1 instance" }),
-    ...read("c2", "get_script_source", { instancePath: "game.ServerScriptService.Main" }, { summary: "get_script_source: 42 lines of source" }),
+    ...read("c1", "get_script_source", { instancePath: "game.ServerScriptService.Main" }, { summary: "get_script_source: 42 lines of source" }),
   ));
 
   assert.deepEqual(nodes.map((node) => [node.title, node.children.length]), [
-    ["Read the place", 0],
     ["Read ServerScriptService.Main", 0],
   ]);
-  assert.equal(nodes[1].finding, "42 lines of source");
+  assert.equal(nodes[0].finding, "42 lines of source");
 });
 
-test("a failure inside a collapsed group stays visible and colours the group", () => {
+test("a failure is its own row, says it failed, and splits the steps around it", () => {
   const nodes = model(fold(
     started,
     ...structureReads(),
@@ -207,16 +204,19 @@ test("a failure inside a collapsed group stays visible and colours the group", (
       summary: "get_project_structure failed (not-found): No instance at game.Lighting.",
       ok: false,
     }),
+    ...read("c9", "get_project_structure", { path: "game.Lighting" }, { summary: "get_project_structure: 2 instances" }),
   ));
 
-  const [group] = nodes;
-  assert.equal(group.status, "failed", "the worst thing inside is what the group reports");
-  assert.match(group.finding ?? "", /1 failed/);
   assert.deepEqual(
-    group.alerts.map((alert) => [alert.title, alert.finding]),
-    [["Read Lighting", "No instance at game.Lighting."]],
-    "so a reader who never opens the group still sees what went wrong",
+    nodes.map((node) => [node.status, node.title, node.children.length]),
+    [
+      ["completed", "Read 5 items", 5],
+      ["failed", "Failed reading Lighting", 0],
+      ["completed", "Read Lighting", 0],
+    ],
+    "the row after a failure is not folded back over it, so the recovery can be seen",
   );
+  assert.equal(nodes[1].finding, "No instance at game.Lighting.");
 });
 
 test("a rejected call is skipped, and an approval request is a row of its own", () => {
@@ -271,7 +271,7 @@ test("what the provider is doing is a state, not a step it took", () => {
   assert.deepEqual(view.status, { label: "Thinking with ChatGPT", detail: undefined });
 });
 
-test("a note the planner left is kept, and kept out of the phases", () => {
+test("a note the planner left is its own row, where it was left", () => {
   const nodes = model(fold(
     started,
     ...read("c1", "get_project_structure", {}, { summary: "get_project_structure: 16 instances" }),
@@ -280,25 +280,42 @@ test("a note the planner left is kept, and kept out of the phases", () => {
   ));
 
   assert.deepEqual(nodes.map((node) => [node.kind, node.title]), [
-    ["read", "Understood the project"],
+    ["read", "Read the project structure"],
     ["note", "Studio did not report a place name"],
-  ], "the note is its own row, and the read after it rejoins the phase above");
-  assert.equal(nodes[0].children.length, 2);
+    ["read", "Read Workspace"],
+  ]);
 });
 
-test("a phase re-entered later rejoins its row instead of starting a second one", () => {
+test("going back to an earlier kind of work starts a new row, so the order is kept", () => {
+  const edit = (id: string): RunEventBody[] => [
+    { type: "tool-proposed", proposal: writeProposal(id) },
+    { type: "approval-resolved", callId: id, decision: "approved", automatic: true, reason: "read-allowed" },
+    { type: "tool-started", callId: id, tool: writeProposal(id).tool },
+    { type: "tool-result", callId: id, tool: writeProposal(id).tool, ok: true, durationMs: 1, summary: `${writeProposal(id).tool}: done` },
+  ];
   const nodes = model(fold(
     started,
     ...read("c1", "get_project_structure", {}, { summary: "get_project_structure: 16 instances" }),
-    ...read("c2", "get_script_source", { instancePath: "game.ServerScriptService.Main" }, { summary: "get_script_source: 42 lines of source" }),
-    ...read("c3", "get_project_structure", { path: "game.Workspace" }, { summary: "get_project_structure: 4 instances" }),
-    ...read("c4", "search_objects", { query: "Coin" }, { summary: "search_objects: 3 results" }),
+    ...read("c2", "get_project_structure", { path: "game.Workspace" }, { summary: "get_project_structure: 4 instances" }),
+    ...edit("c3"),
+    ...read("c4", "get_project_structure", { path: "game.Lighting" }, { summary: "get_project_structure: 2 instances" }),
   ));
 
-  assert.deepEqual(nodes.map((node) => [node.title, node.finding]), [
-    ["Understood the project", "3 steps · 20 instances · 3 results"],
-    ["Read ServerScriptService.Main", "42 lines of source"],
-  ], "a phase is a place to look, not a run of adjacent calls");
+  assert.deepEqual(nodes.map((node) => [node.kind, node.children.length]), [
+    ["read", 2],
+    ["edit", 0],
+    ["read", 0],
+  ]);
+  assert.equal(nodes[0].title, "Read 2 items");
+});
+
+test("a merged row's title comes from what its calls have in common", () => {
+  const scripts = model(fold(
+    started,
+    ...read("c1", "get_script_source", { instancePath: "game.ServerScriptService.Main" }, { summary: "get_script_source: 42 lines of source" }),
+    ...read("c2", "get_script_source", { instancePath: "game.ServerScriptService.Combat" }, { summary: "get_script_source: 8 lines of source" }),
+  ));
+  assert.deepEqual(scripts.map((node) => [node.title, node.finding]), [["Read 2 scripts", "50 lines of source"]]);
 });
 
 test("a search reads as a query, and a query with nothing in it names what was searched", () => {
@@ -308,10 +325,11 @@ test("a search reads as a query, and a query with nothing in it names what was s
     ...read("c2", "grep_scripts", { pattern: "." }, { summary: "grep_scripts: 9 results" }),
   ));
 
-  assert.deepEqual(nodes.map((node) => node.title), [
+  assert.deepEqual(nodes[0].children.map((node) => node.title), [
     "Searched for “Coin”",
     "Searched the scripts",
   ]);
+  assert.equal(nodes[0].title, "Ran 2 searches");
 });
 
 test("a finished run has nothing in flight", () => {
@@ -319,7 +337,7 @@ test("a finished run has nothing in flight", () => {
   assert.equal(nodes.some((node) => node.status === "active"), false);
 });
 
-test("a hundred routine reads stay a handful of rows", () => {
+test("a hundred routine reads stay one row", () => {
   const bodies: RunEventBody[] = [started];
   for (let index = 0; index < 100; index++) {
     bodies.push(...read(`c${index}`, "get_project_structure", { path: `game.Workspace.Model${index}` }, {
@@ -330,7 +348,8 @@ test("a hundred routine reads stay a handful of rows", () => {
 
   assert.equal(nodes.length, 1);
   assert.equal(nodes[0].children.length, 100);
-  assert.equal(nodes[0].finding, "100 steps · 200 instances");
+  assert.equal(nodes[0].title, "Read 100 items");
+  assert.equal(nodes[0].finding, "200 instances");
 });
 
 test("countable findings add up; the rest stay on their own rows", () => {

@@ -1,21 +1,19 @@
 import {
-  activityFinding, activityLabel, activityPhase, evidencePhase, phaseTitle,
-  type ActivityKind, type ActivityPhase,
+  activityFinding, activityLabel, shortTarget,
+  type ActivityKind,
 } from "../shared/activity";
 import type { ActivityStep } from "./run-view";
 
 /**
- * The shape the activity layer is read in.
+ * The shape the activity layer is read in: a timeline.
  *
  * `activitySteps` answers "what happened, in order" — one entry per tool call,
- * per note, per piece of evidence. That is the right record and the wrong
- * reading: a project inspection is ten reads, and ten rows of "Read
- * game.StarterPack" is a trace, not an account of what the agent did.
- *
- * This module folds that record into what a reader wants first — a handful of
- * phases, the one in flight obvious, each openable for the operations beneath
- * it — without dropping anything. Every step survives as a leaf, so the raw
- * operation, its arguments, its timing, and its output stay one click away.
+ * per note, per piece of evidence. Read as it stands, ten reads in a row are ten
+ * rows of "Read game.StarterPack", so neighbours of one kind fold into one row.
+ * Nothing else moves: the order stays the order things happened in, so a failed
+ * edit, the read that followed it and the edit that worked read as that story.
+ * Every step survives as a leaf, so the raw operation, its arguments, its
+ * timing, and its output stay one click away.
  *
  * The fold is pure and lives apart from the component: which steps join a
  * group, what a group claims to have found, and what stays visible when it is
@@ -39,7 +37,6 @@ export type ActivityNode = {
   /** What it learned, kept to a few words. Absent when there is nothing to say. */
   finding?: string;
   kind: ActivityKind;
-  phase: ActivityPhase;
   /** Set on a group: how long its operations took in total. */
   durationMs?: number;
   /** Set on a leaf: the step it came from, carrying the raw detail. */
@@ -78,12 +75,6 @@ function isPast(status: StepStatus): boolean {
   return status === "completed" || status === "failed" || status === "skipped";
 }
 
-function phaseOf(step: ActivityStep): ActivityPhase {
-  if (step.evidence) return evidencePhase(step.evidence.kind);
-  if (step.tool) return activityPhase(step.tool, step.target ?? null);
-  return "note";
-}
-
 /**
  * The one line a step gets. A call in flight is named by what it is touching —
  * "Inspecting ServerScriptService…" — because that is the question a reader
@@ -91,6 +82,11 @@ function phaseOf(step: ActivityStep): ActivityPhase {
  */
 function titleOf(step: ActivityStep, status: StepStatus): string {
   if (step.tool) {
+    // A failed call did not do what its past tense would claim.
+    if (status === "failed") {
+      const attempt = activityLabel(step.tool, step.target ?? null, false);
+      return `Failed ${attempt.charAt(0).toLowerCase()}${attempt.slice(1)}`;
+    }
     const label = activityLabel(step.tool, step.target ?? null, isPast(status));
     return status === "active" ? `${label}…` : label;
   }
@@ -116,7 +112,6 @@ export function leafNode(step: ActivityStep): ActivityNode {
     title: titleOf(step, status),
     finding: findingOf(step, status),
     kind: step.kind,
-    phase: phaseOf(step),
     step,
     children: [],
     alerts: [],
@@ -142,8 +137,8 @@ const COUNT_PATTERN = /^(\d+)\s+(\S+)(.*)$/;
  * Add up the countable findings underneath a group.
  *
  * Children report things like "16 instances" and "42 lines of source"; a group
- * that says "58 instances, 12 lines of source" tells the reader what the phase
- * actually turned up. Findings that are not counts ("Empty", "source revision
+ * that says "58 instances, 12 lines of source" tells the reader what those
+ * calls actually turned up. Findings that are not counts ("Empty", "source revision
  * recorded") stay on their own row, where they mean something.
  */
 export function mergeFindings(findings: readonly string[]): string[] {
@@ -162,16 +157,31 @@ export function mergeFindings(findings: readonly string[]): string[] {
     `${total} ${noun}${total === 1 ? "" : "s"}${rest}`);
 }
 
-/** What a folded phase claims, in the fewest words that stay honest. */
+/** What a merged row claims, in the fewest words that stay honest. */
 function groupFinding(children: readonly ActivityNode[]): string | undefined {
-  const parts = [`${children.length} steps`];
-  parts.push(...mergeFindings(children.flatMap((child) => child.finding ?? [])));
+  const parts = mergeFindings(children.flatMap((child) => child.finding ?? []));
 
   const failed = children.filter((child) => child.status === "failed").length;
   const skipped = children.filter((child) => child.status === "skipped").length;
   if (failed > 0) parts.push(`${failed} failed`);
   if (skipped > 0) parts.push(`${skipped} skipped`);
-  return parts.join(" · ");
+  return parts.length === 0 ? undefined : parts.join(" · ");
+}
+
+/** A merged row says what was done and how many times, from what the calls have in common. */
+function mergedTitle(children: readonly ActivityNode[]): string {
+  const count = children.length;
+  const targets = new Set(children.map((child) => child.step?.target ?? ""));
+  const target = targets.size === 1 ? [...targets][0] : "";
+  const on = target === "" ? "" : ` on ${shortTarget(target)}`;
+  switch (children[0].kind) {
+    case "edit": return `Made ${count} edits${on}`;
+    case "search": return `Ran ${count} searches`;
+    case "run": return `Ran ${count} actions${on}`;
+    case "verify": return `Made ${count} checks${on}`;
+    case "read": return children.every((child) => child.step?.tool === "get_script_source") ? `Read ${count} scripts` : `Read ${count} items`;
+    default: return `Inspected ${count} items`;
+  }
 }
 
 function totalDuration(children: readonly ActivityNode[]): number | undefined {
@@ -182,17 +192,14 @@ function totalDuration(children: readonly ActivityNode[]): number | undefined {
 
 function groupNode(children: ActivityNode[]): ActivityNode {
   const status = rollUpStatus(children);
-  const phase = children[0].phase;
-  // While a phase is running, the specific operation is more use than the
-  // phase's name; once it is done, the phase's name is the whole point.
+  // While the row is running, the specific operation is more use than a count.
   const active = children.find((child) => child.status === "active");
   return {
     key: `group-${children[0].key}`,
     status,
-    title: active ? active.title : phaseTitle(phase, isPast(status)),
+    title: active ? active.title : mergedTitle(children),
     finding: groupFinding(children),
     kind: children[0].kind,
-    phase,
     durationMs: totalDuration(children),
     children,
     // Enough to see what went wrong without the collapsed group growing back
@@ -204,44 +211,42 @@ function groupNode(children: ActivityNode[]): ActivityNode {
 }
 
 /**
- * Two kinds of row are never folded into a phase: a request for the reader's
- * decision, which must not be summarised away, and a piece of evidence, which
- * is what the run learned rather than one more thing it did. A note the planner
- * left is its own row too — it is there precisely because it was worth saying.
+ * Rows that are never merged. A request for the reader's decision must not be
+ * summarised away; evidence is what the run learned rather than one more thing
+ * it did; a note is there because it was worth saying; and a failure or a
+ * rejection is the turning point of the story, so it splits the steps around it.
  */
 function standsAlone(step: ActivityStep, status: StepStatus): boolean {
-  return status === "warning" || step.evidence !== undefined || step.tool === undefined;
+  return status === "warning" || status === "failed" || status === "skipped" || step.evidence !== undefined || step.tool === undefined;
 }
-
-/** A row being assembled: either one phase's steps, or a single standalone step. */
-type Slot = { phase: ActivityPhase; steps: ActivityStep[]; solo: boolean };
 
 /**
  * Fold the steps of a run into the rows the activity layer renders.
  *
- * A phase appears once, where it was first entered, and every step of that
- * phase joins it wherever it happened. An agent that reads the project, writes
- * a script, then reads two more things does not produce a second "Understood
- * the project" row three lines below the first — a phase is a place to look,
- * not a run of adjacent calls. Order within a phase is untouched, and a phase
- * that produced a single step stays a single row rather than a group of one.
+ * The rows keep the order the steps happened in. A step joins the row before it
+ * only when that row is the same kind of work and neither stands alone, so going
+ * back to reading after an edit starts a new row rather than rejoining an earlier
+ * one. A run of one stays a single row rather than a group of one.
  */
 export function buildActivityModel(steps: readonly ActivityStep[]): ActivityNode[] {
-  const slots: Slot[] = [];
+  const rows: ActivityStep[][] = [];
+  let open = false;
 
   for (const step of steps) {
-    const phase = phaseOf(step);
+    const previous = rows[rows.length - 1];
     if (standsAlone(step, stepStatus(step))) {
-      slots.push({ phase, steps: [step], solo: true });
-      continue;
+      rows.push([step]);
+      open = false;
+    } else if (open && previous !== undefined && previous[0].kind === step.kind) {
+      previous.push(step);
+    } else {
+      rows.push([step]);
+      open = true;
     }
-    const section = slots.find((slot) => !slot.solo && slot.phase === phase);
-    if (section) section.steps.push(step);
-    else slots.push({ phase, steps: [step], solo: false });
   }
 
-  return slots.map((slot) => {
-    const children = slot.steps.map(leafNode);
+  return rows.map((row) => {
+    const children = row.map(leafNode);
     return children.length === 1 ? children[0] : groupNode(children);
   });
 }
@@ -263,9 +268,9 @@ export function activeStepTitle(steps: readonly ActivityStep[]): string | null {
  * The one row a closed Activity section shows: what is in flight, and when
  * nothing is, the last thing the run actually did.
  *
- * A finished phase is named by the phase ("Understood the project"), which is
- * the right label for a row you can open and the wrong one for "what just
- * happened" — so the last row reaches past the group to the operation itself.
+ * A merged row is named by a count ("Read 7 items"), which is the right label
+ * for a row you can open and the wrong one for "what just happened" — so the
+ * last row reaches past the group to the operation itself.
  */
 export function currentNodeTitle(nodes: readonly ActivityNode[]): string | null {
   const active = nodes.find((node) => node.status === "active");
@@ -277,7 +282,7 @@ export function currentNodeTitle(nodes: readonly ActivityNode[]): string | null 
 
 /**
  * A duration worth reading. Per-call milliseconds are debug detail, but the
- * second and a half a phase took is something a reader can feel, so only
+ * second and a half a merged row took is something a reader can feel, so only
  * durations at that scale are offered to the primary rows.
  */
 export function aggregateDuration(milliseconds: number | undefined): string | undefined {
@@ -288,7 +293,7 @@ export function aggregateDuration(milliseconds: number | undefined): string | un
 /**
  * A wait as it happens, for the counter shown while the model is working.
  *
- * Whole seconds rather than the tenths a finished phase reports: this one is
+ * Whole seconds rather than the tenths a finished row reports: this one is
  * read repeatedly as it climbs, and a flickering decimal draws the eye to the
  * wrong thing. Past a minute it reads as a clock, because "94s" makes a reader
  * do arithmetic to learn how long they have been waiting.

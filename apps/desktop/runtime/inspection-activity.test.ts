@@ -104,12 +104,11 @@ test("a project inspection is a short timeline, not a call log", async () => {
 
   assert.equal(calls.length, 7, "seven operations went to Studio");
   assert.deepEqual(nodes.map((node) => [node.title, node.finding]), [
-    ["Connected to Studio", "2 steps · 1 instance"],
-    ["Understood the project", "4 steps"],
+    ["Read 6 items", "1 instance"],
     ["Inspected Coffee Run", undefined],
     ["Read ServerScriptService.Main", "2 lines of source"],
     ["Verified ServerScriptService.Main", "Passed"],
-  ], "and they arrive as five lines, three of which are what the run found");
+  ], "and they arrive as four lines, three of which are what the run found");
 });
 
 test("nothing is summarised away: every call is still one click down", async () => {
@@ -121,10 +120,10 @@ test("nothing is summarised away: every call is still one click down", async () 
     .flatMap((node) => node.step?.tool ?? []);
   assert.deepEqual(operations, calls, "the leaves under the groups are the calls that were made");
 
-  const explored = nodes[1];
-  assert.equal(explored.children.length, 4, "the overview and the three service walks");
+  const explored = nodes[0];
+  assert.equal(explored.children.length, 6, "the connection reads, the overview and the three service walks");
   assert.deepEqual(
-    explored.children.map((child) => child.title),
+    explored.children.slice(2).map((child) => child.title),
     [
       "Read the project structure",
       "Read ServerScriptService",
@@ -133,7 +132,7 @@ test("nothing is summarised away: every call is still one click down", async () 
     ],
   );
   assert.equal(
-    explored.children[1].step?.target,
+    explored.children[3].step?.target,
     "game.ServerScriptService",
     "with the full path kept for the details area",
   );
@@ -144,12 +143,12 @@ test("what the run learned stays on the surface", async () => {
   const nodes = timeline(events);
 
   // Evidence is the answer's backing, not one more operation, so it is never
-  // folded into a phase.
+  // merged with its neighbours.
   assert.deepEqual(
     nodes.filter((node) => node.step?.evidence).map((node) => node.title),
     ["Inspected Coffee Run", "Verified ServerScriptService.Main"],
   );
-  assert.equal(nodes[4].step?.evidence?.lines?.length, 2, "and the source it read is still attached");
+  assert.equal(nodes[3].step?.evidence?.lines?.length, 2, "and the source it read is still attached");
 });
 
 test("no operation name or payload reaches a primary row", async () => {

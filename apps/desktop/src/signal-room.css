@@ -103,3 +103,10 @@
 
 /* Results and endings */
 .outcome-warnings, .outcome-failed, .outcome-cancelled, .outcome-refused { border-radius: 12px; }
+
+/* Activity: a timeline. Failures stay under the closed section, and say when there are more. */
+.activity-timeline { padding: 8px 14px 10px; }
+.more-failed { height: 26px; margin-left: 21px; padding: 0 6px; color: var(--accent); background: transparent; border: 0; border-radius: 6px; font-size: 12.5px; font-weight: var(--weight-medium); }
+.more-failed:hover { background: var(--surface-raised); }
+.node-row[data-status="failed"] .node-title { color: var(--ink); font-weight: var(--weight-medium); }
+.node-row[data-status="failed"] .node-finding { color: var(--danger); }

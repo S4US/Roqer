@@ -2,9 +2,9 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
-  activityFinding, activityKind, activityLabel, activityPhase, activityTarget, classifiedTools,
-  evidenceActivityKind, evidenceDetailLabel, evidenceLabel, evidencePhase, phaseTitle,
-  shortTarget, unclassifiedTools, MAX_FINDING_CHARS, type ActivityPhase,
+  activityFinding, activityKind, activityLabel, activityTarget, classifiedTools,
+  evidenceActivityKind, evidenceDetailLabel, evidenceLabel,
+  shortTarget, unclassifiedTools, MAX_FINDING_CHARS,
 } from "./activity";
 import { GATEWAY_TOOL_RISK } from "./gateway-operations";
 import { LOCAL_TOOL_RISK, TOOL_RISK, summarizeToolCall } from "./mcp-tools";
@@ -19,10 +19,9 @@ test("the classification table has no tool the MCP surface dropped", () => {
   assert.deepEqual(classifiedTools().filter((tool) => !known.has(tool)), []);
 });
 
-test("capturing moments reads as checking the result, not as its operation name", () => {
+test("capturing moments reads as what it does, not as its operation name", () => {
   assert.equal(activityLabel("capture_moments", null, false), "Capturing an effect at several moments");
   assert.equal(activityLabel("capture_moments", "client-1", true), "Captured an effect at several moments");
-  assert.equal(activityPhase("capture_moments"), "verify");
 });
 
 test("a batch upload reads as uploading, and its card names every file it sends", () => {
@@ -104,18 +103,6 @@ test("a call with a target reads as a verb and that target", () => {
   assert.equal(shortTarget("Coffee Run"), "Coffee Run", "and a name that is not a path is left alone");
 });
 
-test("steps are grouped by the stage of the run they belong to", () => {
-  assert.equal(activityPhase("get_connected_instances"), "connect");
-  assert.equal(activityPhase("get_project_structure"), "explore");
-  assert.equal(activityPhase("get_script_source"), "scripts");
-  assert.equal(activityPhase("set_script_source"), "edit");
-  assert.equal(activityPhase("solo_playtest"), "run");
-  assert.equal(activityPhase("upload_asset", "status"), "explore");
-  assert.equal(evidencePhase("verification"), "verify");
-  // A tool nobody has phased still lands somewhere sensible, by its kind.
-  assert.equal(activityPhase("some_future_tool"), "run");
-});
-
 test("checking an upload operation reads as a lookup, not another upload", () => {
   assert.equal(activityLabel("upload_asset", "status", false), "Reading upload status");
   assert.equal(activityLabel("upload_asset", "status", true), "Read upload status");
@@ -146,16 +133,6 @@ test("an animation reads as checking or building, whatever its summary says", ()
     assert.equal(activityLabel("animation", unknown, true), "Called the animation tool");
     assert.equal(activityLabel("animation", unknown, false), "Calling the animation tool");
     assert.equal(activityKind("animation", unknown), "edit");
-  }
-});
-
-test("every phase can name itself in both tenses", () => {
-  const phases = [
-    "connect", "explore", "scripts", "edit", "run", "verify", "note",
-  ] as const satisfies readonly ActivityPhase[];
-  for (const phase of phases) {
-    assert.ok(phaseTitle(phase, false).length > 0, `${phase} has no present tense`);
-    assert.ok(phaseTitle(phase, true).length > 0, `${phase} has no past tense`);
   }
 });
 
