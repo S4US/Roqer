@@ -43,7 +43,7 @@ import { SettingsPage } from "./settings-page";
 import { DiagnosticsActions } from "./diagnostics-actions";
 import { sendBlockedNotice } from "./send-blocked";
 import type { FileExpansion } from "./results-card";
-import { finishedDeckStatus, targetLabel, type DeckStatus } from "./run-deck-model";
+import { targetLabel } from "./run-deck-model";
 import { RunDeckProvider, RunDeckToggle, RunResults, useRunDeck } from "./run-deck";
 import { ModelMenu, RunMenu } from "./composer-menus";
 import { ContextMeter } from "./context-meter";
@@ -2250,7 +2250,7 @@ function LiveRun({ view, steps, nodes, onOpenInStudio }: { view: RunView; steps:
     />}
     <TaskList tasks={view.tasks} />
     <ActivitySection steps={steps} nodes={nodes} running={running} />
-    <RunResults runId={view.runId} changes={view.changes} evidence={view.evidence} latest status={liveDeckStatus(view)} renderFiles={renderFiles} />
+    <RunResults runId={view.runId} changes={view.changes} evidence={view.evidence} latest renderFiles={renderFiles} />
     {answered && (running
       // Formatted as it streams, re-rendered a few times a second rather than
       // on every delta, which would make a long reply quadratic.
@@ -2268,13 +2268,6 @@ function LiveRun({ view, steps, nodes, onOpenInStudio }: { view: RunView; steps:
     <RunNotes notes={view.notes} delivered={view.notesDelivered} running={running} />
     {view.desynchronized && <p className="run-warning"><AlertCircle size={14} /> Some updates were missed, so this timeline may be incomplete.</p>}
   </div></section></div>;
-}
-
-/** What the Run Deck's heading says about the run in flight, or the one that just ended. */
-function liveDeckStatus(view: RunView): DeckStatus {
-  if (view.outcome !== null) return finishedDeckStatus(view.outcome, runAppliedAndVerified(view), runHasWarnings(view) || runGateIssues(view).length > 0);
-  if (view.pendingApproval !== null || view.pendingQuestion !== null) return { label: "Waiting for you", tone: "waiting" };
-  return { label: view.status?.label ?? "Working", tone: "working" };
 }
 
 /**
@@ -2893,7 +2886,7 @@ function RunRecordView({ record, text, latest, onOpenInStudio }: { record: RunRe
   return <>
     <TaskList tasks={record.tasks ?? []} settled />
     <ActivitySection steps={steps} running={false} />
-    <RunResults runId={record.runId} changes={record.changes} evidence={record.evidence} latest={latest} status={finishedDeckStatus(record.outcome, recordAppliedAndVerified(record), recordHasWarnings(record) || recordGateIssues(record).length > 0)} renderFiles={renderFiles} />
+    <RunResults runId={record.runId} changes={record.changes} evidence={record.evidence} latest={latest} renderFiles={renderFiles} />
     <Markdown text={text} className="result-copy" />
     {appliedAndVerified && <AppliedStatus />}
     {showOutcome && <OutcomeCard

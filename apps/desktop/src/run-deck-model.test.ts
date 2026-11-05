@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { clampDeckWidth, DECK_MIN_WIDTH, deckTarget, finishedDeckStatus, targetLabel } from "./run-deck-model";
+import { clampDeckWidth, DECK_MIN_WIDTH, deckTarget, targetLabel } from "./run-deck-model";
 
 const base = { picked: null, offered: "run-2", closed: false, inline: true };
 
@@ -32,12 +32,4 @@ test("a file reads by its own name, with where it lives after it", () => {
   assert.deepEqual(targetLabel("game.ReplicatedStorage.VFX.Slash"), { name: "Slash", parent: "ReplicatedStorage.VFX" });
   assert.deepEqual(targetLabel("game.Workspace"), { name: "Workspace" });
   assert.deepEqual(targetLabel("rbxassetid://123"), { name: "rbxassetid://123" });
-});
-
-test("the heading says how a run really ended, not only that it did", () => {
-  assert.deepEqual(finishedDeckStatus("completed", true, false), { label: "Done", detail: "Applied and verified in Studio", tone: "done" });
-  assert.deepEqual(finishedDeckStatus("completed", false, false), { label: "Done", tone: "done" });
-  assert.equal(finishedDeckStatus("completed", false, true).tone, "warning");
-  assert.equal(finishedDeckStatus("failed", false, false).label, "Failed");
-  assert.equal(finishedDeckStatus("cancelled", false, false).label, "Stopped");
 });

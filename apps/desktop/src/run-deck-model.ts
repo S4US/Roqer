@@ -44,22 +44,3 @@ export function targetLabel(target: string): { name: string; parent?: string } {
   const at = path.lastIndexOf(".");
   return at < 0 ? { name: path } : { name: path.slice(at + 1), parent: path.slice(0, at) };
 }
-
-/** What the deck's heading says about a run. */
-export type DeckStatus = Readonly<{ label: string; detail?: string; tone: "working" | "waiting" | "done" | "warning" | "failed" | "neutral" }>;
-
-export function finishedDeckStatus(outcome: string, verified: boolean, warnings: boolean): DeckStatus {
-  switch (outcome) {
-    case "completed":
-      if (warnings) return { label: "Done, with warnings", tone: "warning" };
-      return verified ? { label: "Done", detail: "Applied and verified in Studio", tone: "done" } : { label: "Done", tone: "done" };
-    case "failed":
-      return { label: "Failed", tone: "failed" };
-    case "cancelled":
-      return { label: "Stopped", tone: "neutral" };
-    case "refused":
-      return { label: "Not permitted", tone: "neutral" };
-    default:
-      return { label: "Finished", tone: "neutral" };
-  }
-}

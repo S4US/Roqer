@@ -1,12 +1,12 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type KeyboardEvent, type PointerEvent, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { AlertCircle, Check, ChevronRight, CircleDot, Loader2, PanelRight, X } from "lucide-react";
+import { ChevronRight, PanelRight, X } from "lucide-react";
 
 import type { RunChange, RunEvidence } from "../shared/run-events";
 import type { ChangeGroup } from "./diff-view";
 import { ResultsCard, type FileExpansion } from "./results-card";
 import { resultsSummary, runResults } from "./results-model";
-import { clampDeckWidth, DECK_INLINE_MIN_WIDTH, deckTarget, type DeckStatus } from "./run-deck-model";
+import { clampDeckWidth, DECK_INLINE_MIN_WIDTH, deckTarget } from "./run-deck-model";
 
 /**
  * The Run Deck: a run's results beside the chat.
@@ -77,15 +77,6 @@ export function RunDeckToggle({ deck }: { deck: Deck }) {
   return <button type="button" className="icon-button" aria-pressed={open} onClick={deck.toggle} aria-label={open ? "Hide the Run Deck" : "Show the Run Deck"} title={open ? "Hide the Run Deck" : "Show the Run Deck"}><PanelRight size={16} /></button>;
 }
 
-const STATUS_ICON: Record<DeckStatus["tone"], ReactNode> = {
-  working: <Loader2 size={15} className="run-deck-spin" aria-hidden="true" />,
-  waiting: <CircleDot size={15} aria-hidden="true" />,
-  done: <Check size={15} aria-hidden="true" />,
-  warning: <AlertCircle size={15} aria-hidden="true" />,
-  failed: <X size={15} aria-hidden="true" />,
-  neutral: <CircleDot size={15} aria-hidden="true" />,
-};
-
 /** What the chat must keep when the deck grows. */
 const CHAT_MIN_WIDTH = 480;
 const KEY_STEP = 24;
@@ -134,13 +125,12 @@ function DeckResizer({ host }: { host: HTMLElement }) {
 }
 
 /** A run's results: a summary line in the chat, and the card itself in the deck while it shows this run. */
-export function RunResults({ runId, changes, evidence, latest, status, renderFiles }: {
+export function RunResults({ runId, changes, evidence, latest, renderFiles }: {
   runId: string;
   changes: readonly RunChange[];
   evidence: readonly RunEvidence[];
   /** Whether this is the run the deck shows by default. */
   latest: boolean;
-  status: DeckStatus;
   renderFiles: (files: ChangeGroup[], expansion: FileExpansion) => ReactNode;
 }) {
   const deck = useContext(DeckContext);
@@ -156,21 +146,22 @@ export function RunResults({ runId, changes, evidence, latest, status, renderFil
   if (!hasResults) return null;
   const showing = deck.target === runId;
   return <>
-    {/* Beside the chat, an open deck already says all of this. */}
-    {!(showing && deck.inline) && <button type="button" className="run-summary" aria-pressed={showing} aria-label={`Show this run in the Run Deck: ${summary}`} onClick={() => deck.pick(runId)}>
+    {/* Stays visible and lit while the deck shows this run, which is how a long chat says which run that is. */}
+    <button type="button" className="run-summary" aria-pressed={showing} aria-label={`${showing ? "Close" : "Show"} this run in the Run Deck: ${summary}`} onClick={() => { if (showing) deck.close(); else deck.pick(runId); }}>
       <PanelRight size={15} aria-hidden="true" />
       <span>{summary.replaceAll(", ", " · ")}</span>
       <ChevronRight size={14} aria-hidden="true" />
-    </button>}
+    </button>
     {showing && deck.host !== null && createPortal(<>
       {deck.inline && <DeckResizer host={deck.host} />}
-      <header className="run-deck-head" data-tone={status.tone}>
-        {STATUS_ICON[status.tone]}
-        <strong>{status.label}</strong>
-        {status.detail !== undefined && <span>{status.detail}</span>}
-        <button type="button" className="icon-button" onClick={deck.close} aria-label="Close the Run Deck" title="Close the Run Deck"><X size={15} /></button>
-      </header>
-      <ResultsCard runId={runId} changes={changes} evidence={evidence} docked renderFiles={renderFiles} />
+      <ResultsCard
+        runId={runId}
+        changes={changes}
+        evidence={evidence}
+        docked
+        headerAction={<button type="button" className="icon-button" onClick={deck.close} aria-label="Close the Run Deck" title="Close the Run Deck"><X size={15} /></button>}
+        renderFiles={renderFiles}
+      />
     </>, deck.host)}
   </>;
 }

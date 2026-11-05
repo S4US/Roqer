@@ -41,7 +41,7 @@ export type FileExpansion = {
  *
  * The file diffs are rendered by the caller, which owns the editor panel.
  */
-export const ResultsCard = memo(function ResultsCard({ runId, changes, evidence, collapsed = false, docked = false, renderFiles }: {
+export const ResultsCard = memo(function ResultsCard({ runId, changes, evidence, collapsed = false, docked = false, headerAction, renderFiles }: {
   /** The run this card belongs to; the live card and the recorded one share it. */
   runId: string;
   changes: readonly RunChange[];
@@ -50,6 +50,8 @@ export const ResultsCard = memo(function ResultsCard({ runId, changes, evidence,
   collapsed?: boolean;
   /** In the Run Deck, which is open by being on screen, so the card has no fold of its own. */
   docked?: boolean;
+  /** Beside the tabs, for what the card's host needs there. */
+  headerAction?: ReactNode;
   renderFiles: (files: ChangeGroup[], expansion: FileExpansion) => ReactNode;
 }) {
   const results = useMemo(() => runResults(changes, evidence), [changes, evidence]);
@@ -150,6 +152,7 @@ export const ResultsCard = memo(function ResultsCard({ runId, changes, evidence,
           </button>;
         })}
       </div>
+      {headerAction}
     </div>
     {/* Mounted on first visit: a folded card in a long chat builds none of
         its diffs, tiles or pictures. A hidden pictures panel is display:none,

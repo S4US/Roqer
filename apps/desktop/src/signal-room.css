@@ -124,24 +124,16 @@
 .run-deck { position: relative; display: flex; flex: 0 0 var(--deck-width, clamp(360px, 32vw, 560px)); flex-direction: column; min-width: 0; max-width: calc(100% - 732px); height: 100%; overflow: hidden; container: deck / inline-size; background: var(--surface); border: 1px solid var(--border-subtle); border-radius: 14px; box-shadow: var(--shadow-sm); }
 .run-deck:empty { display: none; }
 .app-shell { position: relative; }
-.run-deck-head { display: flex; flex: none; align-items: center; gap: 8px; min-height: 56px; padding: 0 8px 0 16px; border-bottom: 1px solid var(--border-subtle); }
-.run-deck-head > svg { flex: none; color: var(--muted); }
-.run-deck-head strong { flex: none; font-size: var(--type-heading); font-weight: var(--weight-semibold); letter-spacing: -.01em; }
-.run-deck-head > span { min-width: 0; overflow: hidden; color: var(--muted); font-size: 12.5px; text-overflow: ellipsis; white-space: nowrap; }
-.run-deck-head > button { flex: none; width: 32px; height: 32px; margin-left: auto; }
-.run-deck-head[data-tone="working"] > svg { color: var(--accent); }
-.run-deck-head[data-tone="waiting"] > svg, .run-deck-head[data-tone="warning"] > svg { color: var(--warning); }
-.run-deck-head[data-tone="done"] > svg { color: var(--success); }
-.run-deck-head[data-tone="failed"] > svg { color: var(--danger); }
-.run-deck-spin { animation: spin .9s linear infinite; }
 .run-deck .results-card { display: flex; flex: 1; flex-direction: column; min-height: 0; margin: 0; overflow: hidden; background: transparent; border: 0; border-radius: 0; box-shadow: none; }
-.run-deck .results-header, .run-deck .results-card[data-open="true"] > .results-header { flex: none; min-height: 0; padding: 8px; border-bottom: 1px solid var(--border-subtle); }
+.run-deck .results-header, .run-deck .results-card[data-open="true"] > .results-header { flex: none; gap: 4px; min-height: 56px; padding: 0 8px; border-bottom: 1px solid var(--border-subtle); }
+.run-deck .results-header > .icon-button { flex: none; width: 32px; height: 32px; }
 .run-deck .results-panel:not([hidden]) { flex: 1; min-height: 0; overflow: auto; }
 .run-summary { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 40px; margin-top: 12px; padding: 0 10px 0 12px; color: var(--ink-secondary); background: transparent; border: 1px solid var(--border-subtle); border-radius: 11px; font-size: var(--type-label); text-align: left; }
 .run-summary > span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .run-summary > svg { flex: none; color: var(--faint); }
 .run-summary:hover { background: var(--surface-sunken); border-color: var(--border); }
-.run-summary[aria-pressed="true"] { background: var(--surface-raised); border-color: var(--border); }
+.run-summary[aria-pressed="true"] { color: var(--ink); background: var(--accent-soft); border-color: var(--accent-border); }
+.run-summary[aria-pressed="true"] > svg:first-child { color: var(--accent); }
 
 @media (max-width: 1239px) {
   .run-deck { max-width: none; position: absolute; top: 72px; right: 20px; bottom: calc(var(--dock-height, 180px) + 12px); z-index: 14; width: min(420px, calc(100% - 40px)); height: auto; border-color: var(--border-strong); box-shadow: var(--shadow-lg); }
@@ -159,7 +151,7 @@
 
 /* The deck's tabs always fit. Every tab shows its icon and count; the open one adds its name, and the rest join in when the deck has room. */
 .run-deck .results-tabs { gap: 2px; padding: 2px; overflow: visible; background: var(--surface-sunken); border: 1px solid var(--border-subtle); border-radius: 10px; }
-.run-deck .results-tab { flex: 1 1 auto; justify-content: center; gap: 5px; height: 30px; padding: 0 8px; border: 0; border-radius: 7px; font-size: var(--type-label); }
+.run-deck .results-tab { flex: 1 1 auto; justify-content: center; gap: 4px; height: 30px; padding: 0 6px; border: 0; border-radius: 7px; font-size: var(--type-label); }
 .run-deck .results-card[data-open="true"] .results-tab[aria-selected="true"] { color: var(--ink); background: var(--surface-raised); box-shadow: var(--shadow-sm); }
 .run-deck .results-tab-count { min-width: 0; height: auto; padding: 0; color: var(--faint); background: transparent; font-size: var(--type-meta); }
 .run-deck .results-tab .diff-summary { display: none; }
