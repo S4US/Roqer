@@ -41,13 +41,15 @@ export type FileExpansion = {
  *
  * The file diffs are rendered by the caller, which owns the editor panel.
  */
-export const ResultsCard = memo(function ResultsCard({ runId, changes, evidence, collapsed = false, renderFiles }: {
+export const ResultsCard = memo(function ResultsCard({ runId, changes, evidence, collapsed = false, docked = false, renderFiles }: {
   /** The run this card belongs to; the live card and the recorded one share it. */
   runId: string;
   changes: readonly RunChange[];
   evidence: readonly RunEvidence[];
   /** Start folded to the header: an earlier run in the chat. */
   collapsed?: boolean;
+  /** In the Run Deck, which is open by being on screen, so the card has no fold of its own. */
+  docked?: boolean;
   renderFiles: (files: ChangeGroup[], expansion: FileExpansion) => ReactNode;
 }) {
   const results = useMemo(() => runResults(changes, evidence), [changes, evidence]);
@@ -68,7 +70,7 @@ export const ResultsCard = memo(function ResultsCard({ runId, changes, evidence,
   }, [tabs, update]);
   const baseId = useId();
   const tabRefs = useRef(new Map<ResultsTab, HTMLButtonElement>());
-  const { open } = view;
+  const open = docked || view.open;
   const active = shownTab(tabs, view.picked, view.following);
   // Tabs the reader has had open keep their panels mounted, hidden, so what
   // they chose there is still there when they come back; a tab never opened
@@ -110,7 +112,7 @@ export const ResultsCard = memo(function ResultsCard({ runId, changes, evidence,
   const tabId = (id: ResultsTab) => `${baseId}-${id}`;
   return <section className="results-card" data-open={open} aria-label={`Results: ${resultsSummary(tabs)}`}>
     <div className="results-header">
-      <button
+      {!docked && <button
         type="button"
         className="results-collapse"
         aria-expanded={open}
@@ -119,7 +121,7 @@ export const ResultsCard = memo(function ResultsCard({ runId, changes, evidence,
         onClick={() => update((current) => ({ ...current, open: !current.open }))}
       >
         <ChevronRight size={14} aria-hidden="true" />
-      </button>
+      </button>}
       <div className="results-tabs" role="tablist" aria-label="Results" onKeyDown={onKeyDown}>
         {tabs.map((tab) => {
           const selected = tab.id === active;

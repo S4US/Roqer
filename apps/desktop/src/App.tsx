@@ -42,7 +42,9 @@ import { Markdown, StreamingMarkdown } from "./markdown-view";
 import { SettingsPage } from "./settings-page";
 import { DiagnosticsActions } from "./diagnostics-actions";
 import { sendBlockedNotice } from "./send-blocked";
-import { ResultsCard, type FileExpansion } from "./results-card";
+import type { FileExpansion } from "./results-card";
+import { finishedDeckStatus, type DeckStatus } from "./run-deck-model";
+import { RunDeckProvider, RunDeckToggle, RunResults, useRunDeck } from "./run-deck";
 import { ModelMenu, RunMenu } from "./composer-menus";
 import { ContextMeter } from "./context-meter";
 import { compactUsageNote, contextMeterView, nextContextReading, type ContextReading } from "./context-usage";
@@ -298,7 +300,8 @@ function App() {
     const dock = dockRef.current;
     const workspaceElement = dock?.parentElement;
     if (!dock || !workspaceElement || composerExpanded) return;
-    const measure = () => workspaceElement.style.setProperty("--dock-height", `${Math.ceil(dock.getBoundingClientRect().height)}px`);
+    // On the shell, because the Run Deck beside the workspace stops above the dock too.
+    const measure = () => (workspaceElement.closest<HTMLElement>(".app-shell") ?? workspaceElement).style.setProperty("--dock-height", `${Math.ceil(dock.getBoundingClientRect().height)}px`);
     measure();
     const observer = new ResizeObserver(measure);
     observer.observe(dock);
@@ -693,6 +696,8 @@ function App() {
    */
   const [studioSelection, setStudioSelection] = useState<StudioSelection | null>(null);
   const [dismissedSelectionKey, setDismissedSelectionKey] = useState<string | null>(null);
+  const [deckHost, setDeckHost] = useState<HTMLElement | null>(null);
+  const deck = useRunDeck(workspace.selectedChatId, deckHost);
   const [windowFocused, setWindowFocused] = useState(() => typeof document !== "undefined" && document.hasFocus());
   useEffect(() => {
     const focused = () => setWindowFocused(true);
@@ -1543,7 +1548,8 @@ function App() {
   };
 
   return (
-    <div className="app-shell" data-theme={theme} data-sidebar={sidebarShown ? "shown" : "hidden"} aria-busy={!hydrated}>
+    <RunDeckProvider deck={deck}>
+    <div className="app-shell" data-theme={theme} data-sidebar={sidebarShown ? "shown" : "hidden"} data-deck={deck.target === null ? "closed" : "open"} aria-busy={!hydrated}>
       {/* Settings covers the chat rather than replacing it, so a run keeps
           streaming underneath; while it is open the chat is unreachable. */}
       <aside className="sidebar" id="sidebar" inert={showSettings}>
@@ -1689,6 +1695,7 @@ function App() {
               </div>}
             </div>
             <RojoPill instanceId={targetStudio?.instanceId ?? null} placeName={targetStudio?.name} refreshSignal={studioStatus} />
+            <RunDeckToggle deck={deck} />
             <RowMenu label="Chat options" iconSize={20} disabled={!selectedChat} items={CHAT_MENU_ITEMS} onSelect={(action) => { if (selectedChat) void chatAction(workspace.selectedProjectId, selectedChat.id, action); }} />
           </div>
         </header>
@@ -1884,10 +1891,13 @@ function App() {
         </div>
       </main>
 
+      <aside className="run-deck" aria-label="Run Deck" ref={setDeckHost} inert={showSettings} />
+
       {showSettings && <SettingsPage preferences={workspace.preferences} studioStatus={studioStatus} updateState={updateState} onPreferences={updatePreferences} onStudioRefresh={() => void refreshStudioStatus()} onProviderChanged={() => { void refreshProviderStatus(); void refreshProviderModels(); }} onExport={() => void exportChats(storageRecovery.required ? undefined : workspace)} notice={settingsNotice ?? undefined} onClose={() => { setShowSettings(false); setSettingsNotice(null); }} />}
       {renderDialog()}
       {!hydrated && <div className="loading-overlay"><div><span /><strong>Opening your workspace…</strong></div></div>}
     </div>
+    </RunDeckProvider>
   );
 }
 
@@ -2240,7 +2250,7 @@ function LiveRun({ view, steps, nodes, onOpenInStudio }: { view: RunView; steps:
     />}
     <TaskList tasks={view.tasks} />
     <ActivitySection steps={steps} nodes={nodes} running={running} />
-    <ResultsCard runId={view.runId} changes={view.changes} evidence={view.evidence} renderFiles={renderFiles} />
+    <RunResults runId={view.runId} changes={view.changes} evidence={view.evidence} latest status={liveDeckStatus(view)} renderFiles={renderFiles} />
     {answered && (running
       // Formatted as it streams, re-rendered a few times a second rather than
       // on every delta, which would make a long reply quadratic.
@@ -2259,6 +2269,13 @@ function LiveRun({ view, steps, nodes, onOpenInStudio }: { view: RunView; steps:
     <RunNotes notes={view.notes} delivered={view.notesDelivered} running={running} />
     {view.desynchronized && <p className="run-warning"><AlertCircle size={14} /> Some updates were missed, so this timeline may be incomplete.</p>}
   </div></section></div>;
+}
+
+/** What the Run Deck's heading says about the run in flight, or the one that just ended. */
+function liveDeckStatus(view: RunView): DeckStatus {
+  if (view.outcome !== null) return finishedDeckStatus(view.outcome, runAppliedAndVerified(view), runHasWarnings(view) || runGateIssues(view).length > 0);
+  if (view.pendingApproval !== null || view.pendingQuestion !== null) return { label: "Waiting for you", tone: "waiting" };
+  return { label: view.status?.label ?? "Working", tone: "working" };
 }
 
 /**
@@ -2881,7 +2898,7 @@ function RunRecordView({ record, text, latest, onOpenInStudio }: { record: RunRe
   return <>
     <TaskList tasks={record.tasks ?? []} settled />
     <ActivitySection steps={steps} running={false} />
-    <ResultsCard runId={record.runId} changes={record.changes} evidence={record.evidence} collapsed={!latest} renderFiles={renderFiles} />
+    <RunResults runId={record.runId} changes={record.changes} evidence={record.evidence} latest={latest} status={finishedDeckStatus(record.outcome, recordAppliedAndVerified(record), recordHasWarnings(record) || recordGateIssues(record).length > 0)} renderFiles={renderFiles} />
     <Markdown text={text} className="result-copy" />
     {appliedAndVerified && <AppliedStatus />}
     {showOutcome && <OutcomeCard

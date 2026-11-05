@@ -80,7 +80,7 @@
 
 /* New chat: the question, the composer and the starters sit together mid-pane. */
 .home-studs { position: absolute; inset: 0; pointer-events: none; background-image: radial-gradient(circle at 1.5px 1.5px, color-mix(in srgb, var(--accent) 14%, transparent) 1.5px, transparent 2px); background-size: 24px 24px; -webkit-mask-image: radial-gradient(ellipse 58% 62% at 50% 46%, #000 10%, transparent 100%); mask-image: radial-gradient(ellipse 58% 62% at 50% 46%, #000 10%, transparent 100%); }
-.empty-conversation { position: absolute; inset: 56px 24px calc(50% + 72px); display: flex; align-items: flex-end; justify-content: center; min-height: 0; pointer-events: none; }
+.empty-conversation { position: absolute; inset: 56px 24px calc(50% + 72px); display: flex; flex-direction: row; align-items: flex-end; justify-content: center; min-height: 0; text-align: center; pointer-events: none; }
 .empty-conversation h1 { margin: 0; font-size: 38px; font-weight: var(--weight-medium); letter-spacing: -.03em; line-height: 1.15; text-wrap: balance; }
 .composer-dock.home { top: calc(50% - 48px); bottom: auto; padding-top: 0; background: none; }
 .home-starters { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; width: min(720px, 100%); margin: 14px auto 0; }
@@ -110,3 +110,40 @@
 .more-failed:hover { background: var(--surface-raised); }
 .node-row[data-status="failed"] .node-title { color: var(--ink); font-weight: var(--weight-medium); }
 .node-row[data-status="failed"] .node-finding { color: var(--danger); }
+
+/* The Run Deck: beside the chat from 1,240 px, and over it below that, stopping above the composer so Stop stays reachable. */
+.run-deck { display: flex; flex: 0 0 clamp(340px, 31vw, 520px); flex-direction: column; min-width: 0; height: 100%; overflow: hidden; background: var(--surface); border: 1px solid var(--border-subtle); border-radius: 14px; box-shadow: var(--shadow-sm); }
+.run-deck:empty { display: none; }
+.app-shell { position: relative; }
+.run-deck-head { display: flex; flex: none; align-items: center; gap: 8px; min-height: 56px; padding: 0 8px 0 16px; border-bottom: 1px solid var(--border-subtle); }
+.run-deck-head > svg { flex: none; color: var(--muted); }
+.run-deck-head strong { flex: none; font-size: var(--type-heading); font-weight: var(--weight-semibold); letter-spacing: -.01em; }
+.run-deck-head > span { min-width: 0; overflow: hidden; color: var(--muted); font-size: 12.5px; text-overflow: ellipsis; white-space: nowrap; }
+.run-deck-head > button { flex: none; width: 32px; height: 32px; margin-left: auto; }
+.run-deck-head[data-tone="working"] > svg { color: var(--accent); }
+.run-deck-head[data-tone="waiting"] > svg, .run-deck-head[data-tone="warning"] > svg { color: var(--warning); }
+.run-deck-head[data-tone="done"] > svg { color: var(--success); }
+.run-deck-head[data-tone="failed"] > svg { color: var(--danger); }
+.run-deck-spin { animation: spin .9s linear infinite; }
+.run-deck .results-card { display: flex; flex: 1; flex-direction: column; min-height: 0; margin: 0; overflow: hidden; background: transparent; border: 0; border-radius: 0; box-shadow: none; }
+.run-deck .results-header { flex: none; padding: 0 8px; }
+.run-deck .results-panel:not([hidden]) { flex: 1; min-height: 0; overflow: auto; }
+.run-summary { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 40px; margin-top: 12px; padding: 0 10px 0 12px; color: var(--ink-secondary); background: transparent; border: 1px solid var(--border-subtle); border-radius: 11px; font-size: var(--type-label); text-align: left; }
+.run-summary > span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.run-summary > svg { flex: none; color: var(--faint); }
+.run-summary:hover { background: var(--surface-sunken); border-color: var(--border); }
+.run-summary[aria-pressed="true"] { background: var(--surface-raised); border-color: var(--border); }
+
+@media (max-width: 1239px) {
+  .run-deck { position: absolute; top: 72px; right: 20px; bottom: calc(var(--dock-height, 180px) + 12px); z-index: 14; width: min(420px, calc(100% - 40px)); height: auto; border-color: var(--border-strong); box-shadow: var(--shadow-lg); }
+}
+
+/* A menu opening from the mid-pane composer goes over the top bar, and scrolls rather than leave the window. */
+.composer-dock.home { z-index: 25; }
+.composer-dock.home .composer-menu-panel { max-height: calc(50vh + 24px); overflow-y: auto; }
+
+/* The top bar with the deck open: names stay on one line, and details give way first. */
+.rojo-pill, .connection-pill { flex: none; white-space: nowrap; }
+.topbar .chat-heading { flex: 1; }
+.topbar-actions { flex: none; margin-left: 8px; }
+.app-shell[data-deck="open"] .connection-detail { display: none; }
