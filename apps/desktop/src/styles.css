@@ -278,8 +278,8 @@ button:focus-visible, textarea:focus-visible, select:focus-visible, input:focus-
 .subscription-card .runtime-badge { padding: 4px 6px; color: var(--muted); background: var(--surface-sunken); border: 1px solid var(--border-subtle); border-radius: 6px; font-size: var(--type-meta); font-weight: var(--weight-regular); }
 .settings-button { display: flex; align-items: center; gap: 10px; width: 100%; height: 40px; margin-top: 8px; padding: 0 10px; color: var(--muted); background: transparent; border: 0; border-radius: 9px; font-size: var(--type-body); font-weight: var(--weight-medium); }
 .settings-button:hover { color: var(--ink); background: var(--sidebar-active); }
-.settings-row { display: flex; align-items: center; gap: 4px; margin-top: 8px; }
-.settings-row .settings-button { flex: 1; min-width: 0; margin-top: 0; }
+.sidebar-settings-row { display: flex; align-items: center; gap: 4px; margin-top: 8px; }
+.sidebar-settings-row .settings-button { flex: 1; min-width: 0; margin-top: 0; }
 
 /* The community invite is offered once as a card and then lives beside
  * Settings as an icon. Discord's colour is the only colour it brings. */

@@ -1560,7 +1560,7 @@ function App() {
           {canInstallUpdate(updateState) && <button className="settings-button update-ready" onClick={() => void installUpdate()}>
             <Download size={18} /> {appUpdateMessage(updateState)}
           </button>}
-          <div className="settings-row">
+          <div className="sidebar-settings-row">
             <button className="settings-button" onClick={() => setShowSettings(true)}><Settings size={18} /> Settings</button>
             {invite === "icon" && <CommunityIcon url={COMMUNITY_INVITE_URL} arrived={communityIconArrived} onArrived={() => setCommunityIconArrived(false)} />}
           </div>
