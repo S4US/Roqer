@@ -284,6 +284,25 @@ and Settings says so. Check key asks Roblox's key-introspection endpoint whether
 the key is enabled, unexpired, and allowed to write assets for the chosen
 creator; it creates nothing.
 
+### Your uploads
+
+Every upload the agent makes through `upload_asset` or `upload_assets` is
+recorded in `asset-ledger.json` in Roqer's data folder: the asset id, type and
+name, a Decal's image id, the moderation state, the creator it was published
+as, the SHA-256 and size of the file, the file's name (never its path), when
+it went up, and which chat sent it. The main process writes it from what it
+saw go through the bridge; the model and the window cannot write to it.
+
+Settings → Roblox → Uploads lists them, newest first, with a filter, the
+thumbnail Roblox draws for a picture or model, Copy id, Insert into the
+connected place, and the asset's page on Roblox. The agent reads the same
+list with `list_uploads`, so an asset made in an earlier chat is reused by id.
+A file whose exact bytes this account already uploaded as the same type is
+not uploaded again: the call is answered from the record, and its result says
+so. A changed file, a different type, a different creator, or an upload
+Roblox rejected uploads afresh. A later status check fills in what Roblox
+said about a pending upload.
+
 ### Blender in Roqer
 
 Settings → Blender turns on the opt-in local Blender worker.

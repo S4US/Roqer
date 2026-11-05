@@ -102,6 +102,7 @@ const KIND_BY_TOOL: Readonly<Record<string, ToolActivityKind>> = {
   // A call to one of the user's MCP servers is left out: what it does is the
   // server's, so it reads as "run", the conservative default.
   list_mcp_tools: "read",
+  list_uploads: "read",
 };
 
 /**
@@ -296,6 +297,7 @@ export function activityLabel(tool: string, target: string | null, past: boolean
   if (tool === "upload_asset" && target === "status") return `${verb} upload status`;
   if (tool === "upload_asset" && target === "upload") return past ? "Uploaded an asset" : "Uploading an asset";
   if (tool === "upload_assets") return past ? "Uploaded assets" : "Uploading assets";
+  if (tool === "list_uploads") return past ? "Listed earlier uploads" : "Listing earlier uploads";
   if (tool === "run_blender_script") return past ? "Modeled in Blender" : "Modeling in Blender";
   if (tool === "capture_moments") return past ? "Captured an effect at several moments" : "Capturing an effect at several moments";
   if (tool === "read_reference_clip") return past ? "Looked closer at the reference clip" : "Looking closer at the reference clip";

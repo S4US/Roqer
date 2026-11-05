@@ -17,6 +17,7 @@ import type { RojoResult } from "../shared/rojo";
 import type { ModelPreviewResult } from "../shared/model-preview";
 import type { EvidencePictureResult } from "../shared/evidence-picture";
 import type { EvidenceSoundResult } from "../shared/evidence-sound";
+import type { AssetInsertRequest, AssetLedgerResult, AssetThumbnailRequest, AssetThumbnailResult } from "../shared/asset-ledger";
 import type { ClipSelection } from "../shared/reference-clip";
 
 type ProviderConnector = {
@@ -83,6 +84,11 @@ declare global {
         get(): Promise<OpenCloudSettingsResult>;
         save(save: OpenCloudSave): Promise<OpenCloudSettingsResult>;
         check(): Promise<OpenCloudCheckResult>;
+      };
+      uploads: {
+        ledger(): Promise<AssetLedgerResult>;
+        insert(request: AssetInsertRequest): Promise<StudioActionResult>;
+        thumbnail(request: AssetThumbnailRequest): Promise<AssetThumbnailResult>;
       };
       previews: {
         loadModel(id: string): Promise<ModelPreviewResult>;

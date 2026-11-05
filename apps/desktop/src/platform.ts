@@ -1,3 +1,4 @@
+import type { AssetInsertRequest, AssetLedgerResult, AssetThumbnailRequest, AssetThumbnailResult } from "../shared/asset-ledger";
 import type { EvidenceSoundResult } from "../shared/evidence-sound";
 import type { StudioSelection } from "../shared/studio-selection";
 import { normalizeWorkspace, type AssetAttachment, type WorkspaceState } from "./model";
@@ -139,6 +140,19 @@ export async function importCustomModels(connectionId: string): Promise<CustomMo
 }
 
 const NO_DESKTOP_OPEN_CLOUD = "Roblox Open Cloud settings need the desktop app.";
+
+/** The ledger of what this computer uploaded; a browser has none. */
+export async function getAssetLedger(): Promise<AssetLedgerResult> {
+  return window.workbenchDesktop?.uploads.ledger() ?? { ok: false, message: "The upload ledger needs the desktop app." };
+}
+
+export async function insertLedgerAsset(request: AssetInsertRequest): Promise<StudioActionResult> {
+  return window.workbenchDesktop?.uploads.insert(request) ?? { ok: false, message: "Inserting an asset needs the desktop app." };
+}
+
+export async function getAssetThumbnail(request: AssetThumbnailRequest): Promise<AssetThumbnailResult> {
+  return window.workbenchDesktop?.uploads.thumbnail(request) ?? { ok: false, message: "Thumbnails need the desktop app." };
+}
 
 export async function getOpenCloudSettings(): Promise<OpenCloudSettingsResult> {
   return window.workbenchDesktop?.openCloud.get() ?? { ok: false, message: NO_DESKTOP_OPEN_CLOUD };

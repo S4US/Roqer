@@ -1,6 +1,8 @@
 import { BLENDER_OPERATION } from "../shared/blender";
 import { AUDITED_AFTER_LABEL, REVISION_AFTER_LABEL, UI_AUDIT_TITLE } from "../shared/completion";
-import { CAPTURE_MOMENTS_OPERATION, GATEWAY_TOOL_RISK, isGatewayOperation, UPLOAD_ASSETS_OPERATION } from "../shared/gateway-operations";
+import {
+  CAPTURE_MOMENTS_OPERATION, GATEWAY_TOOL_RISK, isGatewayOperation, LIST_UPLOADS_OPERATION, UPLOAD_ASSETS_OPERATION,
+} from "../shared/gateway-operations";
 import { isKnownTool, TOOL_RISK } from "../shared/mcp-tools";
 import {
   argumentTypeProblems,
@@ -161,6 +163,7 @@ const DOCUMENTED_OPERATIONS = [
   "get_roblox_docs",
   "upload_asset",
   UPLOAD_ASSETS_OPERATION,
+  LIST_UPLOADS_OPERATION,
 ];
 
 /**
@@ -196,6 +199,7 @@ export function studioToolGuide(): string {
     "Important operations and arguments:",
     ...signatures,
     "Other operations in the enum are called the same way. To read one's schema first, call it with {help: true} as its only argument: that is answered locally, never reaches Studio, and is not a failed call. Calling with arguments that do not fit also returns the schema.",
+    "Before uploading a file, list_uploads says what this computer already uploaded (id, type, name, moderation), so an asset made in an earlier chat is reused by id rather than uploaded again; an upload whose exact bytes went up before is answered from that record without uploading, and its result says so.",
     "Always read a script and its sourceRevision before changing it, except one that is still empty, such as a script build_instances just created: omit expectedRevision and Roqer checks it is empty and supplies the revision. Roqer automatically reads back every successful script mutation and tells you whether its reported revision was verified; that is the check, so do not read a script again only to confirm a write.",
     `To write a skill's Lua template unchanged, pass template (its skill path, e.g. ${TEMPLATE_EXAMPLE}) instead of source: Roqer writes the file itself, so do not load a template you are not changing, and never retype one. A script that already holds it exactly is left alone.`,
     "A script write whose source will not compile still lands, and its result carries syntaxError {line, message}: fix that line before playtesting. syntaxCheck: 'unavailable' means the source was not checked. Only syntax is judged, not types or member names.",

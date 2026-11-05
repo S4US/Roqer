@@ -47,7 +47,15 @@ import { linkRojoProject } from "../runtime/link-rojo-project";
 import { withLocalOperations, type LocalOperation } from "../runtime/local-operations";
 import { readStudioSelection } from "../runtime/selection-context";
 import { readSoundFileInside } from "../runtime/picture-store";
-import { CAPTURE_MOMENTS_OPERATION, LINK_ROJO_PROJECT_OPERATION, UPLOAD_ASSETS_OPERATION } from "../shared/gateway-operations";
+import { AssetLedger } from "../runtime/asset-ledger";
+import { ledgerAwareUpload, listUploads, type LedgerRunContext } from "../runtime/upload-ledger";
+import {
+  isAssetInsertRequest, isAssetThumbnailRequest, MAX_THUMBNAIL_CHARACTERS,
+  type AssetLedgerResult, type AssetThumbnailResult,
+} from "../shared/asset-ledger";
+import {
+  CAPTURE_MOMENTS_OPERATION, LINK_ROJO_PROJECT_OPERATION, LIST_UPLOADS_OPERATION, UPLOAD_ASSETS_OPERATION,
+} from "../shared/gateway-operations";
 import type { McpCallOptions, McpToolOutcome } from "../runtime/mcp-types";
 import { BLENDER_OPERATION, type BlenderSettingsResult, type BlenderSettingsView } from "../shared/blender";
 import {
@@ -321,6 +329,16 @@ function withMcpAuthorization(resolved: ResolvedMcpServer): ResolvedMcpServer {
 let openCloudStore: OpenCloudStore | null = null;
 
 /** The user's Roblox Open Cloud key and creator, with the key encrypted by the OS. */
+// -- Asset ledger ------------------------------------------------------------
+
+let assetLedgerStore: AssetLedger | null = null;
+
+/** What this computer uploaded to Roblox, written by the main process from the uploads it saw go through. */
+function assetLedger(): AssetLedger {
+  assetLedgerStore ??= new AssetLedger({ file: path.join(app.getPath("userData"), "asset-ledger.json") });
+  return assetLedgerStore;
+}
+
 function openCloud(): OpenCloudStore {
   openCloudStore ??= new OpenCloudStore({
     file: path.join(app.getPath("userData"), "open-cloud.json"),
@@ -1032,6 +1050,57 @@ async function openCloudSettingsResult(): Promise<OpenCloudSettingsResult> {
         : { damagedNotice: `Your saved Open Cloud settings could not be read and were set aside at ${preserved}. Enter them again.` }),
     },
   };
+}
+
+/** The upload ledger for Settings, newest first, with a one-time note when the file had to be set aside. */
+async function getAssetLedger(event: IpcMainInvokeEvent): Promise<AssetLedgerResult> {
+  if (!isTrusted(event.sender)) return { ok: false, message: "This window may not read the upload ledger." };
+  try {
+    const assets = await assetLedger().list();
+    const notice = assetLedger().takeNotice();
+    return { ok: true, ledger: { assets, ...(notice === undefined ? {} : { notice }) } };
+  } catch (error) {
+    return storeFailure(error, "Your upload ledger could not be read.");
+  }
+}
+
+/**
+ * Put an asset from the ledger into a place, on the user's click. The same
+ * sanitized insertion the agent gets; the click is the confirmation, and the
+ * place is the one the window named, checked against the bridge by the call.
+ */
+async function insertLedgerAsset(event: IpcMainInvokeEvent, value: unknown): Promise<StudioActionResult> {
+  if (!isTrusted(event.sender)) return { ok: false, message: "This window may not insert assets." };
+  if (!isAssetInsertRequest(value)) return { ok: false, message: "The insert request was not valid." };
+  let client: McpClient;
+  try {
+    client = clientFor(value.endpoint);
+  } catch (error) {
+    return { ok: false, message: error instanceof McpEndpointError ? error.message : "The MCP endpoint could not be used." };
+  }
+  const outcome = await client.callTool("insert_asset", {
+    assetId: Number(value.assetId),
+    ...(value.instanceId === null ? {} : { instance_id: value.instanceId }),
+  });
+  if (!outcome.ok) return { ok: false, message: outcome.message ?? "Studio could not insert this asset." };
+  return { ok: true, message: `Inserted asset ${value.assetId} into the place, under Workspace.` };
+}
+
+/** An asset's thumbnail from Roblox, through the bridge, bounded for the window. */
+async function getAssetThumbnail(event: IpcMainInvokeEvent, value: unknown): Promise<AssetThumbnailResult> {
+  if (!isTrusted(event.sender)) return { ok: false, message: "This window may not read thumbnails." };
+  if (!isAssetThumbnailRequest(value)) return { ok: false, message: "The thumbnail request was not valid." };
+  let client: McpClient;
+  try {
+    client = clientFor(value.endpoint);
+  } catch (error) {
+    return { ok: false, message: error instanceof McpEndpointError ? error.message : "The MCP endpoint could not be used." };
+  }
+  const outcome = await client.callTool("get_asset_thumbnail", { assetId: Number(value.assetId), size: "150x150" }, { timeoutMs: 15_000 });
+  const image = outcome.ok ? outcome.images?.[0] : undefined;
+  if (image === undefined) return { ok: false, message: outcome.message ?? "No thumbnail." };
+  const dataUrl = `data:${image.mediaType};base64,${image.data}`;
+  return dataUrl.length <= MAX_THUMBNAIL_CHARACTERS ? { ok: true, dataUrl } : { ok: false, message: "The thumbnail was too large." };
 }
 
 async function getOpenCloudSettings(event: IpcMainInvokeEvent): Promise<OpenCloudSettingsResult> {
@@ -2315,12 +2384,25 @@ async function startRun(event: IpcMainInvokeEvent, payload: unknown): Promise<Ru
       })
       : undefined;
     if (externalMcpSession !== undefined) void pruneMcpDownloads(mcpDownloadsRoot());
+    // Every upload of the run passes the ledger: answered from it when the
+    // same bytes are already on Roblox, written to it when it went through.
+    const ledgerContext: LedgerRunContext = {
+      chatId: request.chatId,
+      projectId: request.projectId,
+      runId,
+      creator: async () => (await openCloud().get()).creator ?? undefined,
+    };
     const session = new RunSession({
       caller: withLocalOperations(client, new Map<string, LocalOperation>([
         [CAPTURE_MOMENTS_OPERATION, (args, options, studio) => captureMoments(
           args, options, studio, composeContactSheet, clips ? chatClips(request.chatId) : undefined, captureToneFrame,
         )],
-        [UPLOAD_ASSETS_OPERATION, uploadAssets],
+        ["upload_asset", (args, options, studio) => ledgerAwareUpload(args, options, studio, assetLedger(), ledgerContext)],
+        [UPLOAD_ASSETS_OPERATION, (args, options, studio) => uploadAssets(args, options, (tool, toolArgs, toolOptions) =>
+          tool === "upload_asset"
+            ? ledgerAwareUpload(toolArgs, toolOptions ?? {}, studio, assetLedger(), ledgerContext)
+            : studio(tool, toolArgs, toolOptions))],
+        [LIST_UPLOADS_OPERATION, (args) => listUploads(args, assetLedger())],
         // Resolved the same way the run's Studio is: `resolvedRequest.instanceId`
         // is the one instance every Studio call is routed to for this run, so
         // the picker opens for exactly that place, never one the model names.
@@ -2956,6 +3038,9 @@ app.whenReady().then(async () => {
   ipcMain.handle("custom-providers:test", testCustomConnectionModel);
   ipcMain.handle("custom-providers:import", importCustomModels);
   ipcMain.handle("open-cloud:get", getOpenCloudSettings);
+  ipcMain.handle("assets:ledger", getAssetLedger);
+  ipcMain.handle("assets:insert", insertLedgerAsset);
+  ipcMain.handle("assets:thumbnail", getAssetThumbnail);
   ipcMain.handle("open-cloud:save", saveOpenCloudSettings);
   ipcMain.handle("open-cloud:check", checkOpenCloudSettings);
   ipcMain.handle("mcp-servers:list", listMcpServers);

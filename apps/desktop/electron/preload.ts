@@ -24,6 +24,9 @@ import {
   isStudioSelectionResult, type StudioSelection, type StudioSelectionRequest, type StudioSelectionResult,
 } from "../shared/studio-selection";
 import { isEvidenceSoundResult, type EvidenceSoundResult } from "../shared/evidence-sound";
+import {
+  isAssetLedgerResult, isAssetThumbnailResult, type AssetInsertRequest, type AssetLedgerResult, type AssetThumbnailRequest, type AssetThumbnailResult,
+} from "../shared/asset-ledger";
 import { isEvidenceSoundRef } from "../shared/run-events";
 import { isStorageStatus, type StorageStatus } from "../shared/workspace-storage";
 import {
@@ -401,6 +404,21 @@ contextBridge.exposeInMainWorld("workbenchDesktop", {
   },
   customProviders,
   openCloud,
+  /** What this computer uploaded to Roblox, and the two things to do with one of them. */
+  uploads: {
+    ledger: async (): Promise<AssetLedgerResult> => {
+      const value: unknown = await ipcRenderer.invoke("assets:ledger");
+      return isAssetLedgerResult(value) ? value : { ok: false, message: "Roqer returned an invalid upload ledger." };
+    },
+    insert: async (request: AssetInsertRequest): Promise<StudioActionResult> => {
+      const value: unknown = await ipcRenderer.invoke("assets:insert", request);
+      return isStudioActionResult(value) ? value : { ok: false, message: "Studio returned an invalid insert result." };
+    },
+    thumbnail: async (request: AssetThumbnailRequest): Promise<AssetThumbnailResult> => {
+      const value: unknown = await ipcRenderer.invoke("assets:thumbnail", request);
+      return isAssetThumbnailResult(value) ? value : { ok: false, message: "Roqer returned an invalid thumbnail." };
+    },
+  },
   blender,
   mcpServers,
   rojo,

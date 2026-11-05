@@ -1607,3 +1607,14 @@ a.small-button:focus-visible { outline: 2px solid var(--accent); outline-offset:
 .evidence-sound { display: block; width: 100%; max-width: 320px; height: 34px; }
 .evidence-sound-pending, .evidence-sound-missing { display: inline-flex; align-items: center; gap: 6px; color: var(--faint); font-size: var(--type-meta); }
 @media (max-width: 720px) { .sound-row { grid-template-columns: 30px minmax(0, 1fr); } .sound-row .evidence-sound, .sound-row .evidence-sound-pending, .sound-row .evidence-sound-missing { grid-column: 2; } }
+.asset-filter { width: 200px; max-width: 100%; padding: 6px 9px; color: var(--ink); background: var(--surface-sunken); border: 1px solid var(--border); border-radius: 8px; font-size: var(--type-label); }
+.asset-ledger { display: flex; flex-direction: column; gap: 6px; margin: 0; padding: 4px 0 8px; list-style: none; }
+.asset-row { display: grid; grid-template-columns: 44px minmax(0, 1fr) auto; align-items: center; gap: 12px; padding: 8px 10px; background: var(--surface-sunken); border: 1px solid var(--border-subtle); border-radius: 10px; }
+.asset-thumbnail { width: 44px; height: 44px; object-fit: cover; background: var(--surface); border-radius: 8px; }
+.asset-icon { display: grid; place-items: center; width: 44px; height: 44px; color: var(--muted); background: var(--surface); border-radius: 8px; }
+.asset-text { display: flex; flex-direction: column; min-width: 0; }
+.asset-text strong { overflow: hidden; color: var(--ink); font-size: var(--type-label); font-weight: var(--weight-medium); text-overflow: ellipsis; white-space: nowrap; }
+.asset-text span { overflow: hidden; color: var(--muted); font-size: var(--type-meta); text-overflow: ellipsis; white-space: nowrap; }
+.asset-text code { color: var(--ink-secondary); font: var(--weight-regular) 11.5px/1.4 "Geist Mono Variable", monospace; }
+.asset-actions { display: inline-flex; gap: 6px; }
+.asset-actions a.small-button { display: inline-grid; place-items: center; text-decoration: none; }

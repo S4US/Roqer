@@ -13,6 +13,7 @@ import { DiagnosticsActions } from "./diagnostics-actions";
 import { EndpointPage, endpointDetail, useCustomConnections } from "./custom-connections";
 import { McpServerSettings, type McpServerVisit } from "./mcp-server-settings";
 import { OpenCloudSettings } from "./open-cloud-settings";
+import { AssetLedgerSettings } from "./asset-ledger-settings";
 import {
   cancelProviderLogin, getAppVersion, getProviderLimits, getProviderStatus, installProviderClient, loginProvider, openProviderLogin, submitProviderCode,
   waitForProviderLogin,
@@ -205,6 +206,9 @@ export function SettingsPage({ preferences, studioStatus, updateState, notice, o
           </SettingsGroup>
           <SettingsGroup title="Publishing">
             <OpenCloudSettings />
+          </SettingsGroup>
+          <SettingsGroup title="Uploads">
+            <AssetLedgerSettings studioStatus={studioStatus} endpoint={preferences.mcpEndpoint} />
           </SettingsGroup>
         </>}
 
