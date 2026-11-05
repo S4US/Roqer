@@ -1,10 +1,11 @@
 /*
- * Monochrome by design.
+ * Signal Room.
  *
- * Every surface, border, and piece of text is built from softened cool neutrals.
- * There are no decorative gradients. Indigo is reserved for focus and selection;
- * semantic colour appears only when a state needs it. The source viewer adds a
- * restrained syntax palette so code structure remains legible in both themes.
+ * Graphite panes on a darker ground. The periwinkle of Roqer's own mark is the
+ * only accent, and it is what acts: focus, selection and the primary button.
+ * Amber is kept for risk, so Full auto and irreversible approvals stand out;
+ * green and red only ever report a result. The source viewer adds a restrained
+ * syntax palette so code structure stays legible in both themes.
  *
  * Both themes are defined entirely by the tokens below. Rules further down
  * reference tokens rather than literal colours, which is why there is no large
@@ -20,68 +21,68 @@
      by Chromium from this, not from the tokens below. */
   color-scheme: light;
 
-  --canvas: #f2f3f5;
-  --surface: #f7f8fa;
-  --surface-raised: #fbfbfc;
-  --surface-sunken: #e9ebef;
-  --sidebar: #e9ebef;
-  --sidebar-active: #dfe2e7;
-  --sidebar-selected: #d9dde3;
-  --sidebar-current: #d3d7de;
-  --sidebar-indicator: #858c97;
+  --canvas: #e9ebf0;
+  --surface: #fbfcfd;
+  --surface-raised: #ffffff;
+  --surface-sunken: #f1f3f6;
+  --sidebar: #e9ebf0;
+  --sidebar-active: #dfe2e8;
+  --sidebar-selected: #ffffff;
+  --sidebar-current: #ffffff;
+  --sidebar-indicator: #3a55d4;
 
-  --border-subtle: #e7e9ed;
-  --border: #d9dce2;
-  --border-strong: #c2c6ce;
+  --border-subtle: #e1e4ea;
+  --border: #d6dae1;
+  --border-strong: #c9ced7;
 
-  --ink: #24262b;
-  --ink-secondary: #4b5059;
-  --muted: #666d78;
-  --faint: #959ca8;
+  --ink: #14171d;
+  --ink-secondary: #373d48;
+  --muted: #535b69;
+  --faint: #5f6775;
 
-  /* Actions remain monochrome; accent is only for focus and selection. */
-  --action: #2d3036;
-  --action-hover: #22252a;
-  --action-ink: #f5f6f8;
-  --toggle-thumb: #f7f8fa;
-  --accent: #5963c7;
-  --accent-soft: #e9ebfa;
-  --accent-border: #c8cdf0;
+  /* The primary action wears the accent; amber never does. */
+  --action: #3a55d4;
+  --action-hover: #3049bd;
+  --action-ink: #ffffff;
+  --toggle-thumb: #ffffff;
+  --accent: #3a55d4;
+  --accent-soft: #e7eafa;
+  --accent-border: #b9c4ef;
   /* Discord's own blurple, kept for its mark and its button so the invite is recognisably Discord's. */
   --discord: #5865f2;
   --discord-hover: #4752c4;
   --discord-soft: #eceefe;
 
-  --success: #247a46;
-  --success-soft: #e8f2eb;
-  --success-border: #c8dece;
-  --warning: #946516;
-  --warning-soft: #f5efdf;
-  --warning-border: #e5d7ae;
-  --danger: #ad4545;
-  --danger-soft: #f5e9e7;
-  --danger-border: #e6c9c6;
+  --success: #0f7346;
+  --success-soft: #e3f1ea;
+  --success-border: #b5d9c6;
+  --warning: #8a5900;
+  --warning-soft: #f6eddb;
+  --warning-border: #e0cda3;
+  --danger: #b5372f;
+  --danger-soft: #f8e9e7;
+  --danger-border: #ebc6c2;
 
-  --syntax-keyword: #8d4568;
-  --syntax-string: #347052;
-  --syntax-number: #8a621e;
-  --syntax-call: #3f6786;
-  --syntax-property: #4c5a7c;
-  --syntax-operator: #7a808b;
-  --syntax-comment: #858c97;
+  --syntax-keyword: #7b3fb8;
+  --syntax-string: #0f7346;
+  --syntax-number: #8a5900;
+  --syntax-call: #2a4fb5;
+  --syntax-property: #3a4a78;
+  --syntax-operator: #5f6775;
+  --syntax-comment: #5f6775;
 
   --scroll-thumb: color-mix(in srgb, var(--faint) 34%, transparent);
   --scroll-thumb-hover: color-mix(in srgb, var(--faint) 58%, transparent);
   --scroll-thumb-active: color-mix(in srgb, var(--faint) 82%, transparent);
 
-  --shadow-sm: 0 1px 2px rgba(31, 35, 42, .035), 0 4px 10px rgba(31, 35, 42, .025);
-  --shadow-md: 0 1px 2px rgba(31, 35, 42, .045), 0 8px 24px rgba(31, 35, 42, .06);
-  --shadow-lg: 0 18px 48px rgba(31, 35, 42, .14);
-  --scrim: rgba(24, 27, 33, .42);
+  --shadow-sm: 0 1px 2px rgba(20, 23, 29, .05);
+  --shadow-md: 0 1px 2px rgba(20, 23, 29, .05), 0 8px 24px rgba(20, 23, 29, .07);
+  --shadow-lg: 0 2px 6px rgba(20, 23, 29, .06), 0 24px 60px rgba(20, 23, 29, .16);
+  --scrim: rgba(20, 23, 29, .42);
 
   /* Layout, not colour, so the dark theme leaves these alone. The width is a
      token because the sidebar's hidden position is stated as its negative. */
-  --sidebar-width: 286px;
+  --sidebar-width: 244px;
   --sidebar-travel: .26s;
   --sidebar-motion: var(--sidebar-travel) cubic-bezier(.32, .72, 0, 1);
 
@@ -89,7 +90,7 @@
   --type-label: 13px;
   --type-body: 14px;
   --type-heading: 15px;
-  --type-title: 22px;
+  --type-title: 24px;
   --weight-regular: 400;
   --weight-medium: 500;
   --weight-semibold: 600;
@@ -101,63 +102,63 @@
 [data-theme="dark"] {
   color-scheme: dark;
 
-  --canvas: #15171b;
-  --surface: #1b1e24;
-  --surface-raised: #21242b;
-  --surface-sunken: #111318;
-  --sidebar: #111318;
-  --sidebar-active: #20232a;
-  --sidebar-selected: #252930;
-  --sidebar-current: #2a2e37;
-  --sidebar-indicator: #69717e;
+  --canvas: #0b0d11;
+  --surface: #13161c;
+  --surface-raised: #1b1f27;
+  --surface-sunken: #0e1015;
+  --sidebar: #0b0d11;
+  --sidebar-active: #161a21;
+  --sidebar-selected: #1b1f27;
+  --sidebar-current: #1b1f27;
+  --sidebar-indicator: #8fa6fa;
 
-  --border-subtle: #282c34;
-  --border: #343943;
-  --border-strong: #4a505d;
+  --border-subtle: #242933;
+  --border: #2d323d;
+  --border-strong: #363c49;
 
-  --ink: #edf0f4;
-  --ink-secondary: #c2c7d0;
-  --muted: #9299a5;
-  --faint: #68717e;
+  --ink: #eef1f6;
+  --ink-secondary: #c5cbd6;
+  --muted: #9aa2b1;
+  --faint: #858d9c;
 
-  --action: #dde1e7;
-  --action-hover: #f0f2f5;
-  --action-ink: #1a1d22;
-  --toggle-thumb: #e9ecf1;
-  --accent: #9aa3ff;
-  --accent-soft: #282b42;
-  --accent-border: #464b70;
+  --action: #8fa6fa;
+  --action-hover: #a3b6fb;
+  --action-ink: #0b0f1c;
+  --toggle-thumb: #0b0f1c;
+  --accent: #8fa6fa;
+  --accent-soft: #1f2640;
+  --accent-border: #3b4770;
   --discord: #5865f2;
   --discord-hover: #4752c4;
   --discord-soft: #23264a;
 
-  --success: #70bd88;
-  --success-soft: #1d2b21;
-  --success-border: #334b3a;
-  --warning: #d2a451;
-  --warning-soft: #2d281d;
-  --warning-border: #51452d;
-  --danger: #df8582;
-  --danger-soft: #332321;
-  --danger-border: #5b3937;
+  --success: #5fd39a;
+  --success-soft: #142620;
+  --success-border: #25493a;
+  --warning: #f0b45a;
+  --warning-soft: #2a2216;
+  --warning-border: #5a4524;
+  --danger: #f28b82;
+  --danger-soft: #2c1b1a;
+  --danger-border: #5a3431;
 
-  --syntax-keyword: #d78dac;
-  --syntax-string: #83c99c;
-  --syntax-number: #d8b367;
-  --syntax-call: #80add2;
+  --syntax-keyword: #c9a6f5;
+  --syntax-string: #7fd6ac;
+  --syntax-number: #f0c27a;
+  --syntax-call: #8fb8fa;
   --syntax-property: #a9b5d9;
-  --syntax-operator: #868e9c;
-  --syntax-comment: #69727f;
+  --syntax-operator: #9aa2b1;
+  --syntax-comment: #858d9c;
 
   /* Dark surfaces swallow a faint thumb, so the same bar is mixed stronger. */
   --scroll-thumb: color-mix(in srgb, var(--faint) 46%, transparent);
   --scroll-thumb-hover: color-mix(in srgb, var(--faint) 74%, transparent);
   --scroll-thumb-active: color-mix(in srgb, var(--faint) 92%, transparent);
 
-  --shadow-sm: 0 1px 2px rgba(0, 0, 0, .18), 0 5px 14px rgba(0, 0, 0, .12);
-  --shadow-md: 0 1px 2px rgba(0, 0, 0, .2), 0 10px 28px rgba(0, 0, 0, .2);
-  --shadow-lg: 0 20px 54px rgba(0, 0, 0, .4);
-  --scrim: rgba(7, 9, 13, .64);
+  --shadow-sm: inset 0 1px 0 rgba(255, 255, 255, .035), 0 1px 2px rgba(0, 0, 0, .32);
+  --shadow-md: inset 0 1px 0 rgba(255, 255, 255, .05), 0 6px 22px rgba(0, 0, 0, .34);
+  --shadow-lg: inset 0 1px 0 rgba(255, 255, 255, .06), 0 22px 60px rgba(0, 0, 0, .55);
+  --scrim: rgba(7, 9, 13, .68);
 
   color: var(--ink);
   background: var(--canvas);

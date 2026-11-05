@@ -1,10 +1,10 @@
 import {
   AlertCircle, AlertTriangle, Archive, Boxes, Check, ChevronDown, ChevronRight, Circle, Download,
   CircleDot, ExternalLink, FileBox, FileCode2, FileText, Folder, FolderPlus, Gamepad2,
-  HelpCircle, Info, ListChecks, Loader2, MessageSquare, MinusCircle, Moon, MoreHorizontal,
+  HelpCircle, Info, ListChecks, Loader2, MessageSquare, MinusCircle, MoreHorizontal,
   ArrowUp, Maximize2, Minimize2, PanelLeftClose, PanelLeftOpen, Paperclip, Pencil, Play, Plus, RotateCw, Scissors, Search, Settings, Square,
-  ShieldCheck, Sparkles, Sun, Film, MousePointerClick,
-  Trash2, X, Zap,
+  ShieldCheck, Sparkles, Film, MousePointerClick,
+  Trash2, X,
 } from "lucide-react";
 import { Fragment, memo, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { createPortal } from "react-dom";
@@ -1452,6 +1452,8 @@ function App() {
   /** Exactly what Send would send. */
   const message = composedMessage(pastedBlocks, composer);
   // Offered once there is enough to want more room, and never in the way before.
+  // A chat with nothing in it yet: the question, the composer and the starters sit together mid-pane.
+  const onHome = !composerExpanded && !showRunControls && (selectedChat?.messages.length ?? 0) === 0;
   const canExpand = !isRunning && (pastedBlocks.length > 0 || lineCount(composer) >= 4 || composer.length >= 400);
   const composerHint: ReactNode = message.length >= 1_000
     ? characterCount(message.length)
@@ -1552,11 +1554,11 @@ function App() {
           <div className="brand-copy"><strong>Roqer</strong></div>
           <button className="icon-button sidebar-close" onClick={() => setSidebarShown(false)} aria-label="Hide sidebar" title="Hide sidebar" aria-controls="sidebar" aria-expanded={sidebarShown}><PanelLeftClose size={18} /></button>
         </div>
+        <button className="new-chat-button" onClick={newChat}><Plus size={18} /> New chat <span className="shortcut">{SEND_MODIFIER} N</span></button>
         <div className="sidebar-section-heading">
           <span>Projects</span>
           <button className="icon-button dark" title="Create project" onClick={() => setDialog({ kind: "create-project" })}><FolderPlus size={17} /></button>
         </div>
-        <button className="new-chat-button" onClick={newChat}><Plus size={18} /> New chat <span className="shortcut">{SEND_MODIFIER} N</span></button>
         <nav className="folder-list" aria-label="Project folders">
           {workspace.projects.map((project) => {
             const expanded = expandedProjects.has(project.id);
@@ -1585,7 +1587,7 @@ function App() {
                             other chat. */}
                         {runHere
                           ? <span className="chat-run-mark" role="status" aria-label={needsInput ? "Roqer needs your answer" : "Roqer is working"} title={needsInput ? "Roqer needs your answer" : "Roqer is working"}>{needsInput ? <CircleDot size={13} /> : <Loader2 size={13} />}</span>
-                          : <time>{relativeTime(chat.updatedAt)}</time>}
+                          : null}
                       </button>
                       <RowMenu className="dark chat-menu" label={`${chat.title} options`} items={CHAT_MENU_ITEMS} onSelect={(action) => void chatAction(project.id, chat.id, action)} />
                     </div>;
@@ -1626,9 +1628,8 @@ function App() {
       <main className="workspace" inert={showSettings}>
         <header className="topbar">
           <button className="icon-button menu-button" onClick={() => setSidebarShown(true)} aria-label="Show sidebar" title="Show sidebar" aria-controls="sidebar" aria-expanded={sidebarShown}><PanelLeftOpen size={20} /></button>
-          <div className="chat-heading"><strong>{selectedChat?.title ?? selectedProject?.name ?? "New project"}</strong><span>{selectedProject?.name} · {saveStatus === "saving" ? "saving…" : saveStatus === "error" ? "save failed" : "saved locally"}</span></div>
+          <div className="chat-heading"><strong>{selectedChat?.title ?? selectedProject?.name ?? "New project"}</strong>{saveStatus === "error" && <span className="save-problem" role="alert">Save failed</span>}</div>
           <div className="topbar-actions">
-            <button className="icon-button theme-button" onClick={() => updatePreferences({ theme: theme === "light" ? "dark" : "light" })} aria-label={theme === "light" ? "Switch to dark theme" : "Switch to light theme"} title={theme === "light" ? "Dark theme" : "Light theme"}>{theme === "light" ? <Moon size={18} /> : <Sun size={18} />}</button>
             <div className="connection-wrap" ref={connectionRef}>
               <button className={`connection-pill status-${studioStatus.kind}`} onClick={() => setShowConnection((value) => !value)}><span className="live-dot" /><span className="connection-label">{targetStudio?.name ?? (chatPinned && chatInstanceId !== null ? "This chat's place is not open" : studioStatus.placeName ?? "Roblox Studio")}</span><span className="connection-detail">{studioStatus.message}</span><ChevronDown size={15} /></button>
               {showConnection && <div className="connection-popover"><div className="popover-title"><div className="studio-icon"><Gamepad2 size={18} /></div><div><strong>Roblox Studio</strong><span>{studioStatus.message}</span></div></div><dl><div><dt>Bridge</dt><dd>{statusLabel(studioStatus.kind)}</dd></div></dl>
@@ -1723,7 +1724,7 @@ function App() {
               // The live run shows its own notes, with whether Claude has them yet.
               hideTrailingNotes={runView !== null && runView.outcome === null}
             />
-            : <EmptyConversation onSuggestion={setComposer} />}
+            : <EmptyConversation place={targetStudio?.name} />}
           {runView
             ? <LiveRun view={runView} steps={runSteps} nodes={runActivityNodes} onOpenInStudio={openArtifactInStudio} />
             // The run is still being started, so the dots stand in for the
@@ -1733,7 +1734,7 @@ function App() {
             </div></section></div>}
         </div></div>
 
-        <div className={`composer-dock${composerExpanded ? " expanded" : ""}`} ref={dockRef}>
+        <div className={`composer-dock${composerExpanded ? " expanded" : ""}${onHome ? " home" : ""}`} ref={dockRef}>
           {pendingApproval && <div className="approval-dock"><ApprovalCard pending={pendingApproval} onApprove={() => answerApproval("approved")} onReject={() => answerApproval("rejected")} /></div>}
           {/* Keyed by the question, so each new one arrives with its own rings. */}
           {pendingQuestion && <div className="approval-dock question-dock" key={pendingQuestion.callId}><QuestionCard question={pendingQuestion} explaining={answeringInWords} onAnswer={answerQuestion} onExplain={explainAnswer} /></div>}
@@ -1879,6 +1880,7 @@ function App() {
                 : !showRunControls && <button className="send-button" onClick={() => void sendPrompt()} disabled={!hydrated || !storageAvailable || storageRecovery.required || isRunning || message === "" || sendAfterCompact !== null || (hasDesktopRuntime() && providerStatus.kind === "signed-in" && !selectedModel)} aria-label={compacting ? "Send once compacting finishes" : "Send message"} title={compacting ? "Sends once compacting finishes" : undefined}><ArrowUp size={18} /></button>}
             </div>
           </div>
+          {onHome && <Starters onSuggestion={setComposer} />}
         </div>
       </main>
 
@@ -2098,8 +2100,13 @@ const SUGGESTIONS = [
   "Read the main server script",
 ];
 
-function EmptyConversation({ onSuggestion }: { onSuggestion: (value: string) => void }) {
-  return <div className="empty-conversation"><div className="empty-illustration"><Sparkles size={27} /></div><h1>Explore your place</h1><p>Ask about the connected place, its scripts, or project structure.</p><div className="suggestion-grid">{SUGGESTIONS.map((suggestion) => <button key={suggestion} onClick={() => onSuggestion(suggestion)}><Zap size={15} />{suggestion}</button>)}</div></div>;
+function EmptyConversation({ place }: { place: string | undefined }) {
+  return <><div className="home-studs" aria-hidden="true" /><div className="empty-conversation"><h1>What should change in {place ?? "your place"}?</h1></div></>;
+}
+
+/** Things to start from, directly under the composer on a new chat. */
+function Starters({ onSuggestion }: { onSuggestion: (value: string) => void }) {
+  return <div className="home-starters">{SUGGESTIONS.map((suggestion) => <button type="button" key={suggestion} onClick={() => onSuggestion(suggestion)}>{suggestion}</button>)}</div>;
 }
 
 /**
@@ -2950,13 +2957,6 @@ function ConfirmModal({ heading, description, confirmLabel, onConfirm, onClose }
   </div></div>;
 }
 
-function relativeTime(value: string): string {
-  const minutes = Math.floor(Math.max(0, Date.now() - new Date(value).getTime()) / 60_000);
-  if (minutes < 1) return "now";
-  if (minutes < 60) return `${minutes}m`;
-  const hours = Math.floor(minutes / 60);
-  return hours < 24 ? `${hours}h` : `${Math.floor(hours / 24)}d`;
-}
 
 function formatBytes(value: number): string {
   if (value < 1_024) return `${value} B`;

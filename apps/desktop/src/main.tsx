@@ -4,6 +4,7 @@ import "@fontsource-variable/instrument-sans";
 import "@fontsource-variable/geist-mono";
 import App from "./App";
 import "./styles.css";
+import "./signal-room.css";
 
 // On the document before the first paint, so the window never flashes the
 // other theme; the app keeps it in step from then on. Dark unless this machine

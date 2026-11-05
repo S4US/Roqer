@@ -1,0 +1,105 @@
+/*
+ * The Signal Room layout and component layer, loaded after styles.css.
+ *
+ * styles.css still holds each component's structure; this file holds what the
+ * redesign changes about it: floating panes, tighter chrome, depth and the
+ * calmer Activity, so the whole look can be read in one place. Colours come from
+ * the tokens only.
+ */
+
+.app-shell { gap: 8px; padding: 8px; }
+.sidebar { background: transparent; border-right: 0; }
+.app-shell[data-sidebar="hidden"] { gap: 0; }
+.app-shell[data-sidebar="hidden"] .sidebar { margin-left: calc(-1 * var(--sidebar-width) - 8px); }
+.workspace { overflow: hidden; background: var(--surface); border: 1px solid var(--border-subtle); border-radius: 14px; box-shadow: var(--shadow-sm); }
+
+/* Sidebar */
+.brand-row { height: 48px; padding: 0 6px 0 12px; border-bottom: 0; }
+.brand-mark { width: 22px; height: 22px; }
+.brand-copy { margin-left: 9px; }
+.brand-copy strong { font-size: var(--type-heading); font-weight: var(--weight-semibold); letter-spacing: -.01em; }
+.sidebar-close { width: 32px; height: 32px; }
+.new-chat-button { width: calc(100% - 12px); height: 36px; margin: 6px 6px 10px; padding: 0 10px; color: var(--ink); background: var(--surface-raised); border-radius: 10px; box-shadow: var(--shadow-sm); font-size: var(--type-label); font-weight: var(--weight-medium); }
+.new-chat-button:hover { background: var(--surface-raised); border-color: var(--border-strong); }
+.sidebar-section-heading { padding: 8px 8px 4px 14px; color: var(--faint); font-size: var(--type-meta); }
+.folder-list { padding: 0 6px 12px; }
+.folder-row { min-height: 30px; }
+.folder-main { height: 30px; }
+.folder-selected { background: transparent; }
+.folder-selected:hover { background: var(--sidebar-active); }
+.chat-list { margin: 2px 0 6px 12px; padding-left: 0; border-left: 0; }
+.chat-row { border-radius: 9px; }
+.chat-selected { box-shadow: var(--shadow-sm); }
+.chat-main { grid-template-columns: minmax(0, 1fr) auto; height: 34px; padding: 0 6px 0 10px; }
+.chat-main > svg:first-child { display: none; }
+.chat-row-title { font-weight: var(--weight-regular); }
+.chat-selected .chat-row-title { font-weight: var(--weight-medium); }
+.sidebar-footer { padding: 6px; border-top: 0; }
+.settings-button { height: 36px; font-size: var(--type-label); }
+
+/* Top bar */
+.topbar { height: 56px; min-height: 56px; padding: 0 12px 0 20px; background: transparent; }
+.chat-heading strong { font-size: var(--type-body); letter-spacing: 0; }
+.chat-heading .save-problem { color: var(--danger); }
+.connection-pill, .rojo-pill { height: 32px; padding: 0 10px; background: transparent; border-color: var(--border-subtle); border-radius: 9px; font-size: var(--type-label); }
+.connection-pill:hover, .rojo-pill:hover { background: var(--surface-sunken); }
+.connection-popover, .rojo-popover { top: 40px; border-color: var(--border-strong); border-radius: 14px; box-shadow: var(--shadow-lg); }
+.topbar .icon-button:not(.menu-button) { width: 32px; height: 32px; }
+
+/* Conversation */
+.conversation { width: min(720px, calc(100% - 48px)); padding-top: 28px; }
+.user-prompt { color: var(--ink); background: var(--surface-raised); border: 0; border-radius: 14px 14px 4px 14px; font-size: var(--type-body); line-height: 1.5; }
+.result-copy { font-size: 14.5px; line-height: 1.6; }
+
+/* Composer */
+.composer-dock { padding: 28px 24px 16px; background: linear-gradient(to bottom, transparent, var(--surface) 24%, var(--surface) 100%); }
+.composer-card, .approval-dock { width: min(720px, 100%); }
+.composer-card { background: var(--surface-raised); border-color: var(--border-strong); box-shadow: var(--shadow-md); }
+.composer-card textarea { padding: 14px 16px 6px; }
+.composer-toolbar { min-height: 44px; padding: 4px 8px 8px; }
+.composer-menu-panel { background: var(--surface-raised); border-color: var(--border-strong); border-radius: 14px; box-shadow: var(--shadow-lg); }
+/* Only Full auto carries a colour: the other modes are not better or worse. */
+.run-menu.auto .composer-menu-label > svg { color: inherit; }
+.send-button { width: 34px; height: 34px; }
+
+/* Plan */
+.task-list { margin-top: 12px; background: var(--surface-raised); border: 1px solid var(--border-subtle); border-radius: 12px; box-shadow: var(--shadow-sm); }
+.task-list-heading { min-height: 40px; padding: 0 14px; }
+
+/* Activity */
+.activity-section { background: var(--surface-sunken); border-radius: 12px; box-shadow: none; }
+
+/* Approval */
+.approval-card { background: var(--surface-raised); border-color: var(--warning-border); border-radius: 16px; box-shadow: var(--shadow-md); }
+.approval-dock .approval-card { box-shadow: var(--shadow-md); }
+
+/* Settings */
+.theme-switch { display: flex; gap: 2px; padding: 2px; background: var(--surface-sunken); border: 1px solid var(--border-subtle); border-radius: 10px; }
+.theme-switch button { display: flex; align-items: center; gap: 6px; height: 28px; padding: 0 12px; color: var(--muted); background: transparent; border: 0; border-radius: 7px; font-size: var(--type-label); font-weight: var(--weight-medium); }
+.theme-switch button[aria-pressed="true"] { color: var(--ink); background: var(--surface-raised); box-shadow: var(--shadow-sm); }
+
+/* New chat: the question, the composer and the starters sit together mid-pane. */
+.home-studs { position: absolute; inset: 0; pointer-events: none; background-image: radial-gradient(circle at 1.5px 1.5px, color-mix(in srgb, var(--accent) 14%, transparent) 1.5px, transparent 2px); background-size: 24px 24px; -webkit-mask-image: radial-gradient(ellipse 58% 62% at 50% 46%, #000 10%, transparent 100%); mask-image: radial-gradient(ellipse 58% 62% at 50% 46%, #000 10%, transparent 100%); }
+.empty-conversation { position: absolute; inset: 56px 24px calc(50% + 72px); display: flex; align-items: flex-end; justify-content: center; min-height: 0; pointer-events: none; }
+.empty-conversation h1 { margin: 0; font-size: 38px; font-weight: var(--weight-medium); letter-spacing: -.03em; line-height: 1.15; text-wrap: balance; }
+.composer-dock.home { top: calc(50% - 48px); bottom: auto; padding-top: 0; background: none; }
+.home-starters { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; width: min(720px, 100%); margin: 14px auto 0; }
+.home-starters button { height: 36px; padding: 0 13px; color: var(--ink-secondary); background: var(--surface); border: 1px solid var(--border-subtle); border-radius: 10px; font-size: var(--type-label); }
+.home-starters button:hover { color: var(--ink); border-color: var(--border-strong); }
+
+/* Settings: the same two panes as the chat. */
+.settings-page { gap: 8px; padding: 8px; }
+.settings-nav { flex-basis: 244px; padding: 8px 6px; background: transparent; border-right: 0; }
+.settings-nav-back, .settings-nav-item { gap: 9px; height: 36px; border-radius: 9px; }
+.settings-nav-item > svg { flex: none; color: var(--muted); }
+.settings-nav-item[aria-current="page"] { box-shadow: var(--shadow-sm); }
+.settings-nav-item[aria-current="page"] > svg { color: var(--ink); }
+.settings-main { background: var(--surface); border: 1px solid var(--border-subtle); border-radius: 14px; box-shadow: var(--shadow-sm); }
+.settings-content { width: min(768px, 100%); margin: 0 auto; padding: 36px 24px 48px; }
+.settings-switch { width: 40px; height: 24px; }
+.settings-switch::after { top: 3px; left: 3px; width: 18px; height: 18px; background: var(--ink); box-shadow: none; }
+.settings-switch[aria-checked="true"] { background: var(--accent); }
+.settings-switch[aria-checked="true"]::after { background: var(--toggle-thumb); }
+
+/* Results and endings */
+.outcome-warnings, .outcome-failed, .outcome-cancelled, .outcome-refused { border-radius: 12px; }
