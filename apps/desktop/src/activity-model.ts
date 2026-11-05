@@ -334,15 +334,15 @@ export function completedRunDurationLabel(startedAt: string, finishedAt: string)
   return `${hours}h${remainingMinutes === 0 ? "" : ` ${remainingMinutes}m`}`;
 }
 
-/** An approval or demo label, with elapsed time only when the interval is trustworthy. */
-export function completedRunMetadataLabel(label: string, startedAt: string, finishedAt: string): string {
+/** Elapsed time when the interval is trustworthy, after a label only a demo run needs. */
+export function completedRunMetadataLabel(label: string | null, startedAt: string, finishedAt: string): string {
   const duration = completedRunDurationLabel(startedAt, finishedAt);
-  return `${label}${duration === null ? "" : ` · ${duration}`}`;
+  return [label, duration].filter((part) => part !== null).join(" · ");
 }
 
 /** Completion metadata and optional provider usage as one reader-facing line. */
 export function completedRunDetailsLabel(metadata: string, usage: string | null): string {
-  return usage === null ? metadata : `${metadata} · ${usage}`;
+  return [metadata, usage].filter((part) => part !== null && part !== "").join(" · ");
 }
 
 /**

@@ -427,22 +427,22 @@ test("a completed run duration is omitted when its timestamps cannot be trusted"
   assert.equal(completedRunDurationLabel(startedAt, "2026-10-13T09:59:59.000Z"), null);
 });
 
-test("completed run metadata keeps its label when duration is unavailable", () => {
+test("a completed run says how long it took, and only a demo run carries a label", () => {
   const startedAt = "2026-10-13T10:00:00.000Z";
-  assert.equal(
-    completedRunMetadataLabel("Full auto", startedAt, "2026-10-13T10:00:42.000Z"),
-    "Full auto · 42s",
-  );
+  assert.equal(completedRunMetadataLabel(null, startedAt, "2026-10-13T10:00:42.000Z"), "42s");
   assert.equal(completedRunMetadataLabel("Demo", startedAt, "2026-10-13T10:00:42.000Z"), "Demo · 42s");
-  assert.equal(completedRunMetadataLabel("Full auto", startedAt, ""), "Full auto");
+  assert.equal(completedRunMetadataLabel("Demo", startedAt, ""), "Demo");
+  assert.equal(completedRunMetadataLabel(null, startedAt, ""), "");
 });
 
 test("completed run details keep metadata and usage on one line", () => {
   assert.equal(
-    completedRunDetailsLabel("Full auto · 4s", "Used 2.3k tokens: 2.3k input, 56 output · 1 request"),
-    "Full auto · 4s · Used 2.3k tokens: 2.3k input, 56 output · 1 request",
+    completedRunDetailsLabel("4s", "Used 2.3k tokens: 2.3k input, 56 output · 1 request"),
+    "4s · Used 2.3k tokens: 2.3k input, 56 output · 1 request",
   );
-  assert.equal(completedRunDetailsLabel("Full auto · 4s", null), "Full auto · 4s");
+  assert.equal(completedRunDetailsLabel("4s", null), "4s");
+  assert.equal(completedRunDetailsLabel("", "1 request"), "1 request");
+  assert.equal(completedRunDetailsLabel("", null), "");
 });
 
 test("a live output count is marked as an estimate until the provider reports its own", () => {

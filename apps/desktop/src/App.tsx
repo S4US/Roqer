@@ -2225,7 +2225,7 @@ function LiveRun({ view, steps, nodes, onOpenInStudio }: { view: RunView; steps:
   const onlyAnswered = runOnlyAnswered(view);
   const showOutcome = !appliedAndVerified && !onlyAnswered;
   const completionNote = completedRunMetadataLabel(
-    view.planner === DEMO_PLANNER ? "Demo" : view.approvalMode,
+    view.planner === DEMO_PLANNER ? "Demo" : null,
     view.startedAt,
     view.finishedAt,
   );
@@ -2889,7 +2889,7 @@ function RunRecordView({ record, text, latest, onOpenInStudio }: { record: RunRe
   const onlyAnswered = recordOnlyAnswered(record, text);
   const showOutcome = !appliedAndVerified && !onlyAnswered;
   const outcomeNote = completedRunMetadataLabel(
-    record.planner === DEMO_PLANNER ? "Demo" : record.approvalMode,
+    record.planner === DEMO_PLANNER ? "Demo" : null,
     record.startedAt,
     record.finishedAt,
   );
