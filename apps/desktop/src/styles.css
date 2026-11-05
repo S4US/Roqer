@@ -814,26 +814,12 @@ button:focus-visible, textarea:focus-visible, select:focus-visible, input:focus-
   70%, 100% { box-shadow: 0 0 0 12px color-mix(in srgb, var(--warning) 0%, transparent), var(--shadow-md); }
 }
 
-.task-list { margin-top: 12px; padding: 11px 13px; background: var(--surface-sunken); border: 1px solid var(--border-subtle); border-radius: 11px; }
-.task-list-heading { display: flex; align-items: center; gap: 7px; color: var(--ink-secondary); font-size: var(--type-meta); }
-.task-list-heading strong { color: var(--ink); font-size: var(--type-label); font-weight: var(--weight-medium); }
-.task-list-heading span { margin-left: auto; color: var(--muted); }
-.task-list ul { margin: 9px 0 0; padding: 0; list-style: none; }
 /* A finished plan folds to its heading, with the caret where Activity's is. */
-details.task-list { padding: 0; }
-details.task-list > summary { gap: 8px; min-height: 40px; padding: 0 13px; list-style: none; cursor: pointer; border-radius: 11px; }
-details.task-list > summary::-webkit-details-marker { display: none; }
-details.task-list > summary:hover { color: var(--ink); }
-details.task-list[open] > summary { min-height: 34px; padding-top: 6px; }
-details.task-list > ul { margin-top: 7px; padding: 0 13px 11px; }
-.task-list-caret { flex: 0 0 auto; color: var(--faint); transition: transform .16s ease; }
-details.task-list[open] .task-list-caret { transform: rotate(90deg); }
 .task-row { display: flex; align-items: center; gap: 7px; padding: 3px 0; color: var(--ink-secondary); font-size: var(--type-meta); }
 .task-row > svg { flex: 0 0 auto; color: var(--muted); }
 .task-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .task-done { color: var(--muted); }
 .task-done > svg { color: var(--success); }
-.task-done .task-title { text-decoration: line-through; }
 .task-active { color: var(--ink); }
 .task-active > svg { color: var(--action); }
 .task-blocked > svg { color: var(--danger); }
@@ -1109,18 +1095,8 @@ a.small-button:focus-visible { outline: 2px solid var(--accent); outline-offset:
  * while the run is live, one collapsed line once it ends. Everything technical
  * a run produced lives in here rather than in the reply.
  */
-.activity-section { overflow: hidden; margin-top: 14px; background: var(--surface-raised); border: 1px solid var(--border-subtle); border-radius: 13px; box-shadow: var(--shadow-sm); }
-.activity-section > summary { display: flex; align-items: center; gap: 8px; min-height: 40px; padding: 0 13px; color: var(--muted); list-style: none; font-size: var(--type-meta); }
-.activity-section > summary::-webkit-details-marker { display: none; }
-.activity-section > summary:hover { background: var(--surface-sunken); }
-.activity-section > summary > svg { flex: 0 0 auto; color: var(--faint); transition: transform .16s ease; }
-.activity-section[open] > summary > svg { transform: rotate(90deg); }
-.activity-section[open] > summary { border-bottom: 1px solid var(--border); }
-.activity-section > summary strong { flex: 0 0 auto; color: var(--ink); font-size: var(--type-label); font-weight: var(--weight-medium); }
-.activity-summary { overflow: hidden; flex: 1; min-width: 0; text-overflow: ellipsis; white-space: nowrap; }
 /* What the closed section is holding back, kept beside the live line so the
  * reader knows the size of what one click opens. */
-.activity-count { flex: 0 0 auto; color: var(--faint); }
 /* Failures and pending decisions do not fold away with the rest. */
 .section-alerts { margin: 4px 0 0; padding: 0 4px; }
 .activity-timeline { display: flex; flex-direction: column; gap: 1px; margin: 0; padding: 8px 9px 9px; list-style: none; }

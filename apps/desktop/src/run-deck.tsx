@@ -1,6 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type KeyboardEvent, type PointerEvent, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { ChevronRight, PanelRight, X } from "lucide-react";
+import { PanelRight, X } from "lucide-react";
 
 import type { RunChange, RunEvidence } from "../shared/run-events";
 import type { ChangeGroup } from "./diff-view";
@@ -14,8 +14,8 @@ import { clampDeckWidth, DECK_INLINE_MIN_WIDTH, deckTarget } from "./run-deck-mo
  * Each run's results are still rendered by the run they belong to, and portalled
  * into the deck when the deck shows that run. So a deck has no data of its own
  * to fall out of step, and what a reader did in a run's results is kept by run
- * id exactly as it was. The chat keeps a one-line summary of each run with
- * results, which is how a past run is opened.
+ * id exactly as it was. Each run's row in the chat has a Results button, which is
+ * how a past run is opened.
  */
 
 type Deck = {
@@ -124,7 +124,7 @@ function DeckResizer({ host }: { host: HTMLElement }) {
   />;
 }
 
-/** A run's results: a summary line in the chat, and the card itself in the deck while it shows this run. */
+/** A run's results: a part of its row in the chat, and the card itself in the deck while it shows this run. */
 export function RunResults({ runId, changes, evidence, latest, renderFiles }: {
   runId: string;
   changes: readonly RunChange[];
@@ -136,8 +136,10 @@ export function RunResults({ runId, changes, evidence, latest, renderFiles }: {
   const deck = useContext(DeckContext);
   if (deck === null) throw new Error("RunResults needs a RunDeckProvider.");
   const { offer, withdraw } = deck;
-  const summary = useMemo(() => resultsSummary(runResults(changes, evidence).tabs), [changes, evidence]);
-  const hasResults = summary !== "";
+  const tabs = useMemo(() => runResults(changes, evidence).tabs, [changes, evidence]);
+  const summary = resultsSummary(tabs);
+  const total = tabs.reduce((sum, tab) => sum + tab.count, 0);
+  const hasResults = tabs.length > 0;
   useEffect(() => {
     if (!latest || !hasResults) return undefined;
     offer(runId);
@@ -147,10 +149,10 @@ export function RunResults({ runId, changes, evidence, latest, renderFiles }: {
   const showing = deck.target === runId;
   return <>
     {/* Stays visible and lit while the deck shows this run, which is how a long chat says which run that is. */}
-    <button type="button" className="run-summary" aria-pressed={showing} aria-label={`${showing ? "Close" : "Show"} this run in the Run Deck: ${summary}`} onClick={() => { if (showing) deck.close(); else deck.pick(runId); }}>
+    <button type="button" className="strip-seg strip-results" aria-pressed={showing} aria-label={`${showing ? "Close" : "Show"} this run's results in the Run Deck: ${summary}`} title={summary} onClick={() => { if (showing) deck.close(); else deck.pick(runId); }}>
       <PanelRight size={15} aria-hidden="true" />
-      <span>{summary.replaceAll(", ", " · ")}</span>
-      <ChevronRight size={14} aria-hidden="true" />
+      <strong>Results</strong>
+      <span>{total}</span>
     </button>
     {showing && deck.host !== null && createPortal(<>
       {deck.inline && <DeckResizer host={deck.host} />}

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
-  isRunTaskList, parseRunTaskList, summarizeTasks, unfinishedTasks,
+  isRunTaskList, parseRunTaskList, summarizeTasks, taskProgress, unfinishedTasks,
   MAX_RUN_TASKS, MAX_TASK_TITLE_CHARS, type RunTask,
 } from "./tasks";
 
@@ -91,6 +91,11 @@ test("isRunTaskList enforces the same cross-task rules as the parser", () => {
     "two active tasks",
   );
   assert.equal(isRunTaskList([{ ...task(), status: "nope" }]), false);
+});
+
+test("progress counts what is done and says what is stuck", () => {
+  assert.equal(taskProgress([task({ id: "a", status: "done" }), task({ id: "b", status: "active" })]), "1 of 2");
+  assert.equal(taskProgress([task({ id: "a", status: "done" }), task({ id: "b", status: "blocked" })]), "1 of 2 · 1 blocked");
 });
 
 test("the summary names the active task, then falls back to blocked counts", () => {

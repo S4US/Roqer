@@ -1,7 +1,7 @@
 import {
   AlertCircle, AlertTriangle, Archive, Boxes, Check, ChevronDown, ChevronRight, Circle, Download,
   CircleDot, ExternalLink, FileBox, FileCode2, FileText, Folder, FolderPlus, Gamepad2,
-  HelpCircle, Info, ListChecks, Loader2, MessageSquare, MinusCircle, MoreHorizontal,
+  HelpCircle, Info, Loader2, MessageSquare, MinusCircle, MoreHorizontal,
   ArrowUp, Maximize2, Minimize2, PanelLeftClose, PanelLeftOpen, Paperclip, Pencil, Play, Plus, RotateCw, Scissors, Search, Settings, Square,
   ShieldCheck, Sparkles, Film, MousePointerClick,
   Trash2, X,
@@ -37,7 +37,8 @@ import {
 import { EvidencePicture, rememberEvidencePicture } from "./evidence-picture";
 import { EvidenceSound } from "./evidence-sound";
 import { QUESTION_ESCAPE_OPTION, type RunQuestion } from "../shared/question";
-import { summarizeTasks, type RunTask, type RunTaskStatus } from "../shared/tasks";
+import { taskProgress, type RunTask, type RunTaskStatus } from "../shared/tasks";
+import { runResults } from "./results-model";
 import { Markdown, StreamingMarkdown } from "./markdown-view";
 import { SettingsPage } from "./settings-page";
 import { DiagnosticsActions } from "./diagnostics-actions";
@@ -2248,9 +2249,7 @@ function LiveRun({ view, steps, nodes, onOpenInStudio }: { view: RunView; steps:
       {...(view.status?.detail === undefined ? {} : { detail: view.status.detail })}
       output={view.outputTokens}
     />}
-    <TaskList tasks={view.tasks} />
-    <ActivitySection steps={steps} nodes={nodes} running={running} />
-    <RunResults runId={view.runId} changes={view.changes} evidence={view.evidence} latest renderFiles={renderFiles} />
+    <RunStrip tasks={view.tasks} steps={steps} nodes={nodes} running={running} runId={view.runId} changes={view.changes} evidence={view.evidence} latest renderFiles={renderFiles} />
     {answered && (running
       // Formatted as it streams, re-rendered a few times a second rather than
       // on every delta, which would make a long reply quadratic.
@@ -2440,37 +2439,48 @@ function EvidenceDetail({ evidence }: { evidence: RunEvidence }) {
 }
 
 /**
- * The activity layer: everything the agent did, in one place, out of the way.
+ * What a run did, as one row: its Plan, its Activity and its results.
  *
- * Closed until the reader opens it, and it never opens or closes itself. A
- * project inspection is forty rows; unrolling that over the answer while the
- * run works, then rolling it back up the moment the run ends, moves the page
- * under the reader twice for something they did not ask to see. So the section
- * holds one line instead — the operation in flight, or the last one finished —
- * with the step and failure counts beside it, and the whole list one click
- * away. Nothing is removed and nothing is decided for the reader.
+ * Each was a bar of its own, so every reply sat under a stack of three that look
+ * alike. Plan and Activity open underneath the row, independently; results open
+ * in the Run Deck. Activity stays closed until the reader opens it and never
+ * opens or closes itself: a project inspection is forty rows, and unrolling that
+ * over the answer while the run works moves the page under the reader for
+ * something they did not ask to see. The Plan is open while there is work left,
+ * because it says what the agent promised, until the reader says otherwise.
  *
  * A failure is the exception to putting things away: it stays listed under the
- * closed section, the way a folded phase keeps its own alerts on screen, since
- * nothing else on the page would report it.
+ * closed row, since nothing else on the page would report it.
+ *
+ * Memoised, because this is what a live run re-renders for every streamed token
+ * otherwise. Its inputs only change when an event of their own kind arrives.
  */
-/**
- * Memoised, with the change set and the task list below, because these are
- * what a live run re-renders for every streamed token otherwise. Their inputs
- * only change when an event of their own kind arrives, so between those a
- * delta reconciles the streaming paragraph and nothing else.
- */
-const ActivitySection = memo(function ActivitySection({ steps, nodes, running }: { steps: ActivityStep[]; nodes?: ActivityNode[]; running: boolean }) {
+const RunStrip = memo(function RunStrip({ tasks, settled = false, steps, nodes, running, runId, changes, evidence, latest, renderFiles }: {
+  tasks: readonly RunTask[];
+  /** A finished run's plan, folded when every task is done. */
+  settled?: boolean;
+  steps: ActivityStep[];
+  nodes?: ActivityNode[];
+  running: boolean;
+  runId: string;
+  changes: readonly RunChange[];
+  evidence: readonly RunEvidence[];
+  latest: boolean;
+  renderFiles: (files: ChangeGroup[], expansion: FileExpansion) => ReactNode;
+}) {
   // Which groups the reader has opened or closed by hand. Without it, the next
   // event would re-assert the default and shut a group under their cursor.
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
-  const [open, setOpen] = useState(false);
+  const [activityOpen, setActivityOpen] = useState(false);
+  const [planChoice, setPlanChoice] = useState<boolean | null>(null);
   const resolvedNodes = useMemo(() => nodes ?? buildActivityModel(steps), [nodes, steps]);
+  const hasResults = useMemo(() => runResults(changes, evidence).tabs.length > 0, [changes, evidence]);
   const onToggle = useCallback((key: string, open: boolean) => {
     setExpanded((current) => (current[key] === open ? current : { ...current, [key]: open }));
   }, []);
-  if (steps.length === 0) return null;
+  if (tasks.length === 0 && steps.length === 0 && !hasResults) return null;
 
+  const planOpen = planChoice ?? (!settled || tasks.some((task) => task.status !== "done"));
   const failed = steps.filter((step) => step.state === "failed").length;
   // Notes are commentary on the run, not things it did, so they are not counted.
   const actions = steps.filter((step) => step.kind !== "note").length;
@@ -2482,36 +2492,51 @@ const ActivitySection = memo(function ActivitySection({ steps, nodes, running }:
     .flatMap((node) => (node.children.length === 0 ? [node] : node.alerts))
     .filter((node) => node.status === "failed")
     .slice(0, MAX_VISIBLE_ALERTS);
-  return <>
-    <details className="activity-section" open={open} onToggle={(event) => setOpen(event.currentTarget.open)}>
-      <summary>
-        <ChevronRight size={14} />
+  return <div className="run-strip">
+    <div className="run-strip-row">
+      {tasks.length > 0 && <button type="button" className="strip-seg strip-plan" aria-expanded={planOpen} onClick={() => setPlanChoice(!planOpen)}>
+        <ChevronRight size={14} aria-hidden="true" />
+        <strong>Plan</strong>
+        <span>{taskProgress(tasks)}</span>
+      </button>}
+      {steps.length > 0 && <button type="button" className="strip-seg strip-activity" aria-expanded={activityOpen} onClick={() => setActivityOpen(!activityOpen)}>
+        <ChevronRight size={14} aria-hidden="true" />
         <strong>Activity</strong>
-        <span className="activity-summary">{current ?? counted}</span>
-        {current !== null && <span className="activity-count">{counted}</span>}
+        {current !== null && <span className="strip-current">{current}</span>}
+        <span className="strip-count">{counted}</span>
         {running && <span className="working-label"><i /></span>}
-      </summary>
-      {/* The rows exist only while the section is open. A closed details
-          element hides its children but still has them built, and a chat of
-          old runs holds thousands. */}
-      {open && <ol className="activity-timeline">
-        {resolvedNodes.map((node) => (node.children.length === 0
-          ? <ActivityLeaf key={node.key} node={node} />
-          : <ActivityGroup
-            key={node.key}
-            node={node}
-            open={expanded[node.key] ?? node.status === "active"}
-            onToggle={onToggle}
-          />))}
-      </ol>}
-    </details>
-    {!open && alerts.length > 0 && <ul className="group-alerts section-alerts">
+      </button>}
+      <RunResults runId={runId} changes={changes} evidence={evidence} latest={latest} renderFiles={renderFiles} />
+    </div>
+    {planOpen && tasks.length > 0 && <ul className="strip-plan-rows">{tasks.map((task) => <li key={task.id} className={`task-row task-${task.status}`}>
+      {TASK_ICON[task.status]}
+      <span className="task-title">{task.title}</span>
+      {task.requiresRuntimeEvidence && <em
+        className="task-flag"
+        title={`Needs ${(task.requiredEvidence ?? ["runtime"]).join(", ")} evidence to be called done`}
+      >
+        {(task.requiredEvidence ?? ["runtime"]).join("/")}
+      </em>}
+    </li>)}</ul>}
+    {/* The rows exist only while the section is open. A closed section has no
+        use for them, and a chat of old runs holds thousands. */}
+    {activityOpen && <ol className="activity-timeline">
+      {resolvedNodes.map((node) => (node.children.length === 0
+        ? <ActivityLeaf key={node.key} node={node} />
+        : <ActivityGroup
+          key={node.key}
+          node={node}
+          open={expanded[node.key] ?? node.status === "active"}
+          onToggle={onToggle}
+        />))}
+    </ol>}
+    {!activityOpen && alerts.length > 0 && <ul className="group-alerts section-alerts">
       {alerts.map((alert) => <li key={alert.key} className="node-row" data-status={alert.status} data-kind={alert.kind}>
         <span className="node-caret" /><NodeLine node={alert} />
       </li>)}
-      {failed > alerts.length && <li><button type="button" className="more-failed" onClick={() => setOpen(true)}>{failed - alerts.length} more failed</button></li>}
+      {failed > alerts.length && <li><button type="button" className="more-failed" onClick={() => setActivityOpen(true)}>{failed - alerts.length} more failed</button></li>}
     </ul>}
-  </>;
+  </div>;
 });
 
 function ApprovalCard({ pending, onApprove, onReject }: { pending: PendingApproval; onApprove: () => void; onReject: () => void }) {
@@ -2782,51 +2807,15 @@ function OutcomeCard({ outcome, summary, warnings = false, issues = [] }: { outc
   </div>;
 }
 
+/** So a run with no plan does not hand the row a new array every render. */
+const NO_TASKS: readonly RunTask[] = [];
+
 const TASK_ICON: Record<RunTaskStatus, React.ReactNode> = {
   pending: <Circle size={13} />,
   active: <CircleDot size={13} />,
   done: <Check size={13} />,
   blocked: <AlertCircle size={13} />,
 };
-
-/**
- * What the agent said it would do, above what it actually did.
- *
- * A task that declared it needs runtime evidence is marked, because that is the
- * promise the completion gate will hold the run to, and seeing it beforehand is
- * what makes the caveat at the end legible instead of surprising.
- */
-const TaskList = memo(function TaskList({ tasks, settled = false }: {
-  tasks: readonly RunTask[];
-  /** A finished run's plan: folded to its heading when every task is done. */
-  settled?: boolean;
-}) {
-  if (tasks.length === 0) return null;
-  const rows = <ul>{tasks.map((task) => <li key={task.id} className={`task-row task-${task.status}`}>
-      {TASK_ICON[task.status]}
-      <span className="task-title">{task.title}</span>
-      {task.requiresRuntimeEvidence && (
-        <em
-          className="task-flag"
-          title={`Needs ${(task.requiredEvidence ?? ["runtime"]).join(", ")} evidence to be called done`}
-        >
-          {(task.requiredEvidence ?? ["runtime"]).join("/")}
-        </em>
-      )}
-    </li>)}</ul>;
-  const heading = <><strong>Plan</strong><span>{summarizeTasks(tasks)}</span></>;
-  if (!settled) {
-    return <div className="task-list">
-      <div className="task-list-heading"><ListChecks size={14} />{heading}</div>
-      {rows}
-    </div>;
-  }
-  // Folded, it lines up with the Activity row beneath it: caret, name, count.
-  return <details className="task-list" open={tasks.some((task) => task.status !== "done")}>
-    <summary className="task-list-heading"><ChevronRight size={14} className="task-list-caret" />{heading}</summary>
-    {rows}
-  </details>;
-});
 
 /**
  * The agent's one bounded question.
@@ -2884,9 +2873,7 @@ function RunRecordView({ record, text, latest, onOpenInStudio }: { record: RunRe
   const steps = useMemo(() => recordSteps(record), [record]);
   const renderFiles = useCallback((files: ChangeGroup[], expansion: FileExpansion) => <ChangeSet groups={files} expansion={expansion} onOpenInStudio={onOpenInStudio} />, [onOpenInStudio]);
   return <>
-    <TaskList tasks={record.tasks ?? []} settled />
-    <ActivitySection steps={steps} running={false} />
-    <RunResults runId={record.runId} changes={record.changes} evidence={record.evidence} latest={latest} renderFiles={renderFiles} />
+    <RunStrip tasks={record.tasks ?? NO_TASKS} settled steps={steps} running={false} runId={record.runId} changes={record.changes} evidence={record.evidence} latest={latest} renderFiles={renderFiles} />
     <Markdown text={text} className="result-copy" />
     {appliedAndVerified && <AppliedStatus />}
     {showOutcome && <OutcomeCard
