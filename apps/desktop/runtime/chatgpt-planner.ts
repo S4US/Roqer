@@ -154,13 +154,27 @@ const CODEX_ITEM_DESCRIPTIONS: Readonly<Record<string, string>> = {
   subAgentActivity: "sub-agents",
 };
 
-/** The built-in Codex tool an item comes from, or null when the item is passive. */
-export function disallowedCodexItem(notification: AppServerNotification): string | null {
+/**
+ * The built-in Codex tool an item comes from, or null when the item is
+ * passive. Web search is the one built-in tool the user can turn on for a
+ * chat; its items pass only then.
+ */
+export function disallowedCodexItem(notification: AppServerNotification, allowed: { webSearch?: boolean } = {}): string | null {
   if (notification.method !== "item/started") return null;
   const item = notification.params.item;
   if (!isRecord(item) || typeof item.type !== "string") return null;
   if (CODEX_PASSIVE_ITEM_TYPES.has(item.type)) return null;
+  if (item.type === "webSearch" && allowed.webSearch === true) return null;
   return CODEX_ITEM_DESCRIPTIONS[item.type] ?? `"${item.type}" tool`;
+}
+
+/** The query of a web search Codex started, for the run's activity; null for any other notification. */
+export function codexWebSearch(notification: AppServerNotification): string | null {
+  if (notification.method !== "item/started") return null;
+  const item = notification.params.item;
+  if (!isRecord(item) || item.type !== "webSearch") return null;
+  const query = typeof item.query === "string" && item.query.trim() !== "" ? item.query.trim() : "the web";
+  return query.slice(0, 300);
 }
 
 /**
@@ -361,14 +375,16 @@ export type CodexThreadStore = ProviderSessionStore<CodexThread>;
  * place is in it: a thread that read one place's scripts and parts would carry
  * them into a run against another.
  */
-function threadKey(options: ChatGptPlannerOptions, { autoPlaytest, instanceId }: Pick<PlannerContext, "autoPlaytest" | "instanceId">): string {
+function threadKey(
+  options: ChatGptPlannerOptions, { autoPlaytest, instanceId, webSearch }: Pick<PlannerContext, "autoPlaytest" | "instanceId" | "webSearch">,
+): string {
   return JSON.stringify([
     instanceId, autoPlaytest, options.agent.id, options.agent.version, options.blender === true, options.referenceClips === true,
-    options.externalMcp === true,
+    options.externalMcp === true, webSearch === true,
   ]);
 }
 
-async function startThread(options: ChatGptPlannerOptions, autoPlaytest: boolean): Promise<string> {
+async function startThread(options: ChatGptPlannerOptions, autoPlaytest: boolean, webSearch = false): Promise<string> {
   const started = await options.appServer.request("thread/start", {
     model: options.model,
     modelProvider: "openai",
@@ -379,7 +395,12 @@ async function startThread(options: ChatGptPlannerOptions, autoPlaytest: boolean
     ephemeral: true,
     serviceName: "studio_workbench",
     baseInstructions: options.agent.systemInstructions,
-    developerInstructions: runDeveloperInstructions(options.agent.developerInstructions, autoPlaytest),
+    developerInstructions: runDeveloperInstructions(options.agent.developerInstructions, autoPlaytest, webSearch),
+    // The app server starts with web search disabled for every thread (see
+    // CODEX_LOCKDOWN_ARGS); a chat the user turned it on for asks for it on
+    // its own thread. A Codex that takes no per-thread override leaves the
+    // model without search, and the run's activity then shows no searches.
+    ...(webSearch ? { config: { web_search: "live" } } : {}),
     dynamicTools: [
       dynamicToolSpec(),
       dynamicSkillSpec(options.skillLibrary),
@@ -427,7 +448,7 @@ export function createChatGptPlanner(options: ChatGptPlannerOptions): Planner {
         ? kept
         : undefined;
       const resumed = current !== undefined;
-      const threadId = current !== undefined ? current.threadId : await startThread(options, context.autoPlaytest);
+      const threadId = current !== undefined ? current.threadId : await startThread(options, context.autoPlaytest, context.webSearch);
       checkCancelled();
 
       const completion = deferred<{ status: string; summary: string }>();
@@ -523,7 +544,9 @@ export function createChatGptPlanner(options: ChatGptPlannerOptions): Planner {
         if (settled || notification.params.threadId !== threadId) return;
         // Every notification on this thread is progress, reasoning included.
         watchdog.progressed();
-        const builtIn = disallowedCodexItem(notification);
+        const searched = context.webSearch ? codexWebSearch(notification) : null;
+        if (searched !== null) context.status("Searched the web", searched);
+        const builtIn = disallowedCodexItem(notification, { webSearch: context.webSearch });
         if (builtIn !== null) {
           const message = `ChatGPT tried to use Codex's built-in ${builtIn}, which Roqer does not allow: `
             + "every action has to go through Roqer's own tools and approvals. The run was stopped.";

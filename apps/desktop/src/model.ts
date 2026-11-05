@@ -100,6 +100,12 @@ export type Preferences = {
   theme: Theme;
   approvalMode: ApprovalMode;
   autoPlaytest: boolean;
+  /**
+   * Whether runs may search the web through the provider's own search. Off by
+   * default: a page is text the user never wrote, and a search sends the
+   * model's words out of the machine.
+   */
+  webSearch: boolean;
   mcpEndpoint: string;
   /**
    * The Studio place runs go to, or `null` to use whichever connected first.
@@ -219,6 +225,7 @@ export function createInitialWorkspace(theme: Theme = "dark"): WorkspaceState {
       theme,
       approvalMode: DEFAULT_APPROVAL_MODE,
       autoPlaytest: true,
+      webSearch: false,
       mcpEndpoint: DEFAULT_MCP_ENDPOINT,
       studioInstanceId: null,
       discordPresence: true,
@@ -371,6 +378,9 @@ export function normalizeWorkspace(value: unknown, themeFallback: Theme = "dark"
     theme: isTheme(rawPreferences.theme) ? rawPreferences.theme : themeFallback,
     approvalMode: isApprovalMode(rawPreferences.approvalMode) ? rawPreferences.approvalMode : DEFAULT_APPROVAL_MODE,
     autoPlaytest: typeof rawPreferences.autoPlaytest === "boolean" ? rawPreferences.autoPlaytest : true,
+    // Off unless the user turned it on: a workspace saved before the switch
+    // existed never agreed to send anything to a search engine.
+    webSearch: rawPreferences.webSearch === true,
     mcpEndpoint: typeof rawPreferences.mcpEndpoint === "string" && rawPreferences.mcpEndpoint !== ""
       ? rawPreferences.mcpEndpoint
       : DEFAULT_MCP_ENDPOINT,

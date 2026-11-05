@@ -104,6 +104,12 @@ export type PlannerContext = {
   instanceId: string | null;
   /** User preference for this run; provider adapters carry it as trusted guidance. */
   autoPlaytest: boolean;
+  /**
+   * Whether the user turned web search on for this run; the planners wire it
+   * to their provider's own search. Absent means off, so a context built
+   * before the switch existed reads as a run without search.
+   */
+  webSearch?: boolean;
   signal: AbortSignal;
   /** Run a read or write tool. Policy and approval are applied by the engine. */
   call(tool: string, args: Record<string, unknown>): Promise<McpToolOutcome>;
@@ -483,6 +489,7 @@ export class RunSession {
       prompt: this.request.prompt,
       approvalMode: this.request.approvalMode,
       autoPlaytest: this.request.autoPlaytest,
+      ...(this.request.webSearch === undefined ? {} : { webSearch: this.request.webSearch }),
       endpoint: this.request.endpoint,
       instanceId: this.request.instanceId,
       model: this.request.model,
@@ -496,6 +503,7 @@ export class RunSession {
       images: this.images,
       instanceId: this.request.instanceId,
       autoPlaytest: this.request.autoPlaytest,
+      webSearch: this.request.webSearch === true,
       signal: this.abortController.signal,
       call: (tool, args) => this.callTool(tool, args),
       say: (text) => this.emit({ type: "message-delta", text }),

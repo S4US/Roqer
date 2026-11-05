@@ -39,6 +39,12 @@ export type RunRequest = {
   conversation: ConversationContext;
   approvalMode: ApprovalMode;
   autoPlaytest: boolean;
+  /**
+   * Whether the model may search the web during this run, through its own
+   * provider's search. Off unless the user turned it on for the chat; absent
+   * in records written before the switch existed.
+   */
+  webSearch?: boolean;
   /** Loopback MCP endpoint, e.g. http://127.0.0.1:58741 */
   endpoint: string;
   /** Studio instance to target, or null to let the server resolve a default. */
@@ -286,6 +292,7 @@ export type RunEvent =
     prompt: string;
     approvalMode: ApprovalMode;
     autoPlaytest: boolean;
+    webSearch?: boolean;
     endpoint: string;
     instanceId: string | null;
     model: string | null;
@@ -811,6 +818,7 @@ export function isRunEvent(value: unknown): value is RunEvent {
       return isString(value.prompt) &&
         APPROVAL_MODES.includes(value.approvalMode as string) &&
         typeof value.autoPlaytest === "boolean" &&
+        (value.webSearch === undefined || typeof value.webSearch === "boolean") &&
         isString(value.endpoint) &&
         isString(value.planner) &&
         (value.model === null || isString(value.model)) &&

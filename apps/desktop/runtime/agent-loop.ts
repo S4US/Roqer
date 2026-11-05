@@ -614,7 +614,7 @@ export function createAgentLoopPlanner(options: AgentLoopPlannerOptions): Planne
       const tools = loopTools(options.skillLibrary, options.blender === true, options.referenceClips === true, options.externalMcp === true);
       const instructions = {
         system: options.agent.systemInstructions,
-        developer: runDeveloperInstructions(options.agent.developerInstructions, context.autoPlaytest),
+        developer: runDeveloperInstructions(options.agent.developerInstructions, context.autoPlaytest, context.webSearch),
       };
       if (!acceptsImages && context.images.length > 0) {
         context.status(
@@ -845,6 +845,7 @@ export function createAgentLoopPlanner(options: AgentLoopPlannerOptions): Planne
           instructions,
           tools,
           messages,
+          ...(context.webSearch ? { webSearch: true } : {}),
         };
         const turnNumber = turn + 1;
 
@@ -930,6 +931,11 @@ export function createAgentLoopPlanner(options: AgentLoopPlannerOptions): Planne
                 lastToolCallMs = elapsed;
                 firstToolCallMs ??= elapsed;
                 calls.push(event.call);
+                continue;
+              }
+              if (event.kind === "search") {
+                // The endpoint's own search, outside Roqer's tools: shown, never acted on.
+                context.status("Searched the web", event.query);
                 continue;
               }
               if (event.kind === "failed") {

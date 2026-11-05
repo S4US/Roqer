@@ -1103,3 +1103,18 @@ test("Codex's context is its last response's total, against the window it report
   assert.equal(usage({ total }), null);
   assert.equal(codexContextUsage({ method: "item/agentMessage/delta", params: { threadId: "thread-1", delta: "Hi" } }), null);
 });
+
+import { codexWebSearch, disallowedCodexItem } from "./chatgpt-planner";
+
+test("a Codex web search item passes only when the user turned search on, and is read off for the activity", () => {
+  const started = { method: "item/started", params: { threadId: "thread-1", item: { type: "webSearch", id: "ws_1", query: "roblox TextureSpeed" } } };
+  assert.equal(disallowedCodexItem(started), "web search");
+  assert.equal(disallowedCodexItem(started, { webSearch: false }), "web search");
+  assert.equal(disallowedCodexItem(started, { webSearch: true }), null);
+  assert.equal(codexWebSearch(started), "roblox TextureSpeed");
+  assert.equal(codexWebSearch({ method: "item/started", params: { item: { type: "webSearch" } } }), "the web");
+  assert.equal(codexWebSearch({ method: "item/completed", params: { item: { type: "webSearch", query: "x" } } }), null);
+  assert.equal(codexWebSearch({ method: "item/started", params: { item: { type: "commandExecution" } } }), null);
+  // Search being on does not let anything else through.
+  assert.equal(disallowedCodexItem({ method: "item/started", params: { item: { type: "commandExecution" } } }, { webSearch: true }), "shell");
+});

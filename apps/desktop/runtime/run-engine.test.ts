@@ -1276,3 +1276,31 @@ test("a run keeps the sounds it stores, attaches only those refs to evidence, an
   assert.equal(refused, 10);
   assert.equal(stored.length, 12);
 });
+
+test("the web search switch reaches the planner's context and the run's first event", async () => {
+  const events: RunEvent[] = [];
+  let seen: boolean | undefined;
+  const session = new RunSession({
+    caller: makeCaller(async () => outcome()),
+    planner: planner(async (ctx) => { seen = ctx.webSearch; return "done"; }),
+    request: makeRequest({ webSearch: true }),
+    emit: (event) => events.push(event),
+  });
+  await session.execute();
+  assertAllValid(events);
+  assert.equal(seen, true);
+  const started = events[0];
+  assert.ok(started.type === "run-started" && started.webSearch === true);
+
+  const quiet: RunEvent[] = [];
+  let off: boolean | undefined;
+  await new RunSession({
+    caller: makeCaller(async () => outcome()),
+    planner: planner(async (ctx) => { off = ctx.webSearch; return "done"; }),
+    request: makeRequest(),
+    emit: (event) => quiet.push(event),
+  }).execute();
+  assertAllValid(quiet);
+  assert.equal(off, false);
+  assert.ok(quiet[0].type === "run-started" && !("webSearch" in quiet[0]));
+});

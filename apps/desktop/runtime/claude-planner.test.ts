@@ -1736,3 +1736,28 @@ test("compacting a chat with no saved conversation says so", async () => {
   }
 });
 
+
+import { CLAUDE_WEB_TOOLS, webToolUses } from "./claude-planner";
+
+test("a search or a page read in one of Claude's messages is read off for the activity, and nothing else is", () => {
+  const message = {
+    type: "assistant",
+    message: {
+      role: "assistant",
+      content: [
+        { type: "text", text: "Checking the docs." },
+        { type: "tool_use", id: "t1", name: "WebSearch", input: { query: "ParticleEmitter FlipbookLayout" } },
+        { type: "tool_use", id: "t2", name: "WebFetch", input: { url: "https://create.roblox.com/docs/reference/engine/classes/ParticleEmitter", prompt: "flipbook" } },
+        { type: "tool_use", id: "t3", name: "mcp__roqer__roblox_studio", input: { operation: "get_place_info" } },
+        { type: "tool_use", id: "t4", name: "WebSearch", input: { notAQuery: 1 } },
+      ],
+    },
+  };
+  assert.deepEqual(webToolUses(message), [
+    { label: "Searched the web", detail: "ParticleEmitter FlipbookLayout" },
+    { label: "Read a web page", detail: "https://create.roblox.com/docs/reference/engine/classes/ParticleEmitter" },
+  ]);
+  assert.deepEqual(webToolUses({ ...message, parent_tool_use_id: "sub" }), [], "a subagent's searches are not the main agent's");
+  assert.deepEqual(webToolUses({ type: "assistant", message: { content: "no blocks" } }), []);
+  assert.deepEqual(CLAUDE_WEB_TOOLS, ["WebSearch", "WebFetch"]);
+});

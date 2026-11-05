@@ -149,13 +149,37 @@ async function writeMcpConfig(directory: string, server: WorkbenchMcpServerHandl
   return file;
 }
 
-function systemPrompt(options: ClaudePlannerOptions, autoPlaytest: boolean): string {
+function systemPrompt(options: ClaudePlannerOptions, autoPlaytest: boolean, webSearch = false): string {
   return [
     options.agent.systemInstructions,
     "<developer-instructions>",
-    runDeveloperInstructions(options.agent.developerInstructions, autoPlaytest),
+    runDeveloperInstructions(options.agent.developerInstructions, autoPlaytest, webSearch),
     "</developer-instructions>",
   ].join("\n\n");
+}
+
+/**
+ * Claude Code's own web tools, the only built-in tools a run may have, and
+ * only when the user turned web search on: a search, and reading a page a
+ * search found. Both are shown in the run's activity as they happen.
+ */
+export const CLAUDE_WEB_TOOLS: readonly string[] = ["WebSearch", "WebFetch"];
+
+/** The searches and page reads in one of the main agent's messages, for the run's activity. */
+export function webToolUses(message: JsonRecord): Array<{ label: string; detail: string }> {
+  if (message.parent_tool_use_id != null) return [];
+  const payload = message.message;
+  if (!isRecord(payload) || !Array.isArray(payload.content)) return [];
+  const uses: Array<{ label: string; detail: string }> = [];
+  for (const block of payload.content) {
+    if (!isRecord(block) || block.type !== "tool_use" || !isRecord(block.input)) continue;
+    if (block.name === "WebSearch" && typeof block.input.query === "string") {
+      uses.push({ label: "Searched the web", detail: block.input.query.slice(0, 300) });
+    } else if (block.name === "WebFetch" && typeof block.input.url === "string") {
+      uses.push({ label: "Read a web page", detail: block.input.url.slice(0, 300) });
+    }
+  }
+  return uses;
 }
 
 /**
@@ -185,6 +209,7 @@ async function writeSystemPrompt(directory: string, text: string): Promise<strin
 
 function buildArguments(
   options: ClaudePlannerOptions, configPath: string, systemPromptPath: string, ref: SessionRef | null = null, slashCommands = false,
+  webSearch = false,
 ): string[] {
   const args = [
     "--print",
@@ -202,15 +227,17 @@ function buildArguments(
     "--model", options.model,
     "--system-prompt-file", systemPromptPath,
     // Roqer owns every Studio action, so Claude Code keeps none of its own
-    // tools: no shell, filesystem, web, subagents, or ambient native skills.
-    "--tools", "",
+    // tools: no shell, filesystem, subagents, or ambient native skills. The
+    // one exception is its web search and page reading, when the user turned
+    // web search on for the chat.
+    "--tools", webSearch ? CLAUDE_WEB_TOOLS.join(",") : "",
     // Only Roqer's own compaction process takes a slash command; a run's
     // prompt is the user's text and is never read as one.
     ...(slashCommands ? [] : ["--disable-slash-commands"]),
     "--setting-sources", "",
     "--strict-mcp-config",
     "--mcp-config", configPath,
-    "--allowedTools", qualifiedToolNames(options).join(","),
+    "--allowedTools", [...qualifiedToolNames(options), ...(webSearch ? CLAUDE_WEB_TOOLS : [])].join(","),
   ];
   if (options.supportsEffort) args.push("--effort", options.effort);
   return args;
@@ -651,6 +678,7 @@ export class ClaudeSession {
     signal: AbortSignal,
     ref: SessionRef | null = null,
     slashCommands = false,
+    webSearch = false,
   ): Promise<ClaudeSession> {
     let session: ClaudeSession | null = null;
     const server = await startWorkbenchMcpServer({
@@ -665,9 +693,9 @@ export class ClaudeSession {
       workingDirectory = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-claude-"));
       if (signal.aborted) throw new Error("Run was cancelled.");
       const configPath = await writeMcpConfig(workingDirectory, server);
-      const systemPromptPath = await writeSystemPrompt(workingDirectory, systemPrompt(options, autoPlaytest));
+      const systemPromptPath = await writeSystemPrompt(workingDirectory, systemPrompt(options, autoPlaytest, webSearch));
       if (signal.aborted) throw new Error("Run was cancelled.");
-      child = await options.launcher.launch(buildArguments(options, configPath, systemPromptPath, ref, slashCommands));
+      child = await options.launcher.launch(buildArguments(options, configPath, systemPromptPath, ref, slashCommands, webSearch));
       session = new ClaudeSession(key, child, server, workingDirectory, createSkillToolRunner(options.skillLibrary));
       session.sessionId = ref?.id ?? null;
       if (ref?.resume === true) {
@@ -761,12 +789,14 @@ export class ClaudeSession {
  * place is part of it: a conversation that read one place's scripts and parts
  * would carry them into a run against another.
  */
-function sessionKey(options: ClaudePlannerOptions, { autoPlaytest, instanceId }: Pick<PlannerContext, "autoPlaytest" | "instanceId">): string {
+function sessionKey(
+  options: ClaudePlannerOptions, { autoPlaytest, instanceId, webSearch }: Pick<PlannerContext, "autoPlaytest" | "instanceId" | "webSearch">,
+): string {
   return JSON.stringify([
     instanceId,
     options.model, options.supportsEffort ? options.effort : null, autoPlaytest,
     options.agent.id, options.agent.version, options.blender === true, options.referenceClips === true,
-    options.externalMcp === true,
+    options.externalMcp === true, webSearch === true,
   ]);
 }
 
@@ -988,6 +1018,9 @@ export function createClaudePlanner(options: ClaudePlannerOptions): Planner {
             contextReading = reading;
             context.contextUsage(reading.usedTokens, session?.contextWindow ?? null);
           }
+          // A search or a page read is Claude Code's own doing, outside Roqer's
+          // tools, so this is where the run's activity learns of it.
+          for (const use of webToolUses(message)) context.status(use.label, use.detail);
           // Only the fallback when partial messages are unavailable; the
           // streamed deltas already carry the same text.
           if (streaming) return;
@@ -1074,13 +1107,13 @@ export function createClaudePlanner(options: ClaudePlannerOptions): Planner {
         if (session === undefined && saved !== undefined) {
           session = await ClaudeSession.open(
             options, key, context.autoPlaytest, context.signal,
-            { id: saved.sessionId, resume: true, usage: saved.usage },
+            { id: saved.sessionId, resume: true, usage: saved.usage }, false, context.webSearch,
           );
           opening = "resumed";
         }
         if (session === undefined) {
           const ref = registry === undefined ? null : { id: randomUUID(), resume: false };
-          session = await ClaudeSession.open(options, key, context.autoPlaytest, context.signal, ref);
+          session = await ClaudeSession.open(options, key, context.autoPlaytest, context.signal, ref, false, context.webSearch);
         }
         if (settled) return await completion.promise;
         if (context.signal.aborted) throw new Error("Run was cancelled.");

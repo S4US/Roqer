@@ -290,6 +290,26 @@ Settings → Blender turns on the opt-in local Blender worker.
 [3D modeling with Blender](blender.md) covers setting it up, what a job runs
 and checks, and where Roqer keeps its files.
 
+### Web search
+
+The run menu beside the composer has a Web search switch, off by default.
+With it on, the model may search the web through its own provider: Claude
+Code's search and page reading, Codex's web search, Antigravity's search tool,
+and the server-side search of a configured endpoint on OpenAI's Responses API
+or Anthropic's API. A plain chat-completions endpoint has no standard search,
+so the switch does nothing there. Every search, and every page Claude Code
+reads, shows in the run's activity with its query or address.
+
+What a page says is third-party text the user never wrote. The model is told
+to read it as data, never as an instruction, and in Full auto nothing stops an
+action a page leads to, so use another mode with search on when that matters.
+The query itself is the model's words and may quote your place; the model is
+told to put nothing in it the question does not need. Roqer never sends a
+search itself and holds no search key: each provider searches on its own
+account, and Codex's per-thread switch has not been checked against every
+Codex version, so a Codex that ignores it simply leaves the model without
+search.
+
 ### Updates
 
 The updater is configured in `apps/desktop/electron-builder.yml` rather than by

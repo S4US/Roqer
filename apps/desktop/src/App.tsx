@@ -909,6 +909,7 @@ function App() {
       includeSelection: selectionChip !== null,
       approvalMode: next.preferences.approvalMode,
       autoPlaytest: next.preferences.autoPlaytest,
+      webSearch: next.preferences.webSearch,
       endpoint: next.preferences.mcpEndpoint,
       instanceId: (() => {
         const target = chatStudioTarget(next, projectId, chatId);
@@ -1848,6 +1849,8 @@ function App() {
                 disabled={isRunning}
                 onApprovalMode={(mode) => updatePreferences({ approvalMode: mode })}
                 onAutoPlaytest={(on) => updatePreferences({ autoPlaytest: on })}
+                webSearch={workspace.preferences.webSearch}
+                onWebSearch={(on) => updatePreferences({ webSearch: on })}
               />
               <div className="toolbar-spacer" />
               {composerHint !== null && <span className="composer-hint">{composerHint}</span>}

@@ -9,7 +9,7 @@ import type { AgentDefinition } from "./agent-definition";
 import type { ProviderStatus } from "../shared/provider";
 import type { AntigravityLauncher } from "./antigravity-cli";
 import {
-  ANTIGRAVITY_MCP_SERVER_NAME, attachmentDirectory, createAntigravityHome, isWithin, readableDirectories, type AntigravityHome,
+  ANTIGRAVITY_MCP_SERVER_NAME, attachmentDirectory, createAntigravityHome, isWithin, readableDirectories, type AntigravityHome, ANTIGRAVITY_WEB_SEARCH_TOOLS,
 } from "./antigravity-home";
 import type { SkillLibrary } from "./skill-library";
 import { createSkillToolRunner, type SkillToolRunner } from "./skill-tool";
@@ -90,14 +90,16 @@ const tokenCount = (value: unknown): number | undefined =>
  * prompt, so Roqer's instructions open the first message of a session; a kept
  * session already has them in its conversation.
  */
-function sessionInstructions(options: AntigravityPlannerOptions, autoPlaytest: boolean): string {
+function sessionInstructions(options: AntigravityPlannerOptions, autoPlaytest: boolean, webSearch = false): string {
   return [
     "<system-instructions>",
     options.agent.systemInstructions,
     "</system-instructions>",
     "<developer-instructions>",
-    runDeveloperInstructions(options.agent.developerInstructions, autoPlaytest),
-    `In this session your tools are the "${ANTIGRAVITY_MCP_SERVER_NAME}" MCP server's tools, called through call_mcp_tool. Antigravity's own built-in tools (shell commands, file edits, web search, browser, subagents) are turned off and every call to one is refused. Work in Roblox Studio only through the "${ANTIGRAVITY_MCP_SERVER_NAME}" tools.`,
+    runDeveloperInstructions(options.agent.developerInstructions, autoPlaytest, webSearch),
+    webSearch
+      ? `In this session your tools are the "${ANTIGRAVITY_MCP_SERVER_NAME}" MCP server's tools, called through call_mcp_tool, and Antigravity's own web search. Its other built-in tools (shell commands, file edits, reading a page by URL, browser, subagents) are turned off and every call to one is refused. Work in Roblox Studio only through the "${ANTIGRAVITY_MCP_SERVER_NAME}" tools.`
+      : `In this session your tools are the "${ANTIGRAVITY_MCP_SERVER_NAME}" MCP server's tools, called through call_mcp_tool. Antigravity's own built-in tools (shell commands, file edits, web search, browser, subagents) are turned off and every call to one is refused. Work in Roblox Studio only through the "${ANTIGRAVITY_MCP_SERVER_NAME}" tools.`,
     "</developer-instructions>",
   ].join("\n\n");
 }
@@ -163,11 +165,23 @@ export function readAntigravityStep(message: JsonRecord): AntigravityStep | null
 export function antigravityToolPermitted(step: AntigravityStep, home: AntigravityHome): boolean {
   const parameters = step.toolParameters ?? {};
   if (step.toolName === "call_mcp_tool") return parameters.ServerName === ANTIGRAVITY_MCP_SERVER_NAME;
+  if (home.webSearch && isAntigravityWebSearch(step)) return true;
   if (step.toolName === "view_file" && typeof parameters.AbsolutePath === "string") {
     const file = parameters.AbsolutePath;
     return readableDirectories(home).some((directory) => isWithin(file, directory));
   }
   return false;
+}
+
+/** Whether a tool step is Antigravity's own web search, by the names the gate knows. */
+export function isAntigravityWebSearch(step: AntigravityStep): boolean {
+  return step.toolName !== undefined && ANTIGRAVITY_WEB_SEARCH_TOOLS.includes(step.toolName);
+}
+
+/** What a web search step searched for, for the run's activity. */
+export function antigravitySearchQuery(step: AntigravityStep): string {
+  const query = step.toolParameters?.query;
+  return typeof query === "string" && query.trim() !== "" ? query.trim().slice(0, 300) : "the web";
 }
 
 /** The extension a picture is saved under, by the media type Roqer already checked. */
@@ -312,7 +326,7 @@ export class AntigravitySession {
     return !this.dead;
   }
 
-  static async open(options: AntigravityPlannerOptions, key: string, signal: AbortSignal): Promise<AntigravitySession> {
+  static async open(options: AntigravityPlannerOptions, key: string, signal: AbortSignal, webSearch = false): Promise<AntigravitySession> {
     let session: AntigravitySession | null = null;
     const server = await startWorkbenchMcpServer({
       tools: workbenchMcpTools(options),
@@ -326,6 +340,7 @@ export class AntigravitySession {
       home = await createAntigravityHome({
         mcp: { url: server.url, token: server.token },
         ...(options.homeParent === undefined ? {} : { parent: options.homeParent }),
+        webSearch,
       });
       if (signal.aborted) throw new Error("Run was cancelled.");
       child = await options.launcher.launch(buildArguments(options), home);
@@ -410,11 +425,13 @@ export class AntigravitySession {
  * is part of it: a conversation that read one place's scripts and parts would
  * carry them into a run against another.
  */
-function sessionKey(options: AntigravityPlannerOptions, { autoPlaytest, instanceId }: Pick<PlannerContext, "autoPlaytest" | "instanceId">): string {
+function sessionKey(
+  options: AntigravityPlannerOptions, { autoPlaytest, instanceId, webSearch }: Pick<PlannerContext, "autoPlaytest" | "instanceId" | "webSearch">,
+): string {
   return JSON.stringify([
     instanceId, options.model, autoPlaytest,
     options.agent.id, options.agent.version, options.blender === true, options.referenceClips === true,
-    options.externalMcp === true,
+    options.externalMcp === true, webSearch === true,
   ]);
 }
 
@@ -518,6 +535,9 @@ export function createAntigravityPlanner(options: AntigravityPlannerOptions): Pl
           fail(new Error(`Roqer's tool gate for Antigravity did not run, so Antigravity refused every tool. ${step.toolError ?? ""}`.trim()));
           return;
         }
+        if (step.state === "DONE" && session.home.webSearch && isAntigravityWebSearch(step)) {
+          context.status("Searched the web", antigravitySearchQuery(step));
+        }
         if (step.state === "DONE" && !antigravityToolPermitted(step, session.home)) {
           fail(new Error(`Antigravity ran ${step.toolName ?? "a tool"}, which Roqer does not allow, so the run was stopped.`));
         }
@@ -590,7 +610,7 @@ export function createAntigravityPlanner(options: AntigravityPlannerOptions): Pl
           else await kept.close();
         }
         const resumed = session !== undefined;
-        session ??= await AntigravitySession.open(options, key, context.signal);
+        session ??= await AntigravitySession.open(options, key, context.signal, context.webSearch);
         if (settled) return await completion.promise;
         if (context.signal.aborted) throw new Error("Run was cancelled.");
         if (resumed) context.progress(waitingLabel);
@@ -616,7 +636,7 @@ export function createAntigravityPlanner(options: AntigravityPlannerOptions): Pl
         if (settled) return await completion.promise;
         const prompt = resumed
           ? buildFollowUpPrompt(context.conversation, context.prompt, (name) => skills.isLoaded(name))
-          : `${sessionInstructions(options, context.autoPlaytest)}\n\n${buildConversationPrompt(context.conversation, context.prompt)}`;
+          : `${sessionInstructions(options, context.autoPlaytest, context.webSearch)}\n\n${buildConversationPrompt(context.conversation, context.prompt)}`;
         session.writeUserMessage(attachments === "" ? prompt : `${prompt}\n\n${attachments}`);
 
         return await completion.promise;

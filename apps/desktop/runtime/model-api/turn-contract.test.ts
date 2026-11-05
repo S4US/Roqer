@@ -304,3 +304,18 @@ test("an attached image is charged against the input estimate", () => {
   assert.ok(withImage > textOnly);
   assert.ok(withImage - textOnly < 400_000 / 4);
 });
+
+import { isTurnEvent as isTurnEventForSearch, isTurnRequest as isTurnRequestForSearch } from "./turn-contract";
+
+test("a turn request may ask for the endpoint's web search, and a search event names its query", () => {
+  const request = {
+    runId: "run-1", turnId: "run-1:turn:1", modelId: "some/model", reasoningEffort: "high",
+    instructions: { system: "S" }, tools: [], messages: [{ role: "user", content: [{ kind: "text", text: "hi" }] }],
+  };
+  assert.equal(isTurnRequestForSearch(request), true);
+  assert.equal(isTurnRequestForSearch({ ...request, webSearch: true }), true);
+  assert.equal(isTurnRequestForSearch({ ...request, webSearch: "yes" }), false);
+  assert.equal(isTurnEventForSearch({ kind: "search", query: "roblox beams" }), true);
+  assert.equal(isTurnEventForSearch({ kind: "search", query: "" }), false);
+  assert.equal(isTurnEventForSearch({ kind: "search", query: "x", extra: 1 }), false);
+});

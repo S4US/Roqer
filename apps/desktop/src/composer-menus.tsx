@@ -277,19 +277,21 @@ const APPROVAL_CHOICES: ReadonlyArray<{ value: ApprovalMode; label: string; deta
 ];
 
 /** How a run behaves: what it may change without asking, and whether it playtests its own work. */
-export function RunMenu({ approvalMode, autoPlaytest, disabled, onApprovalMode, onAutoPlaytest }: {
+export function RunMenu({ approvalMode, autoPlaytest, webSearch, disabled, onApprovalMode, onAutoPlaytest, onWebSearch }: {
   approvalMode: ApprovalMode;
   autoPlaytest: boolean;
+  webSearch: boolean;
   disabled: boolean;
   onApprovalMode: (mode: ApprovalMode) => void;
   onAutoPlaytest: (on: boolean) => void;
+  onWebSearch: (on: boolean) => void;
 }) {
   const tone = approvalMode === "Full auto" ? " full-auto" : approvalMode === "Auto approve" ? " auto" : "";
   return <ComposerMenu
     className={`run-menu${tone}`}
     label="How the run behaves"
     disabled={disabled}
-    trigger={<span className="composer-menu-label"><ShieldCheck size={15} aria-hidden="true" />{approvalMode}<em>{autoPlaytest ? "Playtest on" : "Playtest off"}</em></span>}
+    trigger={<span className="composer-menu-label"><ShieldCheck size={15} aria-hidden="true" />{approvalMode}<em>{autoPlaytest ? "Playtest on" : "Playtest off"}{webSearch ? " · Web on" : ""}</em></span>}
   >
     {(close) => <>
       <span className="model-menu-group-label">Before changing your place</span>
@@ -308,6 +310,10 @@ export function RunMenu({ approvalMode, autoPlaytest, disabled, onApprovalMode, 
       <div className="run-menu-playtest">
         <span className="run-choice-text"><strong>Playtest to check changes</strong><span>After a change a playtest can check, run a short one and stop it before replying.</span></span>
         <SettingsSwitch label="Playtest to check changes" checked={autoPlaytest} onChange={onAutoPlaytest} />
+      </div>
+      <div className="run-menu-playtest">
+        <span className="run-choice-text"><strong>Web search</strong><span>Let the model search the web through your provider. Each search shows in the activity; what it reads is third-party text, and in Full auto nothing stops an action a page leads to.</span></span>
+        <SettingsSwitch label="Web search" checked={webSearch} onChange={onWebSearch} />
       </div>
     </>}
   </ComposerMenu>;

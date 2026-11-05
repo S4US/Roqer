@@ -444,3 +444,14 @@ test("the only project cannot be deleted", () => {
   const state = createInitialWorkspace();
   assert.equal(deleteProject(state, "default"), state);
 });
+
+test("web search is off unless the user turned it on, and a saved choice to turn it on is kept", () => {
+  const workspace = normalizeWorkspace(createInitialWorkspace());
+  assert.equal(workspace.preferences.webSearch, false);
+  const on = normalizeWorkspace({ ...workspace, preferences: { ...workspace.preferences, webSearch: true } });
+  assert.equal(on.preferences.webSearch, true);
+  const older: Record<string, unknown> = { ...workspace.preferences };
+  delete older.webSearch;
+  assert.equal(normalizeWorkspace({ ...workspace, preferences: older }).preferences.webSearch, false);
+  assert.equal(normalizeWorkspace({ ...workspace, preferences: { ...workspace.preferences, webSearch: "yes" } }).preferences.webSearch, false);
+});

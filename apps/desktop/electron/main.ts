@@ -2078,7 +2078,7 @@ function parseStartRequest(value: unknown): RunStartRequest | null {
   if (!isRecord(value)) return null;
   const {
     projectId, chatId, prompt, conversation, approvalMode, autoPlaytest, endpoint, instanceId, provider, model, effort, startId, attachmentIds,
-    includeSelection,
+    includeSelection, webSearch,
   } = value;
   if (typeof projectId !== "string" || projectId === "" || projectId.length > 1_000) return null;
   if (typeof chatId !== "string" || chatId === "" || chatId.length > 1_000) return null;
@@ -2086,6 +2086,7 @@ function parseStartRequest(value: unknown): RunStartRequest | null {
   if (startId !== undefined && (typeof startId !== "string" || !/^[\w-]{1,100}$/.test(startId))) return null;
   if (attachmentIds !== undefined && (!Array.isArray(attachmentIds) || attachmentIds.length > 8 || !attachmentIds.every((id) => typeof id === "string" && id.length <= 100))) return null;
   if (includeSelection !== undefined && typeof includeSelection !== "boolean") return null;
+  if (webSearch !== undefined && typeof webSearch !== "boolean") return null;
   if (!isConversationContext(conversation)) return null;
   if (!APPROVAL_MODES.includes(approvalMode as ApprovalMode)) return null;
   if (typeof autoPlaytest !== "boolean") return null;
@@ -2109,6 +2110,7 @@ function parseStartRequest(value: unknown): RunStartRequest | null {
     startId,
     attachmentIds,
     includeSelection,
+    webSearch,
   };
 }
 
