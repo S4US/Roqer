@@ -1594,11 +1594,17 @@ a.small-button:focus-visible { outline: 2px solid var(--accent); outline-offset:
 .settings-button.update-progress > div > span:first-child { overflow: hidden; font-size: var(--type-label); text-overflow: ellipsis; white-space: nowrap; }
 .update-track { display: flex; height: 4px; overflow: hidden; background: var(--surface-sunken); border-radius: 999px; }
 .update-track > span { display: block; height: 100%; background: var(--accent); border-radius: 999px; transition: width .3s ease; }
-.selection-chip { display: flex; align-items: center; gap: 12px; margin: 12px 14px 0; padding: 8px 8px 8px 12px; color: var(--muted); background: var(--surface-sunken); border: 1px solid var(--border-subtle); border-radius: 11px; }
-.selection-chip > div { display: flex; flex: 1; flex-direction: column; min-width: 0; }
-.selection-chip strong { color: var(--ink); font-size: var(--type-label); font-weight: var(--weight-medium); }
-.selection-chip span { overflow: hidden; color: var(--muted); font: var(--weight-regular) 11.5px/1.4 "Geist Mono Variable", monospace; text-overflow: ellipsis; white-space: nowrap; }
-.selection-chip .icon-button { width: 28px; height: 28px; }
+/* One line at the top of the composer; the right margin stays clear of the expand button. */
+.selection-chip { display: flex; flex: none; align-self: flex-start; align-items: center; gap: 2px; max-width: calc(100% - 68px); margin: 10px 0 0 18px; padding: 2px 3px 2px 8px; color: var(--muted); background: var(--surface-sunken); border: 1px solid var(--border-subtle); border-radius: 8px; font-size: var(--type-meta); }
+.selection-chip-text { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.selection-chip-text > svg { flex: none; color: var(--faint); }
+.selection-chip-text > strong { overflow: hidden; color: var(--ink); font-size: var(--type-meta); font-weight: var(--weight-medium); text-overflow: ellipsis; white-space: nowrap; }
+.selection-chip-text > span { flex: none; white-space: nowrap; }
+.selection-chip-more { color: var(--faint); }
+.selection-chip > button { display: grid; flex: none; place-items: center; width: 21px; height: 21px; padding: 0; color: var(--faint); background: transparent; border: 0; border-radius: 6px; }
+.selection-chip > button:hover { color: var(--ink); background: var(--surface-raised); }
+.selection-chip > button:focus-visible { color: var(--ink); outline: 2px solid var(--accent); outline-offset: -1px; }
+.composer-card .selection-chip + textarea { padding-top: 8px; }
 .message-selection { display: inline-flex; align-items: center; gap: 5px; max-width: 640px; margin-top: 6px; color: var(--faint); font-size: var(--type-meta); }
 .message-selection code { overflow: hidden; color: var(--muted); font: var(--weight-regular) 11.5px/1.4 "Geist Mono Variable", monospace; text-overflow: ellipsis; white-space: nowrap; }
 .sound-list { display: flex; flex-direction: column; gap: 8px; margin: 0; padding: 10px 12px 12px; list-style: none; }

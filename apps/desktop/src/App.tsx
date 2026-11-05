@@ -10,7 +10,7 @@ import { Fragment, memo, useCallback, useEffect, useId, useLayoutEffect, useMemo
 import { createPortal } from "react-dom";
 import { ClipTrimDialog } from "./clip-trim-dialog";
 import { VIDEO_EXTENSIONS, type ClipSelection } from "../shared/reference-clip";
-import { describeSelection, selectionKey, type StudioSelection } from "../shared/studio-selection";
+import { describeSelection, selectionChipParts, selectionKey, type StudioSelection } from "../shared/studio-selection";
 import {
   appendMessage, createChat, createId, createInitialWorkspace, createProject, undeliverNotes, withMessageSelection,
   deleteChat, deleteProject, modelPreference, normalizeWorkspace, renameChat,
@@ -1781,11 +1781,18 @@ function App() {
               <button onClick={() => setSendAfterCompact(null)}>Cancel</button>
             </div>}
             {attachmentError && <div className="attachment-notice" role="alert">{attachmentError}<button onClick={() => setAttachmentError(null)} aria-label="Dismiss"><X size={14} /></button></div>}
-            {selectionChip !== null && <div className="selection-chip" role="status">
-              <MousePointerClick size={16} aria-hidden="true" />
-              <div><strong>Using your Studio selection</strong><span title={selectionChip.items.map((item) => item.path).join("\n")}>{describeSelection(selectionChip)}</span></div>
-              <button type="button" className="icon-button" onClick={() => setDismissedSelectionKey(selectionKey(selectionChip))} aria-label="Send without your selection" title="Send without your selection"><X size={14} /></button>
-            </div>}
+            {selectionChip !== null && (() => {
+              const { name, className, more } = selectionChipParts(selectionChip);
+              return <div className="selection-chip" role="status" aria-label={`Using your Studio selection: ${describeSelection(selectionChip)}`}>
+                <div className="selection-chip-text" title={["Using your Studio selection:", ...selectionChip.items.map((item) => item.path), ...(selectionChip.count > selectionChip.items.length ? [`and ${selectionChip.count - selectionChip.items.length} more`] : [])].join("\n")}>
+                  <MousePointerClick size={13} aria-hidden="true" />
+                  <strong>{name}</strong>
+                  {className !== undefined && <span>{className}</span>}
+                  {more > 0 && <span className="selection-chip-more">+{more} more</span>}
+                </div>
+                <button type="button" onClick={() => setDismissedSelectionKey(selectionKey(selectionChip))} aria-label="Send without your selection" title="Send without your selection"><X size={13} /></button>
+              </div>;
+            })()}
             {attachments.length > 0 && <div className="attachment-row">{attachments.map((attachment) => <div className={`attachment-chip${attachment.clip === undefined ? "" : " clip"}`} key={attachment.id}>
               {attachment.thumbnailDataUrl ? <img className="attachment-thumbnail" src={attachment.thumbnailDataUrl} alt="" /> : attachment.clip === undefined ? <FileBox size={16} /> : <Film size={16} />}
               <div><strong>{attachment.name}</strong><span>{readingClips.has(attachment.id) && <Loader2 size={11} className="attachment-reading" />}{formatBytes(attachment.size)} · {attachmentDetail(attachment, imagesReachModel, readingClips.has(attachment.id))}</span></div>

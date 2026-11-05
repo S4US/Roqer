@@ -104,6 +104,18 @@ export function describeSelection(selection: StudioSelection): string {
 }
 
 /**
+ * The composer chip's short form: the first instance's own name rather than its
+ * whole path, which the chip's tooltip lists. A name holding a dot shows only
+ * its last part. Only a count when Studio listed no instance.
+ */
+export function selectionChipParts(selection: StudioSelection): { name: string; className?: string; more: number } {
+  const first = selection.items[0];
+  if (first === undefined) return { name: `${selection.count} instances`, more: 0 };
+  const name = first.path.slice(first.path.lastIndexOf(".") + 1);
+  return { name: name === "" ? first.path : name, className: first.className, more: selection.count - 1 };
+}
+
+/**
  * The line the model reads beside the prompt. It says where the paths came
  * from, so the model treats them as Studio's data rather than the user's words;
  * what to do with them is in the developer instructions. Nothing for an empty

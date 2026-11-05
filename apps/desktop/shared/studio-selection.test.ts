@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
   describeSelection,
+  selectionChipParts,
   isStudioSelection,
   isStudioSelectionResult,
   MAX_SELECTION_ITEMS,
@@ -78,6 +79,14 @@ test("the model's line names where the paths came from, and says nothing for an 
   assert.equal(selectionContextText({ items: [], count: 0 }), undefined);
   assert.equal(describeSelection(one), "game.Workspace.Tower (Model)");
   assert.equal(describeSelection({ items: [], count: 0 }), "Nothing selected");
+});
+
+test("the composer chip shows the first instance's own name, its class and how many more", () => {
+  assert.deepEqual(selectionChipParts({ items: [{ path: "game.Workspace.Map.Door", className: "Part" }], count: 1 }), { name: "Door", className: "Part", more: 0 });
+  assert.deepEqual(selectionChipParts({ items: [{ path: "game.Workspace.Tree0", className: "Part" }], count: 30 }), { name: "Tree0", className: "Part", more: 29 });
+  assert.deepEqual(selectionChipParts({ items: [{ path: "Door", className: "Part" }], count: 1 }), { name: "Door", className: "Part", more: 0 });
+  assert.deepEqual(selectionChipParts({ items: [{ path: "game.Workspace.", className: "Part" }], count: 1 }), { name: "game.Workspace.", className: "Part", more: 0 });
+  assert.deepEqual(selectionChipParts({ items: [], count: 12 }), { name: "12 instances", more: 0 });
 });
 
 test("selectionKey changes when the selection does", () => {
