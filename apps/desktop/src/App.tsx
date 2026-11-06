@@ -2,12 +2,14 @@ import {
   AlertCircle, AlertTriangle, Archive, Boxes, Check, ChevronDown, ChevronRight, Circle, Download,
   CircleDot, ExternalLink, FileBox, FileCode2, FileText, Folder, FolderPlus, Gamepad2,
   HelpCircle, Info, Loader2, MessageSquare, MinusCircle, MoreHorizontal,
-  ArrowUp, Maximize2, Minimize2, PanelLeftClose, PanelLeftOpen, Paperclip, Pencil, Play, Plus, RotateCw, Scissors, Search, Settings, Square,
-  ShieldCheck, Sparkles, Film, MousePointerClick,
-  Trash2, X,
+  ArrowUp, Maximize2, Minimize2, PanelLeftClose, PanelLeftOpen, Paperclip, Pencil, Play, Plus, RotateCw, Search, Settings, Square,
+  ShieldCheck, Sparkles, MousePointerClick,
+  Trash2, Upload, X,
 } from "lucide-react";
 import { Fragment, memo, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { createPortal } from "react-dom";
+import { AttachmentChip, MessageFiles, MessagePictures } from "./attachment-views";
+import { isImageAttachment } from "./attachment-detail";
 import { ClipTrimDialog } from "./clip-trim-dialog";
 import { VIDEO_EXTENSIONS, type ClipSelection } from "../shared/reference-clip";
 import { describeSelection, selectionChipParts, selectionKey, selectionToOffer, type StudioSelection } from "../shared/studio-selection";
@@ -142,9 +144,6 @@ const MAX_ATTACHMENTS_PER_MESSAGE = 8;
 /** Matches the bound the run contract enforces on one turn. */
 const MAX_IMAGES_PER_MESSAGE = 4;
 
-const isImageAttachment = (attachment: AssetAttachment): boolean =>
-  attachment.mediaType !== undefined && ATTACHABLE_IMAGE_TYPES.has(attachment.mediaType);
-
 /**
  * One chat's run as the window tracks it. A chat has at most one run at a time,
  * and several chats may run at once: the main process refuses a second run in
@@ -215,23 +214,6 @@ const totalImageSlots = (attached: readonly AssetAttachment[]): number =>
 const isVideoFile = (file: File): boolean =>
   ATTACHABLE_VIDEO_TYPES.has(file.type) ||
   (file.type === "" && VIDEO_EXTENSIONS.has(file.name.slice(file.name.lastIndexOf(".")).toLowerCase()));
-
-/** What the chat can promise about an attachment, given where the run will go. */
-function attachmentDetail(attachment: AssetAttachment, imagesReachModel: boolean, reading: boolean): string {
-  const { clip } = attachment;
-  if (clip !== undefined) {
-    if (reading) return "reading its frames…";
-    if (clip.id === undefined) return "choose the part to send";
-    const length = `${((clip.end - clip.start) / clip.slow).toFixed(2)} s`;
-    return imagesReachModel ? `${length} clip shared with agent as frames` : `${length} clip saved; this sign-in cannot read images`;
-  }
-  if (isImageAttachment(attachment)) {
-    return imagesReachModel ? "image shared with agent" : "image saved; this sign-in cannot read images";
-  }
-  return hasDesktopRuntime() && /\.(rbxmx|txt|md|lua|luau)$/i.test(attachment.name)
-    ? "text shared with agent"
-    : "file details only; contents not read";
-}
 
 function App() {
   // Dark unless this machine has chosen otherwise. Roqer sits beside Studio,
@@ -1785,12 +1767,12 @@ function App() {
                 says where the run is and offers the two things that can be done
                 about it from here: go to it, or stop it. */}
             {compactNotice?.chatId === workspace.selectedChatId && <div className="composer-status" role="status"><span>{compactNotice.text}</span></div>}
-            {draggingImage && <div className="composer-drop-hint">Drop an image or a video to attach it</div>}
+            {draggingImage && <div className="composer-drop-hint"><Upload size={18} aria-hidden="true" />Drop an image or a video to attach it</div>}
             {sendAfterCompact !== null && sendAfterCompact === workspace.selectedChatId && <div className="attachment-notice compact-queued" role="status">
               <span><Loader2 size={13} className="spin" aria-hidden="true" /> Queued: your message sends as soon as compacting finishes. You can keep editing it.</span>
               <button onClick={() => setSendAfterCompact(null)}>Cancel</button>
             </div>}
-            {attachmentError && <div className="attachment-notice" role="alert">{attachmentError}<button onClick={() => setAttachmentError(null)} aria-label="Dismiss"><X size={14} /></button></div>}
+            {attachmentError && <div className="attachment-notice" role="alert"><AlertTriangle size={14} aria-hidden="true" /><span>{attachmentError}</span><button onClick={() => setAttachmentError(null)} aria-label="Dismiss"><X size={14} /></button></div>}
             {selectionChip !== null && (() => {
               const { name, className, more } = selectionChipParts(selectionChip);
               return <div className="selection-chip" role="status" aria-label={`Using your Studio selection: ${describeSelection(selectionChip)}`}>
@@ -1803,12 +1785,15 @@ function App() {
                 <button type="button" onClick={() => setDismissedSelectionKey(selectionKey(selectionChip))} aria-label="Send without your selection" title="Send without your selection"><X size={13} /></button>
               </div>;
             })()}
-            {attachments.length > 0 && <div className="attachment-row">{attachments.map((attachment) => <div className={`attachment-chip${attachment.clip === undefined ? "" : " clip"}`} key={attachment.id}>
-              {attachment.thumbnailDataUrl ? <img className="attachment-thumbnail" src={attachment.thumbnailDataUrl} alt="" /> : attachment.clip === undefined ? <FileBox size={16} /> : <Film size={16} />}
-              <div><strong>{attachment.name}</strong><span>{readingClips.has(attachment.id) && <Loader2 size={11} className="attachment-reading" />}{formatBytes(attachment.size)} · {attachmentDetail(attachment, imagesReachModel, readingClips.has(attachment.id))}</span></div>
-              {attachment.clip !== undefined && <button onClick={() => setTrimmingClip(attachment.id)} disabled={readingClips.has(attachment.id)} aria-label={`Choose the part of ${attachment.name} to send`} title="Choose the part to send"><Scissors size={14} /></button>}
-              <button onClick={() => { void releaseAttachments([attachment.id]); setAttachments((current) => current.filter((item) => item.id !== attachment.id)); }} aria-label={`Remove ${attachment.name}`}><X size={14} /></button>
-            </div>)}</div>}
+            {attachments.length > 0 && <div className="attachment-row">{attachments.map((attachment) => <AttachmentChip
+              key={attachment.id}
+              attachment={attachment}
+              imagesReachModel={imagesReachModel}
+              reading={readingClips.has(attachment.id)}
+              readsText={hasDesktopRuntime()}
+              onTrim={() => setTrimmingClip(attachment.id)}
+              onRemove={() => { void releaseAttachments([attachment.id]); setAttachments((current) => current.filter((item) => item.id !== attachment.id)); }}
+            />)}</div>}
             {(() => {
               const trimming = attachments.find((attachment) => attachment.id === trimmingClip);
               return trimming?.clip === undefined ? null : <ClipTrimDialog
@@ -2028,18 +2013,12 @@ const ConversationMessageView = memo(function ConversationMessageView({ message,
   return message.role === "user" ? (
     <section className={`message user-message${message.note === true ? " note-message" : ""}`} key={message.id}>
       {message.note === true && <span className="note-label">Note sent while Roqer was working</span>}
+      {message.attachments !== undefined && <MessagePictures attachments={message.attachments} />}
       <p className="user-prompt">{message.text}</p>
       {message.studioSelection !== undefined && message.studioSelection.count > 0 && <div className="message-selection" title={message.studioSelection.items.map((item) => item.path).join("\n")}>
         <MousePointerClick size={12} aria-hidden="true" /> Selected in Studio: <code>{describeSelection(message.studioSelection)}</code>
       </div>}
-      {message.attachments && message.attachments.length > 0 && <div className="message-attachments">{message.attachments.map((asset) => asset.clip !== undefined
-        ? <figure key={asset.id} className="message-attachment-clip" title={asset.name}>
-          {asset.thumbnailDataUrl ? <img className="message-attachment-image" src={asset.thumbnailDataUrl} alt={`Attached clip: ${asset.name}`} /> : <span><FileBox size={13} />{asset.name}</span>}
-          <figcaption><Film size={12} /> {((asset.clip.end - asset.clip.start) / asset.clip.slow).toFixed(2)} s clip</figcaption>
-        </figure>
-        : asset.thumbnailDataUrl
-          ? <img key={asset.id} className="message-attachment-image" src={asset.thumbnailDataUrl} alt={`Attached image: ${asset.name}`} title={asset.name} />
-          : <span key={asset.id}><FileBox size={13} />{asset.name}</span>)}</div>}
+      {message.attachments !== undefined && <MessageFiles attachments={message.attachments} />}
     </section>
   ) : (
     <section className="message assistant-message" key={message.id}><div className="message-content">
@@ -2960,13 +2939,6 @@ function ConfirmModal({ heading, description, confirmLabel, onConfirm, onClose }
     <p>{description}</p>
     <div className="modal-actions"><button className="secondary-action" autoFocus onClick={onClose}>Cancel</button><button className="danger-action" onClick={onConfirm}><Trash2 size={15} /> {confirmLabel}</button></div>
   </div></div>;
-}
-
-
-function formatBytes(value: number): string {
-  if (value < 1_024) return `${value} B`;
-  if (value < 1_048_576) return `${(value / 1_024).toFixed(1)} KB`;
-  return `${(value / 1_048_576).toFixed(1)} MB`;
 }
 
 function formatDuration(milliseconds: number): string {

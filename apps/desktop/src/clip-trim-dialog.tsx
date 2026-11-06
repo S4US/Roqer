@@ -277,9 +277,10 @@ export function ClipTrimDialog({ attachment, clip, onConfirm, onClose }: {
           <h2>Choose the part to send</h2>
           <span>{attachment.name} · {formatClipTime(duration)}</span>
         </div>
-        <button className="icon-button" onClick={onClose} aria-label="Close"><X size={19} /></button>
+        <button className="icon-button" onClick={onClose} aria-label="Close"><X size={18} /></button>
       </div>
 
+      <div className="clip-modal-body">
       <div className="clip-player">
         {isVideo && url !== undefined && !unplayable
           ? <video
@@ -310,7 +311,8 @@ export function ClipTrimDialog({ attachment, clip, onConfirm, onClose }: {
         <button type="button" className="clip-control" onClick={() => step(-1)} aria-label="Back one frame" title="Back one frame (←)"><ChevronLeft size={17} /></button>
         <button type="button" className="clip-control" onClick={() => step(1)} aria-label="Forward one frame" title="Forward one frame (→)"><ChevronRight size={17} /></button>
         <span className="clip-clock">{formatClipTime(time)}</span>
-        <div className="clip-segmented clip-rate" role="group" aria-label="Preview speed">
+        <span className="clip-rate-label" aria-hidden="true">Preview at</span>
+        <div className="clip-segmented" role="group" aria-label="Preview speed">
           {PREVIEW_RATES.map((value) => <button type="button" key={value} aria-pressed={rate === value} onClick={() => setRate(value)} title={value === 1 ? "Play at normal speed" : `Play at ${value} speed`}>{rateLabel(value)}</button>)}
         </div>
       </div>}
@@ -352,6 +354,7 @@ export function ClipTrimDialog({ attachment, clip, onConfirm, onClose }: {
         <div className="clip-segmented" role="group" aria-label="How fast the video plays">
           {SPEEDS.map((speed) => <button type="button" key={speed.value} aria-pressed={slow === speed.value} onClick={() => setSlow(speed.value)}>{speed.label}</button>)}
         </div>
+      </div>
       </div>
 
       <div className="clip-modal-foot">
