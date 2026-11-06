@@ -144,11 +144,24 @@
 .run-deck .results-card[data-open="true"] .results-tab[aria-selected="true"] { color: var(--ink); background: var(--surface-raised); box-shadow: var(--shadow-sm); }
 .run-deck .results-tab-count { min-width: 0; height: auto; padding: 0; color: var(--faint); background: transparent; font-size: var(--type-meta); }
 .run-deck .results-tab .diff-summary { display: none; }
-.run-deck .results-tab-name { display: none; }
-.run-deck .results-tab[aria-selected="true"] .results-tab-name, .run-deck .results-tabs[data-count="1"] .results-tab-name, .run-deck .results-tabs[data-count="2"] .results-tab-name { display: inline; }
-@container deck (min-width: 430px) { .run-deck .results-tabs[data-count="3"] .results-tab-name { display: inline; } }
-@container deck (min-width: 540px) { .run-deck .results-tabs[data-count="4"] .results-tab-name { display: inline; } }
-@container deck (min-width: 640px) { .run-deck .results-tabs[data-count="5"] .results-tab-name { display: inline; } }
+/* Names tell the tabs apart, so icons go first when the deck is narrow. Only
+   when even names cannot fit does a tab that is not open fall back to its icon. */
+.run-deck .results-tabs[data-count="3"] .results-tab > svg,
+.run-deck .results-tabs[data-count="4"] .results-tab > svg,
+.run-deck .results-tabs[data-count="5"] .results-tab > svg { display: none; }
+.run-deck .results-tabs[data-count="4"] .results-tab,
+.run-deck .results-tabs[data-count="5"] .results-tab { padding: 0 4px; }
+@container deck (min-width: 400px) { .run-deck .results-tabs[data-count="3"] .results-tab > svg { display: block; } }
+@container deck (min-width: 480px) { .run-deck .results-tabs[data-count="4"] .results-tab > svg { display: block; } }
+@container deck (min-width: 570px) { .run-deck .results-tabs[data-count="5"] .results-tab > svg { display: block; } }
+@container deck (max-width: 389px) {
+  .run-deck .results-tabs[data-count="4"] .results-tab > svg { display: block; }
+  .run-deck .results-tabs[data-count="4"] .results-tab[aria-selected="false"] .results-tab-name { display: none; }
+}
+@container deck (max-width: 459px) {
+  .run-deck .results-tabs[data-count="5"] .results-tab > svg { display: block; }
+  .run-deck .results-tabs[data-count="5"] .results-tab[aria-selected="false"] .results-tab-name { display: none; }
+}
 
 /* The deck's edge, for a long diff. */
 .run-deck-resizer { position: absolute; top: 0; bottom: 0; left: 0; z-index: 2; width: 7px; cursor: col-resize; touch-action: none; }
@@ -225,3 +238,7 @@
 .run-deck .results-tabs[data-count="1"] { flex: 0 0 auto; padding: 0; background: transparent; border: 0; }
 .run-deck .results-tabs[data-count="1"] .results-tab { box-shadow: none; background: transparent; cursor: default; }
 .run-deck .results-header > .icon-button { margin-left: auto; }
+
+/* Under a closed row a failure takes one line, so it does not push the answer away. */
+.section-alerts .node-row[data-status="failed"] { align-items: center; padding-block: 0; }
+.section-alerts .node-row[data-status="failed"] > .node-finding { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

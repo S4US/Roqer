@@ -9,8 +9,8 @@ import type { ActivityStep } from "./run-view";
  *
  * `activitySteps` answers "what happened, in order" — one entry per tool call,
  * per note, per piece of evidence. Read as it stands, ten reads in a row are ten
- * rows of "Read game.StarterPack", so neighbours of one kind fold into one row.
- * Nothing else moves: the order stays the order things happened in, so a failed
+ * rows of "Read game.StarterPack", so neighbours of one kind fold into one row,
+ * as does a playtest and an edit with its read-back. Nothing else moves: the order stays the order things happened in, so a failed
  * edit, the read that followed it and the edit that worked read as that story.
  * Every step survives as a leaf, so the raw operation, its arguments, its
  * timing, and its output stay one click away.
@@ -137,7 +137,7 @@ export const MAX_VISIBLE_ALERTS = 3;
 const COUNT_PATTERN = /^(\d+)\s+(\S+)(.*)$/;
 
 const singular = (noun: string) => (noun.endsWith("ies") ? `${noun.slice(0, -3)}y` : noun.endsWith("s") ? noun.slice(0, -1) : noun);
-const plural = (noun: string) => (noun.endsWith("y") ? `${noun.slice(0, -1)}ies` : `${noun}s`);
+const plural = (noun: string) => (noun.endsWith("y") ? `${noun.slice(0, -1)}ies` : noun.endsWith("ch") ? `${noun}es` : `${noun}s`);
 
 /**
  * Add up the countable findings underneath a group.
@@ -176,12 +176,11 @@ function groupFinding(children: readonly ActivityNode[]): string | undefined {
   return parts.length === 0 ? undefined : parts.join(" · ");
 }
 
-/** What a read is of, for a row that says so. */
+/** What a read is of, for a row that says so. A screenshot is taken, not read. */
 const READ_NOUN: Readonly<Record<string, string>> = {
   get_script_source: "script",
   get_instance_properties: "instance",
   get_runtime_logs: "log",
-  capture_screenshot: "screenshot",
 };
 
 /** "a, b and c", keeping the list short enough to read on one row. */
@@ -190,23 +189,58 @@ function listed(parts: readonly string[]): string {
   return shown.length < 2 ? shown.join("") : `${shown.slice(0, -1).join(", ")} and ${shown[shown.length - 1]}`;
 }
 
+const counted = (count: number, noun: string) => `${count} ${count === 1 ? noun : plural(noun)}`;
+
+/** The last part of an instance path, or null for anything that is not one. */
+function instanceName(target: string | null | undefined): string | null {
+  if (!target?.startsWith("game.")) return null;
+  return target.slice(target.lastIndexOf(".") + 1);
+}
+
+/**
+ * A count, then what it was of. The count comes first because a long row is cut
+ * off at its end, and the row should still say how many.
+ */
+function namedAfter(head: string, names: readonly (string | null)[]): string {
+  const distinct = [...new Set(names.flatMap((name) => name ?? []))];
+  if (distinct.length === 0) return head;
+  // The ellipsis also covers calls with no name, so a list never reads as complete when it is not.
+  const more = distinct.length > 2 || names.includes(null);
+  return `${head}: ${distinct.slice(0, 2).join(", ")}${more ? ", …" : ""}`;
+}
+
+function readTitle(children: readonly ActivityNode[]): string {
+  const reads = children.filter((child) => child.step?.tool !== "capture_screenshot");
+  const shots = children.length - reads.length;
+  const nouns = new Map<string, number>();
+  for (const child of reads) {
+    const noun = READ_NOUN[child.step?.tool ?? ""] ?? "item";
+    nouns.set(noun, (nouns.get(noun) ?? 0) + 1);
+  }
+  // Two kinds still read as a list; past that, or with unnamed reads, it is a count.
+  const kinds = nouns.size > 2 || (nouns.size > 1 && nouns.has("item"))
+    ? counted(reads.length, "item")
+    : listed([...nouns].map(([noun, count]) => counted(count, noun)));
+  const took = shots === 1 ? "Took a screenshot" : `Took ${shots} screenshots`;
+  if (shots > 0) return reads.length === 0 ? took : `${took} and read ${kinds}`;
+  return namedAfter(`Read ${kinds}`, reads.map((child) => instanceName(child.step?.target)));
+}
+
 /** A merged row says what was done and how many times, from what the calls have in common. */
 function mergedTitle(children: readonly ActivityNode[]): string {
   const count = children.length;
+  const names = children.map((child) => instanceName(child.step?.target));
   const targets = new Set(children.map((child) => child.step?.target ?? ""));
   const target = targets.size === 1 ? [...targets][0] : "";
   switch (children[0].kind) {
-    case "edit": return `Made ${count} edits${target === "" ? "" : ` to ${shortTarget(target)}`}`;
-    case "search": return `Ran ${count} searches`;
-    case "verify": return `Made ${count} checks${target === "" ? "" : ` on ${shortTarget(target)}`}`;
-    case "read": {
-      const nouns = new Map<string, number>();
-      for (const child of children) {
-        const noun = READ_NOUN[child.step?.tool ?? ""] ?? "item";
-        nouns.set(noun, (nouns.get(noun) ?? 0) + 1);
-      }
-      return `Read ${listed([...nouns].map(([noun, n]) => `${n} ${n === 1 ? noun : plural(noun)}`))}`;
-    }
+    case "edit": return target === "" ? namedAfter(`Made ${count} edits`, names) : `Made ${count} edits to ${shortTarget(target)}`;
+    // A search's target is what was searched for, unless it names where it looked.
+    case "search": return namedAfter(`Ran ${count} searches`, children.map((child) => {
+      const query = child.step?.target;
+      return query && /[\p{L}\p{N}]/u.test(query) ? instanceName(query) ?? `“${query}”` : null;
+    }));
+    case "verify": return target === "" ? namedAfter(`Made ${count} checks`, names) : `Made ${count} checks on ${shortTarget(target)}`;
+    case "read": return readTitle(children);
     case "run": {
       const labels = [...new Set(children.map((child) => child.title))];
       if (labels.length === 1) return `${labels[0]} (${count} times)`;
@@ -223,6 +257,13 @@ function totalDuration(children: readonly ActivityNode[]): number | undefined {
   return measured.reduce((total, child) => total + (child.step?.durationMs ?? 0), 0);
 }
 
+/** Enough to see what went wrong without a closed row growing back into the list it folds. */
+function alertsOf(children: readonly ActivityNode[]): ActivityNode[] {
+  return children
+    .filter((child) => child.status === "failed" || child.status === "warning" || child.status === "skipped")
+    .slice(0, MAX_VISIBLE_ALERTS);
+}
+
 function groupNode(children: ActivityNode[]): ActivityNode {
   const status = rollUpStatus(children);
   // While the row is running, the specific operation is more use than a count.
@@ -235,11 +276,45 @@ function groupNode(children: ActivityNode[]): ActivityNode {
     kind: children[0].kind,
     durationMs: totalDuration(children),
     children,
-    // Enough to see what went wrong without the collapsed group growing back
-    // into the list it was folded out of; the count in the finding covers the rest.
-    alerts: children
-      .filter((child) => child.status === "failed" || child.status === "warning" || child.status === "skipped")
-      .slice(0, MAX_VISIBLE_ALERTS),
+    alerts: alertsOf(children),
+  };
+}
+
+/** An edit and the read that checked it. The row is the edit; the read says what it found. */
+function readBackNode(children: ActivityNode[]): ActivityNode {
+  const verified = children[1].finding === "Verified" || children[1].finding?.endsWith(" · verified") === true;
+  return {
+    key: `group-${children[0].key}`,
+    status: rollUpStatus(children),
+    title: children[0].title,
+    finding: verified ? "Read back · verified" : "Read back",
+    kind: "edit",
+    durationMs: totalDuration(children),
+    children,
+    alerts: alertsOf(children),
+  };
+}
+
+/**
+ * One stretch of a playtest. A step inside that failed does not make the playtest
+ * a failure, so the row keeps its own status and the failure is listed under it.
+ */
+function playtestNode(children: ActivityNode[], part: PlaytestPart): ActivityNode {
+  const active = children.find((child) => child.status === "active");
+  const waiting = children.some((child) => child.status === "warning");
+  const failed = children.filter((child) => child.status === "failed").length;
+  const title = part.stopped
+    ? (part.continued ? "Finished the playtest" : "Ran a playtest")
+    : (part.continued ? "Continued the playtest" : "Started a playtest");
+  return {
+    key: `group-${children[0].key}`,
+    status: active ? "active" : waiting ? "warning" : "completed",
+    title: active ? active.title : title,
+    finding: `${children.length} steps${failed > 0 ? ` · ${failed} failed` : ""}`,
+    kind: "run",
+    durationMs: totalDuration(children),
+    children,
+    alerts: alertsOf(children),
   };
 }
 
@@ -272,6 +347,25 @@ function withEvidenceOnItsCall(steps: readonly ActivityStep[]): ActivityStep[] {
   return out;
 }
 
+type PlaytestPart = { continued: boolean; stopped: boolean };
+type Row = { steps: ActivityStep[]; playtest?: PlaytestPart; readBack?: true };
+
+function isPlaytestCall(step: ActivityStep, action: "start" | "stop"): boolean {
+  return (step.tool === "solo_playtest" || step.tool === "multiplayer_playtest") && step.target === action;
+}
+
+/** A start that worked, or is still trying to, opens a playtest. */
+function opensPlaytest(step: ActivityStep): boolean {
+  return isPlaytestCall(step, "start") && (step.state === "done" || step.state === "running");
+}
+
+/** The read right after an edit, of what it edited: checking the edit, not new work. */
+function readsBack(row: Row | undefined, step: ActivityStep): boolean {
+  const edit = row?.steps.length === 1 && row.playtest === undefined ? row.steps[0] : undefined;
+  return edit?.kind === "edit" && edit.state === "done" && Boolean(edit.target)
+    && step.kind === "read" && step.state === "done" && step.target === edit.target;
+}
+
 /**
  * Fold the steps of a run into the rows the activity layer renders.
  *
@@ -279,27 +373,60 @@ function withEvidenceOnItsCall(steps: readonly ActivityStep[]): ActivityStep[] {
  * only when that row is the same kind of work and neither stands alone, so going
  * back to reading after an edit starts a new row rather than rejoining an earlier
  * one. A run of one stays a single row rather than a group of one.
+ *
+ * Two stretches of different kinds of work are also one thing that happened: an
+ * edit and its read-back, and a playtest from its start to its stop. An edit or
+ * something the model said splits a playtest rather than folding into it, so the
+ * closed rows never hide a change or an explanation; a failure stays in the
+ * playtest and is listed under its row.
  */
 export function buildActivityModel(steps: readonly ActivityStep[]): ActivityNode[] {
-  const rows: ActivityStep[][] = [];
+  const rows: Row[] = [];
   let open = false;
+  let playtest: Row | null = null;
 
   for (const step of withEvidenceOnItsCall(steps)) {
-    const previous = rows[rows.length - 1];
-    if (standsAlone(step, stepStatus(step))) {
-      rows.push([step]);
+    if (opensPlaytest(step)) {
+      playtest = { steps: [step], playtest: { continued: false, stopped: false } };
+      rows.push(playtest);
       open = false;
-    } else if (open && previous !== undefined && previous[0].kind === step.kind) {
-      previous.push(step);
+      continue;
+    }
+    if (playtest !== null) {
+      if (step.kind === "note" || step.kind === "edit") {
+        rows.push({ steps: [step] });
+        playtest = { steps: [], playtest: { continued: true, stopped: false } };
+        continue;
+      }
+      if (playtest.steps.length === 0) rows.push(playtest);
+      playtest.steps.push(step);
+      if (isPlaytestCall(step, "stop") && step.state === "done") {
+        playtest.playtest!.stopped = true;
+        playtest = null;
+      }
+      continue;
+    }
+    const previous = rows[rows.length - 1];
+    if (readsBack(previous, step)) {
+      previous.steps.push(step);
+      previous.readBack = true;
+      open = false;
+    } else if (standsAlone(step, stepStatus(step))) {
+      rows.push({ steps: [step] });
+      open = false;
+    } else if (open && previous !== undefined && previous.steps[0].kind === step.kind) {
+      previous.steps.push(step);
     } else {
-      rows.push([step]);
+      rows.push({ steps: [step] });
       open = true;
     }
   }
 
   return rows.map((row) => {
-    const children = row.map(leafNode);
-    return children.length === 1 ? children[0] : groupNode(children);
+    const children = row.steps.map(leafNode);
+    if (children.length === 1) return children[0];
+    if (row.playtest !== undefined) return playtestNode(children, row.playtest);
+    return row.readBack ? readBackNode(children) : groupNode(children);
   });
 }
 
@@ -336,6 +463,34 @@ export function currentNodeTitle(nodes: readonly ActivityNode[]): string | null 
   const last = [...nodes].reverse().find((node) => node.kind !== "note");
   if (last === undefined) return null;
   return last.children.length === 0 ? last.title : last.children[last.children.length - 1].title;
+}
+
+/**
+ * The line a finished run's closed Activity row shows: the work that changed
+ * something, counted from what the calls did rather than what the model said. A
+ * run of one row is named by it, and a run that only looked is counted by that.
+ */
+export function finishedRunSummary(nodes: readonly ActivityNode[]): string | null {
+  const rows = nodes.filter((node) => node.kind !== "note");
+  if (rows.length === 0) return null;
+  if (rows.length === 1) return rows[0].title;
+  const done = rows
+    .flatMap((node) => (node.children.length === 0 ? [node] : node.children))
+    .filter((node) => node.status === "completed" && node.step?.tool !== undefined);
+  const count = (matches: (step: ActivityStep) => boolean) => done.filter((node) => matches(node.step!)).length;
+  const part = (total: number, noun: string) => (total === 0 ? [] : [counted(total, noun)]);
+  const isUpload = (step: ActivityStep) => step.tool === "upload_assets" || step.tool === "upload_asset";
+  const changed = [
+    // The Results row counts uploads by what was uploaded, which a call does not say.
+    ...part(count((step) => step.kind === "edit" && !isUpload(step)), "edit"),
+    ...part(count((step) => isPlaytestCall(step, "start")), "playtest"),
+    ...part(count((step) => step.tool === "run_blender_script"), "Blender run"),
+  ];
+  const parts = changed.length > 0 ? changed : [
+    ...part(count((step) => step.kind === "read"), "read"),
+    ...part(count((step) => step.kind === "search"), "search"),
+  ];
+  return parts.length === 0 ? null : parts.join(" · ");
 }
 
 /**

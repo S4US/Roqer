@@ -113,12 +113,14 @@ export function classifiedTools(): string[] {
 }
 
 /**
- * An instance path as a reader refers to it. Every path in a place begins at
- * `game`, so the prefix distinguishes nothing and costs the width that the rest
- * of the path needs. The full path stays in the step's details.
+ * An instance path as a reader refers to it: its name and what holds it. A row
+ * cuts a long title off at its end, which for a path is the part that names the
+ * thing, and `game` at the start distinguishes nothing. The full path stays in
+ * the step's details.
  */
 export function shortTarget(target: string): string {
-  return target.startsWith("game.") && target.length > 5 ? target.slice(5) : target;
+  if (!target.startsWith("game.") || target.length <= 5) return target;
+  return target.slice(5).split(".").slice(-2).join(".");
 }
 
 /** Longest finding shown on a row; anything longer belongs in the details. */
@@ -319,6 +321,8 @@ export function activityLabel(tool: string, target: string | null, past: boolean
     // as a place, and a query with nothing to read in it ("." , "*") says less
     // than naming what was searched.
     const query = target.trim();
+    // A search scoped to an instance is summarised by where it looked.
+    if (query.startsWith("game.")) return `${verb} ${shortTarget(query)}`;
     return /[\p{L}\p{N}]/u.test(query) ? `${verb} for “${query}”` : `${verb} ${toolPhrase(tool)}`;
   }
   return `${verb} ${shortTarget(target)}`;

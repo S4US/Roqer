@@ -104,7 +104,7 @@ test("a project inspection is a short timeline, not a call log", async () => {
 
   assert.equal(calls.length, 7, "seven operations went to Studio");
   assert.deepEqual(nodes.map((node) => [node.title, node.finding]), [
-    ["Read 6 items and 1 script", "1 instance · 2 lines of source · verified"],
+    ["Read 7 items: ServerScriptService, ReplicatedStorage, …", "1 instance · 2 lines of source · verified"],
   ], "and they arrive as one line that says what was read and that it checked out");
 });
 

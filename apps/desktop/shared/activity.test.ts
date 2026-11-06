@@ -99,6 +99,11 @@ test("a call with a target reads as a verb and that target", () => {
     "Editing ServerScriptService.Main",
   );
   assert.equal(shortTarget("game.Workspace"), "Workspace");
+  assert.equal(
+    shortTarget("game.StarterPlayer.StarterPlayerScripts.AetherEngineClient"),
+    "StarterPlayerScripts.AetherEngineClient",
+    "a deep path keeps the end, which is what names the thing",
+  );
   assert.equal(shortTarget("game"), "game", "a path with nothing after the prefix keeps it");
   assert.equal(shortTarget("Coffee Run"), "Coffee Run", "and a name that is not a path is left alone");
 });
@@ -200,4 +205,9 @@ test("a failure reads by its reason, without the plugin's path, and a count read
   assert.equal(activityFinding("grep_scripts", "grep_scripts: 1 results"), "1 result");
   assert.equal(activityFinding("get_runtime_logs", "get_runtime_logs: 1 entries"), "1 entry");
   assert.equal(activityFinding("search_assets", "search_assets: 0 results"), "0 results");
+});
+
+test("a search scoped to an instance says where it looked, not that it searched for a path", () => {
+  assert.equal(activityLabel("grep_scripts", "game.ReplicatedStorage.VFX", true), "Searched ReplicatedStorage.VFX");
+  assert.equal(activityLabel("search_assets", "magic chime", true), "Searched for “magic chime”");
 });

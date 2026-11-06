@@ -64,7 +64,7 @@ import {
   type ChangeGroup, type DiffRow, type SyntaxToken,
 } from "./diff-view";
 import {
-  aggregateDuration, buildActivityModel, completedRunMetadataLabel, countedActions, currentNodeTitle,
+  aggregateDuration, buildActivityModel, completedRunMetadataLabel, countedActions, currentNodeTitle, finishedRunSummary,
   elapsedLabel, MAX_VISIBLE_ALERTS, outputTokensLabel, type ActivityNode, type StepStatus,
 } from "./activity-model";
 import { CompletionLine } from "./completion-line";
@@ -2361,7 +2361,7 @@ function NodeLine({ node }: { node: ActivityNode }) {
   return <>
     <NodeIcon node={node} />
     <span className="node-title" title={node.title}>{node.title}</span>
-    <span className="node-finding">{node.finding ?? ""}</span>
+    <span className="node-finding" title={node.finding}>{node.finding ?? ""}</span>
   </>;
 }
 
@@ -2462,7 +2462,8 @@ function EvidenceBody({ evidence }: { evidence: RunEvidence }) {
  * because it says what the agent promised, until the reader says otherwise.
  *
  * A failure is the exception to putting things away: it stays listed under the
- * closed row, since nothing else on the page would report it.
+ * closed row, since nothing else on the page would report it. One line each, so
+ * the answer stays near; the full reason is in the row's tooltip and in Activity.
  *
  * Memoised, because this is what a live run re-renders for every streamed token
  * otherwise. Its inputs only change when an event of their own kind arrives.
@@ -2496,7 +2497,8 @@ const RunStrip = memo(function RunStrip({ tasks, settled = false, steps, nodes, 
   const failed = steps.filter((step) => step.state === "failed").length;
   const actions = countedActions(resolvedNodes);
   const counted = `${actions} ${actions === 1 ? "step" : "steps"}${failed > 0 ? ` · ${failed} failed` : ""}`;
-  const current = currentNodeTitle(resolvedNodes);
+  // Live, what it is doing. Finished, the last step says nothing about the run.
+  const current = running ? currentNodeTitle(resolvedNodes) : finishedRunSummary(resolvedNodes);
   // Failures only. A step waiting on a decision has the approval card above the
   // composer, and repeating it here says the same thing twice.
   const alerts = resolvedNodes
