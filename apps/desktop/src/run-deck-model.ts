@@ -8,7 +8,7 @@
  * asked, and closing it holds until the reader opens it again.
  */
 
-/** Sidebar, a deck and a chat that still reads as a chat. `signal-room.css` uses the same width. */
+/** Sidebar, a deck and a chat that still reads as a chat. `styles.css` uses the same width. */
 export const DECK_INLINE_MIN_WIDTH = 1240;
 
 export type DeckChoice = Readonly<{
