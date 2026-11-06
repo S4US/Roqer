@@ -173,3 +173,31 @@ test("evidence reads as its own kind of activity", () => {
   );
   assert.equal(evidenceDetailLabel("verification"), "Read-back");
 });
+
+test("no tool reads as its operation name, in either tense", () => {
+  for (const tool of classifiedTools()) {
+    assert.doesNotMatch(activityLabel(tool, null, true), /_/, `${tool} shows its name when finished`);
+    assert.doesNotMatch(activityLabel(tool, null, false), /_/, `${tool} shows its name while running`);
+  }
+});
+
+test("calls read as what they did, not as their kind's verb", () => {
+  assert.equal(activityLabel("solo_playtest", "start", true), "Started a playtest");
+  assert.equal(activityLabel("solo_playtest", "stop", false), "Stopping the playtest");
+  assert.equal(activityLabel("eval_client_runtime", null, true), "Ran code on the client");
+  assert.equal(activityLabel("insert_asset", null, true), "Inserted an asset");
+  assert.equal(activityLabel("get_runtime_logs", "client-1", true), "Read output from client-1");
+  assert.equal(activityLabel("selection", "get", true), "Read your selection");
+  assert.equal(activityLabel("selection", "game.Workspace.Tower", true), "Framed Workspace.Tower in Studio");
+});
+
+test("a failure reads by its reason, without the plugin's path, and a count reads properly", () => {
+  assert.equal(
+    activityFinding("selection", "focus failed: user_MCPPlugin.rbxmx.MCPPlugin.modules.handlers.MetadataHandlers:300: Cannot frame a Folder: it has no 3D bounding box."),
+    "Cannot frame a Folder: it has no 3D bounding box.",
+  );
+  assert.equal(activityFinding("capture_moments", "capture_moments failed (error): Tool call failed."), "Tool call failed.");
+  assert.equal(activityFinding("grep_scripts", "grep_scripts: 1 results"), "1 result");
+  assert.equal(activityFinding("get_runtime_logs", "get_runtime_logs: 1 entries"), "1 entry");
+  assert.equal(activityFinding("search_assets", "search_assets: 0 results"), "0 results");
+});

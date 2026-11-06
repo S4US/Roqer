@@ -6,7 +6,7 @@ import type { RunEvent, RunEventBody } from "../shared/run-events";
 import { activitySteps, applyRunEvent, createRunView, type ActivityStep, type RunView } from "./run-view";
 import {
   activeStepTitle, aggregateDuration, buildActivityModel, completedRunDetailsLabel, completedRunDurationLabel,
-  completedRunMetadataLabel, currentNodeTitle, elapsedLabel, outputTokensLabel, mergeFindings, stepStatus, type ActivityNode,
+  completedRunMetadataLabel, countedActions, currentNodeTitle, elapsedLabel, outputTokensLabel, mergeFindings, stepStatus, type ActivityNode,
 } from "./activity-model";
 
 const RUN_ID = "run-1";
@@ -455,4 +455,48 @@ test("a live output count is marked as an estimate until the provider reports it
   assert.equal(outputTokensLabel(9_999, false), "~9.9k tokens");
   assert.equal(outputTokensLabel(12_345, true), "12k tokens");
   assert.equal(outputTokensLabel(99_999, true), "99k tokens");
+});
+
+test("evidence that passed goes inside its call, and evidence that failed keeps its own row", () => {
+  const call = { key: "c1", kind: "edit", state: "done", label: "Edited Main", tool: "set_script_source", target: "game.Main", resultSummary: "set_script_source: 4 lines of source" } as const;
+  const passed = { id: "e1", kind: "verification", title: "Main", passed: true } as const;
+  const failed = { id: "e2", kind: "verification", title: "Main", passed: false } as const;
+  const proof = { key: "e1", kind: "verify", state: "done", label: "Verified Main", evidence: passed } as const;
+  const refuted = { key: "e2", kind: "verify", state: "failed", label: "Verified Main", evidence: failed } as const;
+
+  const rows = buildActivityModel([call, proof]);
+  assert.equal(rows.length, 1);
+  assert.deepEqual(rows[0].step?.attached, [passed], "and what it proved still opens with the call");
+  assert.equal(rows[0].finding, "4 lines of source · verified");
+
+  assert.deepEqual(buildActivityModel([call, refuted]).map((row) => row.status), ["completed", "failed"]);
+  assert.equal(buildActivityModel([proof]).length, 1, "evidence no call claims keeps its row");
+  assert.equal(countedActions(rows), 1, "a call and its proof are one thing the run did");
+});
+
+test("a merged row says what it read, what it ran, and whether it was checked", () => {
+  const step = (key: string, tool: string, kind: "read" | "run", label: string, summary?: string) => ({ key, kind, state: "done" as const, label, tool, target: null, resultSummary: summary });
+  const check = { id: "e1", kind: "verification" as const, title: "x", passed: true };
+  const reads = buildActivityModel([
+    step("a", "get_script_source", "read", "Read Main", "get_script_source: 10 lines of source"),
+    { key: "p", kind: "verify" as const, state: "done" as const, label: "Verified", evidence: check },
+    step("b", "get_script_source", "read", "Read Combat", "get_script_source: 5 lines of source"),
+    step("c", "get_runtime_logs", "read", "Read output", "get_runtime_logs: 1 entries"),
+  ]);
+  assert.equal(reads[0].title, "Read 2 scripts and 1 log");
+  assert.equal(reads[0].finding, "15 lines of source · 1 entry · verified");
+  const sameRuns = buildActivityModel([step("a", "eval_client_runtime", "run", "x"), step("b", "eval_client_runtime", "run", "x")]);
+  assert.equal(sameRuns[0].title, "Ran code on the client (2 times)");
+  const mixed = buildActivityModel([step("a", "eval_client_runtime", "run", "x"), step("b", "simulate_keyboard_input", "run", "y")]);
+  assert.equal(mixed[0].title, "Ran code on the client and pressed a key");
+});
+
+test("the closed line names what the run did last, not what the model said", () => {
+  const nodes = buildActivityModel([
+    { key: "a", kind: "read", state: "done", label: "Read Main", tool: "get_script_source", target: "game.Main" },
+    { key: "b", kind: "note", state: "done", label: "Now I will test it." },
+  ]);
+  assert.equal(nodes.length, 2);
+  assert.equal(currentNodeTitle(nodes), "Read Main");
+  assert.equal(countedActions(nodes), 1);
 });

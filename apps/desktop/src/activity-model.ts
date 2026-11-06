@@ -96,7 +96,10 @@ function titleOf(step: ActivityStep, status: StepStatus): string {
 function findingOf(step: ActivityStep, status: StepStatus): string | undefined {
   if (step.tool) {
     const finding = activityFinding(step.tool, step.resultSummary);
-    if (finding !== null) return finding;
+    // A check that passed is the one thing folded evidence adds to the row itself.
+    const checked = step.attached?.some((evidence) => evidence.kind === "verification" && evidence.passed === true) === true;
+    if (finding !== null) return checked ? `${finding} · verified` : finding;
+    if (checked) return "Verified";
     // A failure with an unreadable message still has to say that it failed.
     return status === "failed" ? "Failed" : undefined;
   }
@@ -133,6 +136,9 @@ export const MAX_VISIBLE_ALERTS = 3;
 
 const COUNT_PATTERN = /^(\d+)\s+(\S+)(.*)$/;
 
+const singular = (noun: string) => (noun.endsWith("ies") ? `${noun.slice(0, -3)}y` : noun.endsWith("s") ? noun.slice(0, -1) : noun);
+const plural = (noun: string) => (noun.endsWith("y") ? `${noun.slice(0, -1)}ies` : `${noun}s`);
+
 /**
  * Add up the countable findings underneath a group.
  *
@@ -146,7 +152,7 @@ export function mergeFindings(findings: readonly string[]): string[] {
   for (const finding of findings) {
     const match = COUNT_PATTERN.exec(finding);
     if (!match) continue;
-    const noun = match[2].endsWith("s") ? match[2].slice(0, -1) : match[2];
+    const noun = singular(match[2]);
     const rest = match[3];
     const key = `${noun}${rest}`;
     const seen = totals.get(key);
@@ -154,12 +160,14 @@ export function mergeFindings(findings: readonly string[]): string[] {
     else totals.set(key, { total: Number(match[1]), noun, rest });
   }
   return [...totals.values()].map(({ total, noun, rest }) =>
-    `${total} ${noun}${total === 1 ? "" : "s"}${rest}`);
+    `${total} ${total === 1 ? noun : plural(noun)}${rest}`);
 }
 
 /** What a merged row claims, in the fewest words that stay honest. */
 function groupFinding(children: readonly ActivityNode[]): string | undefined {
-  const parts = mergeFindings(children.flatMap((child) => child.finding ?? []));
+  const findings = children.flatMap((child) => child.finding ?? []);
+  const parts = mergeFindings(findings.map((finding) => finding.replace(/ · verified$/, "")));
+  if (findings.some((finding) => finding === "Verified" || finding.endsWith(" · verified"))) parts.push("verified");
 
   const failed = children.filter((child) => child.status === "failed").length;
   const skipped = children.filter((child) => child.status === "skipped").length;
@@ -168,18 +176,43 @@ function groupFinding(children: readonly ActivityNode[]): string | undefined {
   return parts.length === 0 ? undefined : parts.join(" · ");
 }
 
+/** What a read is of, for a row that says so. */
+const READ_NOUN: Readonly<Record<string, string>> = {
+  get_script_source: "script",
+  get_instance_properties: "instance",
+  get_runtime_logs: "log",
+  capture_screenshot: "screenshot",
+};
+
+/** "a, b and c", keeping the list short enough to read on one row. */
+function listed(parts: readonly string[]): string {
+  const shown = parts.length > 3 ? [...parts.slice(0, 2), `${parts.length - 2} more`] : parts;
+  return shown.length < 2 ? shown.join("") : `${shown.slice(0, -1).join(", ")} and ${shown[shown.length - 1]}`;
+}
+
 /** A merged row says what was done and how many times, from what the calls have in common. */
 function mergedTitle(children: readonly ActivityNode[]): string {
   const count = children.length;
   const targets = new Set(children.map((child) => child.step?.target ?? ""));
   const target = targets.size === 1 ? [...targets][0] : "";
-  const on = target === "" ? "" : ` on ${shortTarget(target)}`;
   switch (children[0].kind) {
-    case "edit": return `Made ${count} edits${on}`;
+    case "edit": return `Made ${count} edits${target === "" ? "" : ` to ${shortTarget(target)}`}`;
     case "search": return `Ran ${count} searches`;
-    case "run": return `Ran ${count} actions${on}`;
-    case "verify": return `Made ${count} checks${on}`;
-    case "read": return children.every((child) => child.step?.tool === "get_script_source") ? `Read ${count} scripts` : `Read ${count} items`;
+    case "verify": return `Made ${count} checks${target === "" ? "" : ` on ${shortTarget(target)}`}`;
+    case "read": {
+      const nouns = new Map<string, number>();
+      for (const child of children) {
+        const noun = READ_NOUN[child.step?.tool ?? ""] ?? "item";
+        nouns.set(noun, (nouns.get(noun) ?? 0) + 1);
+      }
+      return `Read ${listed([...nouns].map(([noun, n]) => `${n} ${n === 1 ? noun : plural(noun)}`))}`;
+    }
+    case "run": {
+      const labels = [...new Set(children.map((child) => child.title))];
+      if (labels.length === 1) return `${labels[0]} (${count} times)`;
+      const [first, ...rest] = labels;
+      return listed([first, ...rest.map((label) => `${label.charAt(0).toLowerCase()}${label.slice(1)}`)]);
+    }
     default: return `Inspected ${count} items`;
   }
 }
@@ -212,12 +245,31 @@ function groupNode(children: ActivityNode[]): ActivityNode {
 
 /**
  * Rows that are never merged. A request for the reader's decision must not be
- * summarised away; evidence is what the run learned rather than one more thing
- * it did; a note is there because it was worth saying; and a failure or a
- * rejection is the turning point of the story, so it splits the steps around it.
+ * summarised away; a note is there because it was worth saying; evidence that
+ * no call claims is what the run learned by itself; and a failure or a rejection
+ * is the turning point of the story, so it splits the steps around it.
  */
 function standsAlone(step: ActivityStep, status: StepStatus): boolean {
   return status === "warning" || status === "failed" || status === "skipped" || step.evidence !== undefined || step.tool === undefined;
+}
+
+/**
+ * Evidence that passed goes inside the call it came from. A playtest that started
+ * and a playtest proven started are one thing that happened, and listing both
+ * doubled the length of a long run. Evidence that failed keeps its own row, and
+ * nothing is lost: what a call proved opens with the call.
+ */
+function withEvidenceOnItsCall(steps: readonly ActivityStep[]): ActivityStep[] {
+  const out: ActivityStep[] = [];
+  for (const step of steps) {
+    const previous = out[out.length - 1];
+    if (step.evidence !== undefined && step.evidence.passed !== false && previous?.tool !== undefined && previous.state === "done") {
+      out[out.length - 1] = { ...previous, attached: [...(previous.attached ?? []), step.evidence] };
+    } else {
+      out.push(step);
+    }
+  }
+  return out;
 }
 
 /**
@@ -232,7 +284,7 @@ export function buildActivityModel(steps: readonly ActivityStep[]): ActivityNode
   const rows: ActivityStep[][] = [];
   let open = false;
 
-  for (const step of steps) {
+  for (const step of withEvidenceOnItsCall(steps)) {
     const previous = rows[rows.length - 1];
     if (standsAlone(step, stepStatus(step))) {
       rows.push([step]);
@@ -249,6 +301,11 @@ export function buildActivityModel(steps: readonly ActivityStep[]): ActivityNode
     const children = row.map(leafNode);
     return children.length === 1 ? children[0] : groupNode(children);
   });
+}
+
+/** How many things a run did, as a reader would count its rows opened up: notes are commentary. */
+export function countedActions(nodes: readonly ActivityNode[]): number {
+  return nodes.flatMap((node) => (node.children.length === 0 ? [node] : node.children)).filter((node) => node.kind !== "note").length;
 }
 
 /**
@@ -275,7 +332,8 @@ export function activeStepTitle(steps: readonly ActivityStep[]): string | null {
 export function currentNodeTitle(nodes: readonly ActivityNode[]): string | null {
   const active = nodes.find((node) => node.status === "active");
   if (active) return active.title;
-  const last = nodes[nodes.length - 1];
+  // Something the model said is not something the run did.
+  const last = [...nodes].reverse().find((node) => node.kind !== "note");
   if (last === undefined) return null;
   return last.children.length === 0 ? last.title : last.children[last.children.length - 1].title;
 }

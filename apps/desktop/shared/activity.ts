@@ -123,6 +123,16 @@ export function shortTarget(target: string): string {
 
 /** Longest finding shown on a row; anything longer belongs in the details. */
 export const MAX_FINDING_CHARS = 48;
+/** A failure's reason is the one finding worth room: it wraps, and the rest is in the details. */
+export const MAX_FAILURE_CHARS = 180;
+
+/** "1 results" is how the host counts; a row says it properly. */
+function singularCount(text: string): string {
+  const match = /^1 (\w+)$/.exec(text);
+  if (match === null) return text;
+  const noun = match[1];
+  return `1 ${noun.endsWith("ies") ? `${noun.slice(0, -3)}y` : noun.endsWith("s") ? noun.slice(0, -1) : noun}`;
+}
 
 /**
  * What a finished call actually learned, out of the summary the host produced.
@@ -138,16 +148,46 @@ export function activityFinding(tool: string, summary: string | undefined): stri
   if (text.startsWith(`${tool}: `)) text = text.slice(tool.length + 2).trim();
   else if (text.startsWith(`${tool} `)) text = text.slice(tool.length + 1).trim();
 
+  let failure = false;
   if (text.startsWith("failed (")) {
     const separator = text.indexOf("): ");
     text = separator === -1 ? text : text.slice(separator + 3).trim();
+    failure = true;
   }
+  // A failure reads by its reason: not the operation that raised it, and not
+  // where in the plugin's source it was raised.
+  const raised = /^[\w-]+ failed(?: \([^)]*\))?: /.exec(text);
+  if (raised !== null) { text = text.slice(raised[0].length); failure = true; }
+  text = text.replace(/^[\w./-]*\.[\w./-]+:\d+: /, "").trim();
 
   if (text === "" || text === "succeeded") return null;
   // Compacted JSON is the raw payload, not a finding anyone can read.
   if (/[{}[\]]/.test(text)) return null;
-  return text.length > MAX_FINDING_CHARS ? `${text.slice(0, MAX_FINDING_CHARS - 1).trimEnd()}…` : text;
+  const limit = failure ? MAX_FAILURE_CHARS : MAX_FINDING_CHARS;
+  return text.length > limit ? `${text.slice(0, limit - 1).trimEnd()}…` : singularCount(text);
 }
+
+/**
+ * Calls whose kind's verb would misdescribe them: what they do, in both tenses.
+ * "Ran eval_client_runtime" says nothing, and "Edited insert_asset" says less.
+ */
+const TOOL_ACTION: Readonly<Record<string, readonly [present: string, past: string]>> = {
+  eval_client_runtime: ["Running code on the client", "Ran code on the client"],
+  eval_server_runtime: ["Running code on the server", "Ran code on the server"],
+  capture_screenshot: ["Taking a screenshot", "Took a screenshot"],
+  insert_asset: ["Inserting an asset", "Inserted an asset"],
+  import_rbxm: ["Importing a model file", "Imported a model file"],
+  export_rbxm: ["Exporting a model file", "Exported a model file"],
+  generate_model: ["Generating a model", "Generated a model"],
+  manage_instance: ["Changing an instance", "Changed an instance"],
+  set_network_profile: ["Setting the network profile", "Set the network profile"],
+  reset_simulation_state: ["Resetting the simulation", "Reset the simulation"],
+  set_device_simulator: ["Setting the device simulator", "Set the device simulator"],
+  capture_device_matrix: ["Capturing device screenshots", "Captured device screenshots"],
+  interact_ui: ["Using the interface", "Used the interface"],
+  simulate_mouse_input: ["Using the mouse", "Used the mouse"],
+  simulate_keyboard_input: ["Pressing a key", "Pressed a key"],
+};
 
 const PRESENT: Readonly<Record<ActivityKind, string>> = {
   search: "Searching",
@@ -185,6 +225,15 @@ const TOOL_PHRASE: Readonly<Record<string, string>> = {
   get_scene_analysis: "the scene",
   get_memory_breakdown: "the memory breakdown",
   selection: "the current selection",
+  get_simulation_state: "the simulation state",
+  get_device_simulator_state: "the device simulator state",
+  capture_script_profiler: "the script profiler",
+  capture_micro_profiler: "the micro profiler",
+  get_asset_details: "an asset's details",
+  get_asset_thumbnail: "an asset's thumbnail",
+  preview_asset: "an asset preview",
+  get_roblox_skills: "the Roblox guides",
+  get_roblox_docs: "the Roblox docs",
   search_objects: "the project",
   search_assets: "the asset library",
   grep_scripts: "the scripts",
@@ -226,6 +275,13 @@ export function activityTarget(tool: string, summary: string): string | null {
 export function activityLabel(tool: string, target: string | null, past: boolean): string {
   const kind = activityKind(tool, target);
   const verb = past ? PAST[kind] : PRESENT[kind];
+  if (Object.prototype.hasOwnProperty.call(TOOL_ACTION, tool)) return TOOL_ACTION[tool][past ? 1 : 0];
+  if ((tool === "solo_playtest" || tool === "multiplayer_playtest") && target === "start") return past ? "Started a playtest" : "Starting a playtest";
+  if ((tool === "solo_playtest" || tool === "multiplayer_playtest") && target === "stop") return past ? "Stopped the playtest" : "Stopping the playtest";
+  if (tool === "get_runtime_logs" && target !== null) return past ? `Read output from ${target}` : `Reading output from ${target}`;
+  // With a path, this is pointing Studio's camera at something, which reads nothing.
+  if (tool === "selection" && target === "get") return past ? "Read your selection" : "Reading your selection";
+  if (tool === "selection" && target !== null && target.startsWith("game.")) return past ? `Framed ${shortTarget(target)} in Studio` : `Framing ${shortTarget(target)} in Studio`;
   if (tool === "upload_asset" && target === "status") return `${verb} upload status`;
   if (tool === "upload_asset" && target === "upload") return past ? "Uploaded an asset" : "Uploading an asset";
   if (tool === "upload_assets") return past ? "Uploaded assets" : "Uploading assets";

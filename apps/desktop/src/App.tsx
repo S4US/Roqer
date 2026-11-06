@@ -30,7 +30,7 @@ import {
 } from "./platform";
 import {
   activitySteps, applyRunEvent, createRunView, describeOutcome, recordAppliedAndVerified,
-  recordGateIssues, recordHasWarnings, recordOnlyAnswered, recordSteps, runAppliedAndVerified,
+  latestProse, recordGateIssues, recordHasWarnings, recordOnlyAnswered, recordReply, recordSteps, runAppliedAndVerified,
   runGateIssues, runHasWarnings, runOnlyAnswered, toRunRecord, hasPicture,
   type ActivityStep, type PendingApproval, type RunView,
 } from "./run-view";
@@ -64,7 +64,7 @@ import {
   type ChangeGroup, type DiffRow, type SyntaxToken,
 } from "./diff-view";
 import {
-  aggregateDuration, buildActivityModel, completedRunMetadataLabel, currentNodeTitle,
+  aggregateDuration, buildActivityModel, completedRunMetadataLabel, countedActions, currentNodeTitle,
   elapsedLabel, MAX_VISIBLE_ALERTS, outputTokensLabel, type ActivityNode, type StepStatus,
 } from "./activity-model";
 import { CompletionLine } from "./completion-line";
@@ -1429,9 +1429,13 @@ function App() {
   const runTimeline = runView?.timeline;
   const runActivities = runView?.activities;
   const runEvidence = runView?.evidence;
+  // The words said before the latest stretch are settled by the time the timeline
+  // changes, so the rows need not rebuild for every streamed token.
+  const runText = useRef("");
+  runText.current = runView?.text ?? "";
   const runSteps = useMemo(
     () => (runTimeline && runActivities && runEvidence
-      ? activitySteps({ timeline: runTimeline, activities: runActivities, evidence: runEvidence })
+      ? activitySteps({ timeline: runTimeline, activities: runActivities, evidence: runEvidence, text: runText.current })
       : []),
     [runTimeline, runActivities, runEvidence],
   );
@@ -2253,8 +2257,8 @@ function LiveRun({ view, steps, nodes, onOpenInStudio }: { view: RunView; steps:
     {answered && (running
       // Formatted as it streams, re-rendered a few times a second rather than
       // on every delta, which would make a long reply quadratic.
-      ? <StreamingMarkdown text={view.text.trim()} className="result-copy streaming-copy" />
-      : <Markdown text={view.text.trim()} className="result-copy" />)}
+      ? <StreamingMarkdown text={latestProse(view)} className="result-copy streaming-copy" />
+      : <Markdown text={latestProse(view)} className="result-copy" />)}
     {appliedAndVerified && <AppliedStatus />}
     {view.outcome !== null && showOutcome && <OutcomeCard
       outcome={view.outcome}
@@ -2362,33 +2366,41 @@ function NodeLine({ node }: { node: ActivityNode }) {
 }
 
 /**
- * Everything about a step that only matters when something looks wrong: the
- * operation the agent actually called, the full instance path, what it cost,
- * and the payload that came back.
+ * One thing the run did. The row itself opens what only matters when something
+ * looks wrong: the operation the agent actually called, the full instance path,
+ * what it cost, the payload that came back, and what it proved. Built when opened,
+ * because a long run has hundreds of these.
  */
-function StepDetails({ step }: { step: ActivityStep }) {
-  if (step.tool === undefined) return null;
-  const entries: RunMetadata[] = [{ label: "Operation", value: step.tool }];
+function ActivityLeaf({ node }: { node: ActivityNode }) {
+  const [open, setOpen] = useState(false);
+  const { step } = node;
+  if (step === undefined || (step.tool === undefined && step.evidence === undefined)) {
+    return <li className="activity-node">
+      <div className="node-row" data-status={node.status} data-kind={node.kind}><span className="node-caret" /><NodeLine node={node} /></div>
+    </li>;
+  }
+  const entries: RunMetadata[] = step.tool === undefined ? [] : [{ label: "Operation", value: step.tool }];
   if (step.target) entries.push({ label: "Target", value: step.target });
   if (step.durationMs !== undefined) entries.push({ label: "Duration", value: formatDuration(step.durationMs) });
   if (step.resultSummary) entries.push({ label: "Result", value: step.resultSummary });
-  return <CardDetails label="Details">
-    <MetadataList entries={entries} />
-    {step.detail && <pre className="tool-output"><code>{step.detail}</code></pre>}
-  </CardDetails>;
-}
-
-/** One operation, with its raw account of itself behind a disclosure. */
-function ActivityLeaf({ node }: { node: ActivityNode }) {
+  const proved = [...(step.evidence === undefined ? [] : [step.evidence]), ...(step.attached ?? [])];
   return <li className="activity-node">
-    <div className="node-row" data-status={node.status} data-kind={node.kind}><span className="node-caret" /><NodeLine node={node} /></div>
-    {node.step && <StepDetails step={node.step} />}
-    {node.step?.evidence && <EvidenceDetail evidence={node.step.evidence} />}
+    <details onToggle={(event) => setOpen(event.currentTarget.open)}>
+      <summary className="node-row" data-status={node.status} data-kind={node.kind}>
+        <ChevronRight size={12} className="node-caret" />
+        <NodeLine node={node} />
+      </summary>
+      {open && <div className="node-details">
+        {entries.length > 0 && <MetadataList entries={entries} />}
+        {step.detail && <pre className="tool-output"><code>{step.detail}</code></pre>}
+        {proved.map((evidence) => <EvidenceBody key={evidence.id} evidence={evidence} />)}
+      </div>}
+    </details>
   </li>;
 }
 
 /**
- * A phase of the run, folded to one line.
+ * A run of neighbouring steps, folded to one line.
  *
  * Anything that went wrong inside stays listed under the collapsed row: a group
  * is a way to put routine work away, never a way to put a failure away. The
@@ -2421,11 +2433,11 @@ function ActivityGroup({ node, open, onToggle }: {
 }
 
 /** An evidence entry's payload: what was read back, and what proves it. */
-function EvidenceDetail({ evidence }: { evidence: RunEvidence }) {
+function EvidenceBody({ evidence }: { evidence: RunEvidence }) {
   const lines = evidence.lines ?? [];
   const metadata = evidence.metadata ?? [];
-  if (!evidence.detail && lines.length === 0 && metadata.length === 0 && !hasPicture(evidence) && evidence.soundRef === undefined) return null;
-  return <CardDetails label={evidenceDetailLabel(evidence.kind)}>
+  return <div className="node-evidence">
+    <strong>{evidenceDetailLabel(evidence.kind)}</strong>
     {evidence.detail && <p className="evidence-note">{evidence.detail}</p>}
     {hasPicture(evidence) && <EvidencePicture className="evidence-image" evidence={evidence} alt={evidence.title} />}
     {evidence.soundRef !== undefined && <EvidenceSound evidence={evidence} />}
@@ -2435,7 +2447,7 @@ function EvidenceDetail({ evidence }: { evidence: RunEvidence }) {
       ? <pre className="evidence-code"><code>{lines.join("\n")}</code></pre>
       : <ul className="evidence-lines">{lines.map((line, index) => <li key={`${evidence.id}-${index}`}>{line}</li>)}</ul>)}
     {metadata.length > 0 && <MetadataList entries={metadata} />}
-  </CardDetails>;
+  </div>;
 }
 
 /**
@@ -2482,8 +2494,7 @@ const RunStrip = memo(function RunStrip({ tasks, settled = false, steps, nodes, 
 
   const planOpen = planChoice ?? (!settled || tasks.some((task) => task.status !== "done"));
   const failed = steps.filter((step) => step.state === "failed").length;
-  // Notes are commentary on the run, not things it did, so they are not counted.
-  const actions = steps.filter((step) => step.kind !== "note").length;
+  const actions = countedActions(resolvedNodes);
   const counted = `${actions} ${actions === 1 ? "step" : "steps"}${failed > 0 ? ` · ${failed} failed` : ""}`;
   const current = currentNodeTitle(resolvedNodes);
   // Failures only. A step waiting on a decision has the approval card above the
@@ -2753,7 +2764,7 @@ function ArtifactCard({ group, expanded, onExpandedChange, onOpenInStudio }: {
         {earlier.map((change) => <ChangeBody change={change} key={change.id} />)}
       </CardDetails>}
     </div>}
-    {revisions.length > 0 && <CardDetails label="Revision details"><MetadataList entries={revisions} /></CardDetails>}
+    {expanded && revisions.length > 0 && <CardDetails label="Revision details"><MetadataList entries={revisions} /></CardDetails>}
   </article>;
 }
 
@@ -2874,7 +2885,7 @@ function RunRecordView({ record, text, latest, onOpenInStudio }: { record: RunRe
   const renderFiles = useCallback((files: ChangeGroup[], expansion: FileExpansion) => <ChangeSet groups={files} expansion={expansion} onOpenInStudio={onOpenInStudio} />, [onOpenInStudio]);
   return <>
     <RunStrip tasks={record.tasks ?? NO_TASKS} settled steps={steps} running={false} runId={record.runId} changes={record.changes} evidence={record.evidence} latest={latest} renderFiles={renderFiles} />
-    <Markdown text={text} className="result-copy" />
+    <Markdown text={recordReply(record, text)} className="result-copy" />
     {appliedAndVerified && <AppliedStatus />}
     {showOutcome && <OutcomeCard
       outcome={record.outcome}

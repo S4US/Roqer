@@ -198,3 +198,30 @@
 .task-done .task-title { color: var(--muted); }
 .run-strip > .activity-timeline { border-top: 1px solid var(--border-subtle); }
 .run-strip > .section-alerts { margin: 0; padding: 4px 8px 6px; border-top: 1px solid var(--border-subtle); }
+
+/* Activity rows: one line each, and the row itself opens its details. */
+.node-row { grid-template-columns: 12px 15px minmax(0, 1.15fr) minmax(0, 1fr) 46px; }
+.node-row time { text-align: right; }
+.activity-node > details > summary.node-row { cursor: pointer; list-style: none; }
+.activity-node > details > summary.node-row:hover { background: var(--surface); }
+.activity-node .node-caret { transition: transform .16s ease; }
+.activity-node > details[open] > summary .node-caret { transform: rotate(90deg); }
+.node-details { display: flex; flex-direction: column; gap: 10px; margin: 2px 0 8px 32px; padding: 10px 12px; background: var(--surface); border: 1px solid var(--border-subtle); border-radius: 9px; font-size: var(--type-meta); }
+.node-details .metadata-list > div { justify-content: flex-start; }
+.node-details .metadata-list dt { min-width: 64px; }
+.node-details .metadata-list dd { min-width: 0; text-align: left; }
+.node-evidence { display: flex; flex-direction: column; gap: 6px; }
+.node-evidence + .node-evidence, .metadata-list + .node-evidence { padding-top: 10px; border-top: 1px solid var(--border-subtle); }
+.node-evidence > strong { color: var(--ink-secondary); font-weight: var(--weight-medium); }
+/* What the model said along the way reads as a sentence, across the row. */
+.node-row[data-kind="note"] > .node-title { grid-column: 3 / -1; white-space: normal; line-height: 1.45; }
+.node-row[data-kind="note"] > .node-finding:empty { display: none; }
+.node-row[data-kind="note"] { padding-block: 3px; }
+/* A failure's reason gets the room it needs. */
+.node-row[data-status="failed"] > .node-finding { white-space: normal; line-height: 1.4; }
+.node-row[data-status="failed"] { align-items: start; padding-block: 3px; }
+
+/* A single tab has nothing to switch between. */
+.run-deck .results-tabs[data-count="1"] { flex: 0 0 auto; padding: 0; background: transparent; border: 0; }
+.run-deck .results-tabs[data-count="1"] .results-tab { box-shadow: none; background: transparent; cursor: default; }
+.run-deck .results-header > .icon-button { margin-left: auto; }

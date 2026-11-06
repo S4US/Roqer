@@ -104,11 +104,8 @@ test("a project inspection is a short timeline, not a call log", async () => {
 
   assert.equal(calls.length, 7, "seven operations went to Studio");
   assert.deepEqual(nodes.map((node) => [node.title, node.finding]), [
-    ["Read 6 items", "1 instance"],
-    ["Inspected Coffee Run", undefined],
-    ["Read ServerScriptService.Main", "2 lines of source"],
-    ["Verified ServerScriptService.Main", "Passed"],
-  ], "and they arrive as four lines, three of which are what the run found");
+    ["Read 6 items and 1 script", "1 instance · 2 lines of source · verified"],
+  ], "and they arrive as one line that says what was read and that it checked out");
 });
 
 test("nothing is summarised away: every call is still one click down", async () => {
@@ -121,9 +118,9 @@ test("nothing is summarised away: every call is still one click down", async () 
   assert.deepEqual(operations, calls, "the leaves under the groups are the calls that were made");
 
   const explored = nodes[0];
-  assert.equal(explored.children.length, 6, "the connection reads, the overview and the three service walks");
+  assert.equal(explored.children.length, 7, "the connection reads, the overview, the three service walks and the script");
   assert.deepEqual(
-    explored.children.slice(2).map((child) => child.title),
+    explored.children.slice(2, 6).map((child) => child.title),
     [
       "Read the project structure",
       "Read ServerScriptService",
@@ -138,17 +135,14 @@ test("nothing is summarised away: every call is still one click down", async () 
   );
 });
 
-test("what the run learned stays on the surface", async () => {
+test("what the run learned stays one click from the call it came from", async () => {
   const { events } = await inspect();
-  const nodes = timeline(events);
+  const leaves = timeline(events).flatMap((node) => (node.children.length === 0 ? [node] : node.children));
 
-  // Evidence is the answer's backing, not one more operation, so it is never
-  // merged with its neighbours.
-  assert.deepEqual(
-    nodes.filter((node) => node.step?.evidence).map((node) => node.title),
-    ["Inspected Coffee Run", "Verified ServerScriptService.Main"],
-  );
-  assert.equal(nodes[3].step?.evidence?.lines?.length, 2, "and the source it read is still attached");
+  // Evidence that passed is the backing for a call, not one more row of work.
+  const proved = leaves.flatMap((leaf) => leaf.step?.attached ?? []);
+  assert.deepEqual(proved.map((evidence) => evidence.title), ["Coffee Run", "game.ServerScriptService.Main"]);
+  assert.equal(proved[1].lines?.length, 2, "and the source it read is still attached");
 });
 
 test("no operation name or payload reaches a primary row", async () => {
