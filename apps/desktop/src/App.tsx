@@ -1346,23 +1346,62 @@ function App() {
    * end of it. Someone who scrolled up to re-read a diff is reading, and
    * yanking them back down because a tool call finished would be the app
    * talking over them.
+   *
+   * Only the reader turns following off, by moving the view up. Measuring the
+   * distance from the end on every scroll event also turned it off by itself:
+   * content arriving during the glide after a send left the view briefly far
+   * from the end, and the chat stopped following a run nobody had scrolled
+   * away from. Reaching the end, or sending a message, turns it back on.
    */
   const scrollRef = useRef<HTMLDivElement>(null);
+  const conversationRef = useRef<HTMLDivElement>(null);
   const following = useRef(true);
+  const lastScrollTop = useRef(0);
+  /**
+   * Until when content that grows without a run event is followed: a reply
+   * revealing between deltas, a picture loading, the composer changing
+   * height. While the chat's run is live, and for a moment after it ends,
+   * while its reply finishes. Outside that, opening a card at the end of an
+   * old reply leaves the view where the reader put it.
+   */
+  const followGrowthUntil = useRef(0);
   const scrollToEnd = useCallback((behavior: ScrollBehavior) => {
     const node = scrollRef.current;
+    // "instant" is explicit because the stylesheet makes this pane scroll smoothly by default.
     if (node) node.scrollTo({ top: node.scrollHeight, behavior });
   }, []);
   const onConversationScroll = useCallback(() => {
     const node = scrollRef.current;
-    if (node) following.current = node.scrollHeight - node.scrollTop - node.clientHeight < 120;
+    if (!node) return;
+    if (node.scrollHeight - node.scrollTop - node.clientHeight <= FOLLOW_SLACK_PX) following.current = true;
+    else if (node.scrollTop < lastScrollTop.current - 1) following.current = false;
+    lastScrollTop.current = node.scrollTop;
   }, []);
+  useEffect(() => {
+    if (isRunning) followGrowthUntil.current = Number.POSITIVE_INFINITY;
+    else if (followGrowthUntil.current === Number.POSITIVE_INFINITY) followGrowthUntil.current = Date.now() + FOLLOW_AFTER_RUN_MS;
+  }, [isRunning]);
+  useEffect(() => {
+    const node = scrollRef.current;
+    const content = conversationRef.current;
+    if (!node || !content) return;
+    const observer = new ResizeObserver(() => {
+      if (following.current && Date.now() < followGrowthUntil.current) scrollToEnd("instant");
+    });
+    observer.observe(content);
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [scrollToEnd]);
 
   // A sent or completed message is a beat the reader is meant to notice, so it
-  // is followed smoothly.
+  // is followed smoothly. Sending is asking to watch the answer, so it follows
+  // even from higher up.
   const messageCount = selectedChat?.messages.length ?? 0;
+  const lastMessageRole = selectedChat?.messages.at(-1)?.role;
   useEffect(() => {
+    if (lastMessageRole === "user") following.current = true;
     if (following.current) scrollToEnd("smooth");
+    // Only a new message is a beat; the role is read for it, not watched.
   }, [messageCount, scrollToEnd]);
 
   // A run's own events arrive many times a second while a reply streams, and
@@ -1728,7 +1767,7 @@ function App() {
           <button onClick={() => void exportChats(storageRecovery.required ? undefined : workspace)}>Export a copy</button>
         </div>}
 
-        <div className="conversation-scroll" ref={scrollRef} onScroll={onConversationScroll}><div className="conversation">
+        <div className="conversation-scroll" ref={scrollRef} onScroll={onConversationScroll}><div className="conversation" ref={conversationRef}>
           {selectedChat && selectedChat.messages.length > 0
             ? <ConversationMessages
               key={selectedChat.id}
@@ -2147,6 +2186,11 @@ function Starters({ onSuggestion }: { onSuggestion: (value: string) => void }) {
  * nothing during the other two rather than claiming the model is busy while a
  * playtest boots or while an approval sits unanswered.
  */
+/** How close to the end of the chat counts as being at it. */
+const FOLLOW_SLACK_PX = 48;
+/** How long after a run ends the chat still follows its reply, which may still be revealing. */
+const FOLLOW_AFTER_RUN_MS = 2_500;
+
 /**
  * How long a tool step must run before "Thinking" gives way to it. A run of
  * quick tool calls otherwise hid and showed the notice several times a second,
