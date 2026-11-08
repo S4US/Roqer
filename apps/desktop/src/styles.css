@@ -1590,17 +1590,19 @@ a.small-button:focus-visible { outline: 2px solid var(--accent); outline-offset:
 .asset-actions a.small-button { display: inline-grid; place-items: center; text-decoration: none; }
 
 /*
- * The current look, over the component structure above: floating panes, tighter
- * chrome, depth and the calmer Activity. Rules here come last on purpose and win
+ * The current look, over the component structure above: panes that fill the
+ * window edge to edge, tighter chrome, depth and the calmer Activity. Rules here come last on purpose and win
  * over rules of equal weight above, so a value set here is the one that applies.
  * Colours come from the tokens only.
  */
 
-.app-shell { gap: 8px; padding: 8px; }
-.sidebar { background: transparent; border-right: 0; }
-.app-shell[data-sidebar="hidden"] { gap: 0; }
-.app-shell[data-sidebar="hidden"] .sidebar { margin-left: calc(-1 * var(--sidebar-width) - 8px); }
-.workspace { overflow: hidden; background: var(--surface); border: 1px solid var(--border-subtle); border-radius: 14px; box-shadow: var(--shadow-sm); }
+/* The sidebar, the chat and the Run Deck meet at a hairline and reach the window's edges, with no gap or corner around them. */
+.app-shell { gap: 0; padding: 0; }
+.sidebar { background: transparent; border-right: 1px solid var(--border-subtle); }
+/* Docked, a hidden sidebar walks off the left edge; laid over the workspace below 841 px, it slides instead. */
+@media (min-width: 841px) { .app-shell[data-sidebar="hidden"] .sidebar { margin-left: calc(-1 * var(--sidebar-width)); } }
+@media (max-width: 840px) { .sidebar { background: var(--canvas); } }
+.workspace { overflow: hidden; background: var(--surface); border: 0; border-radius: 0; box-shadow: none; }
 
 /* Sidebar */
 .brand-row { height: 48px; padding: 0 6px 0 12px; border-bottom: 0; }
@@ -1703,7 +1705,7 @@ a.small-button:focus-visible { outline: 2px solid var(--accent); outline-offset:
 .node-row[data-status="failed"] .node-finding { color: var(--danger); }
 
 /* The Run Deck: beside the chat from 1,240 px, and over it below that, stopping above the composer so Stop stays reachable. */
-.run-deck { position: relative; display: flex; flex: 0 0 var(--deck-width, clamp(360px, 32vw, 560px)); flex-direction: column; min-width: 0; max-width: calc(100% - 732px); height: 100%; overflow: hidden; container: deck / inline-size; background: var(--surface); border: 1px solid var(--border-subtle); border-radius: 14px; box-shadow: var(--shadow-sm); }
+.run-deck { position: relative; display: flex; flex: 0 0 var(--deck-width, clamp(360px, 32vw, 560px)); flex-direction: column; min-width: 0; max-width: calc(100% - 732px); height: 100%; overflow: hidden; container: deck / inline-size; background: var(--surface); border: 0; border-left: 1px solid var(--border-subtle); border-radius: 0; box-shadow: none; }
 .run-deck:empty { display: none; }
 .app-shell { position: relative; }
 .run-deck .results-card { display: flex; flex: 1; flex-direction: column; min-height: 0; margin: 0; overflow: hidden; background: transparent; border: 0; border-radius: 0; box-shadow: none; }
@@ -1712,7 +1714,8 @@ a.small-button:focus-visible { outline: 2px solid var(--accent); outline-offset:
 .run-deck .results-panel:not([hidden]) { flex: 1; min-height: 0; overflow: auto; }
 
 @media (max-width: 1239px) {
-  .run-deck { max-width: none; position: absolute; top: 72px; right: 20px; bottom: calc(var(--dock-height, 180px) + 12px); z-index: 14; width: min(420px, calc(100% - 40px)); height: auto; border-color: var(--border-strong); box-shadow: var(--shadow-lg); }
+  /* Laid over the chat, the deck is a card again. */
+  .run-deck { max-width: none; position: absolute; top: 72px; right: 20px; bottom: calc(var(--dock-height, 180px) + 12px); z-index: 14; width: min(420px, calc(100% - 40px)); height: auto; border: 1px solid var(--border-strong); border-radius: 14px; box-shadow: var(--shadow-lg); }
 }
 
 /* A menu opening from the mid-pane composer goes over the top bar, and scrolls rather than leave the window. */
