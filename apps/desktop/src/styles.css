@@ -1876,6 +1876,21 @@ a.small-button:focus-visible { outline: 2px solid var(--accent); outline-offset:
   .run-deck > .results-card { align-self: stretch; width: auto; }
 }
 
+/*
+ * Sections open and close by growing and shrinking to their content rather
+ * than appearing in one frame: the Plan and Activity of a run, and every
+ * disclosure (details) in the app.
+ */
+:root { interpolate-size: allow-keywords; }
+.strip-plan-rows, .run-strip > .activity-timeline { overflow: clip; transition: height var(--motion-base) var(--ease-out), padding-block var(--motion-base) var(--ease-out), opacity var(--motion-base) ease; }
+@starting-style { .strip-plan-rows, .run-strip > .activity-timeline { height: 0; padding-block: 0; opacity: 0; } }
+.strip-plan-rows[data-leaving], .run-strip > .activity-timeline[data-leaving] { height: 0; padding-block: 0; opacity: 0; }
+details::details-content { block-size: 0; overflow-y: clip; transition: block-size var(--motion-base) var(--ease-out), content-visibility var(--motion-base) allow-discrete; }
+details[open]::details-content { block-size: auto; }
+/* The carets that turn as a section opens keep pace with it. */
+.card-details > summary > svg, .activity-group > details > summary > .node-caret, .activity-node > details > summary .node-caret { transition: transform var(--motion-base) var(--ease-out); }
+
 @media (prefers-reduced-motion: reduce) {
   .run-deck, .run-deck > .results-card { transition: none; }
+  .strip-plan-rows, .run-strip > .activity-timeline, details::details-content { transition: none; }
 }

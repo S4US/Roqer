@@ -42,6 +42,7 @@ import { QUESTION_ESCAPE_OPTION, type RunQuestion } from "../shared/question";
 import { taskProgress, type RunTask, type RunTaskStatus } from "../shared/tasks";
 import { runResults } from "./results-model";
 import { Markdown, StreamingMarkdown } from "./markdown-view";
+import { usePresence } from "./presence";
 import { useSettledFlag } from "./settled-flag";
 import { SettingsPage } from "./settings-page";
 import { DiagnosticsActions } from "./diagnostics-actions";
@@ -2223,6 +2224,9 @@ function prefersReducedMotion(): boolean {
   return window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 }
 
+/** How long a section of a run's strip takes to slide shut. Matches `--motion-base` in styles.css. */
+const PANEL_LEAVE_MS = 220;
+
 /** How close to the end of the chat counts as being at it. */
 const FOLLOW_SLACK_PX = 48;
 /** How long after a run ends the chat still follows its reply, which may still be revealing. */
@@ -2462,6 +2466,7 @@ function NodeLine({ node }: { node: ActivityNode }) {
  */
 function ActivityLeaf({ node }: { node: ActivityNode }) {
   const [open, setOpen] = useState(false);
+  const details = usePresence(open, PANEL_LEAVE_MS);
   const { step } = node;
   if (step === undefined || (step.tool === undefined && step.evidence === undefined)) {
     return <li className="activity-node">
@@ -2479,7 +2484,8 @@ function ActivityLeaf({ node }: { node: ActivityNode }) {
         <ChevronRight size={12} className="node-caret" />
         <NodeLine node={node} />
       </summary>
-      {open && <div className="node-details">
+      {/* Rendered only while open, and kept as it slides shut. */}
+      {details.present && <div className="node-details">
         {entries.length > 0 && <MetadataList entries={entries} />}
         {step.detail && <pre className="tool-output"><code>{step.detail}</code></pre>}
         {proved.map((evidence) => <EvidenceBody key={evidence.id} evidence={evidence} />)}
@@ -2583,6 +2589,9 @@ const RunStrip = memo(function RunStrip({ tasks, settled = false, steps, nodes, 
   if (tasks.length === 0 && steps.length === 0 && !hasResults) return null;
 
   const planOpen = planChoice ?? (!settled || tasks.some((task) => task.status !== "done"));
+  // Both sections slide shut rather than vanish, so their rows stay a moment after closing.
+  const plan = usePresence(planOpen && tasks.length > 0, PANEL_LEAVE_MS);
+  const activity = usePresence(activityOpen, PANEL_LEAVE_MS);
   const failed = steps.filter((step) => step.state === "failed").length;
   const actions = countedActions(resolvedNodes);
   const counted = `${actions} ${actions === 1 ? "step" : "steps"}${failed > 0 ? ` · ${failed} failed` : ""}`;
@@ -2610,7 +2619,7 @@ const RunStrip = memo(function RunStrip({ tasks, settled = false, steps, nodes, 
       </button>}
       <RunResults runId={runId} changes={changes} evidence={evidence} latest={latest} renderFiles={renderFiles} />
     </div>
-    {planOpen && tasks.length > 0 && <ul className="strip-plan-rows">{tasks.map((task) => <li key={task.id} className={`task-row task-${task.status}`}>
+    {plan.present && tasks.length > 0 && <ul className="strip-plan-rows" data-leaving={plan.leaving || undefined}>{tasks.map((task) => <li key={task.id} className={`task-row task-${task.status}`}>
       {TASK_ICON[task.status]}
       <span className="task-title">{task.title}</span>
       {task.requiresRuntimeEvidence && <em
@@ -2622,7 +2631,7 @@ const RunStrip = memo(function RunStrip({ tasks, settled = false, steps, nodes, 
     </li>)}</ul>}
     {/* The rows exist only while the section is open. A closed section has no
         use for them, and a chat of old runs holds thousands. */}
-    {activityOpen && <ol className="activity-timeline">
+    {activity.present && <ol className="activity-timeline" data-leaving={activity.leaving || undefined}>
       {resolvedNodes.map((node) => (node.children.length === 0
         ? <ActivityLeaf key={node.key} node={node} />
         : <ActivityGroup
