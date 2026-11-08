@@ -1851,8 +1851,10 @@ a.small-button:focus-visible { outline: 2px solid var(--accent); outline-offset:
 }
 
 /*
- * The Run Deck opens by widening from the window's edge while its card keeps
- * its final width, so the results slide in rather than reflow every frame.
+ * The Run Deck opens by widening from the window's edge. Its card keeps its
+ * final width and rides the deck's moving left edge, so the results slide in
+ * with the panel, as on iOS, rather than reflowing every frame or being wiped
+ * into view by an edge that passes over them.
  * Closing reverses it: the run keeps its card for the length of the slide
  * (`data-leaving`). A drag on its edge is followed directly, never eased.
  */
@@ -1866,7 +1868,7 @@ a.small-button:focus-visible { outline: 2px solid var(--accent); outline-offset:
 @starting-style { .run-deck:not(:empty) { flex-basis: 0; } }
 .run-deck[data-leaving] { flex-basis: 0; }
 .run-deck[data-resizing] { transition: none; }
-.run-deck > .results-card { flex: 1 0 auto; align-self: flex-end; width: calc(var(--deck-size) - 1px); container: deck / inline-size; transition: opacity var(--motion-base) ease; }
+.run-deck > .results-card { flex: 1 0 auto; align-self: flex-start; width: calc(var(--deck-size) - 1px); container: deck / inline-size; transition: opacity var(--motion-base) ease; }
 @starting-style { .run-deck > .results-card { opacity: 0; } }
 .run-deck[data-leaving] > .results-card { opacity: 0; }
 @media (max-width: 1239px) {
@@ -1932,8 +1934,16 @@ details[open]::details-content { block-size: auto; }
 :where(.strip-seg, .results-tab, .settings-nav-item):active:not(:disabled) { scale: .985; }
 :where(.chat-row, .project-row, .settings-nav-item, .row-menu-item) { transition: background-color var(--motion-fast) ease, color var(--motion-fast) ease; }
 
+/*
+ * With the deck open the top bar is narrower, so the connection's detail
+ * gives way. It narrows and fades in step with the deck instead of vanishing
+ * as the slide starts, which made the pills jump.
+ */
+.connection-detail { overflow: hidden; white-space: nowrap; transition: width var(--motion-slow) var(--ease-out), margin-left var(--motion-slow) var(--ease-out), opacity var(--motion-base) ease; }
+.app-shell[data-deck="open"] .connection-detail { display: block; width: 0; margin-left: -7px; opacity: 0; }
+
 @media (prefers-reduced-motion: reduce) {
-  .run-deck, .run-deck > .results-card { transition: none; }
+  .run-deck, .run-deck > .results-card, .connection-detail { transition: none; }
   .strip-plan-rows, .run-strip > .activity-timeline, details::details-content { transition: none; }
   .composer-menu-panel, .row-menu, .connection-popover, .settings-page { transition: opacity .12s ease; }
   .composer-menu-panel, .row-menu, .connection-popover, .settings-page, .composer-menu-panel[data-leaving], .row-menu[data-leaving], .connection-popover[data-leaving], .settings-page[data-leaving] { scale: none; translate: none; }
