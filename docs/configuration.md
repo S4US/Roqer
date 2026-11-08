@@ -91,16 +91,17 @@ subscription sign-in, so with one set a run would bill that key instead of your
 plan. A Claude chat keeps its Claude Code conversation between runs; see
 [Long Claude chats](projects.md) for what is kept and where.
 
-While the window is in front and the chat's place is connected, the composer
-shows what is selected in Studio. Send with that chip showing and Roqer reads
+**Use your Studio selection** in Settings → Roblox is off by default. Turn it
+on, and while the window is in front and the chat's place is connected, the
+composer shows what is selected in Studio. Send with that chip showing and Roqer reads
 the selection again at that moment and adds one line beside your message,
 naming the selected instances by path, so "make this open" needs no path. The
 window never writes that line: the main process reads it from Studio, as it
 reads Studio's status, and records it under your message. Dismiss the chip to
-send without it; the next message shows it again. Turn off **Use your Studio
-selection** in Settings → Roblox and Roqer stops showing the chip, reading the
-selection for it and adding the line. The agent's own `selection` tool is a
-separate read of Studio and stays available.
+send without it; the next message shows it again. With the setting off, Roqer
+does not show the chip, read the selection for it or add the line. The agent's
+own `selection` tool is a separate read of Studio and stays available either
+way.
 
 Sounds a run fetched from the Creator Store with `preview_asset`, and sound
 files it uploaded from Roqer's own folders (a Blender job's output, a file an

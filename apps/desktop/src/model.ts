@@ -128,7 +128,8 @@ export type Preferences = {
   /**
    * Whether the composer shows what is selected in Studio and a sent message
    * carries it. Off, the window stops reading the selection and asks the main
-   * process for none. On by default: pointing at something is how "this" works.
+   * process for none. Off by default: what the user has selected in Studio
+   * reaches the model only once they choose to send it.
    */
   useStudioSelection: boolean;
   /** Whether the community invite card was dismissed, leaving only its icon. */
@@ -235,7 +236,7 @@ export function createInitialWorkspace(theme: Theme = "dark"): WorkspaceState {
       mcpEndpoint: DEFAULT_MCP_ENDPOINT,
       studioInstanceId: null,
       discordPresence: true,
-      useStudioSelection: true,
+      useStudioSelection: false,
       communityInviteDismissed: false,
       provider: DEFAULT_PROVIDER_ID,
       chatGptModelId: null,
@@ -400,8 +401,9 @@ export function normalizeWorkspace(value: unknown, themeFallback: Theme = "dark"
     // same answer a new install gets. Anyone who turned it off has the boolean
     // saved, so the default never overrides a decision that was actually made.
     discordPresence: typeof rawPreferences.discordPresence === "boolean" ? rawPreferences.discordPresence : true,
-    // The same: a workspace saved before this existed keeps the behaviour it had.
-    useStudioSelection: typeof rawPreferences.useStudioSelection === "boolean" ? rawPreferences.useStudioSelection : true,
+    // Off unless the user turned it on: a workspace saved before this existed
+    // gets the same answer a new install does.
+    useStudioSelection: rawPreferences.useStudioSelection === true,
     // Additive: a workspace saved before the invite existed has not seen it,
     // so it is offered once to people who were already using Roqer too.
     communityInviteDismissed: rawPreferences.communityInviteDismissed === true,
