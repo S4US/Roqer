@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type KeyboardEvent, type PointerEvent, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type PointerEvent, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { PanelRight, X } from "lucide-react";
 
@@ -77,6 +77,43 @@ export function RunDeckToggle({ deck }: { deck: Deck }) {
   return <button type="button" className="icon-button" aria-pressed={open} onClick={deck.toggle} aria-label={open ? "Hide the Run Deck" : "Show the Run Deck"} title={open ? "Hide the Run Deck" : "Show the Run Deck"}><PanelRight size={16} /></button>;
 }
 
+/** How long the deck takes to close. Matches `--motion-slow` in styles.css. */
+const DECK_LEAVE_MS = 340;
+
+function prefersReducedMotion(): boolean {
+  return window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+}
+
+/**
+ * Whether a run whose results the deck just stopped showing keeps its card in
+ * the deck while the deck slides shut. Only when the deck is closing: a deck
+ * that moves on to another run shows that run's card straight away.
+ */
+function useLeaving(showing: boolean, deckClosed: boolean, host: HTMLElement | null): boolean {
+  const [leaving, setLeaving] = useState(false);
+  const [wasShowing, setWasShowing] = useState(showing);
+  // Decided during the render that stops showing the card, not after it: an
+  // effect would let that render take the card out, and the deck, briefly
+  // empty, would come back as if opening.
+  if (wasShowing !== showing) {
+    setWasShowing(showing);
+    setLeaving(wasShowing && !showing && deckClosed && host !== null && !prefersReducedMotion());
+  } else if (leaving && !deckClosed) {
+    // Reopened, or moved on to another run, mid-slide: that run's card shows instead.
+    setLeaving(false);
+  }
+  useLayoutEffect(() => {
+    if (!leaving || host === null) return undefined;
+    host.setAttribute("data-leaving", "");
+    const timer = window.setTimeout(() => setLeaving(false), DECK_LEAVE_MS);
+    return () => {
+      window.clearTimeout(timer);
+      host.removeAttribute("data-leaving");
+    };
+  }, [leaving, host]);
+  return leaving;
+}
+
 /** What the chat must keep when the deck grows. */
 const CHAT_MIN_WIDTH = 480;
 const KEY_STEP = 24;
@@ -95,9 +132,23 @@ function DeckResizer({ host }: { host: HTMLElement }) {
     host.style.setProperty("--deck-width", `${clamped}px`);
     setWidth(clamped);
   };
+  // The deck opens with a slide, so its width is read again once that ends.
+  useEffect(() => {
+    const settled = (event: TransitionEvent) => {
+      if (event.target === host && event.propertyName === "flex-basis") setWidth(Math.round(host.getBoundingClientRect().width));
+    };
+    host.addEventListener("transitionend", settled);
+    return () => host.removeEventListener("transitionend", settled);
+  }, [host]);
+  const endDrag = () => {
+    drag.current = null;
+    host.removeAttribute("data-resizing");
+  };
   const onPointerDown = (event: PointerEvent<HTMLDivElement>) => {
     event.currentTarget.setPointerCapture(event.pointerId);
     drag.current = { startX: event.clientX, startWidth: host.getBoundingClientRect().width };
+    // Followed directly while dragged, rather than eased behind the pointer.
+    host.setAttribute("data-resizing", "");
   };
   const onPointerMove = (event: PointerEvent<HTMLDivElement>) => {
     if (drag.current !== null) apply(drag.current.startWidth + drag.current.startX - event.clientX);
@@ -117,8 +168,8 @@ function DeckResizer({ host }: { host: HTMLElement }) {
     title="Drag to resize"
     onPointerDown={onPointerDown}
     onPointerMove={onPointerMove}
-    onPointerUp={() => { drag.current = null; }}
-    onPointerCancel={() => { drag.current = null; }}
+    onPointerUp={endDrag}
+    onPointerCancel={endDrag}
     onDoubleClick={() => { host.style.removeProperty("--deck-width"); setWidth(Math.round(host.getBoundingClientRect().width)); }}
     onKeyDown={onKeyDown}
   />;
@@ -145,8 +196,9 @@ export function RunResults({ runId, changes, evidence, latest, renderFiles }: {
     offer(runId);
     return () => withdraw(runId);
   }, [hasResults, latest, offer, runId, withdraw]);
-  if (!hasResults) return null;
   const showing = deck.target === runId;
+  const leaving = useLeaving(showing && hasResults, deck.target === null, deck.host);
+  if (!hasResults) return null;
   return <>
     {/* Stays visible and lit while the deck shows this run, which is how a long chat says which run that is. */}
     <button type="button" className="strip-seg strip-results" aria-pressed={showing} aria-label={`${showing ? "Close" : "Show"} this run's results in the Run Deck: ${summary}`} title={summary} onClick={() => { if (showing) deck.close(); else deck.pick(runId); }}>
@@ -154,7 +206,7 @@ export function RunResults({ runId, changes, evidence, latest, renderFiles }: {
       <strong>Results</strong>
       <span>{total}</span>
     </button>
-    {showing && deck.host !== null && createPortal(<>
+    {(showing || leaving) && deck.host !== null && createPortal(<>
       {deck.inline && <DeckResizer host={deck.host} />}
       <ResultsCard
         runId={runId}

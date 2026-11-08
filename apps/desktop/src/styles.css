@@ -419,9 +419,12 @@ button:focus-visible, textarea:focus-visible, select:focus-visible, input:focus-
  * actually watches land are animated: their own message, and the run that
  * answers it. The recorded answer that replaces a finished run is the same
  * content in the same place, so animating that swap would read as a flicker. */
-.user-message, .mock-run { animation: enter .22s cubic-bezier(.22, .8, .26, 1) both; }
+/* Only a message sent while the chat is open, and the run answering it, animate in; a chat that opens arrives as a whole. */
+.user-message.message-arrived, .mock-run { animation: enter .22s cubic-bezier(.22, .8, .26, 1) both; }
 .message + .message { margin-top: 28px; }
 .message { content-visibility: auto; contain-intrinsic-block-size: auto 240px; }
+/* The end of the chat is where it opens, so it is laid out at its real size from the first frame rather than as placeholders that then resize. */
+.message:nth-last-child(-n + 12) { content-visibility: visible; }
 .user-message { display: flex; flex-direction: column; align-items: flex-end; }
 .user-message + .assistant-message { margin-top: 15px; }
 .note-message { margin-top: -4px; }
@@ -1520,7 +1523,7 @@ a.small-button:focus-visible { outline: 2px solid var(--accent); outline-offset:
  * indicator — the spinner, the dots, the pulse — keeps running, because each of
  * those is feedback rather than decoration. */
 @media (prefers-reduced-motion: reduce) {
-  .user-message, .mock-run, .approval-dock { animation: fade .16s ease both; }
+  .user-message.message-arrived, .mock-run, .approval-dock { animation: fade .16s ease both; }
   /* A ring that spreads is travel. The card, the pulsing dot and the taskbar
      still say the run is waiting. */
   .question-dock .question-card { animation: none; }
@@ -1832,3 +1835,47 @@ a.small-button:focus-visible { outline: 2px solid var(--accent); outline-offset:
 /* Under a closed row a failure takes one line, so it does not push the answer away. */
 .section-alerts .node-row[data-status="failed"] { align-items: center; padding-block: 0; }
 .section-alerts .node-row[data-status="failed"] > .node-finding { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/*
+ * Motion. One ease and three durations, so everything that moves feels like
+ * one system: quick to respond, long to settle, as iOS moves sheets and panels.
+ * Only opacity and transform animate where possible; sizes animate only where
+ * the layout itself has to make room, as the Run Deck does.
+ */
+:root {
+  --ease-out: cubic-bezier(.32, .72, 0, 1);
+  --motion-fast: .14s;
+  --motion-base: .22s;
+  --motion-slow: .34s;
+}
+
+/*
+ * The Run Deck opens by widening from the window's edge while its card keeps
+ * its final width, so the results slide in rather than reflow every frame.
+ * Closing reverses it: the run keeps its card for the length of the slide
+ * (`data-leaving`). A drag on its edge is followed directly, never eased.
+ */
+.run-deck {
+  --deck-size: min(var(--deck-width, clamp(360px, 32vw, 560px)), calc(100vw - 732px));
+  flex-basis: var(--deck-size);
+  max-width: none;
+  container: none;
+  transition: flex-basis var(--motion-slow) var(--ease-out);
+}
+@starting-style { .run-deck:not(:empty) { flex-basis: 0; } }
+.run-deck[data-leaving] { flex-basis: 0; }
+.run-deck[data-resizing] { transition: none; }
+.run-deck > .results-card { flex: 1 0 auto; align-self: flex-end; width: calc(var(--deck-size) - 1px); container: deck / inline-size; transition: opacity var(--motion-base) ease; }
+@starting-style { .run-deck > .results-card { opacity: 0; } }
+.run-deck[data-leaving] > .results-card { opacity: 0; }
+@media (max-width: 1239px) {
+  /* Over the chat it is a card, so it slides in from the right instead. */
+  .run-deck { flex-basis: auto; transition: opacity var(--motion-base) var(--ease-out), transform var(--motion-slow) var(--ease-out); }
+  @starting-style { .run-deck:not(:empty) { opacity: 0; transform: translateX(16px) scale(.98); } }
+  .run-deck[data-leaving] { opacity: 0; transform: translateX(16px) scale(.98); }
+  .run-deck > .results-card { align-self: stretch; width: auto; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .run-deck, .run-deck > .results-card { transition: none; }
+}

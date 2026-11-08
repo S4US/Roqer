@@ -1398,10 +1398,16 @@ function App() {
   // even from higher up.
   const messageCount = selectedChat?.messages.length ?? 0;
   const lastMessageRole = selectedChat?.messages.at(-1)?.role;
+  const countedChat = useRef(workspace.selectedChatId);
   useEffect(() => {
+    // Opening another chat changes the count too; that is not a new message.
+    if (countedChat.current !== workspace.selectedChatId) {
+      countedChat.current = workspace.selectedChatId;
+      return;
+    }
     if (lastMessageRole === "user") following.current = true;
     if (following.current) scrollToEnd("smooth");
-    // Only a new message is a beat; the role is read for it, not watched.
+    // Only a new message is a beat; the role and chat are read for it, not watched.
   }, [messageCount, scrollToEnd]);
 
   // A run's own events arrive many times a second while a reply streams, and
@@ -1412,10 +1418,27 @@ function App() {
     if (following.current) scrollToEnd("instant");
   }, [runView?.lastSeq, runStarting, scrollToEnd]);
 
-  // Another chat opens at its end, and opens there immediately.
-  useEffect(() => {
+  // Another chat opens at its end, before its first frame is painted, and
+  // settles in with a short fade and lift rather than replacing the last one
+  // in a single frame.
+  const openedChat = useRef(workspace.selectedChatId);
+  useLayoutEffect(() => {
     following.current = true;
     scrollToEnd("instant");
+    if (openedChat.current === workspace.selectedChatId) return;
+    openedChat.current = workspace.selectedChatId;
+    if (prefersReducedMotion()) return;
+    // A new chat only fades. Its heading and backdrop are placed against the
+    // workspace, and a transform here would place them against this element
+    // for the length of the animation, so they would drift and then jump back.
+    const empty = (selectedChat?.messages.length ?? 0) === 0;
+    conversationRef.current?.animate(
+      empty
+        ? [{ opacity: 0.3 }, { opacity: 1 }]
+        : [{ opacity: 0.3, transform: "translateY(8px)" }, { opacity: 1, transform: "none" }],
+      { duration: CHAT_ENTER_MS, easing: MOTION_EASE_OUT },
+    );
+    // Only opening a chat animates; what it holds is read for that, not watched.
   }, [workspace.selectedChatId, scrollToEnd]);
 
   useEffect(() => {
@@ -2067,14 +2090,16 @@ function RowMenu({ label, items, onSelect, className = "", iconSize = 16, disabl
 
 type OpenInStudio = (target: string, instanceId?: string) => Promise<{ ok: boolean; message: string }>;
 
-const ConversationMessageView = memo(function ConversationMessageView({ message, latestRun, onOpenInStudio }: {
+const ConversationMessageView = memo(function ConversationMessageView({ message, latestRun, arrived = false, onOpenInStudio }: {
   message: ChatMessage;
+  /** Sent while this chat was open, rather than loaded with it: only such a message animates in. */
+  arrived?: boolean;
   /** Whether this is the newest reply that came from a run; only its diffs open by default. */
   latestRun: boolean;
   onOpenInStudio: OpenInStudio;
 }) {
   return message.role === "user" ? (
-    <section className={`message user-message${message.note === true ? " note-message" : ""}`} key={message.id}>
+    <section className={`message user-message${message.note === true ? " note-message" : ""}${arrived ? " message-arrived" : ""}`} key={message.id}>
       {message.note === true && <span className="note-label">Note sent while Roqer was working</span>}
       {message.attachments !== undefined && <MessagePictures attachments={message.attachments} />}
       <p className="user-prompt">{message.text}</p>
@@ -2107,6 +2132,9 @@ const ConversationMessages = memo(function ConversationMessages({ messages: allM
   // The component is keyed by chat, so this index belongs to one transcript.
   // Appended messages leave it untouched and remain visible at the bottom.
   const [visibleFrom, setVisibleFrom] = useState(() => initialConversationWindowStart(messages.length));
+  // What the chat held when it opened. Those messages, and earlier ones shown
+  // later, appear with the chat; only a message sent since animates in.
+  const [loadedIds] = useState(() => new Set(messages.map((message) => message.id)));
   const revealCount = Math.min(visibleFrom, CONVERSATION_WINDOW_SIZE);
   // The newest reply that came from a run, not the newest message: a prompt
   // just sent must not fold the diffs of the reply it is a follow-up to.
@@ -2124,7 +2152,7 @@ const ConversationMessages = memo(function ConversationMessages({ messages: allM
       </button>
     </div>}
     {messages.slice(visibleFrom).map((message) => (
-      <ConversationMessageView key={message.id} message={message} latestRun={message.id === latestRunId} onOpenInStudio={onOpenInStudio} />
+      <ConversationMessageView key={message.id} message={message} latestRun={message.id === latestRunId} arrived={!loadedIds.has(message.id)} onOpenInStudio={onOpenInStudio} />
     ))}
   </>;
 });
@@ -2186,6 +2214,15 @@ function Starters({ onSuggestion }: { onSuggestion: (value: string) => void }) {
  * nothing during the other two rather than claiming the model is busy while a
  * playtest boots or while an approval sits unanswered.
  */
+/** The app's standard ease: quick to start, long to settle, as iOS moves sheets and panels. Matches `--ease-out`. */
+const MOTION_EASE_OUT = "cubic-bezier(.32, .72, 0, 1)";
+/** How long another chat takes to settle in. */
+const CHAT_ENTER_MS = 260;
+
+function prefersReducedMotion(): boolean {
+  return window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+}
+
 /** How close to the end of the chat counts as being at it. */
 const FOLLOW_SLACK_PX = 48;
 /** How long after a run ends the chat still follows its reply, which may still be revealing. */
