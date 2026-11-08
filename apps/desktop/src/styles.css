@@ -1950,3 +1950,9 @@ details[open]::details-content { block-size: auto; }
   .settings-content > *, .name-modal, .clip-modal { animation: fade .12s ease both; }
   :where(button):active:not(:disabled) { scale: none; }
 }
+
+/* What the window shows instead of going blank when the interface cannot be drawn. */
+.app-crash { display: flex; flex-direction: column; align-items: flex-start; gap: 12px; max-width: 640px; height: 100%; margin: 0 auto; padding: 72px 24px; color: var(--ink); background: var(--canvas); }
+.app-crash h1 { margin: 0; font-size: 22px; font-weight: var(--weight-semibold); }
+.app-crash p { margin: 0; color: var(--muted); font-size: var(--type-body); line-height: 1.6; }
+.app-crash pre { width: 100%; max-height: 40vh; margin: 0; padding: 12px; overflow: auto; color: var(--ink-secondary); background: var(--surface-sunken); border: 1px solid var(--border-subtle); border-radius: 10px; font: 12px/1.5 "Geist Mono Variable", monospace; white-space: pre-wrap; }

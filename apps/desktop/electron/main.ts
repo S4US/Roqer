@@ -122,6 +122,7 @@ import { adoptPreviousUserData, PREVIOUS_USER_DATA_SEGMENTS } from "../runtime/u
 import { RunJournal } from "../runtime/run-journal";
 import { RunAttention, type AttentionSurface } from "../runtime/run-attention";
 import { BridgeLog } from "../runtime/bridge-log";
+import { boundedMessage, createLogGate, watchEventLoop } from "../runtime/window-diagnostics";
 import { composeDiagnostics } from "../runtime/diagnostics";
 import { AttachmentRegistry, MAX_IMAGE_SOURCE_BYTES } from "../runtime/attachment-context";
 import {
@@ -242,6 +243,42 @@ function bridgeLog(): BridgeLog {
 
 function bridgeLogPath(): string {
   return path.join(app.getPath("userData"), "bridge.log");
+}
+
+let appLogFile: BridgeLog | undefined;
+
+/**
+ * What happened to the app's own window, on disk beside bridge.log and bounded
+ * the same way: its page crashing or hanging, errors the page logged, and the
+ * main process freezing. Without it those ended in a dark window with no trace.
+ */
+function appLog(): BridgeLog {
+  return appLogFile ??= new BridgeLog(path.join(app.getPath("userData"), "app.log"), {
+    onError: (error) => console.error("Roqer could not write the app log", error),
+  });
+}
+
+/** A page that crashes again this soon after a reload is left as it is, rather than reloaded in a loop. */
+const PAGE_RELOAD_COOLDOWN_MS = 15_000;
+
+/** Record what happens to the window's page, and bring a crashed page back. */
+function watchWindow(window: BrowserWindow): void {
+  let lastReload = 0;
+  const gate = createLogGate();
+  window.webContents.on("render-process-gone", (_event, details) => {
+    void appLog().write(`[window] the page process is gone: ${details.reason}, exit code ${details.exitCode}`);
+    if (details.reason === "clean-exit" || window.isDestroyed() || Date.now() - lastReload < PAGE_RELOAD_COOLDOWN_MS) return;
+    lastReload = Date.now();
+    void appLog().write("[window] reloading the page");
+    window.webContents.reload();
+  });
+  window.on("unresponsive", () => void appLog().write("[window] the page stopped responding"));
+  window.on("responsive", () => void appLog().write("[window] the page is responding again"));
+  window.webContents.on("console-message", (event) => {
+    if (event.level !== "error") return;
+    const where = event.sourceId === "" ? "" : ` (${event.sourceId.split("/").pop()}:${event.lineNumber})`;
+    for (const line of gate(`[page error]${where} ${boundedMessage(event.message)}`)) void appLog().write(line);
+  });
 }
 
 function runJournal(): RunJournal {
@@ -2889,6 +2926,7 @@ function createWindow(): void {
     // seen downloading in the sidebar rather than discovered later.
     checkForUpdatesNow?.();
   });
+  watchWindow(window);
   window.on("closed", () => {
     trustedSenders.delete(senderId);
     // A window that is gone can no longer approve anything, so nothing it
@@ -3094,6 +3132,9 @@ function runSmokeTest(window: BrowserWindow): void {
 app.whenReady().then(async () => {
   // A second copy is on its way out; it must not start a bridge or open the chats.
   if (!primaryInstance) return;
+  // A frozen main process stops answering the window manager, which dims the
+  // window; this says afterwards how long it was frozen.
+  watchEventLoop({ onStall: (blockedMs) => void appLog().write(`[main] the main process was blocked for ${Math.round(blockedMs)} ms`) });
   ipcMain.handle("workspace:load", (event) => {
     if (!isTrusted(event.sender)) throw new Error("This window may not load the workspace.");
     return loadState();
