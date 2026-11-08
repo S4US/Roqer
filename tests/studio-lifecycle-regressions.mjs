@@ -327,6 +327,11 @@ async function main() {
       worker.workingDirectory,
       launchedProcesses,
     );
+    // Awaited below. If a step in between throws first, cleanup's client.stop()
+    // rejects this launch's pending status poll; unhandled, that rejection
+    // ended the process before cleanup restored the plugins folder or closed
+    // Studio, and printed it in place of the error that caused it.
+    secondLaunchPromise.catch(() => undefined);
     const conflictObservedAt = await waitForStudioLogLine(
       `/ready rejected for ${INSTANCE_ID}/edit: HTTP 409 Conflict`,
       relaunchedAt,

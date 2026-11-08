@@ -23,8 +23,10 @@ import {
   forgetVinegarSandboxFilesystem,
   getVinegarInstall,
   getVinegarSandboxFilesystem,
+  observeVinegarSessionProcesses,
   observeVinegarStudioProcesses,
   listVinegarStudioProcesses,
+  waitForVinegarSessionEnd,
   resolveVinegarStudioExe,
   toVinegarStudioPath,
   vinegarPlaceFileDir,
@@ -1820,6 +1822,22 @@ export class StudioInstanceManager {
           refuseUnreachableVinegarPath(
             vinegar, studioWorkingDirectory,
             'Studio could not be started in it', studioWorkingDirectory,
+          );
+        }
+        // A session whose Studio has just exited would lose this launch, or
+        // start a Studio that hangs (see `waitForVinegarSessionEnd`), so a
+        // relaunch waits the second and a half it takes to finish.
+        const waitStartedAt = Date.now();
+        const sessionEnd = await waitForVinegarSessionEnd({
+          observe: async () => ({
+            studioRunning: (await observeVinegarStudioProcesses()).length > 0,
+            session: await observeVinegarSessionProcesses(vinegar),
+          }),
+        });
+        if (sessionEnd === 'ended' || sessionEnd === 'timed-out') {
+          console.warn(
+            `[robloxstudio-mcp] Studio launch waited ${Date.now() - waitStartedAt} ms for the previous Vinegar session to end` +
+            (sessionEnd === 'timed-out' ? ' and went ahead with part of it still running.' : '.'),
           );
         }
         const launch = buildVinegarLaunchCommand({

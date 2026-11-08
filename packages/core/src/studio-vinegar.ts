@@ -755,3 +755,128 @@ export function listVinegarStudioProcesses(): VinegarStudioProcess[] {
     throw error;
   }
 }
+
+/**
+ * A process of a Vinegar session other than Studio: the Vinegar application
+ * instance itself, or the Wine server of its prefix.
+ */
+export interface VinegarSessionProcess {
+  id: number;
+  role: 'vinegar' | 'wineserver';
+}
+
+/**
+ * The Vinegar instance and the prefix's Wine server in `pgrep -a` output.
+ *
+ * Both outlive the Studio they ran for a moment. Checked against Vinegar 1.9.4
+ * on 2026-11-08: with Studio killed, the instance (a process whose own program
+ * is `vinegar`) exits about 0.4 s later and the Wine server (Vinegar's own
+ * `<data>/kombucha*` build of `wineserver`) about 1.4 s later. The `bwrap`
+ * wrapper around the instance names `vinegar` only in its arguments and is not
+ * counted, nor is Studio, which `parseVinegarStudioProcesses` reads.
+ */
+export function parseVinegarSessionProcesses(
+  pgrepOutput: string,
+  install: Pick<VinegarInstall, 'dataDir'>,
+  executableOf: (id: number) => string | undefined = readProcessExecutable,
+): VinegarSessionProcess[] {
+  const dataDir = path.posix.resolve(install.dataDir) + '/';
+  const processes: VinegarSessionProcess[] = [];
+  for (const rawLine of pgrepOutput.split(/\r?\n/u)) {
+    const match = /^(\d+)\s+(.*)$/u.exec(rawLine.trim());
+    if (!match) continue;
+    const id = Number(match[1]);
+    if (!Number.isSafeInteger(id) || id <= 0) continue;
+    const executable = executableOf(id) ?? match[2].split(/\s+/u)[0] ?? '';
+    const name = path.posix.basename(executable);
+    if (name === 'vinegar') {
+      processes.push({ id, role: 'vinegar' });
+    } else if (name === 'wineserver' && executable.startsWith(dataDir)) {
+      processes.push({ id, role: 'wineserver' });
+    }
+  }
+  return processes;
+}
+
+/** The Vinegar instance and Wine server running now, by observing the host process table. */
+export async function observeVinegarSessionProcesses(
+  install: Pick<VinegarInstall, 'dataDir'>,
+): Promise<VinegarSessionProcess[]> {
+  try {
+    const { stdout } = await execFileAsync('pgrep', ['-a', '-f', 'vinegar'], {
+      encoding: 'utf8',
+      maxBuffer: 4 * 1024 * 1024,
+      timeout: 5000,
+    });
+    return parseVinegarSessionProcesses(stdout, install);
+  } catch (error) {
+    if (Number((error as { code?: unknown }).code) === 1) return [];
+    throw error;
+  }
+}
+
+/**
+ * The longest a launch waits for an ending Vinegar session to finish. The
+ * session takes about a second and a half; the margin covers a busy host and a
+ * Wine server that lingers for its `--persistent` grace period.
+ */
+export const VINEGAR_SESSION_END_TIMEOUT_MS = 15_000;
+
+export type VinegarSessionEndOutcome =
+  /** No session was running: launch at once. */
+  | 'none'
+  /** Studio is running, so its Vinegar instance is live and takes the launch. */
+  | 'studio-running'
+  /** A session was ending and has now ended. */
+  | 'ended'
+  /** Something of a session was still running at the limit; the launch goes ahead. */
+  | 'timed-out'
+  /** The process table could not be read; the launch goes ahead as before. */
+  | 'unobserved';
+
+export interface VinegarSessionObservation {
+  studioRunning: boolean;
+  session: readonly VinegarSessionProcess[];
+}
+
+/**
+ * Wait until no Vinegar session is in the middle of ending.
+ *
+ * Vinegar runs one application instance, and `flatpak run` hands a second
+ * launch to it. Straight after Studio exits, that instance and its Wine server
+ * are still shutting down. A launch handed to the instance then is lost, and a
+ * launch that starts a new instance while the old Wine server is still
+ * stopping gets a Studio that hangs before it writes its first log line. Either
+ * way the plugin never connects. A fast relaunch hits this every time it lands
+ * in that second and a half.
+ *
+ * A session with Studio still running is live, not ending, so a launch goes to
+ * it at once. With no Studio, any Vinegar instance or Wine server left is
+ * taken to be ending. One that is not (Vinegar's own settings window, left
+ * open) costs one wait of `timeoutMs`, after which the launch goes ahead.
+ */
+export async function waitForVinegarSessionEnd(options: {
+  observe: () => Promise<VinegarSessionObservation>;
+  timeoutMs?: number;
+  pollMs?: number;
+  sleep?: (ms: number) => Promise<void>;
+  now?: () => number;
+}): Promise<VinegarSessionEndOutcome> {
+  const timeoutMs = options.timeoutMs ?? VINEGAR_SESSION_END_TIMEOUT_MS;
+  const pollMs = options.pollMs ?? 100;
+  const sleep = options.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+  const now = options.now ?? Date.now;
+  const deadline = now() + timeoutMs;
+  for (let first = true; ; first = false) {
+    let observation: VinegarSessionObservation;
+    try {
+      observation = await options.observe();
+    } catch {
+      return 'unobserved';
+    }
+    if (observation.studioRunning) return 'studio-running';
+    if (observation.session.length === 0) return first ? 'none' : 'ended';
+    if (now() >= deadline) return 'timed-out';
+    await sleep(pollMs);
+  }
+}

@@ -11,6 +11,7 @@ import {
   parseFlatpakFilesystems,
   parseProcessStartTicks,
   parseUserDirectories,
+  parseVinegarSessionProcesses,
   parseVinegarStudioProcesses,
   resolveFlatpakFilesystems,
   resolveVinegarPrefixUser,
@@ -18,7 +19,9 @@ import {
   vinegarCanReadPath,
   vinegarPlaceFileDir,
   vinegarReachRefusal,
+  waitForVinegarSessionEnd,
   type VinegarInstall,
+  type VinegarSessionObservation,
   type VinegarUserDirectories,
 } from '../studio-vinegar.js';
 
@@ -422,5 +425,89 @@ describe('Vinegar Studio processes', () => {
     expect(parseProcessStartTicks(`134662 (Roblox Studio (beta)) ${fields.join(' ')} 1234 5678`)).toBe('914327');
     expect(parseProcessStartTicks('134662 (bad)')).toBeUndefined();
     expect(parseProcessStartTicks('')).toBeUndefined();
+  });
+});
+
+describe('an ending Vinegar session', () => {
+  // `pgrep -a -f vinegar` as observed while Vinegar ran Studio: the bwrap
+  // wrapper and Studio name vinegar in their arguments or paths, and only the
+  // instance and the prefix's Wine server are the session that outlives Studio.
+  const DATA = INSTALL.dataDir;
+  const PGREP = [
+    '557233 /usr/bin/bwrap --args 79 -- vinegar',
+    '557248 vinegar',
+    `557298 ${DATA}/kombucha/bin/wineserver --persistent=6`,
+    `557350 ${DATA}/versions/version-67c8/RobloxStudioBeta.exe`,
+    '600001 /usr/bin/wineserver --persistent',
+    '',
+  ].join('\n');
+  const PROGRAMS: Record<number, string> = {
+    557233: '/usr/bin/bwrap',
+    557248: 'vinegar',
+    557298: `${DATA}/kombucha/bin/wineserver`,
+    557350: `${DATA}/versions/version-67c8/RobloxStudioBeta.exe`,
+    600001: '/usr/bin/wineserver',
+  };
+
+  test("the session is Vinegar's own instance and its prefix's Wine server, nothing else", () => {
+    expect(parseVinegarSessionProcesses(PGREP, INSTALL, (id) => PROGRAMS[id])).toEqual([
+      { id: 557248, role: 'vinegar' },
+      { id: 557298, role: 'wineserver' },
+    ]);
+    // A process gone before /proc was read is judged by its pgrep line.
+    expect(parseVinegarSessionProcesses('557248 vinegar', INSTALL, () => undefined)).toEqual([{ id: 557248, role: 'vinegar' }]);
+    expect(parseVinegarSessionProcesses('', INSTALL)).toEqual([]);
+  });
+
+  /** A clock and sleep that advance together, and a script of what each look sees. */
+  function scripted(observations: Array<VinegarSessionObservation | Error>) {
+    let clock = 0;
+    const seen: number[] = [];
+    return {
+      seen,
+      options: {
+        observe: async () => {
+          seen.push(clock);
+          const next = observations.length > 1 ? observations.shift()! : observations[0];
+          if (next instanceof Error) throw next;
+          return next;
+        },
+        now: () => clock,
+        sleep: async (ms: number) => { clock += ms; },
+        pollMs: 100,
+        timeoutMs: 1_000,
+      },
+    };
+  }
+  const ENDING = { studioRunning: false, session: [{ id: 1, role: 'wineserver' as const }] };
+  const IDLE = { studioRunning: false, session: [] };
+
+  test('with nothing running, a launch goes at once', async () => {
+    const run = scripted([IDLE]);
+    await expect(waitForVinegarSessionEnd(run.options)).resolves.toBe('none');
+    expect(run.seen).toEqual([0]);
+  });
+
+  test('a session still running Studio is live and takes the launch at once', async () => {
+    const run = scripted([{ studioRunning: true, session: [{ id: 2, role: 'vinegar' }] }]);
+    await expect(waitForVinegarSessionEnd(run.options)).resolves.toBe('studio-running');
+    expect(run.seen).toEqual([0]);
+  });
+
+  test('a session whose Studio just exited is waited out before the launch', async () => {
+    const run = scripted([ENDING, ENDING, ENDING, IDLE]);
+    await expect(waitForVinegarSessionEnd(run.options)).resolves.toBe('ended');
+    expect(run.seen).toEqual([0, 100, 200, 300]);
+  });
+
+  test('a session that does not end is waited for only up to the limit', async () => {
+    const run = scripted([ENDING]);
+    await expect(waitForVinegarSessionEnd(run.options)).resolves.toBe('timed-out');
+    expect(run.seen.at(-1)).toBe(1_000);
+  });
+
+  test('a process table that cannot be read does not hold the launch', async () => {
+    const run = scripted([new Error('pgrep missing')]);
+    await expect(waitForVinegarSessionEnd(run.options)).resolves.toBe('unobserved');
   });
 });
