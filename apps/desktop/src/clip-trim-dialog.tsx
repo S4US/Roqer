@@ -359,7 +359,7 @@ export function ClipTrimDialog({ attachment, clip, onConfirm, onClose }: {
 
       <div className="clip-modal-foot">
         <span className={problem === undefined ? "clip-note" : "clip-problem"}>
-          {problem ?? (slow === 1 ? "Roqer reads every frame of this part." : `${(length / slow).toFixed(2)} s at real speed.`)}
+          {problem ?? (slow === 1 ? null : `${(length / slow).toFixed(2)} s at real speed.`)}
         </span>
         <button className="secondary-action" onClick={onClose}>Cancel</button>
         <button className="primary-action" disabled={problem !== undefined} onClick={() => onConfirm(chosen)}>Use {length.toFixed(2)} s</button>
