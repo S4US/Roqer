@@ -50,6 +50,8 @@ const KIND_BY_TOOL: Readonly<Record<string, ToolActivityKind>> = {
   get_roblox_docs: "read",
   // Roqer's own operation: frames of a clip the user attached to the chat.
   read_reference_clip: "read",
+  // Roqer's own operation: a page at a link the user gave.
+  open_user_link: "read",
 
   // -- Changing the project ----------------------------------------------
   set_properties: "edit",
@@ -296,6 +298,7 @@ export function activityLabel(tool: string, target: string | null, past: boolean
     const where = target === null ? "your MCP servers" : target.split("/")[0];
     return past ? `Listed tools on ${where}` : `Listing tools on ${where}`;
   }
+  if (tool === "open_user_link") return past ? `Read ${target ?? "a link you gave"}` : `Reading ${target ?? "a link you gave"}`;
   if (tool === "download_mcp_file") return past ? "Downloaded a file an MCP server made" : "Downloading a file an MCP server made";
   if (tool === "call_mcp_tool") {
     if (target === null) return past ? "Used an MCP tool" : "Using an MCP tool";

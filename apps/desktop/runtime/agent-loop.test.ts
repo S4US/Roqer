@@ -229,7 +229,7 @@ test("a turn with no tool call returns the streamed prose as the answer", async 
   assert.match(sent.instructions.developer ?? "", /DEVELOPER TEST INSTRUCTIONS/);
   assert.match(sent.instructions.developer ?? "", /Automatic playtesting is enabled/);
   assert.deepEqual(sent.tools.map((tool) => tool.name), [
-    "roblox_studio", "load_skill", "resolve_icon", "update_task_list", "ask_user",
+    "roblox_studio", "open_link", "load_skill", "resolve_icon", "update_task_list", "ask_user",
   ]);
   assert.deepEqual(sent.messages, [{
     role: "user",
@@ -1873,7 +1873,7 @@ test("the blender tool is offered only while enabled, and a call becomes one eng
 
   assert.equal(await enabled.run(context), "Modeled.");
   assert.deepEqual(enabledBridge.requests[0].tools.map((tool) => tool.name), [
-    "roblox_studio", "blender", "load_skill", "resolve_icon", "update_task_list", "ask_user",
+    "roblox_studio", "open_link", "blender", "load_skill", "resolve_icon", "update_task_list", "ask_user",
   ]);
   assert.deepEqual(recorded.calls, ["run_blender_script"]);
   const fedBack = enabledBridge.requests[1].messages.at(-1)!.content;
@@ -1909,7 +1909,7 @@ test("the image tool is offered only while an image source is on, and a call bec
 
   assert.equal(await enabled.run(context), "Generated.");
   assert.deepEqual(enabledBridge.requests[0].tools.map((tool) => tool.name), [
-    "roblox_studio", "image", "load_skill", "resolve_icon", "update_task_list", "ask_user",
+    "roblox_studio", "open_link", "image", "load_skill", "resolve_icon", "update_task_list", "ask_user",
   ]);
   assert.deepEqual(recorded.calls, ["generate_image"]);
   const fedBack = enabledBridge.requests[1].messages.at(-1)!.content;

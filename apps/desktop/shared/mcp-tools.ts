@@ -2,6 +2,7 @@ import { GATEWAY_TOOL_RISK, isGatewayOperation } from "./gateway-operations";
 import { IMAGE_OPERATION } from "./image-generation";
 import { CALL_MCP_TOOL_OPERATION, DOWNLOAD_MCP_FILE_OPERATION, LIST_MCP_TOOLS_OPERATION } from "./mcp-servers";
 import type { ToolRisk } from "./policy";
+import { OPEN_LINK_OPERATION } from "./user-links";
 
 /**
  * Risk classification for every public Roblox Studio MCP tool.
@@ -115,6 +116,10 @@ export const LOCAL_TOOL_RISK: Readonly<Record<string, ToolRisk>> = {
   // change on this computer, though not to the project, so Read only refuses
   // it and Ask first asks.
   [DOWNLOAD_MCP_FILE_OPERATION]: "mutation",
+  // Reads a page at a link the user wrote in the chat, and only such a link:
+  // the model cannot choose the address, so the request carries nothing the
+  // user did not already send there. It changes nothing.
+  [OPEN_LINK_OPERATION]: "read",
   // Sends the prompt to the user's image provider and spends their key or
   // plan, like `generate_model` spends Roblox credit.
   [IMAGE_OPERATION]: "irreversible",
@@ -235,6 +240,8 @@ const TOOL_TIMEOUT_MS: Readonly<Record<string, number>> = {
   [CALL_MCP_TOOL_OPERATION]: 120_000,
   // Up to 50 MB from wherever the link points.
   [DOWNLOAD_MCP_FILE_OPERATION]: 120_000,
+  // Up to five redirects and a page of at most 5 MB.
+  [OPEN_LINK_OPERATION]: 60_000,
   // The worker gives the image provider 220 s for up to four pictures at high
   // quality, then measures and writes them; the budget sits a little above.
   [IMAGE_OPERATION]: 240_000,
@@ -451,7 +458,7 @@ export function summarizeToolCall(tool: string, args: Record<string, unknown>): 
     return `${tool} · ${name === undefined ? server : `${server}/${name}`}`;
   }
   // The approval names where the file comes from; the full link is in the arguments.
-  if (tool === DOWNLOAD_MCP_FILE_OPERATION) {
+  if (tool === DOWNLOAD_MCP_FILE_OPERATION || tool === OPEN_LINK_OPERATION) {
     try {
       const url = new URL(String(args.url));
       return `${tool} · ${truncate(`${url.hostname}${url.pathname}`, 72)}`;

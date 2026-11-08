@@ -27,6 +27,8 @@ import { REFERENCE_CLIP_TOOL_NAME } from "../shared/reference-clip";
 import { parseReferenceClipToolInput, referenceClipToolDefinition } from "./reference-clip";
 import { EXTERNAL_MCP_TOOL_NAME } from "../shared/mcp-servers";
 import { externalMcpToolDefinition, parseExternalMcpToolInput } from "./external-mcp-tool";
+import { OPEN_LINK_TOOL_NAME } from "../shared/user-links";
+import { openLinkToolDefinition, parseOpenLinkToolInput } from "./user-links";
 import { IMAGE_TOOL_NAME } from "../shared/image-generation";
 import { imageToolDefinition, parseImageToolInput } from "./image-tool";
 import { buildConversationPrompt, buildFollowUpPrompt, continuesConversation } from "./conversation-prompt";
@@ -338,6 +340,7 @@ function loopTools(library: SkillLibrary, blender: boolean, referenceClips = fal
     skillToolDefinition(library), iconToolDefinition(), taskToolDefinition(), questionToolDefinition(),
   ];
   const localTools = [
+    openLinkToolDefinition(),
     ...(blender ? [blenderToolDefinition()] : []),
     ...(imageGeneration ? [imageToolDefinition()] : []),
     ...(referenceClips ? [referenceClipToolDefinition()] : []),
@@ -736,16 +739,19 @@ export function createAgentLoopPlanner(options: AgentLoopPlannerOptions): Planne
           const clipCall = options.referenceClips === true && call.name === REFERENCE_CLIP_TOOL_NAME;
           const mcpCall = options.externalMcp === true && call.name === EXTERNAL_MCP_TOOL_NAME;
           const imageCall = options.imageGeneration === true && call.name === IMAGE_TOOL_NAME;
-          if (call.name === STUDIO_TOOL_NAME || (options.blender === true && call.name === BLENDER_TOOL_NAME) || clipCall || mcpCall || imageCall) {
+          const linkCall = call.name === OPEN_LINK_TOOL_NAME;
+          if (call.name === STUDIO_TOOL_NAME || (options.blender === true && call.name === BLENDER_TOOL_NAME) || clipCall || mcpCall || imageCall || linkCall) {
             const parsed = call.name === STUDIO_TOOL_NAME
               ? parseStudioToolInput(call.arguments)
-              : clipCall
-                ? parseReferenceClipToolInput(call.arguments)
-                : mcpCall
-                  ? parseExternalMcpToolInput(call.arguments)
-                  : imageCall
-                    ? parseImageToolInput(call.arguments)
-                    : parseBlenderToolInput(call.arguments);
+              : linkCall
+                ? parseOpenLinkToolInput(call.arguments)
+                : clipCall
+                  ? parseReferenceClipToolInput(call.arguments)
+                  : mcpCall
+                    ? parseExternalMcpToolInput(call.arguments)
+                    : imageCall
+                      ? parseImageToolInput(call.arguments)
+                      : parseBlenderToolInput(call.arguments);
             measuredTool = parsed.operation;
             const result = await runStudioTool(parsed.operation, parsed.args);
             const returnedImages = result.images ?? [];

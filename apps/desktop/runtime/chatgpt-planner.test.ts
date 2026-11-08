@@ -272,7 +272,7 @@ test("ChatGPT planner routes Studio calls through PlannerContext and records ver
   assert.match(developerInstructions as string, /Automatic playtesting is enabled/);
   assert.deepEqual(
     ((threadStart?.params as Record<string, unknown>).dynamicTools as Array<{ name: string }>).map((tool) => tool.name),
-    ["roblox_studio", "load_skill", "resolve_icon", "update_task_list", "ask_user"],
+    ["roblox_studio", "load_skill", "resolve_icon", "update_task_list", "ask_user", "open_link"],
   );
   assert.equal((turnStart?.params as Record<string, unknown>).model, "gpt-test");
   assert.equal((turnStart?.params as Record<string, unknown>).effort, "high");
@@ -438,7 +438,7 @@ test("ChatGPT is given the image tool only while an image source is on, and a ca
   const threadStart = appServer.requests.find((request) => request.method === "thread/start");
   assert.deepEqual(
     ((threadStart?.params as Record<string, unknown>).dynamicTools as Array<{ name: string }>).map((tool) => tool.name),
-    ["roblox_studio", "load_skill", "resolve_icon", "update_task_list", "ask_user", "image"],
+    ["roblox_studio", "load_skill", "resolve_icon", "update_task_list", "ask_user", "open_link", "image"],
   );
   appServer.turnResponse.resolve({ turn: { id: "turn-1" } });
   await new Promise((resolve) => setImmediate(resolve));

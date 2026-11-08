@@ -27,9 +27,10 @@ const QUALIFIED_SKILL_TOOL = "mcp__workbench__load_skill";
 const QUALIFIED_ICON_TOOL = "mcp__workbench__resolve_icon";
 const QUALIFIED_TASK_TOOL = "mcp__workbench__update_task_list";
 const QUALIFIED_QUESTION_TOOL = "mcp__workbench__ask_user";
+const QUALIFIED_LINK_TOOL = "mcp__workbench__open_link";
 /** Everything the planner refuses to start without. */
 const PROVIDER_TOOLS = [
-  QUALIFIED_STUDIO_TOOL, QUALIFIED_SKILL_TOOL, QUALIFIED_ICON_TOOL, QUALIFIED_TASK_TOOL, QUALIFIED_QUESTION_TOOL,
+  QUALIFIED_STUDIO_TOOL, QUALIFIED_SKILL_TOOL, QUALIFIED_ICON_TOOL, QUALIFIED_TASK_TOOL, QUALIFIED_QUESTION_TOOL, QUALIFIED_LINK_TOOL,
 ];
 const AGENT: AgentDefinition = {
   id: "test-agent",

@@ -16,6 +16,8 @@ import {
 } from "./studio-tools";
 import { runTaskTool, taskToolDefinition, TASK_TOOL_NAME } from "./task-tool";
 import { runQuestionTool, questionToolDefinition, QUESTION_TOOL_NAME } from "./question-tool";
+import { OPEN_LINK_TOOL_NAME } from "../shared/user-links";
+import { openLinkToolDefinition, parseOpenLinkToolInput } from "./user-links";
 import type { WorkbenchMcpTool, WorkbenchMcpToolResult } from "./workbench-mcp-server";
 
 /**
@@ -44,7 +46,7 @@ export type WorkbenchToolOptions = {
 /** Every tool granted for these options, in the order they are announced. */
 export function workbenchToolNames(options: WorkbenchToolOptions): string[] {
   return [
-    STUDIO_TOOL_NAME, SKILL_TOOL_NAME, ICON_TOOL_NAME, TASK_TOOL_NAME, QUESTION_TOOL_NAME,
+    STUDIO_TOOL_NAME, SKILL_TOOL_NAME, ICON_TOOL_NAME, TASK_TOOL_NAME, QUESTION_TOOL_NAME, OPEN_LINK_TOOL_NAME,
     ...(options.blender === true ? [BLENDER_TOOL_NAME] : []),
     ...(options.imageGeneration === true ? [IMAGE_TOOL_NAME] : []),
     ...(options.referenceClips === true ? [REFERENCE_CLIP_TOOL_NAME] : []),
@@ -56,7 +58,7 @@ export function workbenchToolNames(options: WorkbenchToolOptions): string[] {
 export function workbenchMcpTools(options: WorkbenchToolOptions): WorkbenchMcpTool[] {
   return [
     { name: STUDIO_TOOL_NAME, description: studioToolDescription(), inputSchema: studioToolInputSchema() },
-    skillToolDefinition(options.skillLibrary), iconToolDefinition(), taskToolDefinition(), questionToolDefinition(),
+    skillToolDefinition(options.skillLibrary), iconToolDefinition(), taskToolDefinition(), questionToolDefinition(), openLinkToolDefinition(),
     ...(options.blender === true ? [blenderToolDefinition()] : []),
     ...(options.imageGeneration === true ? [imageToolDefinition()] : []),
     ...(options.referenceClips === true ? [referenceClipToolDefinition()] : []),
@@ -120,15 +122,17 @@ export function createWorkbenchToolInvoker(context: PlannerContext, options: Wor
     }
     let call: { operation: string; args: JsonRecord };
     try {
-      call = options.blender === true && name === BLENDER_TOOL_NAME
-        ? parseBlenderToolInput(args)
-        : options.imageGeneration === true && name === IMAGE_TOOL_NAME
-          ? parseImageToolInput(args)
-          : options.referenceClips === true && name === REFERENCE_CLIP_TOOL_NAME
-            ? parseReferenceClipToolInput(args)
-            : options.externalMcp === true && name === EXTERNAL_MCP_TOOL_NAME
-              ? parseExternalMcpToolInput(args)
-              : parseStudioToolInput(args);
+      call = name === OPEN_LINK_TOOL_NAME
+        ? parseOpenLinkToolInput(args)
+        : options.blender === true && name === BLENDER_TOOL_NAME
+          ? parseBlenderToolInput(args)
+          : options.imageGeneration === true && name === IMAGE_TOOL_NAME
+            ? parseImageToolInput(args)
+            : options.referenceClips === true && name === REFERENCE_CLIP_TOOL_NAME
+              ? parseReferenceClipToolInput(args)
+              : options.externalMcp === true && name === EXTERNAL_MCP_TOOL_NAME
+                ? parseExternalMcpToolInput(args)
+                : parseStudioToolInput(args);
     } catch (error) {
       // A malformed call is the model's mistake to correct, answered like
       // any failed call; only a run of them that is not converging ends it.

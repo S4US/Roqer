@@ -131,6 +131,8 @@ import { ClipDecoder } from "./clip-decoder";
 import { clipScope, ClipStore } from "../runtime/clip-store";
 import type { ClipSupport } from "../runtime/clip-source";
 import { readReferenceClip, type ChatClips } from "../runtime/reference-clip";
+import { openUserLink, UserLinks } from "../runtime/user-links";
+import { OPEN_LINK_OPERATION } from "../shared/user-links";
 import { CLIP_MEDIA_SCHEME, MAX_DROPPED_CLIP_BYTES, REFERENCE_CLIP_OPERATION } from "../shared/reference-clip";
 import { serveClipMedia } from "../runtime/clip-media";
 import { DiscordPresence } from "./discord-presence";
@@ -2480,6 +2482,14 @@ async function startRun(event: IpcMainInvokeEvent, payload: unknown): Promise<Ru
     }
     /** The pictures this run stored, held in the picture store until it ends. */
     const heldPictures = new Set<string>();
+    // The links `open_link` may open: only ones the user wrote. The typed
+    // prompt, not `resolvedRequest.prompt`, which carries attachment and
+    // selection text the user did not write; their earlier messages; and,
+    // below, each note the run accepts.
+    const userLinks = new UserLinks([
+      request.prompt,
+      ...request.conversation.messages.filter((message) => message.role === "user").map((message) => message.text),
+    ]);
     /** This run's connections to the user's MCP servers, all closed when it ends. */
     const externalMcpSession = externalMcp
       ? new ExternalMcpRunSession({
@@ -2510,6 +2520,7 @@ async function startRun(event: IpcMainInvokeEvent, payload: unknown): Promise<Ru
             ? ledgerAwareUpload(toolArgs, toolOptions ?? {}, studio, assetLedger(), ledgerContext)
             : studio(tool, toolArgs, toolOptions))],
         [LIST_UPLOADS_OPERATION, (args) => listUploads(args, assetLedger())],
+        [OPEN_LINK_OPERATION, (args, options) => openUserLink(args, options, userLinks)],
         // Resolved the same way the run's Studio is: `resolvedRequest.instanceId`
         // is the one instance every Studio call is routed to for this run, so
         // the picker opens for exactly that place, never one the model names.
@@ -2579,6 +2590,9 @@ async function startRun(event: IpcMainInvokeEvent, payload: unknown): Promise<Ru
         return ref;
       },
       emit: (runEvent: RunEvent) => {
+        // A note is the user speaking, so a link in it may be opened, from the
+        // moment the engine accepts it -- the same moment it is queued for the model.
+        if (runEvent.type === "steer") userLinks.add(runEvent.text);
         runJournal().record(runEvent);
         if (runEvent.type === "run-completed") completedRuns.add(runId);
         if (!sender.isDestroyed()) sender.send("run:event", runEvent);

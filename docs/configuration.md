@@ -342,6 +342,35 @@ account, and Codex's per-thread switch has not been checked against every
 Codex version, so a Codex that ignores it simply leaves the model without
 search.
 
+### Links you give
+
+A link you write in a message, in a note during a run, or in an earlier message
+of the chat can be opened by the agent with its `open_link` tool, whether web
+search is on or off and with every provider. Roqer fetches the page itself, in
+the desktop app, and only a link you wrote: an address the model made up, or
+one a page, a search or a tool result gave it, is refused before anything is
+sent. Links inside an attached file or the Studio selection do not count.
+
+- A web page comes back as plain text: scripts, styles and navigation removed,
+  code blocks kept. A long page comes back in parts of 16,000 characters, and
+  Roqer reads at most the first 5 MB.
+- A PNG, JPEG, WebP or GIF of up to about 1 MB comes back as an image. Attach a
+  larger picture to the chat instead, which Roqer resizes.
+- Only `http` and `https` links, without a user name or password. Roqer follows
+  up to five redirects, but not to an address that names this computer or a
+  local network (`localhost`, `127.x`, `10.x`, `192.168.x` and the like) unless
+  your own link already pointed at that host. Host names are not resolved for
+  this check, so a public name that points at a local address is not caught.
+- A page that needs a sign-in, or that a browser builds with scripts, has no
+  text Roqer can read; the agent says so.
+
+Each open shows in the run's activity with the address. It counts as a read, so
+it runs without asking in every mode: the model cannot choose the address, so
+the request carries nothing you did not write. The page text is marked to the
+model as third-party data, never an instruction. As with web search, in Full
+auto nothing stops an action a page leads to, so use another mode when you open
+a page you do not trust.
+
 ### Updates
 
 The updater is configured in `apps/desktop/electron-builder.yml` rather than by

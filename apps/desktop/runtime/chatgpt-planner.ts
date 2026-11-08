@@ -12,6 +12,8 @@ import { REFERENCE_CLIP_TOOL_NAME } from "../shared/reference-clip";
 import { parseReferenceClipToolInput, referenceClipToolDefinition } from "./reference-clip";
 import { EXTERNAL_MCP_TOOL_NAME } from "../shared/mcp-servers";
 import { externalMcpToolDefinition, parseExternalMcpToolInput } from "./external-mcp-tool";
+import { OPEN_LINK_TOOL_NAME } from "../shared/user-links";
+import { openLinkToolDefinition, parseOpenLinkToolInput } from "./user-links";
 import { IMAGE_TOOL_NAME } from "../shared/image-generation";
 import { imageToolDefinition, parseImageToolInput } from "./image-tool";
 import {
@@ -355,6 +357,7 @@ function dynamicToolSet(options: ChatGptPlannerOptions): DynamicToolSet {
 function parseDynamicCall(request: AppServerRequest, threadId: string, { blender, referenceClips, externalMcp, imageGeneration }: DynamicToolSet):
   { operation: string; args: JsonRecord } | null {
   if (request.method !== "item/tool/call" || request.params.threadId !== threadId) return null;
+  if (request.params.tool === OPEN_LINK_TOOL_NAME) return parseOpenLinkToolInput(request.params.arguments);
   if (blender && request.params.tool === BLENDER_TOOL_NAME) return parseBlenderToolInput(request.params.arguments);
   if (imageGeneration && request.params.tool === IMAGE_TOOL_NAME) return parseImageToolInput(request.params.arguments);
   if (referenceClips && request.params.tool === REFERENCE_CLIP_TOOL_NAME) return parseReferenceClipToolInput(request.params.arguments);
@@ -421,6 +424,7 @@ async function startThread(options: ChatGptPlannerOptions, autoPlaytest: boolean
       { type: "function", ...iconToolDefinition() },
       { type: "function", ...taskToolDefinition() },
       { type: "function", ...questionToolDefinition() },
+      { type: "function", ...openLinkToolDefinition() },
       ...(options.blender === true ? [{ type: "function", ...blenderToolDefinition() }] : []),
       ...(options.imageGeneration === true ? [{ type: "function", ...imageToolDefinition() }] : []),
       ...(options.referenceClips === true ? [{ type: "function", ...referenceClipToolDefinition() }] : []),
