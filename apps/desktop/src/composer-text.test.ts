@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
-  blockPreview, characterCount, composedMessage, isLongPaste, lineCount, LONG_PASTE_CHARACTERS, LONG_PASTE_LINES, textSize,
+  blockPreview, characterCount, composedMessage, finishBlockEdit, isLongPaste, lineCount, LONG_PASTE_CHARACTERS, LONG_PASTE_LINES, textSize, withBlockText,
 } from "./composer-text";
 
 test("a paste is folded only once it is long by characters or by lines", () => {
@@ -24,6 +24,19 @@ test("what is sent is every block in the order shown, then what was typed, and n
   assert.equal(composedMessage([], "  "), "");
   // The inside of a block is never touched.
   assert.equal(composedMessage([{ id: "a", text: "a\n\n\n\nb" }], ""), "a\n\n\n\nb");
+});
+
+test("editing a block changes that block alone, and an emptied block goes", () => {
+  const blocks = [{ id: "a", text: "First paste" }, { id: "b", text: "Second paste" }, { id: "c", text: "Third paste" }];
+  const edited = withBlockText(blocks, "b", "Second paste, edited");
+  assert.deepEqual(edited, [{ id: "a", text: "First paste" }, { id: "b", text: "Second paste, edited" }, { id: "c", text: "Third paste" }]);
+  assert.deepEqual(blocks[1], { id: "b", text: "Second paste" });
+  assert.equal(composedMessage(edited, "Typed"), "First paste\n\nSecond paste, edited\n\nThird paste\n\nTyped");
+  // Ending the edit keeps a block with words in it, and removes one left blank.
+  assert.deepEqual(finishBlockEdit(edited, "b"), edited);
+  assert.deepEqual(finishBlockEdit(withBlockText(blocks, "b", "  \n "), "b"), [blocks[0], blocks[2]]);
+  // Only the block being edited is ever removed.
+  assert.deepEqual(finishBlockEdit([{ id: "a", text: " " }, blocks[1]], "b"), [{ id: "a", text: " " }, blocks[1]]);
 });
 
 test("a block says how big it is and what it starts with", () => {

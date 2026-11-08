@@ -51,7 +51,7 @@ import { RunDeckProvider, RunDeckToggle, RunResults, useRunDeck } from "./run-de
 import { ModelMenu, RunMenu } from "./composer-menus";
 import { ContextMeter } from "./context-meter";
 import { compactUsageNote, contextMeterView, nextContextReading, type ContextReading } from "./context-usage";
-import { blockPreview, characterCount, composedMessage, isLongPaste, lineCount, textSize, type PastedBlock } from "./composer-text";
+import { blockPreview, characterCount, composedMessage, finishBlockEdit, isLongPaste, lineCount, textSize, withBlockText, type PastedBlock } from "./composer-text";
 import { RojoPill } from "./rojo-pill";
 
 /** The key that sends with Enter and makes a new chat with N, named the way this computer's keyboard names it. */
@@ -246,6 +246,8 @@ function App() {
   /** Long pastes, folded out of the text so what was typed stays readable. Sent first, in order. */
   const [pastedBlocks, setPastedBlocks] = useState<PastedBlock[]>([]);
   const [composerExpanded, setComposerExpanded] = useState(false);
+  /** The pasted block open in the larger editor, if one is. Its text is edited there, apart from what was typed. */
+  const [editingBlockId, setEditingBlockId] = useState<string | null>(null);
   const [attachments, setAttachments] = useState<AssetAttachment[]>([]);
   /** Clips whose frames Roqer is reading, and the one whose part is being chosen. */
   const [readingClips, setReadingClips] = useState<ReadonlySet<string>>(() => new Set());
@@ -267,6 +269,7 @@ function App() {
     setComposer("");
     setPastedBlocks([]);
     setComposerExpanded(false);
+    setEditingBlockId(null);
   }, []);
   // The box grows with what is typed, up to a limit the stylesheet sets, and
   // scrolls after that; the expanded editor fills its space instead.
@@ -275,7 +278,7 @@ function App() {
     if (box === null) return;
     box.style.height = "";
     if (!composerExpanded) box.style.height = `${box.scrollHeight}px`;
-  }, [composer, composerExpanded, pastedBlocks.length]);
+  }, [composer, composerExpanded, pastedBlocks.length, editingBlockId]);
   // The transcript keeps room for the composer below its last message, so a
   // composer grown by a long draft never hides what it is replying to.
   const dockRef = useRef<HTMLDivElement>(null);
@@ -669,6 +672,8 @@ function App() {
   const runView = selectedRun?.view ?? null;
   const runStarting = selectedRun !== null && selectedRun.runId === null;
   const isRunning = runStarting || (runView !== null && runView.outcome === null);
+  // A run that starts ends a pasted block's edit: the box then belongs to the run's note.
+  useEffect(() => { if (isRunning) setEditingBlockId(null); }, [isRunning]);
 
   /**
    * The Studio selection of the chat's place, for the composer's chip. Read
@@ -1452,12 +1457,24 @@ function App() {
     : composer.trim() !== "" && !isRunning
       ? <><kbd>{SEND_MODIFIER}</kbd> <kbd>Enter</kbd> to send</>
       : null;
-  /** A pasted block is edited as text: every block goes back into the box, in order, and the box opens large. */
-  const editPastedText = () => {
-    setComposer(composedMessage(pastedBlocks, composer));
-    setPastedBlocks([]);
+  /**
+   * A pasted block opens alone in the larger editor. Closing the editor folds
+   * it back into its block, so the other blocks and what was typed are never
+   * touched, and a block emptied there is removed.
+   */
+  const editingBlock = isRunning || !composerExpanded ? undefined : pastedBlocks.find((block) => block.id === editingBlockId);
+  const editPastedText = (id: string) => {
+    setEditingBlockId(id);
     setComposerExpanded(true);
     window.requestAnimationFrame(() => composerRef.current?.focus());
+  };
+  const closeEditor = () => {
+    setComposerExpanded(false);
+    if (editingBlockId !== null) {
+      setPastedBlocks((current) => finishBlockEdit(current, editingBlockId));
+      setEditingBlockId(null);
+    }
+    composerRef.current?.focus();
   };
 
   const onlyProject = workspace.projects.length < 2;
@@ -1751,9 +1768,9 @@ function App() {
           >
             {composerExpanded
               ? <div className="composer-expanded-head">
-                <strong>Message</strong>
-                <span>{textSize(message)}</span>
-                <button type="button" className="text-button" onClick={() => { setComposerExpanded(false); composerRef.current?.focus(); }}><Minimize2 size={14} aria-hidden="true" /> Collapse</button>
+                <strong>{editingBlock ? "Pasted text" : "Message"}</strong>
+                <span>{textSize(editingBlock ? editingBlock.text : message)}</span>
+                <button type="button" className="text-button" onClick={closeEditor}><Minimize2 size={14} aria-hidden="true" /> {editingBlock ? "Done" : "Collapse"}</button>
               </div>
               : canExpand && <button type="button" className="icon-button composer-expand" onClick={() => { setComposerExpanded(true); composerRef.current?.focus(); }} aria-label="Open the larger editor" title="Open the larger editor"><Maximize2 size={15} /></button>}
             {thinking && <div className="composer-status" role="status"><Loader2 size={13} /><span>Thinking…</span></div>}
@@ -1803,15 +1820,19 @@ function App() {
                 onConfirm={(selection) => { setTrimmingClip(null); void readClip(trimming.id, selection); }}
               />;
             })()}
-            {pastedBlocks.map((block) => <div className="pasted-block" key={block.id}>
+            {!editingBlock && pastedBlocks.map((block) => <div className="pasted-block" key={block.id}>
               <FileText size={17} aria-hidden="true" />
               <div><strong>Pasted text</strong><span>{textSize(block.text)} · <code>{blockPreview(block.text)}</code></span></div>
-              <button type="button" className="small-button" onClick={editPastedText}>Edit</button>
+              <button type="button" className="small-button" onClick={() => editPastedText(block.id)}>Edit</button>
               <button type="button" className="icon-button" onClick={() => setPastedBlocks((current) => current.filter((entry) => entry.id !== block.id))} aria-label="Remove pasted text"><X size={14} /></button>
             </div>)}
-            <textarea ref={composerRef} value={composer} onChange={(event) => setComposer(event.target.value)} onKeyDown={(event) => {
+            <textarea ref={composerRef} value={editingBlock ? editingBlock.text : composer} onChange={(event) => {
+              const text = event.target.value;
+              if (editingBlock) setPastedBlocks((current) => withBlockText(current, editingBlock.id, text));
+              else setComposer(text);
+            }} onKeyDown={(event) => {
               if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) { event.preventDefault(); void sendPrompt(); }
-              if (event.key === "Escape" && composerExpanded) { event.preventDefault(); setComposerExpanded(false); }
+              if (event.key === "Escape" && composerExpanded) { event.preventDefault(); closeEditor(); }
             }} onPaste={(event) => {
               const images = droppedImages(event.clipboardData?.files);
               if (images.length > 0) {
@@ -1820,13 +1841,14 @@ function App() {
                 return;
               }
               // A note or an answer stays plain text: it is short by nature,
-              // and it is sent the moment it is written.
-              if (steering || explaining) return;
+              // and it is sent the moment it is written. A paste into a block
+              // being edited is part of that block.
+              if (steering || explaining || editingBlock) return;
               const text = event.clipboardData?.getData("text/plain") ?? "";
               if (!isLongPaste(text)) return;
               event.preventDefault();
               setPastedBlocks((current) => [...current, { id: createId("paste"), text }]);
-            }} placeholder={explaining ? "Your answer, in your own words" : pendingQuestion ? "Or write your own answer…" : steering ? "Add a note. Roqer reads it at its next step." : "Describe what you want to build or change…"} aria-label="Message" disabled={isRunning && !steering} />
+            }} placeholder={explaining ? "Your answer, in your own words" : pendingQuestion ? "Or write your own answer…" : steering ? "Add a note. Roqer reads it at its next step." : editingBlock ? "Pasted text" : "Describe what you want to build or change…"} aria-label={editingBlock ? "Pasted text" : "Message"} disabled={isRunning && !steering} />
             <div className="composer-toolbar">
               {/* A note carries words only; a picture cannot be attached to a
                   turn that is already in progress. */}
