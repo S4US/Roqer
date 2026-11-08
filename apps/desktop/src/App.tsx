@@ -2597,12 +2597,14 @@ const RunStrip = memo(function RunStrip({ tasks, settled = false, steps, nodes, 
   const onToggle = useCallback((key: string, open: boolean) => {
     setExpanded((current) => (current[key] === open ? current : { ...current, [key]: open }));
   }, []);
-  if (tasks.length === 0 && steps.length === 0 && !hasResults) return null;
-
   const planOpen = planChoice ?? (!settled || tasks.some((task) => task.status !== "done"));
-  // Both sections slide shut rather than vanish, so their rows stay a moment after closing.
+  // Both sections slide shut rather than vanish, so their rows stay a moment
+  // after closing. Above the early return: a strip drawn before its run has a
+  // step must call the same hooks as one drawn after.
   const plan = usePresence(planOpen && tasks.length > 0, PANEL_LEAVE_MS);
   const activity = usePresence(activityOpen, PANEL_LEAVE_MS);
+  if (tasks.length === 0 && steps.length === 0 && !hasResults) return null;
+
   const failed = steps.filter((step) => step.state === "failed").length;
   const actions = countedActions(resolvedNodes);
   const counted = `${actions} ${actions === 1 ? "step" : "steps"}${failed > 0 ? ` · ${failed} failed` : ""}`;
