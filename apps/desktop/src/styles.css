@@ -1791,14 +1791,16 @@ a.small-button:focus-visible { outline: 2px solid var(--accent); outline-offset:
 .strip-seg[aria-expanded="true"] > svg { transform: rotate(90deg); }
 .strip-seg strong { flex: none; color: var(--ink); font-size: var(--type-label); font-weight: var(--weight-medium); }
 .strip-activity { flex: 1; }
+/* A button's words share one baseline, and the line they make is centred in the bar: the title and the smaller details beside it sit level. */
+.strip-text { display: flex; flex: 1 1 auto; align-items: baseline; gap: 6px; min-width: 0; }
 .strip-current { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .strip-count { flex: none; margin-left: auto; color: var(--faint); }
 .strip-results { margin-left: auto; }
 .strip-activity + .strip-results { margin-left: 0; }
-.strip-results > span { color: var(--faint); }
+.strip-results .strip-text > span { color: var(--faint); }
 .strip-results[aria-pressed="true"] { color: var(--ink); background: var(--accent-soft); }
 .strip-results[aria-pressed="true"] > svg { color: var(--accent); }
-.strip-results[aria-pressed="true"] > span { color: var(--ink-secondary); }
+.strip-results[aria-pressed="true"] .strip-text > span { color: var(--ink-secondary); }
 @container strip (max-width: 520px) { .strip-current { display: none; } }
 .strip-plan-rows { margin: 0; padding: 6px 14px 8px; list-style: none; border-top: 1px solid var(--border-subtle); }
 .strip-plan-rows .task-row { min-height: 26px; font-size: var(--type-label); }
@@ -1930,8 +1932,8 @@ details[open]::details-content { block-size: auto; }
   transition: background-color var(--motion-fast) ease, border-color var(--motion-fast) ease, color var(--motion-fast) ease, opacity var(--motion-fast) ease, scale var(--motion-fast) var(--ease-out);
 }
 :where(.primary-action, .secondary-action, .small-button, .icon-button, .text-button, .new-chat-button, .send-button, .attach-button, .composer-menu-trigger, .popover-action, .home-starters button, .clip-segmented button):active:not(:disabled) { scale: .96; }
-/* Wide controls ease back less, so the press reads the same. */
-:where(.strip-seg, .results-tab, .settings-nav-item):active:not(:disabled) { scale: .985; }
+/* Segments of a bar and rows of a list darken while pressed instead: shrinking one pulls its edges in from the sides, away from its neighbours. */
+.strip-seg:active:not(:disabled), .results-tab:active:not(:disabled), .settings-nav-item:active:not(:disabled) { background: var(--surface-raised); }
 :where(.chat-row, .project-row, .settings-nav-item, .row-menu-item) { transition: background-color var(--motion-fast) ease, color var(--motion-fast) ease; }
 
 /*

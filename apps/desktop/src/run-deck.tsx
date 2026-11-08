@@ -203,8 +203,7 @@ export function RunResults({ runId, changes, evidence, latest, renderFiles }: {
     {/* Stays visible and lit while the deck shows this run, which is how a long chat says which run that is. */}
     <button type="button" className="strip-seg strip-results" aria-pressed={showing} aria-label={`${showing ? "Close" : "Show"} this run's results in the Run Deck: ${summary}`} title={summary} onClick={() => { if (showing) deck.close(); else deck.pick(runId); }}>
       <PanelRight size={15} aria-hidden="true" />
-      <strong>Results</strong>
-      <span>{total}</span>
+      <span className="strip-text"><strong>Results</strong><span>{total}</span></span>
     </button>
     {(showing || leaving) && deck.host !== null && createPortal(<>
       {deck.inline && <DeckResizer host={deck.host} />}

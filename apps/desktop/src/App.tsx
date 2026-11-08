@@ -2620,14 +2620,15 @@ const RunStrip = memo(function RunStrip({ tasks, settled = false, steps, nodes, 
     <div className="run-strip-row">
       {tasks.length > 0 && <button type="button" className="strip-seg strip-plan" aria-expanded={planOpen} onClick={() => setPlanChoice(!planOpen)}>
         <ChevronRight size={14} aria-hidden="true" />
-        <strong>Plan</strong>
-        <span>{taskProgress(tasks)}</span>
+        <span className="strip-text"><strong>Plan</strong><span>{taskProgress(tasks)}</span></span>
       </button>}
       {steps.length > 0 && <button type="button" className="strip-seg strip-activity" aria-expanded={activityOpen} onClick={() => setActivityOpen(!activityOpen)}>
         <ChevronRight size={14} aria-hidden="true" />
-        <strong>Activity</strong>
-        {current !== null && <span className="strip-current">{current}</span>}
-        <span className="strip-count">{counted}</span>
+        <span className="strip-text">
+          <strong>Activity</strong>
+          {current !== null && <span className="strip-current">{current}</span>}
+          <span className="strip-count">{counted}</span>
+        </span>
         {running && <span className="working-label"><i /></span>}
       </button>}
       <RunResults runId={runId} changes={changes} evidence={evidence} latest={latest} renderFiles={renderFiles} />
