@@ -42,6 +42,7 @@ import { QUESTION_ESCAPE_OPTION, type RunQuestion } from "../shared/question";
 import { taskProgress, type RunTask, type RunTaskStatus } from "../shared/tasks";
 import { runResults } from "./results-model";
 import { Markdown, StreamingMarkdown } from "./markdown-view";
+import { useSettledFlag } from "./settled-flag";
 import { SettingsPage } from "./settings-page";
 import { DiagnosticsActions } from "./diagnostics-actions";
 import { sendBlockedNotice } from "./send-blocked";
@@ -1433,8 +1434,9 @@ function App() {
    * thinking, and the Activity heading and approval card already say what those
    * waits are, so the spinner stands down for both.
    */
+  const toolWorking = useSettledFlag(runActivityNodes.some((node) => node.status === "active"), TOOL_SETTLE_MS);
   const thinking = runView !== null && runView.outcome === null
-    ? providerIsThinking(runView, runActivityNodes)
+    ? providerIsThinking(runView, toolWorking)
     : runView === null && runStarting;
   const autoPlaytest = workspace.preferences.autoPlaytest;
   const card = providerCard(provider, providerStatus, hasDesktopRuntime());
@@ -1737,7 +1739,7 @@ function App() {
             />
             : <EmptyConversation place={targetStudio?.name} />}
           {runView
-            ? <LiveRun view={runView} steps={runSteps} nodes={runActivityNodes} onOpenInStudio={openArtifactInStudio} />
+            ? <LiveRun view={runView} steps={runSteps} nodes={runActivityNodes} thinking={thinking} onOpenInStudio={openArtifactInStudio} />
             // The run is still being started, so the dots stand in for the
             // assistant block that is about to exist.
             : runStarting && <div className="mock-run"><section className="message assistant-message"><div className="message-content">
@@ -2145,10 +2147,18 @@ function Starters({ onSuggestion }: { onSuggestion: (value: string) => void }) {
  * nothing during the other two rather than claiming the model is busy while a
  * playtest boots or while an approval sits unanswered.
  */
-function providerIsThinking(view: RunView, nodes: readonly ActivityNode[]): boolean {
+/**
+ * How long a tool step must run before "Thinking" gives way to it. A run of
+ * quick tool calls otherwise hid and showed the notice several times a second,
+ * which read as flicker; a step this short is shown in Activity alone.
+ */
+const TOOL_SETTLE_MS = 900;
+
+/** `toolWorking`: a tool step has been running for at least `TOOL_SETTLE_MS`. */
+function providerIsThinking(view: RunView, toolWorking: boolean): boolean {
   if (view.outcome !== null) return false;
   if (view.pendingApproval !== null || view.pendingQuestion !== null) return false;
-  return !nodes.some((node) => node.status === "active");
+  return !toolWorking;
 }
 
 /**
@@ -2186,8 +2196,8 @@ const WAITING_REASSURANCE_AFTER_MS = 30_000;
  * left for the user to guess.
  *
  * The clock is per waiting spell rather than per run: this unmounts whenever
- * the provider stops being the thing that is working, so a tool call or an
- * approval resets it and the number always means "how long has it been quiet".
+ * the provider stops being the thing that is working, so a tool call longer
+ * than a moment, or an approval, resets it and the number always means "how long has it been quiet".
  * Beside it, once the model has streamed anything, is how much it has written
  * in this response: the clock says time is passing, the count says the model
  * is still producing.
@@ -2224,7 +2234,7 @@ function WaitingNotice({ label, detail, output }: { label: string; detail?: stri
   </div>;
 }
 
-function LiveRun({ view, steps, nodes, onOpenInStudio }: { view: RunView; steps: ActivityStep[]; nodes: ActivityNode[]; onOpenInStudio: OpenInStudio }) {
+function LiveRun({ view, steps, nodes, thinking, onOpenInStudio }: { view: RunView; steps: ActivityStep[]; nodes: ActivityNode[]; thinking: boolean; onOpenInStudio: OpenInStudio }) {
   const answered = view.text.trim() !== "";
   const running = view.outcome === null;
   const appliedAndVerified = runAppliedAndVerified(view);
@@ -2239,10 +2249,9 @@ function LiveRun({ view, steps, nodes, onOpenInStudio }: { view: RunView; steps:
   // row, a question to answer (docked above the composer), or the first words
   // of the reply.
   const produced = view.tasks.length > 0 || steps.length > 0 || answered || view.pendingQuestion !== null;
-  // The same rule the composer's spinner uses, so the two can never disagree
+  // `thinking` is the composer's own value, so the two can never disagree
   // about who is working. A run waiting on Studio or on the user is not
   // thinking, and both of those already say so elsewhere.
-  const thinking = running && providerIsThinking(view, nodes);
   const renderFiles = useCallback((files: ChangeGroup[], expansion: FileExpansion) => <ChangeSet groups={files} expansion={expansion} onOpenInStudio={onOpenInStudio} />, [onOpenInStudio]);
   return <div className="mock-run"><section className="message assistant-message"><div className="message-content">
     {view.planner === DEMO_PLANNER && <p className="run-tag"><span className="run-badge">Demo</span></p>}
@@ -2255,11 +2264,9 @@ function LiveRun({ view, steps, nodes, onOpenInStudio }: { view: RunView; steps:
       output={view.outputTokens}
     />}
     <RunStrip tasks={view.tasks} steps={steps} nodes={nodes} running={running} runId={view.runId} changes={view.changes} evidence={view.evidence} latest renderFiles={renderFiles} />
-    {answered && (running
-      // Formatted as it streams, re-rendered a few times a second rather than
-      // on every delta, which would make a long reply quadratic.
-      ? <StreamingMarkdown text={latestProse(view)} className="result-copy streaming-copy" />
-      : <Markdown text={latestProse(view)} className="result-copy" />)}
+    {/* Formatted and revealed smoothly as it streams. When the run ends, the
+        saved reply takes over from the same point, keyed by the run. */}
+    {answered && <StreamingMarkdown text={latestProse(view)} live done={!running} handoffKey={view.runId} className={running ? "result-copy streaming-copy" : "result-copy"} />}
     {appliedAndVerified && <AppliedStatus />}
     {view.outcome !== null && showOutcome && <OutcomeCard
       outcome={view.outcome}
@@ -2888,7 +2895,8 @@ function RunRecordView({ record, text, latest, onOpenInStudio }: { record: RunRe
   const renderFiles = useCallback((files: ChangeGroup[], expansion: FileExpansion) => <ChangeSet groups={files} expansion={expansion} onOpenInStudio={onOpenInStudio} />, [onOpenInStudio]);
   return <>
     <RunStrip tasks={record.tasks ?? NO_TASKS} settled steps={steps} running={false} runId={record.runId} changes={record.changes} evidence={record.evidence} latest={latest} renderFiles={renderFiles} />
-    <Markdown text={recordReply(record, text)} className="result-copy" />
+    {/* Carries on a reveal the live view had not finished; an older reply shows at once. */}
+    <StreamingMarkdown text={recordReply(record, text)} done handoffKey={record.runId} className="result-copy" />
     {appliedAndVerified && <AppliedStatus />}
     {showOutcome && <OutcomeCard
       outcome={record.outcome}
