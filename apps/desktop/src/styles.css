@@ -536,7 +536,7 @@ button:focus-visible, textarea:focus-visible, select:focus-visible, input:focus-
 /* Full auto runs what cannot be undone without asking, so it wears the warning
    colour the whole time it is chosen. */
 .run-menu.full-auto .composer-menu-label { color: var(--warning); }
-.composer-menu-panel { position: absolute; bottom: calc(100% + 8px); left: 0; z-index: 60; display: flex; flex-direction: column; width: min(350px, 80vw); max-height: min(480px, 70vh); padding: 6px; color: var(--ink); font-size: var(--type-label); border: 1px solid var(--border); animation: fade .12s ease both; }
+.composer-menu-panel { position: absolute; bottom: calc(100% + 8px); left: 0; z-index: 60; display: flex; flex-direction: column; width: min(350px, 80vw); max-height: min(480px, 70vh); padding: 6px; color: var(--ink); font-size: var(--type-label); border: 1px solid var(--border); }
 /* Taller than the other menus because of its long descriptions; a short window scrolls it. */
 .run-menu .composer-menu-panel { width: min(370px, 80vw); max-height: min(620px, 70vh); overflow-y: auto; }
 .model-menu-search { display: flex; flex: none; align-items: center; gap: 8px; height: 34px; margin-bottom: 4px; padding: 0 10px; color: var(--faint); background: var(--surface-sunken); border-radius: 8px; }
@@ -1675,13 +1675,14 @@ a.small-button:focus-visible { outline: 2px solid var(--accent); outline-offset:
 .home-starters button:hover { color: var(--ink); border-color: var(--border-strong); }
 
 /* Settings: the same two panes as the chat. */
-.settings-page { gap: 8px; padding: 8px; }
-.settings-nav { flex-basis: 244px; padding: 8px 6px; background: transparent; border-right: 0; }
+/* Like the chats, Settings fills the window: its nav and page meet at a hairline. */
+.settings-page { gap: 0; padding: 0; }
+.settings-nav { flex-basis: 244px; padding: 8px 6px; background: transparent; border-right: 1px solid var(--border-subtle); }
 .settings-nav-back, .settings-nav-item { gap: 9px; height: 36px; border-radius: 9px; }
 .settings-nav-item > svg { flex: none; color: var(--muted); }
 .settings-nav-item[aria-current="page"] { box-shadow: var(--shadow-sm); }
 .settings-nav-item[aria-current="page"] > svg { color: var(--ink); }
-.settings-main { background: var(--surface); border: 1px solid var(--border-subtle); border-radius: 14px; box-shadow: var(--shadow-sm); }
+.settings-main { background: var(--surface); border: 0; border-radius: 0; box-shadow: none; }
 .settings-content { width: min(768px, 100%); margin: 0 auto; padding: 36px 24px 48px; }
 .settings-switch { width: 40px; height: 24px; }
 .settings-switch::after { top: 3px; left: 3px; width: 18px; height: 18px; background: var(--ink); box-shadow: none; }
@@ -1890,7 +1891,52 @@ details[open]::details-content { block-size: auto; }
 /* The carets that turn as a section opens keep pace with it. */
 .card-details > summary > svg, .activity-group > details > summary > .node-caret, .activity-node > details > summary .node-caret { transition: transform var(--motion-base) var(--ease-out); }
 
+/*
+ * Menus and popovers grow out of what opened them, and fade out quicker than
+ * they came. They take no clicks on the way out.
+ */
+.composer-menu-panel, .row-menu, .connection-popover { transition: opacity .16s ease, scale var(--motion-base) var(--ease-out), translate var(--motion-base) var(--ease-out); }
+@starting-style { .composer-menu-panel, .row-menu, .connection-popover { opacity: 0; scale: .96; } }
+.composer-menu-panel { transform-origin: bottom left; }
+@starting-style { .composer-menu-panel { translate: 0 4px; } }
+.row-menu, .connection-popover { transform-origin: top right; }
+.row-menu[data-placement="above"] { transform-origin: bottom right; }
+.composer-menu-panel[data-leaving], .row-menu[data-leaving], .connection-popover[data-leaving] { opacity: 0; scale: .97; pointer-events: none; transition-duration: .12s; transition-timing-function: ease-in; }
+
+/* Settings comes forward over the chats and settles; it goes back quicker. A section fades in as it opens. */
+.settings-page { transition: opacity var(--motion-base) ease, scale var(--motion-slow) var(--ease-out); }
+@starting-style { .settings-page { opacity: 0; scale: .985; } }
+.settings-page[data-leaving] { opacity: 0; scale: .985; transition-duration: .18s; transition-timing-function: ease-in; }
+.settings-content > * { animation: settle var(--motion-base) var(--ease-out) both; }
+
+/* Dialogs rise into place over a backdrop that fades in. */
+.modal-backdrop { animation: fade var(--motion-base) ease both; }
+.name-modal, .clip-modal { animation: dialog-in var(--motion-slow) var(--ease-out) both; }
+.preview-viewer { animation: fade var(--motion-base) ease both; }
+@keyframes dialog-in { from { opacity: 0; scale: .96; translate: 0 8px; } }
+@keyframes settle { from { opacity: 0; translate: 0 4px; } }
+
+/* A results tab fades its panel in. */
+.results-panel:not([hidden]) { animation: fade .18s ease both; }
+
+/*
+ * Controls answer a press at once: they ease back a little while held, and
+ * their colours change smoothly on hover. Zero specificity, so a control with
+ * its own transition keeps it.
+ */
+:where(.primary-action, .secondary-action, .small-button, .icon-button, .text-button, .new-chat-button, .send-button, .attach-button, .composer-menu-trigger, .popover-action, .strip-seg, .results-tab, .home-starters button, .clip-segmented button, .settings-nav-item, .row-menu-item) {
+  transition: background-color var(--motion-fast) ease, border-color var(--motion-fast) ease, color var(--motion-fast) ease, opacity var(--motion-fast) ease, scale var(--motion-fast) var(--ease-out);
+}
+:where(.primary-action, .secondary-action, .small-button, .icon-button, .text-button, .new-chat-button, .send-button, .attach-button, .composer-menu-trigger, .popover-action, .home-starters button, .clip-segmented button):active:not(:disabled) { scale: .96; }
+/* Wide controls ease back less, so the press reads the same. */
+:where(.strip-seg, .results-tab, .settings-nav-item):active:not(:disabled) { scale: .985; }
+:where(.chat-row, .project-row, .settings-nav-item, .row-menu-item) { transition: background-color var(--motion-fast) ease, color var(--motion-fast) ease; }
+
 @media (prefers-reduced-motion: reduce) {
   .run-deck, .run-deck > .results-card { transition: none; }
   .strip-plan-rows, .run-strip > .activity-timeline, details::details-content { transition: none; }
+  .composer-menu-panel, .row-menu, .connection-popover, .settings-page { transition: opacity .12s ease; }
+  .composer-menu-panel, .row-menu, .connection-popover, .settings-page, .composer-menu-panel[data-leaving], .row-menu[data-leaving], .connection-popover[data-leaving], .settings-page[data-leaving] { scale: none; translate: none; }
+  .settings-content > *, .name-modal, .clip-modal { animation: fade .12s ease both; }
+  :where(button):active:not(:disabled) { scale: none; }
 }

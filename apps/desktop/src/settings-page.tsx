@@ -77,7 +77,9 @@ type EndpointView = { key: string; id?: string };
 
 let nextEndpointVisit = 0;
 
-export function SettingsPage({ preferences, studioStatus, updateState, notice, onPreferences, onStudioRefresh, onProviderChanged, onExport, onClose }: {
+export function SettingsPage({ leaving = false, preferences, studioStatus, updateState, notice, onPreferences, onStudioRefresh, onProviderChanged, onExport, onClose }: {
+  /** Closing: shown on its way out, and no longer taking input. */
+  leaving?: boolean;
   preferences: WorkspaceState["preferences"];
   studioStatus: StudioStatus;
   updateState: AppUpdateState;
@@ -139,7 +141,7 @@ export function SettingsPage({ preferences, studioStatus, updateState, notice, o
     ? undefined
     : endpoints.connections?.find((connection) => connection.id === endpoint.id);
 
-  return <div className="settings-page" role="region" aria-label="Settings">
+  return <div className="settings-page" role="region" aria-label="Settings" data-leaving={leaving || undefined} inert={leaving}>
     <nav className="settings-nav" aria-label="Settings sections">
       <button type="button" className="settings-nav-back" onClick={close}><ChevronLeft size={15} /> Back to chats</button>
       {SECTIONS.map((entry) => <button

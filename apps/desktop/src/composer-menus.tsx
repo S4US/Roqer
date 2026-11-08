@@ -8,6 +8,10 @@ import {
 } from "../shared/provider";
 import { getProviderModels, getProviderStatus } from "./platform";
 import { SettingsSwitch } from "./settings-parts";
+import { usePresence } from "./presence";
+
+/** How long a menu takes to fade out. Matches the leave rule in styles.css. */
+const MENU_LEAVE_MS = 120;
 
 /**
  * The composer's two menus: which model answers, and how the run behaves.
@@ -83,6 +87,8 @@ export function ComposerMenu({ className, label, trigger, disabled, title, ariaL
     options[next].focus();
   };
 
+  // Fades out rather than vanishing, quicker than it came.
+  const panel = usePresence(open, MENU_LEAVE_MS);
   return <div className={`composer-menu ${className}${open ? " open" : ""}`} ref={rootRef} onKeyDown={open ? onKeyDown : undefined}>
     <button
       type="button"
@@ -95,7 +101,7 @@ export function ComposerMenu({ className, label, trigger, disabled, title, ariaL
       aria-expanded={open}
       onClick={() => setOpen((current) => !current)}
     >{trigger}{chevron && <ChevronDown className="composer-menu-chevron" size={13} aria-hidden="true" />}</button>
-    {open && <div className="composer-menu-panel" role="dialog" aria-label={label}>{children(() => close())}</div>}
+    {panel.present && <div className="composer-menu-panel" role="dialog" aria-label={label} data-leaving={panel.leaving || undefined}>{children(() => close())}</div>}
   </div>;
 }
 

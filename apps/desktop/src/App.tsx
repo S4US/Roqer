@@ -301,8 +301,10 @@ function App() {
     if (explainingQuestion !== null) composerRef.current?.focus();
   }, [explainingQuestion]);
   const [showConnection, setShowConnection] = useState(false);
+  const connectionPopover = usePresence(showConnection, MENU_LEAVE_MS);
   const connectionRef = useRef<HTMLDivElement>(null);
   const [showSettings, setShowSettings] = useState(false);
+  const settingsPage = usePresence(showSettings, SETTINGS_LEAVE_MS);
   /** The community icon has just taken the dismissed card's place and pulses once. */
   const [communityIconArrived, setCommunityIconArrived] = useState(false);
   /** The chat whose message waits for its compaction to finish before it sends. */
@@ -1707,7 +1709,7 @@ function App() {
           <div className="topbar-actions">
             <div className="connection-wrap" ref={connectionRef}>
               <button className={`connection-pill status-${studioStatus.kind}`} onClick={() => setShowConnection((value) => !value)}><span className="live-dot" /><span className="connection-label">{targetStudio?.name ?? (chatPinned && chatInstanceId !== null ? "This chat's place is not open" : studioStatus.placeName ?? "Roblox Studio")}</span><span className="connection-detail">{studioStatus.message}</span><ChevronDown size={15} /></button>
-              {showConnection && <div className="connection-popover"><div className="popover-title"><div className="studio-icon"><Gamepad2 size={18} /></div><div><strong>Roblox Studio</strong><span>{studioStatus.message}</span></div></div><dl><div><dt>Bridge</dt><dd>{statusLabel(studioStatus.kind)}</dd></div></dl>
+              {connectionPopover.present && <div className="connection-popover" data-leaving={connectionPopover.leaving || undefined}><div className="popover-title"><div className="studio-icon"><Gamepad2 size={18} /></div><div><strong>Roblox Studio</strong><span>{studioStatus.message}</span></div></div><dl><div><dt>Bridge</dt><dd>{statusLabel(studioStatus.kind)}</dd></div></dl>
                 {/* Every connected place, not just the one a run happens to
                     go to. Two places open used to look identical to one. */}
                 {studios.length === 0
@@ -1970,7 +1972,7 @@ function App() {
 
       <aside className="run-deck" aria-label="Run Deck" ref={setDeckHost} inert={showSettings} />
 
-      {showSettings && <SettingsPage preferences={workspace.preferences} studioStatus={studioStatus} updateState={updateState} onPreferences={updatePreferences} onStudioRefresh={() => void refreshStudioStatus()} onProviderChanged={() => { void refreshProviderStatus(); void refreshProviderModels(); }} onExport={() => void exportChats(storageRecovery.required ? undefined : workspace)} notice={settingsNotice ?? undefined} onClose={() => { setShowSettings(false); setSettingsNotice(null); }} />}
+      {settingsPage.present && <SettingsPage leaving={settingsPage.leaving} preferences={workspace.preferences} studioStatus={studioStatus} updateState={updateState} onPreferences={updatePreferences} onStudioRefresh={() => void refreshStudioStatus()} onProviderChanged={() => { void refreshProviderStatus(); void refreshProviderModels(); }} onExport={() => void exportChats(storageRecovery.required ? undefined : workspace)} notice={settingsNotice ?? undefined} onClose={() => { setShowSettings(false); setSettingsNotice(null); }} />}
       {renderDialog()}
       {!hydrated && <div className="loading-overlay"><div><span /><strong>Opening your workspace…</strong></div></div>}
     </div>
@@ -2011,6 +2013,11 @@ function RowMenu({ label, items, onSelect, className = "", iconSize = 16, disabl
   disabled?: boolean;
 }) {
   const [anchor, setAnchor] = useState<MenuAnchor | null>(null);
+  // Where the menu last opened, so it can fade out where it was.
+  const [lastAnchor, setLastAnchor] = useState<MenuAnchor | null>(null);
+  if (anchor !== null && anchor !== lastAnchor) setLastAnchor(anchor);
+  const shownAnchor = anchor ?? lastAnchor;
+  const menu = usePresence(anchor !== null, MENU_LEAVE_MS);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
   const itemRefs = useRef<Array<HTMLButtonElement | null>>([]);
@@ -2072,8 +2079,8 @@ function RowMenu({ label, items, onSelect, className = "", iconSize = 16, disabl
       aria-haspopup="menu" aria-expanded={anchor !== null}
       onClick={() => anchor ? close() : open()}
     ><MoreHorizontal size={iconSize} /></button>
-    {anchor && createPortal(
-      <div className="row-menu" role="menu" aria-label={label} ref={menuRef} style={{ top: anchor.top, bottom: anchor.bottom, right: anchor.right }}>
+    {menu.present && shownAnchor !== null && createPortal(
+      <div className="row-menu" role="menu" aria-label={label} ref={menuRef} data-leaving={menu.leaving || undefined} data-placement={shownAnchor.bottom === undefined ? "below" : "above"} style={{ top: shownAnchor.top, bottom: shownAnchor.bottom, right: shownAnchor.right }}>
         {items.map((item, index) => <button
           className={`row-menu-item ${item.danger ? "danger" : ""}`}
           type="button" role="menuitem" key={item.id} disabled={item.disabled} title={item.title}
@@ -2223,6 +2230,10 @@ const CHAT_ENTER_MS = 260;
 function prefersReducedMotion(): boolean {
   return window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 }
+
+/** How long a menu or popover takes to fade out, and Settings to close. Match the leave rules in styles.css. */
+const MENU_LEAVE_MS = 120;
+const SETTINGS_LEAVE_MS = 180;
 
 /** How long a section of a run's strip takes to slide shut. Matches `--motion-base` in styles.css. */
 const PANEL_LEAVE_MS = 220;
