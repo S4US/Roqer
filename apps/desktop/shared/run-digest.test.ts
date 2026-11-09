@@ -164,5 +164,7 @@ test("a record written before decisions existed still validates, and one with th
   delete older.decisions;
   assert.equal(isRunRecord(older), true);
   assert.equal(isRunRecord(RECORD), true);
+  // A run saved by a build that recorded playtests still loads; its clip's ref is ignored.
+  assert.equal(isRunRecord({ ...RECORD, evidence: [{ id: "e1", kind: "playtest", title: "Playtest", detail: "Ran.", clipRef: `${"a".repeat(64)}.webm` }] }), true);
   assert.equal(isRunRecord({ ...RECORD, decisions: [{ question: "", answer: "Coins" }] }), false);
 });

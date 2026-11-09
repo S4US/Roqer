@@ -12,6 +12,10 @@ import { REFERENCE_CLIP_TOOL_NAME } from "../shared/reference-clip";
 import { parseReferenceClipToolInput, referenceClipToolDefinition } from "./reference-clip";
 import { EXTERNAL_MCP_TOOL_NAME } from "../shared/mcp-servers";
 import { externalMcpToolDefinition, parseExternalMcpToolInput } from "./external-mcp-tool";
+import { OPEN_LINK_TOOL_NAME } from "../shared/user-links";
+import { openLinkToolDefinition, parseOpenLinkToolInput } from "./user-links";
+import { IMAGE_TOOL_NAME } from "../shared/image-generation";
+import { imageToolDefinition, parseImageToolInput } from "./image-tool";
 import {
   createSkillToolRunner, skillToolDefinition, SKILL_TOOL_NAME, STEERED_BATCH_CHARACTERS,
   type SkillDelivery, type SkillToolRunner,
@@ -59,6 +63,8 @@ export type ChatGptPlannerOptions = {
   referenceClips?: boolean;
   /** Offer `external_mcp`: only while the user has at least one MCP server turned on. */
   externalMcp?: boolean;
+  /** Offer `image`: only while the user has an image source set up and turned on. */
+  imageGeneration?: boolean;
 };
 
 export interface ChatGptAppServer {
@@ -154,13 +160,27 @@ const CODEX_ITEM_DESCRIPTIONS: Readonly<Record<string, string>> = {
   subAgentActivity: "sub-agents",
 };
 
-/** The built-in Codex tool an item comes from, or null when the item is passive. */
-export function disallowedCodexItem(notification: AppServerNotification): string | null {
+/**
+ * The built-in Codex tool an item comes from, or null when the item is
+ * passive. Web search is the one built-in tool the user can turn on for a
+ * chat; its items pass only then.
+ */
+export function disallowedCodexItem(notification: AppServerNotification, allowed: { webSearch?: boolean } = {}): string | null {
   if (notification.method !== "item/started") return null;
   const item = notification.params.item;
   if (!isRecord(item) || typeof item.type !== "string") return null;
   if (CODEX_PASSIVE_ITEM_TYPES.has(item.type)) return null;
+  if (item.type === "webSearch" && allowed.webSearch === true) return null;
   return CODEX_ITEM_DESCRIPTIONS[item.type] ?? `"${item.type}" tool`;
+}
+
+/** The query of a web search Codex started, for the run's activity; null for any other notification. */
+export function codexWebSearch(notification: AppServerNotification): string | null {
+  if (notification.method !== "item/started") return null;
+  const item = notification.params.item;
+  if (!isRecord(item) || item.type !== "webSearch") return null;
+  const query = typeof item.query === "string" && item.query.trim() !== "" ? item.query.trim() : "the web";
+  return query.slice(0, 300);
 }
 
 /**
@@ -325,10 +345,21 @@ function skillGuidanceNote(delivery: SkillDelivery): string {
   return `${note}\n\nNot loaded in this call:\n${delivery.notLoaded.map((line) => `- ${line}`).join("\n")}`;
 }
 
-function parseDynamicCall(request: AppServerRequest, threadId: string, blender: boolean, referenceClips = false, externalMcp = false):
+type DynamicToolSet = Readonly<{ blender: boolean; referenceClips: boolean; externalMcp: boolean; imageGeneration: boolean }>;
+
+function dynamicToolSet(options: ChatGptPlannerOptions): DynamicToolSet {
+  return {
+    blender: options.blender === true, referenceClips: options.referenceClips === true,
+    externalMcp: options.externalMcp === true, imageGeneration: options.imageGeneration === true,
+  };
+}
+
+function parseDynamicCall(request: AppServerRequest, threadId: string, { blender, referenceClips, externalMcp, imageGeneration }: DynamicToolSet):
   { operation: string; args: JsonRecord } | null {
   if (request.method !== "item/tool/call" || request.params.threadId !== threadId) return null;
+  if (request.params.tool === OPEN_LINK_TOOL_NAME) return parseOpenLinkToolInput(request.params.arguments);
   if (blender && request.params.tool === BLENDER_TOOL_NAME) return parseBlenderToolInput(request.params.arguments);
+  if (imageGeneration && request.params.tool === IMAGE_TOOL_NAME) return parseImageToolInput(request.params.arguments);
   if (referenceClips && request.params.tool === REFERENCE_CLIP_TOOL_NAME) return parseReferenceClipToolInput(request.params.arguments);
   if (externalMcp && request.params.tool === EXTERNAL_MCP_TOOL_NAME) return parseExternalMcpToolInput(request.params.arguments);
   if (request.params.tool !== STUDIO_TOOL_NAME) return null;
@@ -361,14 +392,16 @@ export type CodexThreadStore = ProviderSessionStore<CodexThread>;
  * place is in it: a thread that read one place's scripts and parts would carry
  * them into a run against another.
  */
-function threadKey(options: ChatGptPlannerOptions, { autoPlaytest, instanceId }: Pick<PlannerContext, "autoPlaytest" | "instanceId">): string {
+function threadKey(
+  options: ChatGptPlannerOptions, { autoPlaytest, instanceId, webSearch }: Pick<PlannerContext, "autoPlaytest" | "instanceId" | "webSearch">,
+): string {
   return JSON.stringify([
     instanceId, autoPlaytest, options.agent.id, options.agent.version, options.blender === true, options.referenceClips === true,
-    options.externalMcp === true,
+    options.externalMcp === true, webSearch === true, options.imageGeneration === true,
   ]);
 }
 
-async function startThread(options: ChatGptPlannerOptions, autoPlaytest: boolean): Promise<string> {
+async function startThread(options: ChatGptPlannerOptions, autoPlaytest: boolean, webSearch = false): Promise<string> {
   const started = await options.appServer.request("thread/start", {
     model: options.model,
     modelProvider: "openai",
@@ -379,14 +412,21 @@ async function startThread(options: ChatGptPlannerOptions, autoPlaytest: boolean
     ephemeral: true,
     serviceName: "studio_workbench",
     baseInstructions: options.agent.systemInstructions,
-    developerInstructions: runDeveloperInstructions(options.agent.developerInstructions, autoPlaytest),
+    developerInstructions: runDeveloperInstructions(options.agent.developerInstructions, autoPlaytest, webSearch),
+    // The app server starts with web search disabled for every thread (see
+    // CODEX_LOCKDOWN_ARGS); a chat the user turned it on for asks for it on
+    // its own thread. A Codex that takes no per-thread override leaves the
+    // model without search, and the run's activity then shows no searches.
+    ...(webSearch ? { config: { web_search: "live" } } : {}),
     dynamicTools: [
       dynamicToolSpec(),
       dynamicSkillSpec(options.skillLibrary),
       { type: "function", ...iconToolDefinition() },
       { type: "function", ...taskToolDefinition() },
       { type: "function", ...questionToolDefinition() },
+      { type: "function", ...openLinkToolDefinition() },
       ...(options.blender === true ? [{ type: "function", ...blenderToolDefinition() }] : []),
+      ...(options.imageGeneration === true ? [{ type: "function", ...imageToolDefinition() }] : []),
       ...(options.referenceClips === true ? [{ type: "function", ...referenceClipToolDefinition() }] : []),
       ...(options.externalMcp === true ? [{ type: "function", ...externalMcpToolDefinition() }] : []),
     ],
@@ -427,7 +467,7 @@ export function createChatGptPlanner(options: ChatGptPlannerOptions): Planner {
         ? kept
         : undefined;
       const resumed = current !== undefined;
-      const threadId = current !== undefined ? current.threadId : await startThread(options, context.autoPlaytest);
+      const threadId = current !== undefined ? current.threadId : await startThread(options, context.autoPlaytest, context.webSearch);
       checkCancelled();
 
       const completion = deferred<{ status: string; summary: string }>();
@@ -523,7 +563,9 @@ export function createChatGptPlanner(options: ChatGptPlannerOptions): Planner {
         if (settled || notification.params.threadId !== threadId) return;
         // Every notification on this thread is progress, reasoning included.
         watchdog.progressed();
-        const builtIn = disallowedCodexItem(notification);
+        const searched = context.webSearch ? codexWebSearch(notification) : null;
+        if (searched !== null) context.status("Searched the web", searched);
+        const builtIn = disallowedCodexItem(notification, { webSearch: context.webSearch });
         if (builtIn !== null) {
           const message = `ChatGPT tried to use Codex's built-in ${builtIn}, which Roqer does not allow: `
             + "every action has to go through Roqer's own tools and approvals. The run was stopped.";
@@ -616,7 +658,7 @@ export function createChatGptPlanner(options: ChatGptPlannerOptions): Planner {
         }
         let call: ReturnType<typeof parseDynamicCall>;
         try {
-          call = parseDynamicCall(request, threadId, options.blender === true, options.referenceClips === true, options.externalMcp === true);
+          call = parseDynamicCall(request, threadId, dynamicToolSet(options));
         } catch (error) {
           if (!(error instanceof MalformedToolCallError)) {
             fail(error);

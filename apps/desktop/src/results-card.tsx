@@ -5,6 +5,7 @@ import {
 import type { RunChange, RunEvidence } from "../shared/run-events";
 import type { ChangeGroup } from "./diff-view";
 import { PreviewsPanel } from "./evidence-previews";
+import { EvidenceSound } from "./evidence-sound";
 import {
   arrivedTab, initialResultsView, rememberResults, resultsSummary, runResults, settleFileDefaults, shownTab, TAB_NAME, uploadEntry,
   type ResultsTab, type ResultsTabInfo, type ResultsViewState, type UploadEntry,
@@ -15,6 +16,7 @@ const TAB_ICON: Record<ResultsTab, ReactNode> = {
   uploads: <CloudUpload size={14} aria-hidden="true" />,
   screenshots: <Camera size={14} aria-hidden="true" />,
   previews: <Box size={14} aria-hidden="true" />,
+  sounds: <AudioLines size={14} aria-hidden="true" />,
 };
 
 /** Every run's card as the reader left it, by run id. See `ResultsViewState`. */
@@ -39,13 +41,17 @@ export type FileExpansion = {
  *
  * The file diffs are rendered by the caller, which owns the editor panel.
  */
-export const ResultsCard = memo(function ResultsCard({ runId, changes, evidence, collapsed = false, renderFiles }: {
+export const ResultsCard = memo(function ResultsCard({ runId, changes, evidence, collapsed = false, docked = false, headerAction, renderFiles }: {
   /** The run this card belongs to; the live card and the recorded one share it. */
   runId: string;
   changes: readonly RunChange[];
   evidence: readonly RunEvidence[];
   /** Start folded to the header: an earlier run in the chat. */
   collapsed?: boolean;
+  /** In the Run Deck, which is open by being on screen, so the card has no fold of its own. */
+  docked?: boolean;
+  /** Beside the tabs, for what the card's host needs there. */
+  headerAction?: ReactNode;
   renderFiles: (files: ChangeGroup[], expansion: FileExpansion) => ReactNode;
 }) {
   const results = useMemo(() => runResults(changes, evidence), [changes, evidence]);
@@ -66,7 +72,7 @@ export const ResultsCard = memo(function ResultsCard({ runId, changes, evidence,
   }, [tabs, update]);
   const baseId = useId();
   const tabRefs = useRef(new Map<ResultsTab, HTMLButtonElement>());
-  const { open } = view;
+  const open = docked || view.open;
   const active = shownTab(tabs, view.picked, view.following);
   // Tabs the reader has had open keep their panels mounted, hidden, so what
   // they chose there is still there when they come back; a tab never opened
@@ -108,7 +114,7 @@ export const ResultsCard = memo(function ResultsCard({ runId, changes, evidence,
   const tabId = (id: ResultsTab) => `${baseId}-${id}`;
   return <section className="results-card" data-open={open} aria-label={`Results: ${resultsSummary(tabs)}`}>
     <div className="results-header">
-      <button
+      {!docked && <button
         type="button"
         className="results-collapse"
         aria-expanded={open}
@@ -117,8 +123,8 @@ export const ResultsCard = memo(function ResultsCard({ runId, changes, evidence,
         onClick={() => update((current) => ({ ...current, open: !current.open }))}
       >
         <ChevronRight size={14} aria-hidden="true" />
-      </button>
-      <div className="results-tabs" role="tablist" aria-label="Results" onKeyDown={onKeyDown}>
+      </button>}
+      <div className="results-tabs" role="tablist" aria-label="Results" data-count={tabs.length} onKeyDown={onKeyDown}>
         {tabs.map((tab) => {
           const selected = tab.id === active;
           const noun = tab.count === 1 ? TAB_NAME[tab.id].one : TAB_NAME[tab.id].many;
@@ -132,6 +138,7 @@ export const ResultsCard = memo(function ResultsCard({ runId, changes, evidence,
             aria-selected={selected}
             aria-controls={view.visited.includes(tab.id) ? panelId(tab.id) : undefined}
             aria-label={`${TAB_NAME[tab.id].title}, ${tab.count} ${noun}`}
+            title={TAB_NAME[tab.id].title}
             tabIndex={selected ? 0 : -1}
             onClick={() => choose(tab.id)}
           >
@@ -145,6 +152,7 @@ export const ResultsCard = memo(function ResultsCard({ runId, changes, evidence,
           </button>;
         })}
       </div>
+      {headerAction}
     </div>
     {/* Mounted on first visit: a folded card in a long chat builds none of
         its diffs, tiles or pictures. A hidden pictures panel is display:none,
@@ -160,6 +168,7 @@ export const ResultsCard = memo(function ResultsCard({ runId, changes, evidence,
     >
       {tab.id === "changes" && renderFiles(results.files, expansion)}
       {tab.id === "uploads" && <UploadsPanel uploads={results.uploads} />}
+      {tab.id === "sounds" && <SoundsPanel evidence={evidence} />}
       {(tab.id === "screenshots" || tab.id === "previews") && <PreviewsPanel
         category={tab.id}
         evidence={evidence}
@@ -181,6 +190,25 @@ const UploadsPanel = memo(function UploadsPanel({ uploads }: { uploads: readonly
   const entries = useMemo(() => uploads.map(uploadEntry), [uploads]);
   return <ul className="upload-grid">
     {entries.map((entry) => <UploadTile key={entry.key} entry={entry} />)}
+  </ul>;
+});
+
+/**
+ * The sounds a run previewed or uploaded, each with a player: what the agent
+ * heard about from the Creator Store, and the file it sent to Roblox, so the
+ * person can judge a sound without opening Studio.
+ */
+const SoundsPanel = memo(function SoundsPanel({ evidence }: { evidence: readonly RunEvidence[] }) {
+  const sounds = useMemo(() => evidence.filter((item) => item.soundRef !== undefined), [evidence]);
+  return <ul className="sound-list">
+    {sounds.map((item) => <li key={item.id} className="sound-row">
+      <span className="upload-icon"><AudioLines size={16} aria-hidden="true" /></span>
+      <div className="sound-text">
+        <strong title={item.title}>{item.title}</strong>
+        {item.detail && <span>{item.detail}</span>}
+      </div>
+      <EvidenceSound evidence={item} />
+    </li>)}
   </ul>;
 });
 

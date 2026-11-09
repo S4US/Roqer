@@ -40,12 +40,16 @@ a sword, the Scarlet Requiem, with a combo, a flash step, and three special atta
 - **Your own model.** ChatGPT through the Codex app, Claude through Claude Code, Gemini through the Antigravity CLI, or any OpenAI- or Anthropic-compatible endpoint, including local models.
 - **Works in your place.** Reads and edits instances, properties, and scripts. A script edit is refused if the script changed after the agent read it, so it won't overwrite your own changes.
 - **Models in Blender.** Turn on the optional Blender integration and the agent models what parts can't make (curved shapes, detailed props, vehicle bodies), checks each model with a preview render, and uploads it into your place. It can render UI icons too.
+- **Generates textures and icons.** Turn on an image model you pay for (OpenAI's, any model on OpenRouter, or any server with OpenAI's image API) and the agent generates particle sprites, light textures, UI icons, decals and tiles. Roqer measures each picture (crisp or soft, how much is full-bright, a ring's evenness, a tile's seams), shows it on a dark ground, previews it in Studio, and uploads it when it is right.
 - **Character animations.** Ask for a run, a wave or a dance and the agent makes an R15 animation. Roqer checks the motion before Studio sees it, and you can play it in 3D in the chat. The agent then publishes the animation as the place's owner, sets it on your players' characters, and checks in a playtest that it plays.
 - **Tests its own work.** Runs solo and multi-client playtests, reads server and client output, takes screenshots, and profiles performance.
 - **Rojo projects.** Link a Rojo-synced place and script edits, new scripts and models, removals, and renames save to your project files, so they show up in `git diff`.
 - **You stay in control.** Choose how much it may do on its own, from Read only to Full auto, and see every script change as a diff.
+- **Point at things.** Select something in Studio, and when you send, Roqer tells the model what you selected, so "make this open when touched" needs no path.
 - **Built for Roblox.** Bundled Roblox skills, Creator Store search and insertion, and Open Cloud uploads with your own key.
 - **Your own MCP servers.** Add other MCP servers in Settings and the agent can use their tools, with the risk of each tool set by you and every call approved like a Studio call.
+- **Web search, when you say so.** A switch in the run menu lets the model search through your own provider, with every search shown in the run's activity.
+- **Links you give.** Paste a link in the chat and the agent can read the page or picture, with any provider and with web search off. It can open only links you wrote.
 - **Local.** No Roqer account or server. Chats are saved on your computer, and the conversation goes straight to your model provider.
 
 ## Getting started
@@ -86,6 +90,7 @@ claude mcp add robloxstudio -- node C:\path\to\Roqer\packages\robloxstudio-mcp\d
 - [Configuration](docs/configuration.md)
 - [Long Claude chats](docs/projects.md)
 - [3D modeling with Blender](docs/blender.md)
+- [Image generation](docs/images.md)
 - [Your own MCP servers](docs/mcp-servers.md)
 - [Character animation](docs/animation.md)
 - [The Studio MCP server](docs/mcp-server.md)
@@ -99,7 +104,6 @@ What Roqer is working toward. Plans can change; [open an issue](https://github.c
 
 - MacOS support
 - Model-written compact summaries for every provider. Claude chats with a saved conversation compact with Claude Code's own `/compact`; the others still compact (https://github.com/S4US/Roqer/issues/63) with a record written from what the chat recorded.
-- Web search. An optional switch that lets the model search the web during a run, with each search shown in the run's activity.
 
 ## Contributing
 

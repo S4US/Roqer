@@ -5,7 +5,8 @@
  * readable around it. The block only changes how the text is shown while it is
  * edited: the message that is sent is the blocks' text, in the order shown,
  * followed by what was typed, joined by blank lines. Nothing is summarised,
- * trimmed inside, or sent any other way.
+ * trimmed inside, or sent any other way. Editing a block edits that block
+ * alone: the other blocks and what was typed are left as they are.
  */
 
 /** A paste this long is folded into a block. */
@@ -29,6 +30,16 @@ export function composedMessage(blocks: readonly PastedBlock[], typed: string): 
   return [...blocks.map((block) => block.text.trim()), typed.trim()]
     .filter((part) => part !== "")
     .join("\n\n");
+}
+
+/** The blocks with one block's text replaced; the others, and the order, stay as they are. */
+export function withBlockText(blocks: readonly PastedBlock[], id: string, text: string): PastedBlock[] {
+  return blocks.map((block) => (block.id === id ? { id, text } : block));
+}
+
+/** The blocks once an edit of one ends: a block the edit emptied is removed. */
+export function finishBlockEdit(blocks: readonly PastedBlock[], id: string): PastedBlock[] {
+  return blocks.filter((block) => block.id !== id || block.text.trim() !== "");
 }
 
 /** "184 lines · 9,240 characters" */

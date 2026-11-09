@@ -443,6 +443,9 @@ Load those, not this reference, before a VFX job.
 A job may render PNGs into `OUTPUT_DIR` instead of, or as well as, exporting
 a model: an inventory icon, a shop thumbnail, a badge. Roqer attaches each PNG
 as it is, with its pixel size read from the file. Look at it before uploading.
+A flat picture that needs no render of a model, such as an icon or a decal,
+can come from the `image` tool instead when it is offered (`kind: "icon"` or
+`"decal"`); a render is for picturing a model that exists.
 
 - Render with Workbench: it is fast and needs no lights. Set
   `scene.display.shading.color_type` to where the colour lives: `"VERTEX"` for

@@ -114,6 +114,14 @@ Two consequences are worth knowing:
   longer, and the launch then keeps no process id. `close` says so plainly
   instead of stopping something it does not own — close that Studio window
   yourself.
+- **A relaunch waits for the last session to end.** For about a second and a
+  half after Studio exits, its Vinegar instance and the prefix's Wine server are
+  still shutting down. A launch in that window was lost (handed to the instance
+  that was exiting) or started a Studio that hung before its first log line, and
+  the plugin never connected. So when no Studio is running but that instance or
+  Wine server still is, a launch waits for them to exit, for at most 15 seconds,
+  and then goes ahead. With Vinegar's own settings window open and no Studio, a
+  launch therefore waits the full 15 seconds.
 - **Process identity cannot be retained.** `require_process_identity`, which on
   Windows holds a suspended Studio and proves its exact creation identity,
   reports `process_identity_unavailable` on Linux, as it does on macOS.

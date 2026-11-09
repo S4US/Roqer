@@ -112,6 +112,7 @@ function BoxesNote({ note }: { note: string }) {
 function SourceIcon({ evidence, size }: { evidence: RunEvidence; size: number }) {
   switch (previewSource(evidence)) {
     case "blender": return <Box size={size} aria-hidden="true" />;
+    case "image": return <ImageIcon size={size} aria-hidden="true" />;
     case "animation":
     case "rig": return <PersonStanding size={size} aria-hidden="true" />;
     case "playtest": return <Gamepad2 size={size} aria-hidden="true" />;
@@ -272,9 +273,8 @@ function PreviewViewer({ images, changes, choice, index, onIndex, onClose }: {
     return () => window.removeEventListener("keydown", onKey);
   }, [images.length, index, onClose, onIndex]);
 
-  return createPortal(<div className="preview-viewer" role="dialog" aria-modal="true" aria-label={`${current.title}, image ${index + 1} of ${images.length}`}>
+  return createPortal(<div className="preview-viewer" data-theme="dark" role="dialog" aria-modal="true" aria-label={`${current.title}, image ${index + 1} of ${images.length}`}>
     <div className="preview-viewer-bar">
-      <span className="preview-viewer-count">{index + 1} of {images.length}</span>
       <div className="preview-viewer-title">
         <strong><SourceIcon evidence={current} size={15} />{current.title}</strong>
         <span>{caption ?? (previewSource(current) === "animation"
@@ -297,19 +297,16 @@ function PreviewViewer({ images, changes, choice, index, onIndex, onClose }: {
         <button type="button" aria-pressed={inModel} onClick={() => setPictureAt(null)}><Rotate3d size={14} aria-hidden="true" />3D</button>
         <button type="button" aria-pressed={!inModel} onClick={showPicture} ref={pictureButton}><ImageIcon size={14} aria-hidden="true" />Picture</button>
       </div>}
-      <p className="preview-viewer-keys" aria-hidden="true">
-        {images.length > 1 && <><kbd>←</kbd><kbd>→</kbd> to move · </>}<kbd>Esc</kbd> to close
-      </p>
-      <button type="button" className="preview-viewer-close" onClick={onClose} aria-label="Close the viewer" autoFocus><X size={20} /></button>
+      <button type="button" className="preview-viewer-close" onClick={onClose} aria-label="Close the viewer" title="Close (Esc)" autoFocus><X size={18} /></button>
     </div>
     <div className="preview-viewer-stage">
-      {images.length > 1 && <button type="button" className="preview-viewer-step" onClick={() => onIndex(index - 1)} disabled={atStart} aria-label="Previous image"><ChevronLeft size={20} /></button>}
+      {images.length > 1 && <button type="button" className="preview-viewer-step" onClick={() => onIndex(index - 1)} disabled={atStart} aria-label="Previous image" title="Previous image (←)"><ChevronLeft size={19} /></button>}
       <div className="preview-viewer-frame" data-view={inModel ? "model" : "picture"}>
         {inModel
           ? <ModelViewer key={current.id} evidence={current} onShowPicture={showPicture} autoplay />
           : <EvidencePicture evidence={current} alt={current.title} />}
       </div>
-      {images.length > 1 && <button type="button" className="preview-viewer-step" onClick={() => onIndex(index + 1)} disabled={atEnd} aria-label="Next image"><ChevronRight size={20} /></button>}
+      {images.length > 1 && <button type="button" className="preview-viewer-step" onClick={() => onIndex(index + 1)} disabled={atEnd} aria-label="Next image" title="Next image (→)"><ChevronRight size={19} /></button>}
     </div>
     {images.length > 1 && <div className="preview-viewer-strip">
       {images.map((picture, position) => {
@@ -321,13 +318,11 @@ function PreviewViewer({ images, changes, choice, index, onIndex, onClose }: {
           data-source={previewSource(item)}
           aria-current={position === index ? "true" : undefined}
           aria-label={`Show image ${position + 1}, ${item.title}${hasModelPreview(item) ? ", with a 3D view" : ""}`}
+          title={previewSourceLabel(item)}
           onClick={() => onIndex(position)}
         >
-          <span>
-            <EvidencePicture evidence={item} />
-            {hasModelPreview(item) && <i className="preview-badge" aria-hidden="true"><Rotate3d size={10} />3D</i>}
-          </span>
-          <em>{position + 1} · {previewSourceLabel(item)}</em>
+          <EvidencePicture evidence={item} />
+          {hasModelPreview(item) && <i className="preview-badge" aria-hidden="true">3D</i>}
         </button>;
       })}
     </div>}

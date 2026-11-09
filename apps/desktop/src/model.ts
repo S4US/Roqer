@@ -1,6 +1,7 @@
 import { isRunRecord, withoutMalformedUsage, type RunRecord } from "../shared/run-events";
 import { isPersistedAttachment } from "../shared/workspace-validation";
 import type { AttachmentClip } from "../shared/reference-clip";
+import { isStudioSelection, type StudioSelection } from "../shared/studio-selection";
 import {
   DEFAULT_PROVIDER_ID,
   enabledProviderOr,
@@ -51,6 +52,12 @@ export type ChatMessage = {
   run?: RunRecord;
   /** A note the user sent while a run was working, rather than a prompt that started one. */
   note?: true;
+  /**
+   * The Studio selection Roqer read when this message was sent and told the
+   * model about. What was actually sent, which the composer's chip may not
+   * have shown; absent when nothing was selected or the chip was dismissed.
+   */
+  studioSelection?: StudioSelection;
 };
 
 export type Chat = {
@@ -93,6 +100,12 @@ export type Preferences = {
   theme: Theme;
   approvalMode: ApprovalMode;
   autoPlaytest: boolean;
+  /**
+   * Whether runs may search the web through the provider's own search. Off by
+   * default: a page is text the user never wrote, and a search sends the
+   * model's words out of the machine.
+   */
+  webSearch: boolean;
   mcpEndpoint: string;
   /**
    * The Studio place runs go to, or `null` to use whichever connected first.
@@ -112,6 +125,13 @@ export type Preferences = {
    * announces the tool and never the work.
    */
   discordPresence: boolean;
+  /**
+   * Whether the composer shows what is selected in Studio and a sent message
+   * carries it. Off, the window stops reading the selection and asks the main
+   * process for none. Off by default: what the user has selected in Studio
+   * reaches the model only once they choose to send it.
+   */
+  useStudioSelection: boolean;
   /** Whether the community invite card was dismissed, leaving only its icon. */
   communityInviteDismissed: boolean;
   /** Which managed sign-in drives runs. */
@@ -212,9 +232,11 @@ export function createInitialWorkspace(theme: Theme = "dark"): WorkspaceState {
       theme,
       approvalMode: DEFAULT_APPROVAL_MODE,
       autoPlaytest: true,
+      webSearch: false,
       mcpEndpoint: DEFAULT_MCP_ENDPOINT,
       studioInstanceId: null,
       discordPresence: true,
+      useStudioSelection: false,
       communityInviteDismissed: false,
       provider: DEFAULT_PROVIDER_ID,
       chatGptModelId: null,
@@ -249,7 +271,8 @@ function isMessage(value: unknown): value is ChatMessage {
     typeof value.createdAt === "string" &&
     (value.attachments === undefined || (Array.isArray(value.attachments) && value.attachments.every(isAttachment))) &&
     (value.run === undefined || isRunRecord(value.run)) &&
-    (value.note === undefined || (value.note === true && value.role === "user"));
+    (value.note === undefined || (value.note === true && value.role === "user")) &&
+    (value.studioSelection === undefined || (value.role === "user" && isStudioSelection(value.studioSelection)));
 }
 
 /**
@@ -260,9 +283,13 @@ function isMessage(value: unknown): value is ChatMessage {
 function normalizeMessage(value: unknown): ChatMessage[] {
   if (!isRecord(value)) return [];
   const run = withoutMalformedUsage(value.run);
-  const candidate = run === undefined || isRunRecord(run)
+  const withRun = run === undefined || isRunRecord(run)
     ? (run === value.run ? value : { ...value, run })
     : { ...value, run: undefined };
+  // A damaged selection likewise costs only itself, never the words.
+  const candidate = withRun.studioSelection === undefined || isStudioSelection(withRun.studioSelection)
+    ? withRun
+    : { ...withRun, studioSelection: undefined };
   return isMessage(candidate) ? [candidate] : [];
 }
 
@@ -359,6 +386,9 @@ export function normalizeWorkspace(value: unknown, themeFallback: Theme = "dark"
     theme: isTheme(rawPreferences.theme) ? rawPreferences.theme : themeFallback,
     approvalMode: isApprovalMode(rawPreferences.approvalMode) ? rawPreferences.approvalMode : DEFAULT_APPROVAL_MODE,
     autoPlaytest: typeof rawPreferences.autoPlaytest === "boolean" ? rawPreferences.autoPlaytest : true,
+    // Off unless the user turned it on: a workspace saved before the switch
+    // existed never agreed to send anything to a search engine.
+    webSearch: rawPreferences.webSearch === true,
     mcpEndpoint: typeof rawPreferences.mcpEndpoint === "string" && rawPreferences.mcpEndpoint !== ""
       ? rawPreferences.mcpEndpoint
       : DEFAULT_MCP_ENDPOINT,
@@ -371,6 +401,9 @@ export function normalizeWorkspace(value: unknown, themeFallback: Theme = "dark"
     // same answer a new install gets. Anyone who turned it off has the boolean
     // saved, so the default never overrides a decision that was actually made.
     discordPresence: typeof rawPreferences.discordPresence === "boolean" ? rawPreferences.discordPresence : true,
+    // Off unless the user turned it on: a workspace saved before this existed
+    // gets the same answer a new install does.
+    useStudioSelection: rawPreferences.useStudioSelection === true,
     // Additive: a workspace saved before the invite existed has not seen it,
     // so it is offered once to people who were already using Roqer too.
     communityInviteDismissed: rawPreferences.communityInviteDismissed === true,
@@ -717,6 +750,22 @@ export function withdrawMessage(state: WorkspaceState, projectId: string, chatId
         const messages = chat.messages.filter((message) => message.id !== messageId);
         const title = messages.length === 0 && chat.titleSetByUser !== true ? UNTITLED_CHAT : chat.title;
         return { ...chat, title, messages };
+      }),
+    }),
+  };
+}
+
+/** Record on a sent message the Studio selection Roqer actually read when it went. */
+export function withMessageSelection(
+  state: WorkspaceState, projectId: string, chatId: string, messageId: string, selection: StudioSelection,
+): WorkspaceState {
+  return {
+    ...state,
+    projects: state.projects.map((project) => project.id !== projectId ? project : {
+      ...project,
+      chats: project.chats.map((chat) => chat.id !== chatId ? chat : {
+        ...chat,
+        messages: chat.messages.map((message) => message.id !== messageId ? message : { ...message, studioSelection: selection }),
       }),
     }),
   };

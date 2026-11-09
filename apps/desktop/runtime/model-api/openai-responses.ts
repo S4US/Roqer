@@ -89,7 +89,16 @@ type ProducedTurn = Readonly<{
 type StreamItem =
   | { kind: "reasoning"; summary: JsonRecord[]; encrypted?: string }
   | { kind: "message"; text: string }
-  | { kind: "call"; id: string; name: string; arguments: string; done: boolean };
+  | { kind: "call"; id: string; name: string; arguments: string; done: boolean }
+  /** The endpoint's own web search, reported to the user and never sent back. */
+  | { kind: "search"; query: string };
+
+/** What a web search item searched for, as the Responses API spells it. */
+function searchQuery(item: JsonRecord): string {
+  const action = isRecord(item.action) ? item.action : undefined;
+  const query = action?.query;
+  return typeof query === "string" ? query.trim().slice(0, 1_000) : "";
+}
 
 function usageOf(value: unknown): TurnUsage | undefined {
   if (!isRecord(value)) return undefined;
@@ -215,12 +224,16 @@ export class OpenAiResponsesTurns implements TurnTransport {
         ...(Object.keys(reasoning).length === 0 ? {} : { reasoning }),
         ...(this.options.serviceTier === undefined ? {} : { service_tier: this.options.serviceTier }),
         ...(include ? { include: ["reasoning.encrypted_content"] } : {}),
-        ...(request.tools.length === 0 ? {} : {
+        ...(request.tools.length === 0 && request.webSearch !== true ? {} : {
           // Roqer's tool schemas are not written for strict mode, which some
-          // endpoints turn on when it is not said.
-          tools: request.tools.map((tool) => ({
-            type: "function", name: tool.name, description: tool.description, parameters: tool.parameters, strict: false,
-          })),
+          // endpoints turn on when it is not said. The endpoint's own web
+          // search rides beside them when the user turned it on.
+          tools: [
+            ...request.tools.map((tool) => ({
+              type: "function", name: tool.name, description: tool.description, parameters: tool.parameters, strict: false,
+            })),
+            ...(request.webSearch === true ? [{ type: "web_search" }] : []),
+          ],
         }),
       },
       sent,
@@ -295,6 +308,8 @@ export class OpenAiResponsesTurns implements TurnTransport {
         begun = { kind: "reasoning", summary: [] };
       } else if (item.type === "message") {
         begun = { kind: "message", text: "" };
+      } else if (item.type === "web_search_call") {
+        begun = { kind: "search", query: searchQuery(item) };
       } else if (item.type === "function_call") {
         if ([...items.values()].filter((entry) => entry.kind === "call").length >= MAX_TOOL_CALLS_PER_TURN) {
           throw tooManyToolCalls(label);
@@ -337,6 +352,8 @@ export class OpenAiResponsesTurns implements TurnTransport {
           if (item?.kind === "reasoning") {
             produced = true;
             yield { kind: "reasoning" };
+          } else if (item?.kind === "search") {
+            produced = true;
           }
           break;
         }
@@ -380,6 +397,12 @@ export class OpenAiResponsesTurns implements TurnTransport {
           if (item?.kind === "reasoning") {
             if (Array.isArray(done.summary)) item.summary = done.summary.filter(isRecord);
             if (typeof done.encrypted_content === "string" && done.encrypted_content.length > 0) item.encrypted = done.encrypted_content;
+          } else if (item?.kind === "search") {
+            // The finished item names the query; the started one often did not yet.
+            const query = searchQuery(done) || item.query;
+            item.query = query;
+            produced = true;
+            yield { kind: "search", query: query === "" ? "the web" : query };
           } else if (item?.kind === "call") {
             if (typeof done.call_id === "string") item.id = done.call_id;
             if (typeof done.name === "string") item.name = done.name;

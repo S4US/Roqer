@@ -1,6 +1,7 @@
 import type { AssetAttachment, WorkspaceState } from "./model";
 import type { RunEvent, RunStartRequest } from "../shared/run-events";
 import type { OpenStudioScriptRequest, StudioActionResult, StudioStatus } from "../shared/studio-status";
+import type { StudioSelection, StudioSelectionRequest, StudioSelectionResult } from "../shared/studio-selection";
 import type { ProviderInstallResult, ProviderLoginResult, ProviderModelCatalog, ProviderStatus } from "../shared/provider";
 import type { ProviderLimits } from "../shared/provider-limits";
 import type { StorageStatus } from "../shared/workspace-storage";
@@ -11,10 +12,13 @@ import type {
 } from "../shared/custom-providers";
 import type { OpenCloudCheckResult, OpenCloudSave, OpenCloudSettingsResult } from "../shared/open-cloud";
 import type { BlenderSettingsResult } from "../shared/blender";
+import type { ImageSettingsResult, ImageSettingsSave, ImageTestResult } from "../shared/image-generation";
 import type { McpServerSave, McpServersResult, McpServerTestResult } from "../shared/mcp-servers";
 import type { RojoResult } from "../shared/rojo";
 import type { ModelPreviewResult } from "../shared/model-preview";
 import type { EvidencePictureResult } from "../shared/evidence-picture";
+import type { EvidenceSoundResult } from "../shared/evidence-sound";
+import type { AssetInsertRequest, AssetLedgerResult, AssetThumbnailRequest, AssetThumbnailResult } from "../shared/asset-ledger";
 import type { ClipSelection } from "../shared/reference-clip";
 
 type ProviderConnector = {
@@ -61,6 +65,7 @@ declare global {
       };
       studio: {
         getStatus(endpoint: string): Promise<StudioStatus>;
+        getSelection(request: StudioSelectionRequest): Promise<StudioSelectionResult>;
         openScript(request: OpenStudioScriptRequest): Promise<StudioActionResult>;
       };
       providers: {
@@ -81,15 +86,27 @@ declare global {
         save(save: OpenCloudSave): Promise<OpenCloudSettingsResult>;
         check(): Promise<OpenCloudCheckResult>;
       };
+      uploads: {
+        ledger(): Promise<AssetLedgerResult>;
+        insert(request: AssetInsertRequest): Promise<StudioActionResult>;
+        thumbnail(request: AssetThumbnailRequest): Promise<AssetThumbnailResult>;
+      };
       previews: {
         loadModel(id: string): Promise<ModelPreviewResult>;
         loadPicture(ref: string): Promise<EvidencePictureResult>;
+        loadSound(ref: string): Promise<EvidenceSoundResult>;
       };
       blender: {
         get(): Promise<BlenderSettingsResult>;
         setEnabled(enabled: boolean): Promise<BlenderSettingsResult>;
         choose(): Promise<BlenderSettingsResult>;
         redetect(): Promise<BlenderSettingsResult>;
+      };
+      images: {
+        get(): Promise<ImageSettingsResult>;
+        save(save: ImageSettingsSave): Promise<ImageSettingsResult>;
+        /** Asks the server about the saved model; makes no picture. */
+        test(): Promise<ImageTestResult>;
       };
       mcpServers: {
         list(): Promise<McpServersResult>;
@@ -112,7 +129,7 @@ declare global {
         openFolder(instanceId: string): Promise<RojoResult>;
       };
       runs: {
-        start(request: RunStartRequest): Promise<{ ok: true; runId: string } | { ok: false; message: string }>;
+        start(request: RunStartRequest): Promise<{ ok: true; runId: string; selection?: StudioSelection } | { ok: false; message: string }>;
         respond(runId: string, callId: string, decision: "approved" | "rejected"): Promise<boolean>;
         answer(runId: string, callId: string, answerIndex: number): Promise<boolean>;
         steer(runId: string, text: string): Promise<boolean>;

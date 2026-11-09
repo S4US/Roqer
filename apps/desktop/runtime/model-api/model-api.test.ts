@@ -1199,3 +1199,62 @@ test("a Responses server that sends each item whole, without deltas, still gives
     { kind: "completed", stopReason: "end" },
   ]);
 });
+
+test("a Responses turn asks for the endpoint's web search when the run has it on, and reports each search", async () => {
+  const { fetch, sent } = endpoint([{
+    frames: [
+      json({ type: "response.output_item.added", output_index: 0, item: { type: "web_search_call", id: "ws_1", status: "in_progress" } }),
+      json({ type: "response.output_item.done", output_index: 0, item: { type: "web_search_call", id: "ws_1", status: "completed", action: { type: "search", query: "ParticleEmitter FlipbookLayout" } } }),
+      json({ type: "response.output_item.added", output_index: 1, item: { type: "message", role: "assistant", content: [] } }),
+      json({ type: "response.output_text.delta", output_index: 1, delta: "Found it." }),
+      RESPONSE_DONE,
+    ],
+  }, RESPONSES_FINISHED]);
+  const turns = new OpenAiResponsesTurns({ baseUrl: "https://api.openai.com/v1", apiKey: null, label: "OpenAI", reasoning: false, fetch });
+
+  const events = await collect(turns.streamTurn({ ...REQUEST, webSearch: true }, new AbortController().signal));
+  assert.deepEqual(events, [
+    { kind: "search", query: "ParticleEmitter FlipbookLayout" },
+    { kind: "delta", text: "Found it." },
+    { kind: "completed", stopReason: "end", usage: { inputTokens: 120, outputTokens: 30, cachedInputTokens: 100 } },
+  ]);
+  assert.deepEqual(sent[0].body.tools, [
+    { type: "function", name: "roblox_studio", description: "Studio", parameters: { type: "object" }, strict: false },
+    { type: "web_search" },
+  ]);
+
+  await collect(turns.streamTurn({ ...REQUEST, turnId: "run-1:turn:2" }, new AbortController().signal));
+  assert.deepEqual(sent[1].body.tools, [
+    { type: "function", name: "roblox_studio", description: "Studio", parameters: { type: "object" }, strict: false },
+  ], "a turn without the switch asks for no search");
+});
+
+test("an Anthropic turn asks for the server's web search when the run has it on, and reports each search", async () => {
+  const frames = [
+    json({ type: "message_start", message: { usage: { input_tokens: 50, output_tokens: 1 } } }),
+    json({ type: "content_block_start", index: 0, content_block: { type: "server_tool_use", id: "srvtoolu_1", name: "web_search", input: {} } }),
+    json({ type: "content_block_delta", index: 0, delta: { type: "input_json_delta", partial_json: "{\"query\": \"roblox " } }),
+    json({ type: "content_block_delta", index: 0, delta: { type: "input_json_delta", partial_json: "TextureSpeed\"}" } }),
+    json({ type: "content_block_stop", index: 0 }),
+    json({ type: "content_block_start", index: 1, content_block: { type: "web_search_tool_result", tool_use_id: "srvtoolu_1", content: [] } }),
+    json({ type: "content_block_stop", index: 1 }),
+    json({ type: "content_block_start", index: 2, content_block: { type: "text", text: "" } }),
+    json({ type: "content_block_delta", index: 2, delta: { type: "text_delta", text: "It scrolls the texture." } }),
+    json({ type: "content_block_stop", index: 2 }),
+    json({ type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { output_tokens: 12 } }),
+    json({ type: "message_stop" }),
+  ];
+  const { fetch, sent } = endpoint([{ frames }]);
+  const turns = new AnthropicMessagesTurns({ baseUrl: "https://api.anthropic.com/v1", apiKey: null, label: "Anthropic", reasoning: false, fetch });
+
+  const events = await collect(turns.streamTurn({ ...REQUEST, webSearch: true }, new AbortController().signal));
+  assert.deepEqual(events, [
+    { kind: "search", query: "roblox TextureSpeed" },
+    { kind: "delta", text: "It scrolls the texture." },
+    { kind: "completed", stopReason: "end", usage: { inputTokens: 50, outputTokens: 12, cachedInputTokens: 0 } },
+  ]);
+  assert.deepEqual(sent[0].body.tools, [
+    { name: "roblox_studio", description: "Studio", input_schema: { type: "object" } },
+    { type: "web_search_20250305", name: "web_search", max_uses: 8 },
+  ]);
+});

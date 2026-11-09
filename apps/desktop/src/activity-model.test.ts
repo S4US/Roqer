@@ -2,11 +2,12 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { summarizeToolCall } from "../shared/mcp-tools";
-import type { RunEvent, RunEventBody } from "../shared/run-events";
+import { activityKind } from "../shared/activity";
+import type { RunEvent, RunEventBody, RunEvidence } from "../shared/run-events";
 import { activitySteps, applyRunEvent, createRunView, type ActivityStep, type RunView } from "./run-view";
 import {
-  activeStepTitle, aggregateDuration, buildActivityModel, completedRunDetailsLabel, completedRunDurationLabel,
-  completedRunMetadataLabel, currentNodeTitle, elapsedLabel, outputTokensLabel, mergeFindings, stepStatus, type ActivityNode,
+  activeStepTitle, aggregateDuration, buildActivityModel, finishedRunSummary, completedRunDetailsLabel, completedRunDurationLabel,
+  completedRunMetadataLabel, countedActions, currentNodeTitle, elapsedLabel, outputTokensLabel, mergeFindings, stepStatus, type ActivityNode,
 } from "./activity-model";
 
 const RUN_ID = "run-1";
@@ -97,12 +98,11 @@ function leaves(nodes: readonly ActivityNode[]): ActivityNode[] {
   return nodes.flatMap((node) => (node.children.length === 0 ? [node] : node.children));
 }
 
-test("a project inspection reads as a few phases, not eleven operations", () => {
+test("neighbouring reads fold into one row, not eleven", () => {
   const nodes = model(fold(...inspectProject()));
 
   assert.deepEqual(nodes.map((node) => [node.title, node.finding]), [
-    ["Connected to Studio", "2 steps · 1 instance"],
-    ["Understood the project", "5 steps · 30 instances"],
+    ["Read 7 items: Workspace, ServerScriptService, …", "31 instances"],
   ]);
 });
 
@@ -152,10 +152,10 @@ test("every operation survives the fold, in the order it happened", () => {
   assert.deepEqual(
     leaves(nodes).map((node) => node.key),
     steps.map((step) => step.key),
-    "grouping hides operations behind a disclosure; it never drops or reorders one",
+    "merging hides operations behind a disclosure; it never drops or reorders one",
   );
   assert.deepEqual(
-    nodes[1].children.map((child) => child.title),
+    nodes[0].children.slice(-5).map((child) => child.title),
     [
       "Read the project structure",
       "Read Workspace",
@@ -167,7 +167,7 @@ test("every operation survives the fold, in the order it happened", () => {
   );
 });
 
-test("the group in flight names the operation in flight, and only that row is active", () => {
+test("a merged row in flight names the operation in flight, and only that row is active", () => {
   const nodes = model(fold(
     started,
     ...read("c1", "get_connected_instances", {}, { summary: "get_connected_instances: 1 instance" }),
@@ -182,24 +182,22 @@ test("the group in flight names the operation in flight, and only that row is ac
   const active = nodes.filter((node) => node.status === "active");
   assert.equal(active.length, 1, "exactly one row claims to be happening now");
   assert.equal(active[0].title, "Reading ServerScriptService…");
-  assert.equal(nodes[0].status, "completed");
+  assert.equal(active[0].children.filter((child) => child.status === "active").length, 1);
 });
 
-test("a phase that produced one step stays one row rather than a group of one", () => {
+test("a run of one stays one row rather than a group of one", () => {
   const nodes = model(fold(
     started,
-    ...read("c1", "get_place_info", {}, { summary: "get_place_info: 1 instance" }),
-    ...read("c2", "get_script_source", { instancePath: "game.ServerScriptService.Main" }, { summary: "get_script_source: 42 lines of source" }),
+    ...read("c1", "get_script_source", { instancePath: "game.ServerScriptService.Main" }, { summary: "get_script_source: 42 lines of source" }),
   ));
 
   assert.deepEqual(nodes.map((node) => [node.title, node.children.length]), [
-    ["Read the place", 0],
     ["Read ServerScriptService.Main", 0],
   ]);
-  assert.equal(nodes[1].finding, "42 lines of source");
+  assert.equal(nodes[0].finding, "42 lines of source");
 });
 
-test("a failure inside a collapsed group stays visible and colours the group", () => {
+test("a failure is its own row, says it failed, and splits the steps around it", () => {
   const nodes = model(fold(
     started,
     ...structureReads(),
@@ -207,16 +205,19 @@ test("a failure inside a collapsed group stays visible and colours the group", (
       summary: "get_project_structure failed (not-found): No instance at game.Lighting.",
       ok: false,
     }),
+    ...read("c9", "get_project_structure", { path: "game.Lighting" }, { summary: "get_project_structure: 2 instances" }),
   ));
 
-  const [group] = nodes;
-  assert.equal(group.status, "failed", "the worst thing inside is what the group reports");
-  assert.match(group.finding ?? "", /1 failed/);
   assert.deepEqual(
-    group.alerts.map((alert) => [alert.title, alert.finding]),
-    [["Read Lighting", "No instance at game.Lighting."]],
-    "so a reader who never opens the group still sees what went wrong",
+    nodes.map((node) => [node.status, node.title, node.children.length]),
+    [
+      ["completed", "Read 5 items: Workspace, ServerScriptService, …", 5],
+      ["failed", "Failed reading Lighting", 0],
+      ["completed", "Read Lighting", 0],
+    ],
+    "the row after a failure is not folded back over it, so the recovery can be seen",
   );
+  assert.equal(nodes[1].finding, "No instance at game.Lighting.");
 });
 
 test("a rejected call is skipped, and an approval request is a row of its own", () => {
@@ -271,7 +272,7 @@ test("what the provider is doing is a state, not a step it took", () => {
   assert.deepEqual(view.status, { label: "Thinking with ChatGPT", detail: undefined });
 });
 
-test("a note the planner left is kept, and kept out of the phases", () => {
+test("a note the planner left is its own row, where it was left", () => {
   const nodes = model(fold(
     started,
     ...read("c1", "get_project_structure", {}, { summary: "get_project_structure: 16 instances" }),
@@ -280,25 +281,42 @@ test("a note the planner left is kept, and kept out of the phases", () => {
   ));
 
   assert.deepEqual(nodes.map((node) => [node.kind, node.title]), [
-    ["read", "Understood the project"],
+    ["read", "Read the project structure"],
     ["note", "Studio did not report a place name"],
-  ], "the note is its own row, and the read after it rejoins the phase above");
-  assert.equal(nodes[0].children.length, 2);
+    ["read", "Read Workspace"],
+  ]);
 });
 
-test("a phase re-entered later rejoins its row instead of starting a second one", () => {
+test("going back to an earlier kind of work starts a new row, so the order is kept", () => {
+  const edit = (id: string): RunEventBody[] => [
+    { type: "tool-proposed", proposal: writeProposal(id) },
+    { type: "approval-resolved", callId: id, decision: "approved", automatic: true, reason: "read-allowed" },
+    { type: "tool-started", callId: id, tool: writeProposal(id).tool },
+    { type: "tool-result", callId: id, tool: writeProposal(id).tool, ok: true, durationMs: 1, summary: `${writeProposal(id).tool}: done` },
+  ];
   const nodes = model(fold(
     started,
     ...read("c1", "get_project_structure", {}, { summary: "get_project_structure: 16 instances" }),
-    ...read("c2", "get_script_source", { instancePath: "game.ServerScriptService.Main" }, { summary: "get_script_source: 42 lines of source" }),
-    ...read("c3", "get_project_structure", { path: "game.Workspace" }, { summary: "get_project_structure: 4 instances" }),
-    ...read("c4", "search_objects", { query: "Coin" }, { summary: "search_objects: 3 results" }),
+    ...read("c2", "get_project_structure", { path: "game.Workspace" }, { summary: "get_project_structure: 4 instances" }),
+    ...edit("c3"),
+    ...read("c4", "get_project_structure", { path: "game.Lighting" }, { summary: "get_project_structure: 2 instances" }),
   ));
 
-  assert.deepEqual(nodes.map((node) => [node.title, node.finding]), [
-    ["Understood the project", "3 steps · 20 instances · 3 results"],
-    ["Read ServerScriptService.Main", "42 lines of source"],
-  ], "a phase is a place to look, not a run of adjacent calls");
+  assert.deepEqual(nodes.map((node) => [node.kind, node.children.length]), [
+    ["read", 2],
+    ["edit", 0],
+    ["read", 0],
+  ]);
+  assert.equal(nodes[0].title, "Read 2 items: Workspace, …");
+});
+
+test("a merged row's title comes from what its calls have in common", () => {
+  const scripts = model(fold(
+    started,
+    ...read("c1", "get_script_source", { instancePath: "game.ServerScriptService.Main" }, { summary: "get_script_source: 42 lines of source" }),
+    ...read("c2", "get_script_source", { instancePath: "game.ServerScriptService.Combat" }, { summary: "get_script_source: 8 lines of source" }),
+  ));
+  assert.deepEqual(scripts.map((node) => [node.title, node.finding]), [["Read 2 scripts: Main, Combat", "50 lines of source"]]);
 });
 
 test("a search reads as a query, and a query with nothing in it names what was searched", () => {
@@ -308,10 +326,11 @@ test("a search reads as a query, and a query with nothing in it names what was s
     ...read("c2", "grep_scripts", { pattern: "." }, { summary: "grep_scripts: 9 results" }),
   ));
 
-  assert.deepEqual(nodes.map((node) => node.title), [
+  assert.deepEqual(nodes[0].children.map((node) => node.title), [
     "Searched for “Coin”",
     "Searched the scripts",
   ]);
+  assert.equal(nodes[0].title, "Ran 2 searches: “Coin”, …");
 });
 
 test("a finished run has nothing in flight", () => {
@@ -319,7 +338,7 @@ test("a finished run has nothing in flight", () => {
   assert.equal(nodes.some((node) => node.status === "active"), false);
 });
 
-test("a hundred routine reads stay a handful of rows", () => {
+test("a hundred routine reads stay one row", () => {
   const bodies: RunEventBody[] = [started];
   for (let index = 0; index < 100; index++) {
     bodies.push(...read(`c${index}`, "get_project_structure", { path: `game.Workspace.Model${index}` }, {
@@ -330,7 +349,8 @@ test("a hundred routine reads stay a handful of rows", () => {
 
   assert.equal(nodes.length, 1);
   assert.equal(nodes[0].children.length, 100);
-  assert.equal(nodes[0].finding, "100 steps · 200 instances");
+  assert.equal(nodes[0].title, "Read 100 items: Model0, Model1, …");
+  assert.equal(nodes[0].finding, "200 instances");
 });
 
 test("countable findings add up; the rest stay on their own rows", () => {
@@ -408,22 +428,22 @@ test("a completed run duration is omitted when its timestamps cannot be trusted"
   assert.equal(completedRunDurationLabel(startedAt, "2026-10-13T09:59:59.000Z"), null);
 });
 
-test("completed run metadata keeps its label when duration is unavailable", () => {
+test("a completed run says how long it took, and only a demo run carries a label", () => {
   const startedAt = "2026-10-13T10:00:00.000Z";
-  assert.equal(
-    completedRunMetadataLabel("Full auto", startedAt, "2026-10-13T10:00:42.000Z"),
-    "Full auto · 42s",
-  );
+  assert.equal(completedRunMetadataLabel(null, startedAt, "2026-10-13T10:00:42.000Z"), "42s");
   assert.equal(completedRunMetadataLabel("Demo", startedAt, "2026-10-13T10:00:42.000Z"), "Demo · 42s");
-  assert.equal(completedRunMetadataLabel("Full auto", startedAt, ""), "Full auto");
+  assert.equal(completedRunMetadataLabel("Demo", startedAt, ""), "Demo");
+  assert.equal(completedRunMetadataLabel(null, startedAt, ""), "");
 });
 
 test("completed run details keep metadata and usage on one line", () => {
   assert.equal(
-    completedRunDetailsLabel("Full auto · 4s", "Used 2.3k tokens: 2.3k input, 56 output · 1 request"),
-    "Full auto · 4s · Used 2.3k tokens: 2.3k input, 56 output · 1 request",
+    completedRunDetailsLabel("4s", "Used 2.3k tokens: 2.3k input, 56 output · 1 request"),
+    "4s · Used 2.3k tokens: 2.3k input, 56 output · 1 request",
   );
-  assert.equal(completedRunDetailsLabel("Full auto · 4s", null), "Full auto · 4s");
+  assert.equal(completedRunDetailsLabel("4s", null), "4s");
+  assert.equal(completedRunDetailsLabel("", "1 request"), "1 request");
+  assert.equal(completedRunDetailsLabel("", null), "");
 });
 
 test("a live output count is marked as an estimate until the provider reports its own", () => {
@@ -436,4 +456,186 @@ test("a live output count is marked as an estimate until the provider reports it
   assert.equal(outputTokensLabel(9_999, false), "~9.9k tokens");
   assert.equal(outputTokensLabel(12_345, true), "12k tokens");
   assert.equal(outputTokensLabel(99_999, true), "99k tokens");
+});
+
+test("evidence that passed goes inside its call, and evidence that failed keeps its own row", () => {
+  const call = { key: "c1", kind: "edit", state: "done", label: "Edited Main", tool: "set_script_source", target: "game.Main", resultSummary: "set_script_source: 4 lines of source" } as const;
+  const passed = { id: "e1", kind: "verification", title: "Main", passed: true } as const;
+  const failed = { id: "e2", kind: "verification", title: "Main", passed: false } as const;
+  const proof = { key: "e1", kind: "verify", state: "done", label: "Verified Main", evidence: passed } as const;
+  const refuted = { key: "e2", kind: "verify", state: "failed", label: "Verified Main", evidence: failed } as const;
+
+  const rows = buildActivityModel([call, proof]);
+  assert.equal(rows.length, 1);
+  assert.deepEqual(rows[0].step?.attached, [passed], "and what it proved still opens with the call");
+  assert.equal(rows[0].finding, "4 lines of source · verified");
+
+  assert.deepEqual(buildActivityModel([call, refuted]).map((row) => row.status), ["completed", "failed"]);
+  assert.equal(buildActivityModel([proof]).length, 1, "evidence no call claims keeps its row");
+  assert.equal(countedActions(rows), 1, "a call and its proof are one thing the run did");
+});
+
+test("a merged row says what it read, what it ran, and whether it was checked", () => {
+  const step = (key: string, tool: string, kind: "read" | "run", label: string, summary?: string) => ({ key, kind, state: "done" as const, label, tool, target: null, resultSummary: summary });
+  const check = { id: "e1", kind: "verification" as const, title: "x", passed: true };
+  const reads = buildActivityModel([
+    step("a", "get_script_source", "read", "Read Main", "get_script_source: 10 lines of source"),
+    { key: "p", kind: "verify" as const, state: "done" as const, label: "Verified", evidence: check },
+    step("b", "get_script_source", "read", "Read Combat", "get_script_source: 5 lines of source"),
+    step("c", "get_runtime_logs", "read", "Read output", "get_runtime_logs: 1 entries"),
+  ]);
+  assert.equal(reads[0].title, "Read 2 scripts and 1 log");
+  assert.equal(reads[0].finding, "15 lines of source · 1 entry · verified");
+  const sameRuns = buildActivityModel([step("a", "eval_client_runtime", "run", "x"), step("b", "eval_client_runtime", "run", "x")]);
+  assert.equal(sameRuns[0].title, "Ran code on the client (2 times)");
+  const mixed = buildActivityModel([step("a", "eval_client_runtime", "run", "x"), step("b", "simulate_keyboard_input", "run", "y")]);
+  assert.equal(mixed[0].title, "Ran code on the client and pressed a key");
+});
+
+test("the closed line names what the run did last, not what the model said", () => {
+  const nodes = buildActivityModel([
+    { key: "a", kind: "read", state: "done", label: "Read Main", tool: "get_script_source", target: "game.Main" },
+    { key: "b", kind: "note", state: "done", label: "Now I will test it." },
+  ]);
+  assert.equal(nodes.length, 2);
+  assert.equal(currentNodeTitle(nodes), "Read Main");
+  assert.equal(countedActions(nodes), 1);
+});
+
+/** A step as `activitySteps` gives it, for the rules that only look at the steps. */
+function step(key: string, tool: string, target: string | null, overrides: Partial<ActivityStep> = {}): ActivityStep {
+  const kind = activityKind(tool, target);
+  return { key, kind, label: tool, note: "", state: "done", tool, target, ...overrides } as ActivityStep;
+}
+const start = (key: string) => step(key, "solo_playtest", "start");
+const stop = (key: string) => step(key, "solo_playtest", "stop");
+const code = (key: string) => step(key, "eval_client_runtime", null);
+const note = (key: string, label: string) => ({ key, kind: "note", label, note: "", state: "done" }) as ActivityStep;
+const titles = (nodes: readonly ActivityNode[]) => nodes.map((node) => [node.title, node.children.length]);
+
+test("a playtest from its start to its stop is one row, with every step still inside", () => {
+  const nodes = buildActivityModel([start("a"), code("b"), step("c", "capture_screenshot", null), stop("d")]);
+
+  assert.deepEqual(titles(nodes), [["Ran a playtest", 4]]);
+  assert.equal(nodes[0].finding, "4 steps");
+  assert.equal(countedActions(nodes), 4, "folding a playtest does not change how many steps the run took");
+});
+
+test("a change or an explanation splits a playtest, so a closed row never hides one", () => {
+  const nodes = buildActivityModel([
+    start("a"), code("b"),
+    note("c", "Only the first pylon lit."),
+    code("d"), code("e"),
+    step("f", "upload_asset", "upload"),
+    code("g"), stop("h"),
+  ]);
+
+  assert.deepEqual(titles(nodes), [
+    ["Started a playtest", 2],
+    ["Only the first pylon lit.", 0],
+    ["Continued the playtest", 2],
+    ["Uploaded an asset", 0],
+    ["Finished the playtest", 2],
+  ]);
+});
+
+test("a playtest's last stretch of one is just that step", () => {
+  const nodes = buildActivityModel([start("a"), code("b"), note("c", "Done."), stop("d")]);
+
+  assert.deepEqual(titles(nodes).at(-1), ["Stopped the playtest", 0]);
+});
+
+test("a failure inside a playtest is listed under the row without calling the playtest failed", () => {
+  const nodes = buildActivityModel([
+    start("a"),
+    step("b", "capture_moments", null, { state: "failed", resultSummary: "capture_moments failed (error): Timed out." }),
+    code("c"), stop("d"),
+  ]);
+
+  assert.equal(nodes[0].status, "completed");
+  assert.equal(nodes[0].finding, "4 steps · 1 failed");
+  assert.deepEqual(nodes[0].alerts.map((alert) => alert.title), ["Failed capturing an effect at several moments"]);
+});
+
+test("a playtest that failed to start opens nothing", () => {
+  const nodes = buildActivityModel([step("a", "solo_playtest", "start", { state: "failed" }), code("b"), code("c")]);
+
+  assert.deepEqual(titles(nodes), [["Failed starting a playtest", 0], ["Ran code on the client (2 times)", 2]]);
+});
+
+test("a playtest still going names what is in flight, and is not said to have finished", () => {
+  const running = buildActivityModel([start("a"), code("b"), step("c", "capture_screenshot", null, { state: "running" })]);
+  assert.equal(running[0].status, "active");
+  assert.equal(running[0].title, "Taking a screenshot…");
+
+  const between = buildActivityModel([start("a"), code("b")]);
+  assert.equal(between[0].title, "Started a playtest");
+});
+
+test("an edit and the read that checks it are one row, named by the edit", () => {
+  const target = "game.ServerScriptService.Main";
+  const verified: RunEvidence = { id: "e1", kind: "verification", title: target, detail: "", passed: true };
+  const nodes = buildActivityModel([
+    step("a", "set_script_source", target),
+    step("b", "get_script_source", target, { resultSummary: "get_script_source: 40 lines of source" }),
+    { key: "c", kind: "verify", label: "", note: "", state: "done", evidence: verified } as ActivityStep,
+  ]);
+
+  assert.deepEqual(titles(nodes), [["Edited ServerScriptService.Main", 2]]);
+  assert.equal(nodes[0].kind, "edit");
+  assert.equal(nodes[0].finding, "Read back · verified");
+});
+
+test("a read of something else after an edit is new work, and a failed edit has nothing to read back", () => {
+  const nodes = buildActivityModel([
+    step("a", "set_script_source", "game.A"),
+    step("b", "get_script_source", "game.B"),
+    step("c", "set_script_source", "game.C", { state: "failed" }),
+    step("d", "get_script_source", "game.C"),
+  ]);
+
+  assert.deepEqual(titles(nodes).map(([, children]) => children), [0, 0, 0, 0]);
+});
+
+test("a screenshot is taken, not read, in a merged row's title", () => {
+  const shot = (key: string) => step(key, "capture_screenshot", null);
+  const logs = (key: string) => step(key, "get_runtime_logs", null);
+
+  assert.equal(buildActivityModel([shot("a"), shot("b")])[0].title, "Took 2 screenshots");
+  assert.equal(buildActivityModel([shot("a"), logs("b"), logs("c")])[0].title, "Took a screenshot and read 2 logs");
+});
+
+test("a merged row of mixed reads gives a count rather than a list of counts", () => {
+  const nodes = buildActivityModel([
+    step("a", "get_instance_properties", "game.A"),
+    step("b", "get_script_source", "game.B"),
+    step("c", "get_project_structure", "game.C"),
+    step("d", "get_runtime_logs", null),
+  ]);
+
+  assert.equal(nodes[0].title, "Read 4 items: A, B, …");
+});
+
+test("a finished run is summed up by what it changed, and only by what worked", () => {
+  const nodes = buildActivityModel([
+    step("a", "set_script_source", "game.A"),
+    note("b", "Next."),
+    step("c", "build_instances", "game.B"),
+    step("d", "set_script_source", "game.C", { state: "failed" }),
+    step("e", "upload_asset", "upload"),
+    start("f"), stop("g"),
+    step("h", "run_blender_script", null),
+  ]);
+
+  assert.equal(finishedRunSummary(nodes), "2 edits · 1 playtest · 1 Blender run");
+});
+
+test("a run that only looked is counted by that, and a run of one row is named by it", () => {
+  assert.equal(finishedRunSummary(buildActivityModel([
+    step("a", "get_script_source", "game.A"),
+    step("b", "search_objects", "Coin"),
+    step("c", "get_script_source", "game.B"),
+  ])), "2 reads · 1 search");
+  assert.equal(finishedRunSummary(buildActivityModel([step("a", "run_blender_script", null), note("b", "Done.")])), "Modeled in Blender");
+  assert.equal(finishedRunSummary([]), null);
 });

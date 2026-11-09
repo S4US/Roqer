@@ -2,9 +2,9 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
-  activityFinding, activityKind, activityLabel, activityPhase, activityTarget, classifiedTools,
-  evidenceActivityKind, evidenceDetailLabel, evidenceLabel, evidencePhase, phaseTitle,
-  shortTarget, unclassifiedTools, MAX_FINDING_CHARS, type ActivityPhase,
+  activityFinding, activityKind, activityLabel, activityTarget, classifiedTools,
+  evidenceActivityKind, evidenceDetailLabel, evidenceLabel,
+  shortTarget, unclassifiedTools, MAX_FINDING_CHARS,
 } from "./activity";
 import { GATEWAY_TOOL_RISK } from "./gateway-operations";
 import { LOCAL_TOOL_RISK, TOOL_RISK, summarizeToolCall } from "./mcp-tools";
@@ -19,10 +19,9 @@ test("the classification table has no tool the MCP surface dropped", () => {
   assert.deepEqual(classifiedTools().filter((tool) => !known.has(tool)), []);
 });
 
-test("capturing moments reads as checking the result, not as its operation name", () => {
+test("capturing moments reads as what it does, not as its operation name", () => {
   assert.equal(activityLabel("capture_moments", null, false), "Capturing an effect at several moments");
   assert.equal(activityLabel("capture_moments", "client-1", true), "Captured an effect at several moments");
-  assert.equal(activityPhase("capture_moments"), "verify");
 });
 
 test("a batch upload reads as uploading, and its card names every file it sends", () => {
@@ -39,6 +38,16 @@ test("a Blender job reads as modeling, not as its operation name", () => {
   assert.equal(activityLabel("run_blender_script", null, false), "Modeling in Blender");
   assert.equal(activityLabel("run_blender_script", null, true), "Modeled in Blender");
   assert.equal(activityKind("run_blender_script"), "run");
+});
+
+test("an image job reads as generating, is approved like a spend, and is summarised by what it is for", () => {
+  assert.equal(activityLabel("generate_image", null, false), "Generating images");
+  assert.equal(activityLabel("generate_image", null, true), "Generated images");
+  assert.equal(activityKind("generate_image"), "run");
+  assert.equal(LOCAL_TOOL_RISK.generate_image, "irreversible");
+  assert.equal(summarizeToolCall("generate_image", { prompt: "a soft glow", kind: "light", name: "rune_ring", count: 3 }), "generate_image · light rune_ring ×3");
+  assert.equal(summarizeToolCall("generate_image", { prompt: "a soft glow", kind: "icon", name: "sword", count: 1 }), "generate_image · icon sword");
+  assert.equal(summarizeToolCall("generate_image", { prompt: "a soft glow" }), "generate_image");
 });
 
 test("a closer look at a reference clip reads as looking, not as its operation name", () => {
@@ -90,20 +99,13 @@ test("a call with a target reads as a verb and that target", () => {
     "Editing ServerScriptService.Main",
   );
   assert.equal(shortTarget("game.Workspace"), "Workspace");
+  assert.equal(
+    shortTarget("game.StarterPlayer.StarterPlayerScripts.AetherEngineClient"),
+    "StarterPlayerScripts.AetherEngineClient",
+    "a deep path keeps the end, which is what names the thing",
+  );
   assert.equal(shortTarget("game"), "game", "a path with nothing after the prefix keeps it");
   assert.equal(shortTarget("Coffee Run"), "Coffee Run", "and a name that is not a path is left alone");
-});
-
-test("steps are grouped by the stage of the run they belong to", () => {
-  assert.equal(activityPhase("get_connected_instances"), "connect");
-  assert.equal(activityPhase("get_project_structure"), "explore");
-  assert.equal(activityPhase("get_script_source"), "scripts");
-  assert.equal(activityPhase("set_script_source"), "edit");
-  assert.equal(activityPhase("solo_playtest"), "run");
-  assert.equal(activityPhase("upload_asset", "status"), "explore");
-  assert.equal(evidencePhase("verification"), "verify");
-  // A tool nobody has phased still lands somewhere sensible, by its kind.
-  assert.equal(activityPhase("some_future_tool"), "run");
 });
 
 test("checking an upload operation reads as a lookup, not another upload", () => {
@@ -136,16 +138,6 @@ test("an animation reads as checking or building, whatever its summary says", ()
     assert.equal(activityLabel("animation", unknown, true), "Called the animation tool");
     assert.equal(activityLabel("animation", unknown, false), "Calling the animation tool");
     assert.equal(activityKind("animation", unknown), "edit");
-  }
-});
-
-test("every phase can name itself in both tenses", () => {
-  const phases = [
-    "connect", "explore", "scripts", "edit", "run", "verify", "note",
-  ] as const satisfies readonly ActivityPhase[];
-  for (const phase of phases) {
-    assert.ok(phaseTitle(phase, false).length > 0, `${phase} has no present tense`);
-    assert.ok(phaseTitle(phase, true).length > 0, `${phase} has no past tense`);
   }
 });
 
@@ -185,4 +177,37 @@ test("evidence reads as its own kind of activity", () => {
     "Verified ServerScriptService.Main",
   );
   assert.equal(evidenceDetailLabel("verification"), "Read-back");
+});
+
+test("no tool reads as its operation name, in either tense", () => {
+  for (const tool of classifiedTools()) {
+    assert.doesNotMatch(activityLabel(tool, null, true), /_/, `${tool} shows its name when finished`);
+    assert.doesNotMatch(activityLabel(tool, null, false), /_/, `${tool} shows its name while running`);
+  }
+});
+
+test("calls read as what they did, not as their kind's verb", () => {
+  assert.equal(activityLabel("solo_playtest", "start", true), "Started a playtest");
+  assert.equal(activityLabel("solo_playtest", "stop", false), "Stopping the playtest");
+  assert.equal(activityLabel("eval_client_runtime", null, true), "Ran code on the client");
+  assert.equal(activityLabel("insert_asset", null, true), "Inserted an asset");
+  assert.equal(activityLabel("get_runtime_logs", "client-1", true), "Read output from client-1");
+  assert.equal(activityLabel("selection", "get", true), "Read your selection");
+  assert.equal(activityLabel("selection", "game.Workspace.Tower", true), "Framed Workspace.Tower in Studio");
+});
+
+test("a failure reads by its reason, without the plugin's path, and a count reads properly", () => {
+  assert.equal(
+    activityFinding("selection", "focus failed: user_MCPPlugin.rbxmx.MCPPlugin.modules.handlers.MetadataHandlers:300: Cannot frame a Folder: it has no 3D bounding box."),
+    "Cannot frame a Folder: it has no 3D bounding box.",
+  );
+  assert.equal(activityFinding("capture_moments", "capture_moments failed (error): Tool call failed."), "Tool call failed.");
+  assert.equal(activityFinding("grep_scripts", "grep_scripts: 1 results"), "1 result");
+  assert.equal(activityFinding("get_runtime_logs", "get_runtime_logs: 1 entries"), "1 entry");
+  assert.equal(activityFinding("search_assets", "search_assets: 0 results"), "0 results");
+});
+
+test("a search scoped to an instance says where it looked, not that it searched for a path", () => {
+  assert.equal(activityLabel("grep_scripts", "game.ReplicatedStorage.VFX", true), "Searched ReplicatedStorage.VFX");
+  assert.equal(activityLabel("search_assets", "magic chime", true), "Searched for “magic chime”");
 });

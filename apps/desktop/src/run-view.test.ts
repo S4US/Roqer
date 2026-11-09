@@ -14,6 +14,7 @@ import {
   recordAppliedAndVerified, recordGateIssues, recordHasWarnings, recordOnlyAnswered, recordSteps, recordTranscriptSegments,
   runAppliedAndVerified, runGateIssues, runHasWarnings, runOnlyAnswered, toRunRecord, transcriptSegments, usageLabel,
   type RunView,
+  latestProse, recordReply,
 } from "./run-view";
 import { completedRunDurationLabel } from "./activity-model";
 
@@ -987,7 +988,12 @@ test("prose and steps are read in the order they happened, live and recorded", (
   assert.equal(view.text.slice(first.start, first.end ?? undefined), "Let me look.");
   assert.equal(view.text.slice(last.start, last.end ?? undefined), "\n\nFound it.");
   assert.deepEqual(steps.steps.map((step) => step.kind === "note" ? step.label : step.state), ["done", "You added a note", "failed"]);
-  assert.equal(activitySteps(view).length, 3, "prose is not a step");
+  assert.deepEqual(
+    activitySteps(view).map((step) => (step.kind === "note" ? step.label : step.state)),
+    ["Let me look.", "done", "You added a note", "failed"],
+    "what was said along the way is a row where it was said; the last words are the reply",
+  );
+  assert.equal(latestProse(view), "Found it.");
 
   const record = toRunRecord(view)!;
   assert.ok(isRunRecord(record));
@@ -998,6 +1004,14 @@ test("prose and steps are read in the order they happened, live and recorded", (
   assert.deepEqual(recorded.map((segment) => segment.type === "text" ? segment.text : segment.steps.map((step) => step.key)),
     ["Let me look.", ["call-0", "note-0", "call-1"], "\n\nFound it."]);
   assert.equal(recordTranscriptSegments({ ...record, transcript: undefined }), null, "older records keep their old layout");
+
+  // A saved run reads the same as it did live: in order, with its last words as the reply.
+  assert.deepEqual(recordSteps(record).map((step) => step.key), ["prose-0", "call-0", "note-0", "call-1"]);
+  assert.equal(recordSteps(record)[0].label, "Let me look.");
+  assert.equal(recordReply(record, view.text), "Found it.");
+  // A record with no transcript shows every call, then what they proved, and its whole text.
+  assert.deepEqual(recordSteps({ ...record, transcript: undefined }).map((step) => step.key), ["call-0", "call-1", "note-0"]);
+  assert.equal(recordReply({ ...record, transcript: undefined }, view.text), view.text);
 });
 
 test("a run with more steps than a record may carry keeps no transcript", () => {

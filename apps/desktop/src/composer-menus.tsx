@@ -8,6 +8,10 @@ import {
 } from "../shared/provider";
 import { getProviderModels, getProviderStatus } from "./platform";
 import { SettingsSwitch } from "./settings-parts";
+import { usePresence } from "./presence";
+
+/** How long a menu takes to fade out. Matches the leave rule in styles.css. */
+const MENU_LEAVE_MS = 120;
 
 /**
  * The composer's two menus: which model answers, and how the run behaves.
@@ -83,6 +87,8 @@ export function ComposerMenu({ className, label, trigger, disabled, title, ariaL
     options[next].focus();
   };
 
+  // Fades out rather than vanishing, quicker than it came.
+  const panel = usePresence(open, MENU_LEAVE_MS);
   return <div className={`composer-menu ${className}${open ? " open" : ""}`} ref={rootRef} onKeyDown={open ? onKeyDown : undefined}>
     <button
       type="button"
@@ -95,7 +101,7 @@ export function ComposerMenu({ className, label, trigger, disabled, title, ariaL
       aria-expanded={open}
       onClick={() => setOpen((current) => !current)}
     >{trigger}{chevron && <ChevronDown className="composer-menu-chevron" size={13} aria-hidden="true" />}</button>
-    {open && <div className="composer-menu-panel" role="dialog" aria-label={label}>{children(() => close())}</div>}
+    {panel.present && <div className="composer-menu-panel" role="dialog" aria-label={label} data-leaving={panel.leaving || undefined}>{children(() => close())}</div>}
   </div>;
 }
 
@@ -277,19 +283,21 @@ const APPROVAL_CHOICES: ReadonlyArray<{ value: ApprovalMode; label: string; deta
 ];
 
 /** How a run behaves: what it may change without asking, and whether it playtests its own work. */
-export function RunMenu({ approvalMode, autoPlaytest, disabled, onApprovalMode, onAutoPlaytest }: {
+export function RunMenu({ approvalMode, autoPlaytest, webSearch, disabled, onApprovalMode, onAutoPlaytest, onWebSearch }: {
   approvalMode: ApprovalMode;
   autoPlaytest: boolean;
+  webSearch: boolean;
   disabled: boolean;
   onApprovalMode: (mode: ApprovalMode) => void;
   onAutoPlaytest: (on: boolean) => void;
+  onWebSearch: (on: boolean) => void;
 }) {
   const tone = approvalMode === "Full auto" ? " full-auto" : approvalMode === "Auto approve" ? " auto" : "";
   return <ComposerMenu
     className={`run-menu${tone}`}
     label="How the run behaves"
     disabled={disabled}
-    trigger={<span className="composer-menu-label"><ShieldCheck size={15} aria-hidden="true" />{approvalMode}<em>{autoPlaytest ? "Playtest on" : "Playtest off"}</em></span>}
+    trigger={<span className="composer-menu-label"><ShieldCheck size={15} aria-hidden="true" />{approvalMode}<em>{autoPlaytest ? "Playtest on" : "Playtest off"}{webSearch ? " · Web on" : ""}</em></span>}
   >
     {(close) => <>
       <span className="model-menu-group-label">Before changing your place</span>
@@ -308,6 +316,10 @@ export function RunMenu({ approvalMode, autoPlaytest, disabled, onApprovalMode, 
       <div className="run-menu-playtest">
         <span className="run-choice-text"><strong>Playtest to check changes</strong><span>After a change a playtest can check, run a short one and stop it before replying.</span></span>
         <SettingsSwitch label="Playtest to check changes" checked={autoPlaytest} onChange={onAutoPlaytest} />
+      </div>
+      <div className="run-menu-playtest">
+        <span className="run-choice-text"><strong>Web search</strong><span>Let the model search the web through your provider. Each search shows in the activity; what it reads is third-party text, and in Full auto nothing stops an action a page leads to.</span></span>
+        <SettingsSwitch label="Web search" checked={webSearch} onChange={onWebSearch} />
       </div>
     </>}
   </ComposerMenu>;

@@ -20,18 +20,6 @@ export type ToolActivityKind = "search" | "read" | "edit" | "run";
 /** Every entry the activity layer can show, including non-tool entries. */
 export type ActivityKind = ToolActivityKind | "verify" | "inspect" | "note";
 
-/**
- * The stage of the run a step belongs to.
- *
- * Phases are what the activity layer groups by: a run that reads eight places in
- * the project is one thing happening, not eight, and the reader should be able
- * to see that as one line and open it when they want the eight. Deriving the
- * phase from the kind means a tool added to `KIND_BY_TOOL` tomorrow lands in a
- * sensible group without touching this file again.
- */
-export type ActivityPhase =
-  | "connect" | "explore" | "scripts" | "edit" | "run" | "verify" | "note";
-
 const KIND_BY_TOOL: Readonly<Record<string, ToolActivityKind>> = {
   // -- Looking for something ---------------------------------------------
   search_objects: "search",
@@ -62,6 +50,8 @@ const KIND_BY_TOOL: Readonly<Record<string, ToolActivityKind>> = {
   get_roblox_docs: "read",
   // Roqer's own operation: frames of a clip the user attached to the chat.
   read_reference_clip: "read",
+  // Roqer's own operation: a page at a link the user gave.
+  open_user_link: "read",
 
   // -- Changing the project ----------------------------------------------
   set_properties: "edit",
@@ -98,10 +88,12 @@ const KIND_BY_TOOL: Readonly<Record<string, ToolActivityKind>> = {
   simulate_keyboard_input: "run",
   // Roqer's own operations, not Studio tools.
   run_blender_script: "run",
+  generate_image: "run",
   capture_moments: "run",
   // A call to one of the user's MCP servers is left out: what it does is the
   // server's, so it reads as "run", the conservative default.
   list_mcp_tools: "read",
+  list_uploads: "read",
 };
 
 /**
@@ -123,73 +115,28 @@ export function classifiedTools(): string[] {
 }
 
 /**
- * Reads that are about something other than the project itself, so they do not
- * fall into the same group as walking the tree. Everything else takes the phase
- * its kind implies.
- */
-const PHASE_BY_TOOL: Readonly<Record<string, ActivityPhase>> = {
-  get_connected_instances: "connect",
-  get_place_info: "connect",
-  get_script_source: "scripts",
-  grep_scripts: "scripts",
-  get_runtime_logs: "verify",
-  capture_screenshot: "verify",
-  capture_moments: "verify",
-};
-
-const PHASE_BY_KIND: Readonly<Record<ActivityKind, ActivityPhase>> = {
-  search: "explore",
-  read: "explore",
-  inspect: "explore",
-  edit: "edit",
-  run: "run",
-  verify: "verify",
-  note: "note",
-};
-
-/** Which stage of the run a tool call belongs to. */
-export function activityPhase(tool: string, target: string | null = null): ActivityPhase {
-  return Object.prototype.hasOwnProperty.call(PHASE_BY_TOOL, tool)
-    ? PHASE_BY_TOOL[tool]
-    : PHASE_BY_KIND[activityKind(tool, target)];
-}
-
-/** Which stage a piece of evidence belongs to. */
-export function evidencePhase(kind: RunEvidence["kind"]): ActivityPhase {
-  return PHASE_BY_KIND[evidenceActivityKind(kind)];
-}
-
-/**
- * What a whole phase is called once its steps are folded into one line. The
- * present tense is used while the phase is still running, so a group reads as
- * an activity in progress rather than a finished claim.
- */
-const PHASE_TITLE: Readonly<Record<ActivityPhase, { present: string; past: string }>> = {
-  connect: { present: "Connecting to Studio", past: "Connected to Studio" },
-  explore: { present: "Understanding the project", past: "Understood the project" },
-  scripts: { present: "Inspecting scripts", past: "Inspected scripts" },
-  edit: { present: "Applying changes", past: "Applied changes" },
-  run: { present: "Running in Studio", past: "Ran in Studio" },
-  verify: { present: "Checking the result", past: "Checked the result" },
-  // A run of progress notes is titled by its latest note, never by this.
-  note: { present: "Working", past: "Worked" },
-};
-
-export function phaseTitle(phase: ActivityPhase, past: boolean): string {
-  return past ? PHASE_TITLE[phase].past : PHASE_TITLE[phase].present;
-}
-
-/**
- * An instance path as a reader refers to it. Every path in a place begins at
- * `game`, so the prefix distinguishes nothing and costs the width that the rest
- * of the path needs. The full path stays in the step's details.
+ * An instance path as a reader refers to it: its name and what holds it. A row
+ * cuts a long title off at its end, which for a path is the part that names the
+ * thing, and `game` at the start distinguishes nothing. The full path stays in
+ * the step's details.
  */
 export function shortTarget(target: string): string {
-  return target.startsWith("game.") && target.length > 5 ? target.slice(5) : target;
+  if (!target.startsWith("game.") || target.length <= 5) return target;
+  return target.slice(5).split(".").slice(-2).join(".");
 }
 
 /** Longest finding shown on a row; anything longer belongs in the details. */
 export const MAX_FINDING_CHARS = 48;
+/** A failure's reason is the one finding worth room: it wraps, and the rest is in the details. */
+export const MAX_FAILURE_CHARS = 180;
+
+/** "1 results" is how the host counts; a row says it properly. */
+function singularCount(text: string): string {
+  const match = /^1 (\w+)$/.exec(text);
+  if (match === null) return text;
+  const noun = match[1];
+  return `1 ${noun.endsWith("ies") ? `${noun.slice(0, -3)}y` : noun.endsWith("s") ? noun.slice(0, -1) : noun}`;
+}
 
 /**
  * What a finished call actually learned, out of the summary the host produced.
@@ -205,16 +152,46 @@ export function activityFinding(tool: string, summary: string | undefined): stri
   if (text.startsWith(`${tool}: `)) text = text.slice(tool.length + 2).trim();
   else if (text.startsWith(`${tool} `)) text = text.slice(tool.length + 1).trim();
 
+  let failure = false;
   if (text.startsWith("failed (")) {
     const separator = text.indexOf("): ");
     text = separator === -1 ? text : text.slice(separator + 3).trim();
+    failure = true;
   }
+  // A failure reads by its reason: not the operation that raised it, and not
+  // where in the plugin's source it was raised.
+  const raised = /^[\w-]+ failed(?: \([^)]*\))?: /.exec(text);
+  if (raised !== null) { text = text.slice(raised[0].length); failure = true; }
+  text = text.replace(/^[\w./-]*\.[\w./-]+:\d+: /, "").trim();
 
   if (text === "" || text === "succeeded") return null;
   // Compacted JSON is the raw payload, not a finding anyone can read.
   if (/[{}[\]]/.test(text)) return null;
-  return text.length > MAX_FINDING_CHARS ? `${text.slice(0, MAX_FINDING_CHARS - 1).trimEnd()}…` : text;
+  const limit = failure ? MAX_FAILURE_CHARS : MAX_FINDING_CHARS;
+  return text.length > limit ? `${text.slice(0, limit - 1).trimEnd()}…` : singularCount(text);
 }
+
+/**
+ * Calls whose kind's verb would misdescribe them: what they do, in both tenses.
+ * "Ran eval_client_runtime" says nothing, and "Edited insert_asset" says less.
+ */
+const TOOL_ACTION: Readonly<Record<string, readonly [present: string, past: string]>> = {
+  eval_client_runtime: ["Running code on the client", "Ran code on the client"],
+  eval_server_runtime: ["Running code on the server", "Ran code on the server"],
+  capture_screenshot: ["Taking a screenshot", "Took a screenshot"],
+  insert_asset: ["Inserting an asset", "Inserted an asset"],
+  import_rbxm: ["Importing a model file", "Imported a model file"],
+  export_rbxm: ["Exporting a model file", "Exported a model file"],
+  generate_model: ["Generating a model", "Generated a model"],
+  manage_instance: ["Changing an instance", "Changed an instance"],
+  set_network_profile: ["Setting the network profile", "Set the network profile"],
+  reset_simulation_state: ["Resetting the simulation", "Reset the simulation"],
+  set_device_simulator: ["Setting the device simulator", "Set the device simulator"],
+  capture_device_matrix: ["Capturing device screenshots", "Captured device screenshots"],
+  interact_ui: ["Using the interface", "Used the interface"],
+  simulate_mouse_input: ["Using the mouse", "Used the mouse"],
+  simulate_keyboard_input: ["Pressing a key", "Pressed a key"],
+};
 
 const PRESENT: Readonly<Record<ActivityKind, string>> = {
   search: "Searching",
@@ -252,6 +229,15 @@ const TOOL_PHRASE: Readonly<Record<string, string>> = {
   get_scene_analysis: "the scene",
   get_memory_breakdown: "the memory breakdown",
   selection: "the current selection",
+  get_simulation_state: "the simulation state",
+  get_device_simulator_state: "the device simulator state",
+  capture_script_profiler: "the script profiler",
+  capture_micro_profiler: "the micro profiler",
+  get_asset_details: "an asset's details",
+  get_asset_thumbnail: "an asset's thumbnail",
+  preview_asset: "an asset preview",
+  get_roblox_skills: "the Roblox guides",
+  get_roblox_docs: "the Roblox docs",
   search_objects: "the project",
   search_assets: "the asset library",
   grep_scripts: "the scripts",
@@ -293,16 +279,26 @@ export function activityTarget(tool: string, summary: string): string | null {
 export function activityLabel(tool: string, target: string | null, past: boolean): string {
   const kind = activityKind(tool, target);
   const verb = past ? PAST[kind] : PRESENT[kind];
+  if (Object.prototype.hasOwnProperty.call(TOOL_ACTION, tool)) return TOOL_ACTION[tool][past ? 1 : 0];
+  if ((tool === "solo_playtest" || tool === "multiplayer_playtest") && target === "start") return past ? "Started a playtest" : "Starting a playtest";
+  if ((tool === "solo_playtest" || tool === "multiplayer_playtest") && target === "stop") return past ? "Stopped the playtest" : "Stopping the playtest";
+  if (tool === "get_runtime_logs" && target !== null) return past ? `Read output from ${target}` : `Reading output from ${target}`;
+  // With a path, this is pointing Studio's camera at something, which reads nothing.
+  if (tool === "selection" && target === "get") return past ? "Read your selection" : "Reading your selection";
+  if (tool === "selection" && target !== null && target.startsWith("game.")) return past ? `Framed ${shortTarget(target)} in Studio` : `Framing ${shortTarget(target)} in Studio`;
   if (tool === "upload_asset" && target === "status") return `${verb} upload status`;
   if (tool === "upload_asset" && target === "upload") return past ? "Uploaded an asset" : "Uploading an asset";
   if (tool === "upload_assets") return past ? "Uploaded assets" : "Uploading assets";
+  if (tool === "list_uploads") return past ? "Listed earlier uploads" : "Listing earlier uploads";
   if (tool === "run_blender_script") return past ? "Modeled in Blender" : "Modeling in Blender";
+  if (tool === "generate_image") return past ? "Generated images" : "Generating images";
   if (tool === "capture_moments") return past ? "Captured an effect at several moments" : "Capturing an effect at several moments";
   if (tool === "read_reference_clip") return past ? "Looked closer at the reference clip" : "Looking closer at the reference clip";
   if (tool === "list_mcp_tools") {
     const where = target === null ? "your MCP servers" : target.split("/")[0];
     return past ? `Listed tools on ${where}` : `Listing tools on ${where}`;
   }
+  if (tool === "open_user_link") return past ? `Read ${target ?? "a link you gave"}` : `Reading ${target ?? "a link you gave"}`;
   if (tool === "download_mcp_file") return past ? "Downloaded a file an MCP server made" : "Downloading a file an MCP server made";
   if (tool === "call_mcp_tool") {
     if (target === null) return past ? "Used an MCP tool" : "Using an MCP tool";
@@ -328,6 +324,8 @@ export function activityLabel(tool: string, target: string | null, past: boolean
     // as a place, and a query with nothing to read in it ("." , "*") says less
     // than naming what was searched.
     const query = target.trim();
+    // A search scoped to an instance is summarised by where it looked.
+    if (query.startsWith("game.")) return `${verb} ${shortTarget(query)}`;
     return /[\p{L}\p{N}]/u.test(query) ? `${verb} for “${query}”` : `${verb} ${toolPhrase(tool)}`;
   }
   return `${verb} ${shortTarget(target)}`;

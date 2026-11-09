@@ -229,7 +229,7 @@ test("a turn with no tool call returns the streamed prose as the answer", async 
   assert.match(sent.instructions.developer ?? "", /DEVELOPER TEST INSTRUCTIONS/);
   assert.match(sent.instructions.developer ?? "", /Automatic playtesting is enabled/);
   assert.deepEqual(sent.tools.map((tool) => tool.name), [
-    "roblox_studio", "load_skill", "resolve_icon", "update_task_list", "ask_user",
+    "roblox_studio", "open_link", "load_skill", "resolve_icon", "update_task_list", "ask_user",
   ]);
   assert.deepEqual(sent.messages, [{
     role: "user",
@@ -1873,7 +1873,7 @@ test("the blender tool is offered only while enabled, and a call becomes one eng
 
   assert.equal(await enabled.run(context), "Modeled.");
   assert.deepEqual(enabledBridge.requests[0].tools.map((tool) => tool.name), [
-    "roblox_studio", "blender", "load_skill", "resolve_icon", "update_task_list", "ask_user",
+    "roblox_studio", "open_link", "blender", "load_skill", "resolve_icon", "update_task_list", "ask_user",
   ]);
   assert.deepEqual(recorded.calls, ["run_blender_script"]);
   const fedBack = enabledBridge.requests[1].messages.at(-1)!.content;
@@ -1887,6 +1887,42 @@ test("the blender tool is offered only while enabled, and a call becomes one eng
   ]);
   await planner(offBridge).run(off.context);
   assert.equal(offBridge.requests[0].tools.some((tool) => tool.name === "blender"), false);
+  assert.deepEqual(off.recorded.calls, []);
+});
+
+test("the image tool is offered only while an image source is on, and a call becomes one engine operation with its preview", async () => {
+  const preview = { data: "iVBORw0KGgo=", mediaType: "image/png" as const };
+  const controller = new AbortController();
+  const { context, recorded } = makeContext(controller, (tool) => ({
+    ok: true, data: { jobId: "0a1b2c3d", images: [] }, text: "Image job 0a1b2c3d: 1 image.", images: tool === "generate_image" ? [preview] : undefined,
+    httpStatus: 200, durationMs: 1,
+  }));
+  const call = { id: "call_1", name: "image", arguments: { prompt: "a soft white glow", kind: "light", name: "glow" } };
+  const enabledBridge = gateway([
+    [{ kind: "tool-call", call }, { kind: "completed", stopReason: "tool-use" }],
+    DONE("Generated."),
+  ]);
+  const enabled = createAgentLoopPlanner({
+    transport: enabledBridge, runId: "run_test", modelId: "openai/gpt-5.6-luna", effort: "medium",
+    agent: AGENT, skillLibrary: SKILLS, imageGeneration: true,
+  });
+
+  assert.equal(await enabled.run(context), "Generated.");
+  assert.deepEqual(enabledBridge.requests[0].tools.map((tool) => tool.name), [
+    "roblox_studio", "open_link", "image", "load_skill", "resolve_icon", "update_task_list", "ask_user",
+  ]);
+  assert.deepEqual(recorded.calls, ["generate_image"]);
+  const fedBack = enabledBridge.requests[1].messages.at(-1)!.content;
+  assert.ok(fedBack.some((block) => block.kind === "image" && block.data === preview.data), "the picture reaches the model");
+
+  // Off: the tool is not offered, and a model that names it anyway gets nothing run.
+  const off = makeContext(new AbortController());
+  const offBridge = gateway([
+    [{ kind: "tool-call", call }, { kind: "completed", stopReason: "tool-use" }],
+    DONE("Could not."),
+  ]);
+  await planner(offBridge).run(off.context);
+  assert.equal(offBridge.requests[0].tools.some((tool) => tool.name === "image"), false);
   assert.deepEqual(off.recorded.calls, []);
 });
 

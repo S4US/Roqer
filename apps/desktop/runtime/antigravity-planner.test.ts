@@ -388,7 +388,7 @@ test("a kept Antigravity session carries the chat's next message, and each run r
 
 test("a tool step is permitted only for Roqer's server and the files in its private folders", () => {
   const root = path.resolve("agy-root");
-  const home = { home: path.join(root, "home"), workspace: path.join(root, "workspace"), remove: async () => undefined };
+  const home = { home: path.join(root, "home"), workspace: path.join(root, "workspace"), remove: async () => undefined, webSearch: false };
   const tool = (name: string, parameters: Record<string, unknown>) =>
     readAntigravityStep(step(1, { state: "DONE", step_type: "tool", tool_name: name, tool_info: { name, parameters } }))!;
   const permitted = (name: string, parameters: Record<string, unknown>) => antigravityToolPermitted(tool(name, parameters), home);
@@ -422,4 +422,20 @@ test("a result's usage keeps agy's input apart from its cache reads and counts t
     { inputTokens: 30990, cacheReadTokens: 32605, outputTokens: 15 },
   );
   assert.equal(antigravityResultUsage({ usage: { output_tokens: 3 } }), null);
+});
+
+import { antigravitySearchQuery, isAntigravityWebSearch } from "./antigravity-planner";
+
+test("a web search step is permitted only in a home with search on, and its query is read off for the activity", () => {
+  const step = (name: string, parameters: Record<string, unknown>) => ({ index: 1, state: "DONE", type: "tool", toolName: name, toolParameters: parameters });
+  const searching = step("search_web", { query: " flipbook particle roblox " });
+  const withSearch = { home: "/h", workspace: "/w", remove: async () => undefined, webSearch: true };
+  const without = { ...withSearch, webSearch: false };
+  assert.equal(isAntigravityWebSearch(searching), true);
+  assert.equal(isAntigravityWebSearch(step("run_command", {})), false);
+  assert.equal(antigravityToolPermitted(searching, withSearch), true);
+  assert.equal(antigravityToolPermitted(searching, without), false);
+  assert.equal(antigravityToolPermitted(step("read_url_content", { Url: "https://x" }), withSearch), false);
+  assert.equal(antigravitySearchQuery(searching), "flipbook particle roblox");
+  assert.equal(antigravitySearchQuery(step("search_web", {})), "the web");
 });

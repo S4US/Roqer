@@ -39,6 +39,12 @@ export type RunRequest = {
   conversation: ConversationContext;
   approvalMode: ApprovalMode;
   autoPlaytest: boolean;
+  /**
+   * Whether the model may search the web during this run, through its own
+   * provider's search. Off unless the user turned it on for the chat; absent
+   * in records written before the switch existed.
+   */
+  webSearch?: boolean;
   /** Loopback MCP endpoint, e.g. http://127.0.0.1:58741 */
   endpoint: string;
   /** Studio instance to target, or null to let the server resolve a default. */
@@ -58,6 +64,12 @@ export type RunStartRequest = Omit<RunRequest, "runId"> & {
   startId?: string;
   /** Opaque handles issued by the native file picker; never filesystem paths. */
   attachmentIds?: string[];
+  /**
+   * Whether to read the user's Studio selection when the run starts and put it
+   * beside the prompt. A yes or no, never the selection itself: the main
+   * process reads the paths from Studio, so the window cannot compose them.
+   */
+  includeSelection?: boolean;
 };
 
 export type RunOutcome =
@@ -154,6 +166,13 @@ export type RunEvidence = {
    * for the picture when it is shown.
    */
   imageRef?: string;
+  /**
+   * A sound this evidence is about, by its name in the store beside the chat
+   * (`isEvidenceSoundRef`): a Creator Store preview the agent fetched, or the
+   * file it uploaded as a sound. Only the ref, live or saved: a sound is asked
+   * for when someone presses play.
+   */
+  soundRef?: string;
   /**
    * The 3D preview of a Blender result, by the opaque id the main process
    * serves it under. Never a path; the preview may have expired since.
@@ -273,6 +292,7 @@ export type RunEvent =
     prompt: string;
     approvalMode: ApprovalMode;
     autoPlaytest: boolean;
+    webSearch?: boolean;
     endpoint: string;
     instanceId: string | null;
     model: string | null;
@@ -545,6 +565,12 @@ export const MAX_RECORDED_EVIDENCE_IMAGES = 40;
 export const MAX_INLINE_EVIDENCE_IMAGES = 6;
 
 /**
+ * How many sounds one run keeps beside the chat: enough for a set of effect
+ * sounds, and a bound on the disk a run can fill with them.
+ */
+export const MAX_RECORDED_EVIDENCE_SOUNDS = 12;
+
+/**
  * A stored preview's name in the picture store: the SHA-256 of its bytes and
  * its type. It names a picture by its content, never a path, so the renderer
  * can ask for a picture but cannot name a file, and the main process can check
@@ -556,11 +582,32 @@ export function isEvidencePictureRef(value: unknown): value is string {
   return typeof value === "string" && EVIDENCE_PICTURE_REF.test(value);
 }
 
+/** A stored sound's name: the SHA-256 of its bytes and its format, like a picture's. */
+const EVIDENCE_SOUND_REF = /^[0-9a-f]{64}\.(mp3|ogg|wav|flac)$/;
+
+export function isEvidenceSoundRef(value: unknown): value is string {
+  return typeof value === "string" && EVIDENCE_SOUND_REF.test(value);
+}
+
 /**
  * The title of a Blender job's preview. The answer labels a preview by where it
  * came from, and this is how it tells a render of a file from a Studio capture.
  */
 export const BLENDER_PREVIEW_TITLE = "Blender result, before upload";
+
+/**
+ * The title of a generated image's preview: the picture, or the review sheet
+ * of several, that the image tool made, seen before any upload. A picture of
+ * a file, like a Blender render, is not evidence of anything in Studio.
+ */
+export const IMAGE_PREVIEW_TITLE = "Generated image, before upload";
+
+/**
+ * Metadata on a generated image's preview: the file stem the call named.
+ * Previews of one name are versions of one texture, and the card shows them
+ * as one; the host also records that as the evidence's `subject`.
+ */
+export const IMAGE_NAME_LABEL = "Image";
 
 /**
  * The title of an animation's preview: the contact sheet the animation tool
@@ -695,6 +742,7 @@ function isEvidence(value: unknown): value is RunEvidence {
     isOptionalString(value.afterChangeId) &&
     (value.imageDataUrl === undefined || isEvidenceImage(value.imageDataUrl)) &&
     (value.imageRef === undefined || isEvidencePictureRef(value.imageRef)) &&
+    (value.soundRef === undefined || isEvidenceSoundRef(value.soundRef)) &&
     (value.modelPreviewId === undefined || isModelPreviewId(value.modelPreviewId)) &&
     (value.previewNotKept === undefined || value.previewNotKept === true) &&
     (value.subject === undefined || (isString(value.subject) && value.subject.length > 0 && value.subject.length <= MAX_EVIDENCE_SUBJECT_CHARS)) &&
@@ -784,6 +832,7 @@ export function isRunEvent(value: unknown): value is RunEvent {
       return isString(value.prompt) &&
         APPROVAL_MODES.includes(value.approvalMode as string) &&
         typeof value.autoPlaytest === "boolean" &&
+        (value.webSearch === undefined || typeof value.webSearch === "boolean") &&
         isString(value.endpoint) &&
         isString(value.planner) &&
         (value.model === null || isString(value.model)) &&

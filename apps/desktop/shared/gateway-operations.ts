@@ -17,6 +17,8 @@ import type { ToolParameterSchema, ToolSchema } from "./mcp-tool-schemas";
 export const CAPTURE_MOMENTS_OPERATION = "capture_moments";
 export const UPLOAD_ASSETS_OPERATION = "upload_assets";
 export const LINK_ROJO_PROJECT_OPERATION = "link_rojo_project";
+/** Reads the ledger of what this computer uploaded; it reaches neither Studio nor Roblox. */
+export const LIST_UPLOADS_OPERATION = "list_uploads";
 
 /**
  * Captures run Luau the model wrote, in Studio or in a playtest client, so
@@ -31,6 +33,7 @@ export const GATEWAY_TOOL_RISK: Readonly<Record<string, ToolRisk>> = {
   [CAPTURE_MOMENTS_OPERATION]: "irreversible",
   [UPLOAD_ASSETS_OPERATION]: "irreversible",
   [LINK_ROJO_PROJECT_OPERATION]: "mutation",
+  [LIST_UPLOADS_OPERATION]: "read",
 };
 
 /** The most moments one call captures: each is an image the model reads. */
@@ -60,6 +63,14 @@ export const GATEWAY_SCHEMAS: Readonly<Record<string, ToolSchema>> = {
     description: "Use to upload several local files to Roblox in one call, as upload_asset does one: every texture of a finished set at once.",
     parameters: [
       { name: "uploads", type: "object[]", required: true, description: `1-${MAX_UPLOADS} files, each {filePath, assetType: 'Decal'|'Model'|'Audio'|'Animation'|'Video', displayName (at most 50 characters), description?}. Each file is uploaded on its own; the result lists every file with its assetId and, for a Decal, its imageId.` },
+    ],
+  },
+  [LIST_UPLOADS_OPERATION]: {
+    description: "Use before uploading, or to find an asset made earlier: lists what this computer already uploaded to Roblox (id, type, name, imageId, moderation, date), newest first. Reuse an id with insert_asset or in a property instead of uploading the same file again; an upload whose exact bytes went up before is answered from this record anyway.",
+    parameters: [
+      { name: "query", type: "string", required: false, description: "Part of a name or file name, an id, or a type; case does not matter. Leave out for the newest uploads." },
+      { name: "assetType", type: "string", required: false, enumValues: ["Decal", "Model", "Audio", "Animation", "Video"], description: "Only uploads of this type." },
+      { name: "limit", type: "number", required: false, defaultValue: "20", description: "How many to list, 1-50." },
     ],
   },
   [LINK_ROJO_PROJECT_OPERATION]: {

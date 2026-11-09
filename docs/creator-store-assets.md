@@ -30,7 +30,10 @@ three and can be set as high as five.
 Downloads are accepted only from HTTPS locations on `rbxcdn.com` or the exact
 Roblox-owned legacy host `contentdelivery.roblox.com`. The server validates MP3,
 OGG, WAV, or FLAC file signatures and enforces per-file and aggregate byte
-limits. Audio bytes remain in memory and are not written to disk. A failed or
+limits. Audio bytes remain in memory on the server and are not written to disk. The
+Roqer desktop keeps its own copy of each previewed sound beside the chat, so
+the user can play it from the run's results; see
+[Configuration](configuration.md#roqer-desktop). A failed or
 inaccessible download is reported without weakening insertion sanitization or
 preventing the structural preview from returning.
 

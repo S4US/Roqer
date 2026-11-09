@@ -8,13 +8,13 @@ const usage = { inputTokens: 2_250, outputTokens: 56, requests: 1 };
 
 test("completion metadata and usage render as one DOM line", () => {
   const html = renderToStaticMarkup(createElement(CompletionLine, {
-    metadata: "Full auto · 4s",
+    metadata: "4s",
     usage,
   }));
 
   assert.equal(
     html,
-    '<p class="run-completion-metadata" title="As the provider reported it.">Full auto · 4s · Used 2.3k tokens: 2.3k input, 56 output · 1 request</p>',
+    '<p class="run-completion-metadata" title="As the provider reported it.">4s · Used 2.3k tokens: 2.3k input, 56 output · 1 request</p>',
   );
   assert.equal((html.match(/<p/g) ?? []).length, 1);
 });

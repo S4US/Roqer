@@ -46,6 +46,13 @@ const GATE_TIMEOUT_SECONDS = 30;
 export const GATE_REFUSAL_PREFIX = "Roqer allows only its own tools here";
 
 /**
+ * The names Antigravity's own web search goes by, the one built-in tool the
+ * gate lets through when the user turned web search on. Reading a page stays
+ * refused by the permission rules (`read_url`).
+ */
+export const ANTIGRAVITY_WEB_SEARCH_TOOLS: readonly string[] = ["search_web", "google_web_search"];
+
+/**
  * Permission rules for every Roqer-owned home. Deny beats allow in `agy`, so
  * nothing here may deny what `allow` grants. Reads are left at the default:
  * `agy` reads the schemas of an MCP server's tools from a file in the home
@@ -133,6 +140,8 @@ try {
   } else if (name === "view_file" && typeof args.AbsolutePath === "string" &&
     config.readable.some((directory) => within(args.AbsolutePath, directory))) {
     // A tool schema, a saved tool image, or a picture the user attached.
+  } else if (Array.isArray(config.webSearchTools) && config.webSearchTools.includes(name)) {
+    // Web search, which the user turned on for this chat; Roqer shows each one.
   } else if (name === "call_mcp_tool") {
     refuse("only the " + JSON.stringify(config.server) + " MCP server is available.");
   } else {
@@ -217,6 +226,8 @@ export type AntigravityHomeOptions = {
   parent?: string;
   /** The user's real home, whose account-level `agy` choices are kept. Defaults to the running user's. */
   userHome?: string;
+  /** Let the agent use Antigravity's own web search: the user turned it on for the chat. */
+  webSearch?: boolean;
 };
 
 export type AntigravityHome = {
@@ -224,6 +235,8 @@ export type AntigravityHome = {
   home: string;
   /** The process's working directory: empty but for attached pictures, and a repository root of its own. */
   workspace: string;
+  /** Whether the gate lets Antigravity's web search through in this home. */
+  webSearch: boolean;
   /** Remove everything, including the MCP credential. Safe to call more than once. */
   remove(): Promise<void>;
 };
@@ -254,7 +267,8 @@ export async function createAntigravityHome(options: AntigravityHomeOptions = {}
     // to the repository root; a repository of its own stops that walk here.
     await fs.mkdir(path.join(workspace, ".git"), { recursive: true });
     await fs.mkdir(attachmentDirectory(workspace));
-    const readable = readableDirectories({ home, workspace, remove });
+    const webSearch = options.webSearch === true;
+    const readable = readableDirectories({ home, workspace, remove, webSearch });
 
     const carried = await readCarriedSettings(options.userHome ?? os.homedir());
     await writePrivate(path.join(cli, "settings.json"), JSON.stringify(antigravitySettings({ mcp: options.mcp !== undefined, carried, readable })));
@@ -269,6 +283,7 @@ export async function createAntigravityHome(options: AntigravityHomeOptions = {}
     await writePrivate(path.join(config, GATE_CONFIG_FILE), JSON.stringify({
       server: ANTIGRAVITY_MCP_SERVER_NAME,
       readable,
+      webSearchTools: webSearch ? ANTIGRAVITY_WEB_SEARCH_TOOLS : [],
     }));
     await fs.writeFile(path.join(config, wrapper.file), wrapper.text, { encoding: "utf8", mode: 0o700 });
     await writePrivate(path.join(config, "hooks.json"), JSON.stringify({
@@ -276,7 +291,7 @@ export async function createAntigravityHome(options: AntigravityHomeOptions = {}
         PreToolUse: [{ matcher: "*", hooks: [{ type: "command", command: wrapper.command, timeout: GATE_TIMEOUT_SECONDS }] }],
       },
     }));
-    return { home, workspace, remove };
+    return { home, workspace, remove, webSearch };
   } catch (error) {
     await remove();
     throw error;

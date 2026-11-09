@@ -1,4 +1,4 @@
-import { ChevronLeft, ChevronRight, Plus, X } from "lucide-react";
+import { Box, ChevronLeft, ChevronRight, Cpu, Gamepad2, ImageIcon, Moon, Plug, Plus, SlidersHorizontal, Sun, X, type LucideIcon } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { appVersionDetail, type AppUpdateState } from "../shared/app-update";
@@ -9,10 +9,12 @@ import type { StudioStatus } from "../shared/studio-status";
 import type { WorkspaceState } from "./model";
 import { accountDetail } from "./account-detail";
 import { BlenderSettings } from "./blender-settings";
+import { ImageSettings } from "./image-settings";
 import { DiagnosticsActions } from "./diagnostics-actions";
 import { EndpointPage, endpointDetail, useCustomConnections } from "./custom-connections";
 import { McpServerSettings, type McpServerVisit } from "./mcp-server-settings";
 import { OpenCloudSettings } from "./open-cloud-settings";
+import { AssetLedgerSettings } from "./asset-ledger-settings";
 import {
   cancelProviderLogin, getAppVersion, getProviderLimits, getProviderStatus, installProviderClient, loginProvider, openProviderLogin, submitProviderCode,
   waitForProviderLogin,
@@ -33,14 +35,15 @@ import { SettingsGroup, SettingsRow, SettingsSwitch } from "./settings-parts";
  * beside the model. This page only says what is available to choose from.
  */
 
-export type SettingsSectionId = "models" | "roblox" | "blender" | "mcp" | "app";
+export type SettingsSectionId = "models" | "roblox" | "blender" | "images" | "mcp" | "app";
 
-const SECTIONS: ReadonlyArray<{ id: SettingsSectionId; label: string }> = [
-  { id: "models", label: "Models" },
-  { id: "roblox", label: "Roblox" },
-  { id: "blender", label: "Blender" },
-  { id: "mcp", label: "MCP servers" },
-  { id: "app", label: "App" },
+const SECTIONS: ReadonlyArray<{ id: SettingsSectionId; label: string; icon: LucideIcon }> = [
+  { id: "models", label: "Models", icon: Cpu },
+  { id: "roblox", label: "Roblox", icon: Gamepad2 },
+  { id: "blender", label: "Blender", icon: Box },
+  { id: "images", label: "Images", icon: ImageIcon },
+  { id: "mcp", label: "MCP servers", icon: Plug },
+  { id: "app", label: "App", icon: SlidersHorizontal },
 ];
 
 /** A subscription account; the Custom provider is the endpoints list instead. */
@@ -74,7 +77,9 @@ type EndpointView = { key: string; id?: string };
 
 let nextEndpointVisit = 0;
 
-export function SettingsPage({ preferences, studioStatus, updateState, notice, onPreferences, onStudioRefresh, onProviderChanged, onExport, onClose }: {
+export function SettingsPage({ leaving = false, preferences, studioStatus, updateState, notice, onPreferences, onStudioRefresh, onProviderChanged, onExport, onClose }: {
+  /** Closing: shown on its way out, and no longer taking input. */
+  leaving?: boolean;
   preferences: WorkspaceState["preferences"];
   studioStatus: StudioStatus;
   updateState: AppUpdateState;
@@ -136,7 +141,7 @@ export function SettingsPage({ preferences, studioStatus, updateState, notice, o
     ? undefined
     : endpoints.connections?.find((connection) => connection.id === endpoint.id);
 
-  return <div className="settings-page" role="region" aria-label="Settings">
+  return <div className="settings-page" role="region" aria-label="Settings" data-leaving={leaving || undefined} inert={leaving}>
     <nav className="settings-nav" aria-label="Settings sections">
       <button type="button" className="settings-nav-back" onClick={close}><ChevronLeft size={15} /> Back to chats</button>
       {SECTIONS.map((entry) => <button
@@ -145,7 +150,7 @@ export function SettingsPage({ preferences, studioStatus, updateState, notice, o
         className="settings-nav-item"
         aria-current={section === entry.id ? "page" : undefined}
         onClick={() => openSection(entry.id)}
-      >{entry.label}</button>)}
+      ><entry.icon size={15} aria-hidden="true" />{entry.label}</button>)}
     </nav>
 
     <main className="settings-main" ref={mainRef}>
@@ -202,15 +207,26 @@ export function SettingsPage({ preferences, studioStatus, updateState, notice, o
             <SettingsRow title="Roblox Studio" detail={studioStatus.message}>
               <button type="button" className="small-button" onClick={onStudioRefresh}>Check</button>
             </SettingsRow>
+            <SettingsRow title="Use your Studio selection" detail="Show what is selected in Studio above the message box, and tell the model when you send.">
+              <SettingsSwitch label="Use your Studio selection" checked={preferences.useStudioSelection} onChange={(useStudioSelection) => onPreferences({ useStudioSelection })} />
+            </SettingsRow>
           </SettingsGroup>
           <SettingsGroup title="Publishing">
             <OpenCloudSettings />
+          </SettingsGroup>
+          <SettingsGroup title="Uploads">
+            <AssetLedgerSettings studioStatus={studioStatus} endpoint={preferences.mcpEndpoint} />
           </SettingsGroup>
         </>}
 
         {section === "blender" && <>
           <PageHead title="Blender" lede="Let the agent model props and buildings in Blender, then bring them into Studio." />
           <BlenderSettings />
+        </>}
+
+        {section === "images" && <>
+          <PageHead title="Images" lede="Let the agent generate particle textures, icons, decals and tiles with an image model you pay for, then check and upload them." />
+          <ImageSettings />
         </>}
 
         {section === "mcp" && <McpServerSettings
@@ -222,7 +238,13 @@ export function SettingsPage({ preferences, studioStatus, updateState, notice, o
 
         {section === "app" && <>
           <PageHead title="App" />
-          <SettingsGroup>
+          <SettingsGroup title="General">
+            <SettingsRow title="Theme">
+              <div className="theme-switch" role="group" aria-label="Theme">
+                <button type="button" aria-pressed={preferences.theme === "dark"} onClick={() => onPreferences({ theme: "dark" })}><Moon size={14} aria-hidden="true" />Dark</button>
+                <button type="button" aria-pressed={preferences.theme === "light"} onClick={() => onPreferences({ theme: "light" })}><Sun size={14} aria-hidden="true" />Light</button>
+              </div>
+            </SettingsRow>
             <SettingsRow title="Show Roqer on Discord" detail="Your profile shows that Roqer is open and whether it is busy. Never your place, scripts, or tasks.">
               <SettingsSwitch label="Show Roqer on Discord" checked={preferences.discordPresence} onChange={(discordPresence) => onPreferences({ discordPresence })} />
             </SettingsRow>

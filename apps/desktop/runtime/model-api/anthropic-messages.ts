@@ -63,7 +63,12 @@ type StreamBlock =
   | { kind: "text"; text: string }
   | { kind: "tool"; id: string; name: string; arguments: string }
   | { kind: "thinking"; thinking: string; signature: string }
-  | { kind: "redacted"; data: string };
+  | { kind: "redacted"; data: string }
+  /** The API's own web search: reported to the user as it runs, and not sent back. */
+  | { kind: "server"; name: string; arguments: string };
+
+/** Anthropic's server-side web search, asked for beside Roqer's tools when the user turned search on. */
+const ANTHROPIC_WEB_SEARCH_TOOL = { type: "web_search_20250305", name: "web_search", max_uses: 8 } as const;
 
 /**
  * One assistant turn exactly as the endpoint produced it, kept so it can be
@@ -327,7 +332,8 @@ export class AnthropicMessagesTurns implements TurnTransport {
       ? request.instructions.system
       : `${request.instructions.system}\n\n${request.instructions.developer}`;
     const maxTokens = request.maxOutputTokens ?? this.maxOutput;
-    const tools = request.tools.map((tool) => ({ name: tool.name, description: tool.description, input_schema: tool.parameters }));
+    const tools: unknown[] = request.tools.map((tool) => ({ name: tool.name, description: tool.description, input_schema: tool.parameters }));
+    if (request.webSearch === true) tools.push(ANTHROPIC_WEB_SEARCH_TOOL);
     const rendering = this.render(request, system, tools);
     const messages = rendering.messages;
     // A cache breakpoint on the newest block: every turn re-sends the whole
@@ -452,6 +458,9 @@ export class AnthropicMessagesTurns implements TurnTransport {
             throw tooManyToolCalls(label);
           }
           blocks.set(index, { kind: "tool", id: block.id, name: block.name, arguments: "" });
+        } else if (block?.type === "server_tool_use" && typeof block.name === "string") {
+          blocks.set(index, { kind: "server", name: block.name, arguments: "" });
+          produced = true;
         } else if (block?.type === "text") {
           blocks.set(index, { kind: "text", text: "" });
         } else if (block?.type === "thinking") {
@@ -466,6 +475,15 @@ export class AnthropicMessagesTurns implements TurnTransport {
         }
       } else if (payload.type === "content_block_stop") {
         thinkingOpen.delete(index);
+        const finished = blocks.get(index);
+        if (finished?.kind === "server" && finished.name === "web_search") {
+          let query = "the web";
+          try {
+            const input = JSON.parse(finished.arguments || "{}") as unknown;
+            if (isRecord(input) && typeof input.query === "string" && input.query.trim() !== "") query = input.query.trim().slice(0, 1_000);
+          } catch { /* A query that did not parse is still a search. */ }
+          yield { kind: "search", query };
+        }
       } else if (payload.type === "content_block_delta") {
         const delta = isRecord(payload.delta) ? payload.delta : undefined;
         const current = blocks.get(index);
@@ -473,6 +491,8 @@ export class AnthropicMessagesTurns implements TurnTransport {
         if (delta?.type === "text_delta" && typeof delta.text === "string" && delta.text.length > 0) {
           if (current?.kind === "text") current.text += delta.text;
           yield { kind: "delta", text: delta.text };
+        } else if (delta?.type === "input_json_delta" && typeof delta.partial_json === "string" && current?.kind === "server") {
+          if (current.arguments.length < MAX_TOOL_ARGUMENT_CHARACTERS) current.arguments += delta.partial_json;
         } else if (delta?.type === "input_json_delta" && typeof delta.partial_json === "string" && current?.kind === "tool") {
           if (current.arguments.length + delta.partial_json.length > MAX_TOOL_ARGUMENT_CHARACTERS) {
             throw oversizedToolCall(label, current.name);

@@ -34,6 +34,12 @@ import { RunHolds, STUDIO_PLACE_BUSY, type RunHold } from "../runtime/run-claims
 import { bridgeEnvironment, checkOpenCloudKey } from "../runtime/open-cloud";
 import { BlenderSettings } from "../runtime/blender-settings";
 import { BlenderWorker, scriptEnvironment } from "../runtime/blender-worker";
+import { ImageSettings } from "../runtime/image-settings";
+import { ImageWorker } from "../runtime/image-worker";
+import { createImageSource, testImageSource } from "../runtime/image-sources";
+import {
+  IMAGE_OPERATION, imageSourceNeedsKey, MAX_IMAGES_PER_RUN, parseImageSettingsSave, type ImageSettingsResult, type ImageTestResult,
+} from "../shared/image-generation";
 import { RojoConnection } from "../runtime/rojo-connection";
 import { RojoLinksStore } from "../runtime/rojo-links";
 import {
@@ -45,12 +51,26 @@ import { captureMoments } from "../runtime/capture-moments";
 import { uploadAssets } from "../runtime/upload-assets";
 import { linkRojoProject } from "../runtime/link-rojo-project";
 import { withLocalOperations, type LocalOperation } from "../runtime/local-operations";
-import { CAPTURE_MOMENTS_OPERATION, LINK_ROJO_PROJECT_OPERATION, UPLOAD_ASSETS_OPERATION } from "../shared/gateway-operations";
+import { readStudioSelection } from "../runtime/selection-context";
+import { readSoundFileInside } from "../runtime/picture-store";
+import { AssetLedger } from "../runtime/asset-ledger";
+import { ledgerAwareUpload, listUploads, type LedgerRunContext } from "../runtime/upload-ledger";
+import {
+  isAssetInsertRequest, isAssetThumbnailRequest, MAX_THUMBNAIL_CHARACTERS,
+  type AssetLedgerResult, type AssetThumbnailResult,
+} from "../shared/asset-ledger";
+import {
+  CAPTURE_MOMENTS_OPERATION, LINK_ROJO_PROJECT_OPERATION, LIST_UPLOADS_OPERATION, UPLOAD_ASSETS_OPERATION,
+} from "../shared/gateway-operations";
 import type { McpCallOptions, McpToolOutcome } from "../runtime/mcp-types";
 import { BLENDER_OPERATION, type BlenderSettingsResult, type BlenderSettingsView } from "../shared/blender";
+import {
+  isStudioSelectionRequest, selectionContextText, type StudioSelection, type StudioSelectionResult,
+} from "../shared/studio-selection";
 import type { RojoPickOutcome, RojoResult } from "../shared/rojo";
 import type { ModelPreviewResult } from "../shared/model-preview";
 import type { EvidencePictureResult } from "../shared/evidence-picture";
+import type { EvidenceSoundResult } from "../shared/evidence-sound";
 import { OpenCloudStore, type OpenCloudResolved } from "../runtime/open-cloud-store";
 import {
   parseOpenCloudSave,
@@ -102,6 +122,7 @@ import { adoptPreviousUserData, PREVIOUS_USER_DATA_SEGMENTS } from "../runtime/u
 import { RunJournal } from "../runtime/run-journal";
 import { RunAttention, type AttentionSurface } from "../runtime/run-attention";
 import { BridgeLog } from "../runtime/bridge-log";
+import { boundedMessage, createLogGate, watchEventLoop } from "../runtime/window-diagnostics";
 import { composeDiagnostics } from "../runtime/diagnostics";
 import { AttachmentRegistry, MAX_IMAGE_SOURCE_BYTES } from "../runtime/attachment-context";
 import {
@@ -111,6 +132,8 @@ import { ClipDecoder } from "./clip-decoder";
 import { clipScope, ClipStore } from "../runtime/clip-store";
 import type { ClipSupport } from "../runtime/clip-source";
 import { readReferenceClip, type ChatClips } from "../runtime/reference-clip";
+import { openUserLink, UserLinks } from "../runtime/user-links";
+import { OPEN_LINK_OPERATION } from "../shared/user-links";
 import { CLIP_MEDIA_SCHEME, MAX_DROPPED_CLIP_BYTES, REFERENCE_CLIP_OPERATION } from "../shared/reference-clip";
 import { serveClipMedia } from "../runtime/clip-media";
 import { DiscordPresence } from "./discord-presence";
@@ -222,6 +245,42 @@ function bridgeLogPath(): string {
   return path.join(app.getPath("userData"), "bridge.log");
 }
 
+let appLogFile: BridgeLog | undefined;
+
+/**
+ * What happened to the app's own window, on disk beside bridge.log and bounded
+ * the same way: its page crashing or hanging, errors the page logged, and the
+ * main process freezing. Without it those ended in a dark window with no trace.
+ */
+function appLog(): BridgeLog {
+  return appLogFile ??= new BridgeLog(path.join(app.getPath("userData"), "app.log"), {
+    onError: (error) => console.error("Roqer could not write the app log", error),
+  });
+}
+
+/** A page that crashes again this soon after a reload is left as it is, rather than reloaded in a loop. */
+const PAGE_RELOAD_COOLDOWN_MS = 15_000;
+
+/** Record what happens to the window's page, and bring a crashed page back. */
+function watchWindow(window: BrowserWindow): void {
+  let lastReload = 0;
+  const gate = createLogGate();
+  window.webContents.on("render-process-gone", (_event, details) => {
+    void appLog().write(`[window] the page process is gone: ${details.reason}, exit code ${details.exitCode}`);
+    if (details.reason === "clean-exit" || window.isDestroyed() || Date.now() - lastReload < PAGE_RELOAD_COOLDOWN_MS) return;
+    lastReload = Date.now();
+    void appLog().write("[window] reloading the page");
+    window.webContents.reload();
+  });
+  window.on("unresponsive", () => void appLog().write("[window] the page stopped responding"));
+  window.on("responsive", () => void appLog().write("[window] the page is responding again"));
+  window.webContents.on("console-message", (event) => {
+    if (event.level !== "error") return;
+    const where = event.sourceId === "" ? "" : ` (${event.sourceId.split("/").pop()}:${event.lineNumber})`;
+    for (const line of gate(`[page error]${where} ${boundedMessage(event.message)}`)) void appLog().write(line);
+  });
+}
+
 function runJournal(): RunJournal {
   return journal ??= new RunJournal(path.join(app.getPath("userData"), "run-journal"), (error) => {
     if (journalFailure) return;
@@ -315,6 +374,16 @@ function withMcpAuthorization(resolved: ResolvedMcpServer): ResolvedMcpServer {
 let openCloudStore: OpenCloudStore | null = null;
 
 /** The user's Roblox Open Cloud key and creator, with the key encrypted by the OS. */
+// -- Asset ledger ------------------------------------------------------------
+
+let assetLedgerStore: AssetLedger | null = null;
+
+/** What this computer uploaded to Roblox, written by the main process from the uploads it saw go through. */
+function assetLedger(): AssetLedger {
+  assetLedgerStore ??= new AssetLedger({ file: path.join(app.getPath("userData"), "asset-ledger.json") });
+  return assetLedgerStore;
+}
+
 function openCloud(): OpenCloudStore {
   openCloudStore ??= new OpenCloudStore({
     file: path.join(app.getPath("userData"), "open-cloud.json"),
@@ -781,6 +850,97 @@ function blenderJobsRoot(): string {
   return path.join(app.getPath("userData"), "blender-jobs");
 }
 
+// -- Image generation ---------------------------------------------------------
+
+let imageSettingsStore: ImageSettings | null = null;
+
+/** Whether the image tool is on, which server it calls, with which model and key; the key encrypted by the OS. */
+function imageSettings(): ImageSettings {
+  imageSettingsStore ??= new ImageSettings({ file: path.join(app.getPath("userData"), "image-generation.json"), protector: electronSecretProtector });
+  return imageSettingsStore;
+}
+
+function imageJobsRoot(): string {
+  return path.join(app.getPath("userData"), "image-jobs");
+}
+
+/**
+ * One approved image call. The engine has already classified and approved it;
+ * this reads the settings again, so turning the tool off mid-run stops new
+ * calls, then runs it in its own job folder. A reference may name only this
+ * chat's earlier outputs, so the chat is the worker's scope, hashed like
+ * Blender's so the folders do not carry the chat's own id.
+ */
+async function runImageJob(args: Record<string, unknown>, options: McpCallOptions, chatId: string, budget: { made: number }): Promise<McpToolOutcome> {
+  const refused = (message: string, errorCode: string): McpToolOutcome =>
+    ({ ok: false, data: undefined, text: message, httpStatus: 200, errorCode, message, durationMs: 0 });
+  const ready = await imageSettings().ready().catch(() => undefined);
+  if (ready === undefined) {
+    return refused("Image generation is turned off in Roqer's Settings, or has no key, so no picture was made. Ask the user to set it up under Settings → Images, or draw the texture in Blender instead.", "image_off");
+  }
+  // One run may make only so many pictures, so a Full auto run that keeps
+  // retrying a texture cannot spend without end.
+  const count = typeof args.count === "number" && Number.isInteger(args.count) && args.count > 0 ? args.count : 1;
+  if (budget.made + count > MAX_IMAGES_PER_RUN) {
+    return refused(`This run has made ${budget.made} of the ${MAX_IMAGES_PER_RUN} images one run may make, so this call was not sent. Use what was made, draw the texture in Blender, or ask the user to start a new run.`, "image_budget_spent");
+  }
+  budget.made += count;
+  const worker = new ImageWorker({
+    source: createImageSource(ready),
+    jobsRoot: imageJobsRoot(),
+    scope: createHash("sha256").update(chatId).digest("hex").slice(0, 32),
+    defaultQuality: ready.quality,
+  });
+  const outcome = await worker.run(args, options);
+  // A call the provider refused made nothing, so it does not count.
+  if (!outcome.ok) budget.made -= count;
+  return outcome;
+}
+
+async function imageSettingsResult(): Promise<ImageSettingsResult> {
+  const settings = await imageSettings().get();
+  const preserved = imageSettings().takeDamagedNotice();
+  return {
+    ok: true,
+    settings: preserved === undefined
+      ? settings
+      : { ...settings, damagedNotice: `Your saved image settings could not be read and were set aside at ${preserved}. Enter them again.` },
+  };
+}
+
+async function getImageSettings(event: IpcMainInvokeEvent): Promise<ImageSettingsResult> {
+  if (!isTrusted(event.sender)) return { ok: false, message: "This window may not read the image settings." };
+  try {
+    return await imageSettingsResult();
+  } catch (error) {
+    return storeFailure(error, "Your image settings could not be read.");
+  }
+}
+
+async function saveImageSettings(event: IpcMainInvokeEvent, payload: unknown): Promise<ImageSettingsResult> {
+  if (!isTrusted(event.sender)) return { ok: false, message: "This window may not change the image settings." };
+  const parsed = parseImageSettingsSave(payload);
+  if ("message" in parsed) return { ok: false, message: parsed.message };
+  try {
+    await imageSettings().save(parsed.save);
+  } catch (error) {
+    return storeFailure(error, "Your image settings could not be saved.");
+  }
+  return imageSettingsResult().catch((error) => storeFailure(error, "Your image settings could not be read."));
+}
+
+/** Asks the server about the saved model without making a picture, so a test spends nothing. */
+async function testImageSettings(event: IpcMainInvokeEvent): Promise<ImageTestResult> {
+  if (!isTrusted(event.sender)) return { ok: false, message: "This window may not test the image settings." };
+  try {
+    const resolved = await imageSettings().resolved();
+    if (imageSourceNeedsKey(resolved.source) && resolved.apiKey === null) return { ok: false, message: "Save an API key first." };
+    return await testImageSource(resolved, AbortSignal.timeout(20_000));
+  } catch (error) {
+    return storeFailure(error, "The image settings could not be tested.");
+  }
+}
+
 /**
  * A Blender result's 3D preview, for the viewer in the chat. The renderer
  * names it by the opaque id its evidence carries; the file is found inside
@@ -799,6 +959,12 @@ async function loadModelPreview(event: IpcMainInvokeEvent, id: unknown): Promise
 async function loadEvidencePicture(event: IpcMainInvokeEvent, ref: unknown): Promise<EvidencePictureResult> {
   if (!isTrusted(event.sender)) return { ok: false, reason: "refused" };
   return store().pictures.read(ref);
+}
+
+/** A saved run's sound, by the ref its evidence carries, read and checked like a picture. */
+async function loadEvidenceSound(event: IpcMainInvokeEvent, ref: unknown): Promise<EvidenceSoundResult> {
+  if (!isTrusted(event.sender)) return { ok: false, reason: "refused" };
+  return store().pictures.readSound(ref);
 }
 
 async function blenderResult(operation: () => Promise<BlenderSettingsView>): Promise<BlenderSettingsResult> {
@@ -1020,6 +1186,57 @@ async function openCloudSettingsResult(): Promise<OpenCloudSettingsResult> {
         : { damagedNotice: `Your saved Open Cloud settings could not be read and were set aside at ${preserved}. Enter them again.` }),
     },
   };
+}
+
+/** The upload ledger for Settings, newest first, with a one-time note when the file had to be set aside. */
+async function getAssetLedger(event: IpcMainInvokeEvent): Promise<AssetLedgerResult> {
+  if (!isTrusted(event.sender)) return { ok: false, message: "This window may not read the upload ledger." };
+  try {
+    const assets = await assetLedger().list();
+    const notice = assetLedger().takeNotice();
+    return { ok: true, ledger: { assets, ...(notice === undefined ? {} : { notice }) } };
+  } catch (error) {
+    return storeFailure(error, "Your upload ledger could not be read.");
+  }
+}
+
+/**
+ * Put an asset from the ledger into a place, on the user's click. The same
+ * sanitized insertion the agent gets; the click is the confirmation, and the
+ * place is the one the window named, checked against the bridge by the call.
+ */
+async function insertLedgerAsset(event: IpcMainInvokeEvent, value: unknown): Promise<StudioActionResult> {
+  if (!isTrusted(event.sender)) return { ok: false, message: "This window may not insert assets." };
+  if (!isAssetInsertRequest(value)) return { ok: false, message: "The insert request was not valid." };
+  let client: McpClient;
+  try {
+    client = clientFor(value.endpoint);
+  } catch (error) {
+    return { ok: false, message: error instanceof McpEndpointError ? error.message : "The MCP endpoint could not be used." };
+  }
+  const outcome = await client.callTool("insert_asset", {
+    assetId: Number(value.assetId),
+    ...(value.instanceId === null ? {} : { instance_id: value.instanceId }),
+  });
+  if (!outcome.ok) return { ok: false, message: outcome.message ?? "Studio could not insert this asset." };
+  return { ok: true, message: `Inserted asset ${value.assetId} into the place, under Workspace.` };
+}
+
+/** An asset's thumbnail from Roblox, through the bridge, bounded for the window. */
+async function getAssetThumbnail(event: IpcMainInvokeEvent, value: unknown): Promise<AssetThumbnailResult> {
+  if (!isTrusted(event.sender)) return { ok: false, message: "This window may not read thumbnails." };
+  if (!isAssetThumbnailRequest(value)) return { ok: false, message: "The thumbnail request was not valid." };
+  let client: McpClient;
+  try {
+    client = clientFor(value.endpoint);
+  } catch (error) {
+    return { ok: false, message: error instanceof McpEndpointError ? error.message : "The MCP endpoint could not be used." };
+  }
+  const outcome = await client.callTool("get_asset_thumbnail", { assetId: Number(value.assetId), size: "150x150" }, { timeoutMs: 15_000 });
+  const image = outcome.ok ? outcome.images?.[0] : undefined;
+  if (image === undefined) return { ok: false, message: outcome.message ?? "No thumbnail." };
+  const dataUrl = `data:${image.mediaType};base64,${image.data}`;
+  return dataUrl.length <= MAX_THUMBNAIL_CHARACTERS ? { ok: true, dataUrl } : { ok: false, message: "The thumbnail was too large." };
 }
 
 async function getOpenCloudSettings(event: IpcMainInvokeEvent): Promise<OpenCloudSettingsResult> {
@@ -1816,7 +2033,7 @@ async function resolveCustomRun(modelKey: string | null): Promise<CustomRun | { 
 /** The agent that drives a run, chosen by the provider the user connected. */
 function plannerFor(
   request: RunStartRequest, agentRuntime: AgentRuntime, runId: string, modelName: string | undefined, custom?: CustomRun, blender = false, referenceClips = false,
-  externalMcp = false,
+  externalMcp = false, imageGeneration = false,
 ): Planner {
   const cwd = app.getPath("userData");
   // A conversation kept by one provider has not seen what another provider
@@ -1849,6 +2066,7 @@ function plannerFor(
       blender,
       referenceClips,
       externalMcp,
+      imageGeneration,
       chatId: request.chatId,
       sessions: customConversations,
       transportKey: customTransportKey(custom),
@@ -1874,6 +2092,7 @@ function plannerFor(
       blender,
       referenceClips,
       externalMcp,
+      imageGeneration,
     });
   }
   if (request.provider === "antigravity") {
@@ -1892,6 +2111,7 @@ function plannerFor(
       blender,
       referenceClips,
       externalMcp,
+      imageGeneration,
     });
   }
   if (request.provider !== "chatgpt") throw new Error(`No planner drives ${providerLabel(request.provider)}.`);
@@ -1908,6 +2128,7 @@ function plannerFor(
     blender,
     referenceClips,
     externalMcp,
+    imageGeneration,
   });
 }
 
@@ -1921,6 +2142,24 @@ async function getStudioStatus(event: IpcMainInvokeEvent, endpointValue: unknown
   // a status is what it is built to show.
   if (!isTrusted(event.sender)) return { kind: "offline", endpoint, message: "This window may not read Studio's status." };
   return studioStatusAt(endpoint);
+}
+
+/**
+ * The selection of one connected place, for the composer's chip. Read through
+ * the bridge like Studio's status, and answered rather than thrown: the window
+ * polls it while it is in front.
+ */
+async function getStudioSelection(event: IpcMainInvokeEvent, value: unknown): Promise<StudioSelectionResult> {
+  if (!isTrusted(event.sender)) return { ok: false, message: "This window may not read Studio's selection." };
+  if (!isStudioSelectionRequest(value)) return { ok: false, message: "The selection request was not valid." };
+  let client: McpClient;
+  try {
+    client = clientFor(value.endpoint);
+  } catch (error) {
+    return { ok: false, message: error instanceof McpEndpointError ? error.message : "The MCP endpoint could not be used." };
+  }
+  const selection = await readStudioSelection(client, value.instanceId);
+  return selection === undefined ? { ok: false, message: "Studio did not answer." } : { ok: true, selection };
 }
 
 async function studioStatusAt(endpoint: string): Promise<StudioStatus> {
@@ -2046,12 +2285,17 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
 
 function parseStartRequest(value: unknown): RunStartRequest | null {
   if (!isRecord(value)) return null;
-  const { projectId, chatId, prompt, conversation, approvalMode, autoPlaytest, endpoint, instanceId, provider, model, effort, startId, attachmentIds } = value;
+  const {
+    projectId, chatId, prompt, conversation, approvalMode, autoPlaytest, endpoint, instanceId, provider, model, effort, startId, attachmentIds,
+    includeSelection, webSearch,
+  } = value;
   if (typeof projectId !== "string" || projectId === "" || projectId.length > 1_000) return null;
   if (typeof chatId !== "string" || chatId === "" || chatId.length > 1_000) return null;
   if (typeof prompt !== "string" || prompt.trim() === "" || prompt.length > 64_000) return null;
   if (startId !== undefined && (typeof startId !== "string" || !/^[\w-]{1,100}$/.test(startId))) return null;
   if (attachmentIds !== undefined && (!Array.isArray(attachmentIds) || attachmentIds.length > 8 || !attachmentIds.every((id) => typeof id === "string" && id.length <= 100))) return null;
+  if (includeSelection !== undefined && typeof includeSelection !== "boolean") return null;
+  if (webSearch !== undefined && typeof webSearch !== "boolean") return null;
   if (!isConversationContext(conversation)) return null;
   if (!APPROVAL_MODES.includes(approvalMode as ApprovalMode)) return null;
   if (typeof autoPlaytest !== "boolean") return null;
@@ -2074,6 +2318,8 @@ function parseStartRequest(value: unknown): RunStartRequest | null {
     effort,
     startId,
     attachmentIds,
+    includeSelection,
+    webSearch,
   };
 }
 
@@ -2081,7 +2327,7 @@ function isTrusted(sender: WebContents): boolean {
   return trustedSenders.has(sender.id);
 }
 
-type RunStartResult = { ok: true; runId: string } | { ok: false; message: string };
+type RunStartResult = { ok: true; runId: string; selection?: StudioSelection } | { ok: false; message: string };
 
 type Settled<T> = { ok: true; value: T } | { ok: false; error: unknown };
 
@@ -2179,6 +2425,14 @@ async function startRun(event: IpcMainInvokeEvent, payload: unknown): Promise<Ru
       if (instanceId !== null && !runHold.holdPlace(instanceId)) return { ok: false, message: STUDIO_PLACE_BUSY };
     }
 
+    // The selection is read here, not in the window: the chip showed what was
+    // selected while the person wrote, and this is what was selected when they
+    // sent, read from Studio by this process and recorded on the message.
+    const selection = request.includeSelection === true && instanceId !== null && !smokeTest
+      ? await readStudioSelection(client, instanceId, { signal: pending.signal })
+      : undefined;
+    if (cancelled()) return stopped;
+
     const label = providerLabel(request.provider);
     let resolvedRequest: RunStartRequest = { ...request, instanceId };
     /** What the picker calls the model, for the waiting line. */
@@ -2242,18 +2496,37 @@ async function startRun(event: IpcMainInvokeEvent, payload: unknown): Promise<Ru
     // Reading them here also loads what the engine classifies calls against.
     const externalMcp = !smokeTest && (await mcpServers().list().catch(() => [])).some((server) => server.enabled);
     if (cancelled()) return stopped;
+    // The image tool is offered while an image source is on with what it
+    // needs; each call reads the settings again, so turning it off stops new calls.
+    const imageGeneration = !smokeTest && (await imageSettings().ready().catch(() => undefined)) !== undefined;
+    /** How many pictures this run's image calls have made, against the run's budget. */
+    const imageBudget = { made: 0 };
+    if (cancelled()) return stopped;
     const planner = smokeTest
       ? createInspectionPlanner()
-      : plannerFor(resolvedRequest, agentRuntime, runId, modelName, customRun, blender, clips, externalMcp);
+      : plannerFor(resolvedRequest, agentRuntime, runId, modelName, customRun, blender, clips, externalMcp, imageGeneration);
     journalId = runId;
     await runJournal().start(runId, request, request.prompt, request.approvalMode);
     if (cancelled()) return stopped;
     journalRuns.add(runId);
-    if (attachmentContext.text) {
-      resolvedRequest = { ...resolvedRequest, prompt: `${request.prompt}\n\n${attachmentContext.text}` };
+    const selectionText = selection === undefined ? undefined : selectionContextText(selection);
+    const promptContext = [
+      ...(attachmentContext.text ? [attachmentContext.text] : []),
+      ...(selectionText === undefined ? [] : [selectionText]),
+    ];
+    if (promptContext.length > 0) {
+      resolvedRequest = { ...resolvedRequest, prompt: `${request.prompt}\n\n${promptContext.join("\n\n")}` };
     }
     /** The pictures this run stored, held in the picture store until it ends. */
     const heldPictures = new Set<string>();
+    // The links `open_link` may open: only ones the user wrote. The typed
+    // prompt, not `resolvedRequest.prompt`, which carries attachment and
+    // selection text the user did not write; their earlier messages; and,
+    // below, each note the run accepts.
+    const userLinks = new UserLinks([
+      request.prompt,
+      ...request.conversation.messages.filter((message) => message.role === "user").map((message) => message.text),
+    ]);
     /** This run's connections to the user's MCP servers, all closed when it ends. */
     const externalMcpSession = externalMcp
       ? new ExternalMcpRunSession({
@@ -2265,12 +2538,26 @@ async function startRun(event: IpcMainInvokeEvent, payload: unknown): Promise<Ru
       })
       : undefined;
     if (externalMcpSession !== undefined) void pruneMcpDownloads(mcpDownloadsRoot());
+    // Every upload of the run passes the ledger: answered from it when the
+    // same bytes are already on Roblox, written to it when it went through.
+    const ledgerContext: LedgerRunContext = {
+      chatId: request.chatId,
+      projectId: request.projectId,
+      runId,
+      creator: async () => (await openCloud().get()).creator ?? undefined,
+    };
     const session = new RunSession({
       caller: withLocalOperations(client, new Map<string, LocalOperation>([
         [CAPTURE_MOMENTS_OPERATION, (args, options, studio) => captureMoments(
           args, options, studio, composeContactSheet, clips ? chatClips(request.chatId) : undefined, captureToneFrame,
         )],
-        [UPLOAD_ASSETS_OPERATION, uploadAssets],
+        ["upload_asset", (args, options, studio) => ledgerAwareUpload(args, options, studio, assetLedger(), ledgerContext)],
+        [UPLOAD_ASSETS_OPERATION, (args, options, studio) => uploadAssets(args, options, (tool, toolArgs, toolOptions) =>
+          tool === "upload_asset"
+            ? ledgerAwareUpload(toolArgs, toolOptions ?? {}, studio, assetLedger(), ledgerContext)
+            : studio(tool, toolArgs, toolOptions))],
+        [LIST_UPLOADS_OPERATION, (args) => listUploads(args, assetLedger())],
+        [OPEN_LINK_OPERATION, (args, options) => openUserLink(args, options, userLinks)],
         // Resolved the same way the run's Studio is: `resolvedRequest.instanceId`
         // is the one instance every Studio call is routed to for this run, so
         // the picker opens for exactly that place, never one the model names.
@@ -2283,6 +2570,7 @@ async function startRun(event: IpcMainInvokeEvent, payload: unknown): Promise<Ru
           (instanceId) => pickRojoProject(BrowserWindow.fromWebContents(sender), instanceId),
         )],
         ...(blender ? [[BLENDER_OPERATION, (args, options) => runBlenderJob(args, options, request.chatId)] as [string, LocalOperation]] : []),
+        ...(imageGeneration ? [[IMAGE_OPERATION, (args, options) => runImageJob(args, options, request.chatId, imageBudget)] as [string, LocalOperation]] : []),
         ...(clips
           ? [[REFERENCE_CLIP_OPERATION, (args, options) => readReferenceClip(args, options, chatClips(request.chatId), composeClipSheet)] as [string, LocalOperation]]
           : []),
@@ -2317,7 +2605,31 @@ async function startRun(event: IpcMainInvokeEvent, payload: unknown): Promise<Ru
         }
         return ref;
       },
+      // Sounds are kept beside the pictures, and held for the run the same way.
+      storeSound: async (audio) => {
+        const ref = await store().pictures.putSound(Buffer.from(audio.data, "base64"));
+        if (ref !== undefined && !heldPictures.has(ref)) {
+          heldPictures.add(ref);
+          store().pictures.hold([ref]);
+        }
+        return ref;
+      },
+      // A file the agent uploaded is copied only from Roqer's own folders: the
+      // path is the model's word, and the user's disk is not the agent's to read.
+      storeSoundFile: async (filePath) => {
+        const bytes = await readSoundFileInside(filePath, [app.getPath("userData")]);
+        if (bytes === undefined) return undefined;
+        const ref = await store().pictures.putSound(bytes);
+        if (ref !== undefined && !heldPictures.has(ref)) {
+          heldPictures.add(ref);
+          store().pictures.hold([ref]);
+        }
+        return ref;
+      },
       emit: (runEvent: RunEvent) => {
+        // A note is the user speaking, so a link in it may be opened, from the
+        // moment the engine accepts it -- the same moment it is queued for the model.
+        if (runEvent.type === "steer") userLinks.add(runEvent.text);
         runJournal().record(runEvent);
         if (runEvent.type === "run-completed") completedRuns.add(runId);
         if (!sender.isDestroyed()) sender.send("run:event", runEvent);
@@ -2361,7 +2673,7 @@ async function startRun(event: IpcMainInvokeEvent, payload: unknown): Promise<Ru
     runExecutions.add(execution);
     void execution.finally(() => runExecutions.delete(execution)).catch((error) => console.error("Roqer run cleanup failed", error));
 
-    return { ok: true, runId };
+    return { ok: true, runId, ...(selectionText === undefined || selection === undefined ? {} : { selection }) };
   } catch (error) {
     return { ok: false, message: cancelled() ? "Run startup was cancelled." : error instanceof Error ? error.message : "The run could not start." };
   } finally {
@@ -2614,6 +2926,7 @@ function createWindow(): void {
     // seen downloading in the sidebar rather than discovered later.
     checkForUpdatesNow?.();
   });
+  watchWindow(window);
   window.on("closed", () => {
     trustedSenders.delete(senderId);
     // A window that is gone can no longer approve anything, so nothing it
@@ -2819,6 +3132,9 @@ function runSmokeTest(window: BrowserWindow): void {
 app.whenReady().then(async () => {
   // A second copy is on its way out; it must not start a bridge or open the chats.
   if (!primaryInstance) return;
+  // A frozen main process stops answering the window manager, which dims the
+  // window; this says afterwards how long it was frozen.
+  watchEventLoop({ onStall: (blockedMs) => void appLog().write(`[main] the main process was blocked for ${Math.round(blockedMs)} ms`) });
   ipcMain.handle("workspace:load", (event) => {
     if (!isTrusted(event.sender)) throw new Error("This window may not load the workspace.");
     return loadState();
@@ -2868,6 +3184,7 @@ app.whenReady().then(async () => {
     if (isTrusted(event.sender) && Array.isArray(ids) && ids.length <= 64 && ids.every((id) => typeof id === "string")) attachments.release(ids);
   });
   ipcMain.handle("studio:status", getStudioStatus);
+  ipcMain.handle("studio:selection", getStudioSelection);
   ipcMain.handle("studio:open-script", openStudioScript);
   ipcMain.handle("provider:status", getProviderStatus);
   ipcMain.handle("provider:models", getProviderModels);
@@ -2884,6 +3201,9 @@ app.whenReady().then(async () => {
   ipcMain.handle("custom-providers:test", testCustomConnectionModel);
   ipcMain.handle("custom-providers:import", importCustomModels);
   ipcMain.handle("open-cloud:get", getOpenCloudSettings);
+  ipcMain.handle("assets:ledger", getAssetLedger);
+  ipcMain.handle("assets:insert", insertLedgerAsset);
+  ipcMain.handle("assets:thumbnail", getAssetThumbnail);
   ipcMain.handle("open-cloud:save", saveOpenCloudSettings);
   ipcMain.handle("open-cloud:check", checkOpenCloudSettings);
   ipcMain.handle("mcp-servers:list", listMcpServers);
@@ -2897,6 +3217,9 @@ app.whenReady().then(async () => {
   ipcMain.handle("blender:set-enabled", setBlenderEnabled);
   ipcMain.handle("blender:choose", chooseBlender);
   ipcMain.handle("blender:redetect", redetectBlender);
+  ipcMain.handle("image:get", getImageSettings);
+  ipcMain.handle("image:save", saveImageSettings);
+  ipcMain.handle("image:test", testImageSettings);
   ipcMain.handle("rojo:get", getRojo);
   ipcMain.handle("rojo:choose", chooseRojo);
   ipcMain.handle("rojo:link-recent", linkRecentRojo);
@@ -2906,6 +3229,7 @@ app.whenReady().then(async () => {
   ipcMain.handle("rojo:open-folder", openRojoFolder);
   ipcMain.handle("previews:model", loadModelPreview);
   ipcMain.handle("previews:picture", loadEvidencePicture);
+  ipcMain.handle("previews:sound", loadEvidenceSound);
   ipcMain.handle("chat:compact-model", compactChat);
   ipcMain.handle("run:start", startRun);
   ipcMain.handle("chat:compact", compactChatSessions);

@@ -180,3 +180,15 @@ test("a lone file opens; a second file arriving starts folded and leaves the fir
   // A file the reader closed stays closed.
   assert.deepEqual(settleFileDefaults({ "game.A": false }, ["game.A"]), { "game.A": false });
 });
+
+test("sounds a run kept get a tab of their own, after the pictures and before the code", () => {
+  const sound = (id: string): RunEvidence => ({ id, kind: "inspection", title: `Sound ${id}`, soundRef: `${"a".repeat(64)}.mp3` });
+  const results = runResults([script("c1", "game.ServerScriptService.Main", 1, 0)], [sound("s1"), sound("s2"), shot("p1")]);
+  assert.deepEqual(tabIds(results.tabs), ["changes", "screenshots", "sounds"]);
+  assert.equal(results.tabs.find((tab) => tab.id === "sounds")?.count, 2);
+  assert.equal(openingTab(results.tabs), "screenshots");
+  assert.equal(openingTab(runResults([script("c1", "x", 1, 0)], [sound("s1")]).tabs), "sounds");
+  assert.equal(resultsSummary(results.tabs), "1 file, 1 screenshot, 2 sounds");
+  assert.equal(arrivedTab([], results.tabs), "screenshots");
+  assert.equal(arrivedTab(runResults([], [shot("p1")]).tabs, results.tabs), "sounds");
+});

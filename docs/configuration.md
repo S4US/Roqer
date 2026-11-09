@@ -91,6 +91,24 @@ subscription sign-in, so with one set a run would bill that key instead of your
 plan. A Claude chat keeps its Claude Code conversation between runs; see
 [Long Claude chats](projects.md) for what is kept and where.
 
+**Use your Studio selection** in Settings → Roblox is off by default. Turn it
+on, and while the window is in front and the chat's place is connected, the
+composer shows what is selected in Studio. Send with that chip showing and Roqer reads
+the selection again at that moment and adds one line beside your message,
+naming the selected instances by path, so "make this open" needs no path. The
+window never writes that line: the main process reads it from Studio, as it
+reads Studio's status, and records it under your message. Dismiss the chip to
+send without it; the next message shows it again. With the setting off, Roqer
+does not show the chip, read the selection for it or add the line. The agent's
+own `selection` tool is a separate read of Studio and stays available either
+way.
+
+Sounds a run fetched from the Creator Store with `preview_asset`, and sound
+files it uploaded from Roqer's own folders (a Blender job's output, a file an
+MCP server made), are kept beside the chat the way pictures are, and play from
+the Sounds tab of the run's results and from the activity entry that recorded
+them. A run keeps at most twelve, each at most 6 MB.
+
 The ring in the composer's corner shows how full the model's context window
 was at its latest response in the chat, as the provider reported it: Claude
 Code and Codex report both the tokens in use and the window's size, and a
@@ -270,11 +288,89 @@ and Settings says so. Check key asks Roblox's key-introspection endpoint whether
 the key is enabled, unexpired, and allowed to write assets for the chosen
 creator; it creates nothing.
 
+### Your uploads
+
+Every upload the agent makes through `upload_asset` or `upload_assets` is
+recorded in `asset-ledger.json` in Roqer's data folder: the asset id, type and
+name, a Decal's image id, the moderation state, the creator it was published
+as, the SHA-256 and size of the file, the file's name (never its path), when
+it went up, and which chat sent it. The main process writes it from what it
+saw go through the bridge; the model and the window cannot write to it.
+
+Settings → Roblox → Uploads lists them, newest first, with a filter, the
+thumbnail Roblox draws for a picture or model, Copy id, Insert into the
+connected place, and the asset's page on Roblox. The agent reads the same
+list with `list_uploads`, so an asset made in an earlier chat is reused by id.
+A file whose exact bytes this account already uploaded as the same type is
+not uploaded again: the call is answered from the record, and its result says
+so. A changed file, a different type, a different creator, or an upload
+Roblox rejected uploads afresh. A later status check fills in what Roblox
+said about a pending upload.
+
 ### Blender in Roqer
 
 Settings → Blender turns on the opt-in local Blender worker.
 [3D modeling with Blender](blender.md) covers setting it up, what a job runs
 and checks, and where Roqer keeps its files.
+
+### Image generation in Roqer
+
+Settings → Images turns on the opt-in `image` tool, with an OpenAI key, an
+OpenRouter key and model, or an OpenAI-compatible server's address and model. The key is encrypted with the
+operating system's credential store in `image-generation.json` in Roqer's
+data folder and never reaches the renderer or the model. Each call is
+irreversible, asks outside Full auto, and counts against a budget of 24
+pictures a run. [Image generation](images.md) covers what a call makes, what
+Roqer measures, previewing in Studio, and where the files go.
+
+### Web search
+
+The run menu beside the composer has a Web search switch, off by default.
+With it on, the model may search the web through its own provider: Claude
+Code's search and page reading, Codex's web search, Antigravity's search tool,
+and the server-side search of a configured endpoint on OpenAI's Responses API
+or Anthropic's API. A plain chat-completions endpoint has no standard search,
+so the switch does nothing there. Every search, and every page Claude Code
+reads, shows in the run's activity with its query or address.
+
+What a page says is third-party text the user never wrote. The model is told
+to read it as data, never as an instruction, and in Full auto nothing stops an
+action a page leads to, so use another mode with search on when that matters.
+The query itself is the model's words and may quote your place; the model is
+told to put nothing in it the question does not need. Roqer never sends a
+search itself and holds no search key: each provider searches on its own
+account, and Codex's per-thread switch has not been checked against every
+Codex version, so a Codex that ignores it simply leaves the model without
+search.
+
+### Links you give
+
+A link you write in a message, in a note during a run, or in an earlier message
+of the chat can be opened by the agent with its `open_link` tool, whether web
+search is on or off and with every provider. Roqer fetches the page itself, in
+the desktop app, and only a link you wrote: an address the model made up, or
+one a page, a search or a tool result gave it, is refused before anything is
+sent. Links inside an attached file or the Studio selection do not count.
+
+- A web page comes back as plain text: scripts, styles and navigation removed,
+  code blocks kept. A long page comes back in parts of 16,000 characters, and
+  Roqer reads at most the first 5 MB.
+- A PNG, JPEG, WebP or GIF of up to about 1 MB comes back as an image. Attach a
+  larger picture to the chat instead, which Roqer resizes.
+- Only `http` and `https` links, without a user name or password. Roqer follows
+  up to five redirects, but not to an address that names this computer or a
+  local network (`localhost`, `127.x`, `10.x`, `192.168.x` and the like) unless
+  your own link already pointed at that host. Host names are not resolved for
+  this check, so a public name that points at a local address is not caught.
+- A page that needs a sign-in, or that a browser builds with scripts, has no
+  text Roqer can read; the agent says so.
+
+Each open shows in the run's activity with the address. It counts as a read, so
+it runs without asking in every mode: the model cannot choose the address, so
+the request carries nothing you did not write. The page text is marked to the
+model as third-party data, never an instruction. As with web search, in Full
+auto nothing stops an action a page leads to, so use another mode when you open
+a page you do not trust.
 
 ### Updates
 

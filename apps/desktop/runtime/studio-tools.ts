@@ -1,6 +1,9 @@
 import { BLENDER_OPERATION } from "../shared/blender";
+import { IMAGE_OPERATION } from "../shared/image-generation";
 import { AUDITED_AFTER_LABEL, REVISION_AFTER_LABEL, UI_AUDIT_TITLE } from "../shared/completion";
-import { CAPTURE_MOMENTS_OPERATION, GATEWAY_TOOL_RISK, isGatewayOperation, UPLOAD_ASSETS_OPERATION } from "../shared/gateway-operations";
+import {
+  CAPTURE_MOMENTS_OPERATION, GATEWAY_TOOL_RISK, isGatewayOperation, LIST_UPLOADS_OPERATION, UPLOAD_ASSETS_OPERATION,
+} from "../shared/gateway-operations";
 import { isKnownTool, TOOL_RISK } from "../shared/mcp-tools";
 import {
   argumentTypeProblems,
@@ -16,7 +19,7 @@ import {
   ANIMATION_ALL_CHECKS_PASSED, ANIMATION_CHECKED_AS_GAIT, ANIMATION_GAIT_CHECKS_LABEL, ANIMATION_MOTION_CHECKS_LABEL,
   ANIMATION_DESCRIBED_BY_BAKE, ANIMATION_DESCRIBED_BY_LABEL, MODEL_STATE_WIRED, modelStateLabel,
   ANIMATION_BOXES_LABEL, ANIMATION_NAME_LABEL, ANIMATION_PLAYED_FROM_LABEL, ANIMATION_PLAYED_PUBLISHED, ANIMATION_PREVIEW_TITLE, ANIMATION_RIG_LABEL, animationSlotLabel, RIG_RANGE_SHEET_TITLE,
-  BLENDER_MODEL_LABEL, BLENDER_PREVIEW_TITLE, MAX_EVIDENCE_SUBJECT_CHARS, MODEL_MOVED_BY_GAME, MODEL_MOVED_BY_LABEL,
+  BLENDER_MODEL_LABEL, BLENDER_PREVIEW_TITLE, IMAGE_NAME_LABEL, IMAGE_PREVIEW_TITLE, MAX_EVIDENCE_SUBJECT_CHARS, MODEL_MOVED_BY_GAME, MODEL_MOVED_BY_LABEL,
   MODEL_MOVED_BY_VERIFY, MODEL_WHILE_MOVING_LABEL, MODEL_WHILE_STANDING_LABEL, ROJO_SAVE_DIVERGED_SUFFIX, ROJO_SAVE_PENDING_SUFFIX,
   SCREENSHOT_VIEW_LABEL, SCREENSHOT_VIEW_PLAYTEST,
   type RunChange, type RunEvidence, type RunMetadata,
@@ -161,6 +164,7 @@ const DOCUMENTED_OPERATIONS = [
   "get_roblox_docs",
   "upload_asset",
   UPLOAD_ASSETS_OPERATION,
+  LIST_UPLOADS_OPERATION,
 ];
 
 /**
@@ -196,6 +200,7 @@ export function studioToolGuide(): string {
     "Important operations and arguments:",
     ...signatures,
     "Other operations in the enum are called the same way. To read one's schema first, call it with {help: true} as its only argument: that is answered locally, never reaches Studio, and is not a failed call. Calling with arguments that do not fit also returns the schema.",
+    "Before uploading a file, list_uploads says what this computer already uploaded (id, type, name, moderation), so an asset made in an earlier chat is reused by id rather than uploaded again; an upload whose exact bytes went up before is answered from that record without uploading, and its result says so.",
     "Always read a script and its sourceRevision before changing it, except one that is still empty, such as a script build_instances just created: omit expectedRevision and Roqer checks it is empty and supplies the revision. Roqer automatically reads back every successful script mutation and tells you whether its reported revision was verified; that is the check, so do not read a script again only to confirm a write.",
     `To write a skill's Lua template unchanged, pass template (its skill path, e.g. ${TEMPLATE_EXAMPLE}) instead of source: Roqer writes the file itself, so do not load a template you are not changing, and never retype one. A script that already holds it exactly is left alone.`,
     "A script write whose source will not compile still lands, and its result carries syntaxError {line, message}: fix that line before playtesting. syntaxCheck: 'unavailable' means the source was not checked. Only syntax is judged, not types or member names.",
@@ -589,6 +594,35 @@ const BLENDER_PREVIEW_EVIDENCE: ObservationEvidence = {
   title: BLENDER_PREVIEW_TITLE,
   detail: "Rendered by Blender from the job's output. A Studio screenshot shows what is in the place.",
 };
+
+/**
+ * What an image job's preview is: the picture it made, or the review sheet of
+ * several, seen before upload. Like a Blender preview it is an inspection with
+ * no requirement: a picture of a file is not evidence of anything in Studio.
+ */
+const IMAGE_PREVIEW_EVIDENCE: ObservationEvidence = {
+  kind: "inspection",
+  title: IMAGE_PREVIEW_TITLE,
+  detail: "Made by the image model from the prompt; transparent pictures are shown over a dark ground. A Studio screenshot shows what is in the place.",
+};
+
+/**
+ * What an image preview is of, so every take of one texture is a version of
+ * it: the file stem the call named, which a later call for the same texture
+ * names again. The labels carry what the model asked for and what answered.
+ */
+function imagePreviewFacts(args: JsonRecord, outcome: McpToolOutcome): Pick<ObservationEvidence, "subject" | "metadata"> {
+  const name = typeof args.name === "string" && args.name !== "" ? args.name : undefined;
+  const data = isRecord(outcome.data) ? outcome.data : {};
+  const images = Array.isArray(data.images) ? data.images.length : 0;
+  const metadata: RunMetadata[] = [
+    ...(name === undefined ? [] : [{ label: IMAGE_NAME_LABEL, value: name.slice(0, MAX_MODEL_NAME_CHARS) }]),
+    ...(typeof args.kind === "string" ? [{ label: "Kind", value: args.kind }] : []),
+    ...(typeof data.model === "string" && data.model !== "" ? [{ label: "Image model", value: data.model.slice(0, MAX_MODEL_NAME_CHARS) }] : []),
+    ...(images > 0 ? [{ label: "Pictures", value: String(images) }] : []),
+  ];
+  return { ...(name === undefined ? {} : { subject: `image:${name}`.slice(0, MAX_EVIDENCE_SUBJECT_CHARS) }), metadata };
+}
 
 /** A model's file name, as the preview records it; Blender's own are far shorter. */
 const MAX_MODEL_NAME_CHARS = 120;
@@ -1807,6 +1841,76 @@ function completedBatchUploads(outcome: McpToolOutcome): Array<Omit<RunChange, "
   });
 }
 
+/**
+ * Sounds the user can hear beside the answer: the audio a Creator Store preview
+ * fetched, and the file an upload sent to Roblox as a sound. Each is kept
+ * beside the chat through the host, which bounds how many a run keeps and
+ * which files it will open; the model is told nothing new, since the result
+ * already names them.
+ */
+async function recordSounds(context: PlannerContext, operation: string, args: JsonRecord, outcome: McpToolOutcome): Promise<void> {
+  if (!outcome.ok) return;
+  if (operation === "preview_asset" && context.storeSound !== undefined && outcome.audio !== undefined) {
+    const items = audioPreviewItems(outcome.data);
+    const about = typeof args.assetId === "number" || typeof args.assetId === "string" ? String(args.assetId) : undefined;
+    for (const [index, sound] of outcome.audio.entries()) {
+      const ref = await context.storeSound(sound);
+      if (ref === undefined) continue;
+      const item = items.find((entry) => entry.contentIndex === index + 1);
+      const assetId = item === undefined ? undefined : stringField(item, "assetId") ?? (typeof item.assetId === "number" ? String(item.assetId) : undefined);
+      context.recordEvidence({
+        kind: "inspection",
+        title: assetId === undefined ? `Sound preview ${index + 1}` : `Sound ${assetId}`,
+        detail: `Fetched from the Creator Store${about === undefined ? "" : ` while previewing asset ${about}`}: ${describeSound(sound.mediaType, sound.data.length)}.`,
+        soundRef: ref,
+      });
+    }
+  }
+  if (context.storeSoundFile === undefined) return;
+  const uploads: Array<{ filePath: string; displayName?: string; assetId?: string }> = [];
+  if (operation === "upload_asset" && args.assetType === "Audio" && typeof args.filePath === "string") {
+    const upload = completedUpload(args, outcome);
+    if (upload?.assetId !== undefined) {
+      uploads.push({ filePath: args.filePath, displayName: typeof args.displayName === "string" ? args.displayName : undefined, assetId: upload.assetId });
+    }
+  }
+  if (operation === UPLOAD_ASSETS_OPERATION && isRecord(outcome.data) && Array.isArray(outcome.data.uploads)) {
+    for (const upload of outcome.data.uploads) {
+      if (!isRecord(upload) || upload.status !== "complete" || upload.assetType !== "Audio" || typeof upload.filePath !== "string") continue;
+      uploads.push({ filePath: upload.filePath, displayName: stringField(upload, "displayName"), assetId: stringField(upload, "assetId") });
+    }
+  }
+  for (const upload of uploads) {
+    const ref = await context.storeSoundFile(upload.filePath);
+    if (ref === undefined) continue;
+    context.recordEvidence({
+      kind: "inspection",
+      title: upload.displayName ?? "Uploaded sound",
+      detail: `The file uploaded to Roblox${upload.assetId === undefined ? "" : ` as audio asset ${upload.assetId}`}, as it was sent.`,
+      soundRef: ref,
+    });
+  }
+}
+
+/** The preview's list of the sounds it fetched, wherever the result keeps it: each names its content block. */
+function audioPreviewItems(data: unknown): JsonRecord[] {
+  if (!isRecord(data)) return [];
+  const candidates = [data, ...Object.values(data).filter(isRecord)];
+  for (const candidate of candidates) {
+    if (Array.isArray(candidate.items) && candidate.items.some((item) => isRecord(item) && typeof item.contentIndex === "number")) {
+      return candidate.items.filter(isRecord);
+    }
+  }
+  return [];
+}
+
+function describeSound(mediaType: string, base64Length: number): string {
+  const bytes = Math.floor(base64Length * 3 / 4);
+  const size = bytes >= 1_048_576 ? `${(bytes / 1_048_576).toFixed(1)} MB` : `${Math.max(1, Math.round(bytes / 1_024))} KB`;
+  const format = mediaType === "audio/mpeg" ? "MP3" : mediaType === "audio/ogg" ? "OGG" : mediaType === "audio/wav" ? "WAV" : "FLAC";
+  return `${format}, ${size}`;
+}
+
 function uploadChange(upload: {
   assetId: string;
   displayName?: string;
@@ -2178,14 +2282,16 @@ export function createStudioToolRunner(context: PlannerContext, options: StudioT
       }
     }
     const observed = observationEvidence(operation, args, outcome, playtestRunning);
-    const preview = observed !== undefined || operation === BLENDER_OPERATION
+    const preview = observed !== undefined || operation === BLENDER_OPERATION || operation === IMAGE_OPERATION
       ? await evidencePreview(context, outcome)
       : undefined;
     const subject = outcome.ok && operation === BLENDER_OPERATION ? blenderLineage.follow(outcome) : undefined;
     const observation = observed !== undefined
       ? { ...observed, ...(preview === undefined ? {} : { imageDataUrl: preview }) }
       : preview !== undefined
-        ? { ...BLENDER_PREVIEW_EVIDENCE, ...blenderModelFacts(outcome), ...(subject === undefined ? {} : { subject }), imageDataUrl: preview }
+        ? operation === IMAGE_OPERATION
+          ? { ...IMAGE_PREVIEW_EVIDENCE, ...imagePreviewFacts(args, outcome), imageDataUrl: preview }
+          : { ...BLENDER_PREVIEW_EVIDENCE, ...blenderModelFacts(outcome), ...(subject === undefined ? {} : { subject }), imageDataUrl: preview }
         : undefined;
     if (observation?.title === UI_AUDIT_TITLE) {
       // Which changes the audit saw, so the gate can tell an interface change made after it.
@@ -2367,6 +2473,7 @@ export function createStudioToolRunner(context: PlannerContext, options: StudioT
         context.recordChange(upload);
       }
     }
+    await recordSounds(context, operation, args, outcome);
 
     return {
       ok: outcome.ok && !refused,

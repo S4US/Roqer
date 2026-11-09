@@ -1,4 +1,5 @@
 import { digestChars, isRunDigest, type RunDigest } from "./run-digest";
+import { isStudioSelection, type StudioSelection } from "./studio-selection";
 
 /** A prior message that the next model run may use as chat context. */
 export type ConversationMessage = {
@@ -19,6 +20,12 @@ export type ConversationMessage = {
   attachments?: MessageAttachments;
   /** A note the user sent while a run was working, which the provider received mid-run. */
   note?: true;
+  /**
+   * The user's Studio selection when the message was sent, as Roqer read it
+   * from Studio. Replayed beside the words, so a fresh session knows what
+   * "this" was.
+   */
+  selection?: StudioSelection;
   /**
    * Who wrote an assistant reply: true for a Claude Code run, false for a run
    * on another provider. A saved Claude conversation finds where it left off by
@@ -100,6 +107,7 @@ export function boundConversation(messages: readonly ConversationMessage[], summ
       ...(run === undefined ? {} : { run }),
       ...(message.attachments === undefined ? {} : { attachments: message.attachments }),
       ...(message.note === true ? { note: true as const } : {}),
+      ...(message.selection === undefined ? {} : { selection: message.selection }),
       ...(message.claude === undefined ? {} : { claude: message.claude }),
     });
     totalChars += text.length + (run === undefined ? 0 : digestChars(run));
@@ -163,6 +171,7 @@ export function isConversationContext(value: unknown): value is ConversationCont
     if (message.attachments !== undefined &&
       (message.role !== "user" || !isMessageAttachments(message.attachments))) return false;
     if (message.note !== undefined && (message.note !== true || message.role !== "user")) return false;
+    if (message.selection !== undefined && (message.role !== "user" || !isStudioSelection(message.selection))) return false;
     if (message.claude !== undefined && (typeof message.claude !== "boolean" || message.role !== "assistant")) return false;
     if (totalChars > MAX_CONVERSATION_CHARS) return false;
   }

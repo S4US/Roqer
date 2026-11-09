@@ -20,6 +20,14 @@ import {
   type OpenStudioScriptRequest,
   type StudioActionResult,
 } from "../shared/studio-status";
+import {
+  isStudioSelectionResult, type StudioSelection, type StudioSelectionRequest, type StudioSelectionResult,
+} from "../shared/studio-selection";
+import { isEvidenceSoundResult, type EvidenceSoundResult } from "../shared/evidence-sound";
+import {
+  isAssetLedgerResult, isAssetThumbnailResult, type AssetInsertRequest, type AssetLedgerResult, type AssetThumbnailRequest, type AssetThumbnailResult,
+} from "../shared/asset-ledger";
+import { isEvidenceSoundRef } from "../shared/run-events";
 import { isStorageStatus, type StorageStatus } from "../shared/workspace-storage";
 import {
   isCustomConnectionsResult,
@@ -39,6 +47,9 @@ import {
 } from "../shared/open-cloud";
 import { isBlenderSettingsResult, type BlenderSettingsResult } from "../shared/blender";
 import {
+  isImageSettingsResult, isImageTestResult, type ImageSettingsResult, type ImageSettingsSave, type ImageTestResult,
+} from "../shared/image-generation";
+import {
   isMcpServersResult, isMcpServerTestResult, type McpServerSave, type McpServersResult, type McpServerTestResult,
 } from "../shared/mcp-servers";
 import { isRojoResult, type RojoResult } from "../shared/rojo";
@@ -55,7 +66,7 @@ import { isEvidencePictureResult, type EvidencePictureResult } from "../shared/e
  */
 
 export type RunStartResult =
-  | { ok: true; runId: string }
+  | { ok: true; runId: string; selection?: StudioSelection }
   | { ok: false; message: string };
 
 const runs = {
@@ -205,6 +216,25 @@ const blender = {
   setEnabled: (enabled: boolean) => blenderRequest("blender:set-enabled", enabled),
   choose: () => blenderRequest("blender:choose"),
   redetect: () => blenderRequest("blender:redetect"),
+};
+
+async function imagesRequest(channel: string, ...args: unknown[]): Promise<ImageSettingsResult> {
+  const value: unknown = await ipcRenderer.invoke(channel, ...args);
+  return isImageSettingsResult(value) ? value : { ok: false, message: "Roqer returned invalid image settings." };
+}
+
+/**
+ * The image model the agent may generate pictures with. As with Open Cloud,
+ * the key goes in with `save` and never comes back out; `test` asks the server
+ * about the model without making a picture.
+ */
+const images = {
+  get: () => imagesRequest("image:get"),
+  save: (save: ImageSettingsSave) => imagesRequest("image:save", save),
+  test: async (): Promise<ImageTestResult> => {
+    const value: unknown = await ipcRenderer.invoke("image:test");
+    return isImageTestResult(value) ? value : { ok: false, message: "The image test returned an invalid result." };
+  },
 };
 
 async function mcpServersRequest(channel: string, ...args: unknown[]): Promise<McpServersResult> {
@@ -374,6 +404,13 @@ contextBridge.exposeInMainWorld("workbenchDesktop", {
   },
   studio: {
     getStatus: (endpoint: string) => ipcRenderer.invoke("studio:status", endpoint),
+    /** What is selected in one connected place, for the composer's chip. */
+    getSelection: async (request: StudioSelectionRequest): Promise<StudioSelectionResult> => {
+      const value: unknown = await ipcRenderer.invoke("studio:selection", request);
+      return isStudioSelectionResult(value)
+        ? value
+        : { ok: false, message: "Studio returned an invalid selection result." };
+    },
     openScript: async (request: OpenStudioScriptRequest): Promise<StudioActionResult> => {
       const value: unknown = await ipcRenderer.invoke("studio:open-script", request);
       return isStudioActionResult(value)
@@ -389,7 +426,23 @@ contextBridge.exposeInMainWorld("workbenchDesktop", {
   },
   customProviders,
   openCloud,
+  /** What this computer uploaded to Roblox, and the two things to do with one of them. */
+  uploads: {
+    ledger: async (): Promise<AssetLedgerResult> => {
+      const value: unknown = await ipcRenderer.invoke("assets:ledger");
+      return isAssetLedgerResult(value) ? value : { ok: false, message: "Roqer returned an invalid upload ledger." };
+    },
+    insert: async (request: AssetInsertRequest): Promise<StudioActionResult> => {
+      const value: unknown = await ipcRenderer.invoke("assets:insert", request);
+      return isStudioActionResult(value) ? value : { ok: false, message: "Studio returned an invalid insert result." };
+    },
+    thumbnail: async (request: AssetThumbnailRequest): Promise<AssetThumbnailResult> => {
+      const value: unknown = await ipcRenderer.invoke("assets:thumbnail", request);
+      return isAssetThumbnailResult(value) ? value : { ok: false, message: "Roqer returned an invalid thumbnail." };
+    },
+  },
   blender,
+  images,
   mcpServers,
   rojo,
   runs,
@@ -405,6 +458,12 @@ contextBridge.exposeInMainWorld("workbenchDesktop", {
       if (!isEvidencePictureRef(ref)) return { ok: false, reason: "invalid" };
       const value: unknown = await ipcRenderer.invoke("previews:picture", ref);
       return isEvidencePictureResult(value) ? value : { ok: false, reason: "invalid" };
+    },
+    /** A saved run's sound, by the ref its evidence carries; never a path. */
+    loadSound: async (ref: string): Promise<EvidenceSoundResult> => {
+      if (!isEvidenceSoundRef(ref)) return { ok: false, reason: "invalid" };
+      const value: unknown = await ipcRenderer.invoke("previews:sound", ref);
+      return isEvidenceSoundResult(value) ? value : { ok: false, reason: "invalid" };
     },
   },
   app: {

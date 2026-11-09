@@ -69,6 +69,8 @@ export type TimelineEntry =
 
 /** One rendered line of the activity layer, resolved and ready to display. */
 export type ActivityStep = {
+  /** Evidence this call produced, folded into its row by the activity model. */
+  attached?: readonly RunEvidence[];
   key: string;
   kind: ActivityKind;
   state: ActivityState;
@@ -398,20 +400,40 @@ function evidenceStep(key: string, evidence: RunEvidence): ActivityStep {
   };
 }
 
+/** Something the model said on its way to the answer, as a row of its own. */
+function proseStep(key: string, text: string): ActivityStep {
+  return { key, kind: "note", state: "done", label: text.replace(/\*\*|`/g, "").replace(/\s+/g, " ").trim() };
+}
+
+/** A run's reply in the chat: what the model said last. What it said before is in Activity. */
+export function latestProse(view: Pick<RunView, "timeline" | "text">): string {
+  const last = view.timeline.filter((entry) => entry.type === "text").pop();
+  return (last?.type === "text" ? view.text.slice(last.start) : view.text).trim();
+}
+
 /**
  * Resolve the run's timeline into the lines the activity layer renders.
  *
  * Entries whose target is missing are skipped rather than rendered empty: a
  * dropped event should shorten the timeline, not put a blank row in it.
  */
-export function activitySteps(view: Pick<RunView, "timeline" | "activities" | "evidence">): ActivityStep[] {
+export function activitySteps(view: Pick<RunView, "timeline" | "activities" | "evidence"> & { text?: string }): ActivityStep[] {
   const byCallId = new Map(view.activities.map((activity) => [activity.callId, activity]));
   const byEvidenceId = new Map(view.evidence.map((evidence) => [evidence.id, evidence]));
   const steps: ActivityStep[] = [];
+  const texts = view.timeline.filter((entry) => entry.type === "text");
 
   for (const entry of view.timeline) {
-    // Prose is not a step; `transcriptSegments` places it between them.
-    if (entry.type === "text") continue;
+    // What the model said along the way is part of the story, where it said it.
+    // Its latest words are the reply, which `latestProse` puts in the chat.
+    if (entry.type === "text") {
+      const next = texts[texts.indexOf(entry) + 1];
+      if (view.text !== undefined && next?.type === "text") {
+        const said = view.text.slice(entry.start, next.start).trim();
+        if (said !== "") steps.push(proseStep(entry.key, said));
+      }
+      continue;
+    }
     if (entry.type === "note") {
       steps.push({ key: entry.key, kind: "note", state: "done", label: entry.label, note: entry.detail });
       continue;
@@ -441,13 +463,39 @@ export function activitySteps(view: Pick<RunView, "timeline" | "activities" | "e
 }
 
 /**
- * The same lines for a run restored from chat history.
- *
- * The record keeps calls and evidence in separate lists rather than one
- * timeline, so history shows every call and then everything they proved. That
- * loses the interleaving, which is worth the smaller record.
+ * The same lines for a run restored from chat history, in the order they
+ * happened. A record's transcript says that order; one written before transcripts
+ * were kept, or too long to keep one, shows every call and then what they proved.
+ * Steps the transcript does not place go at the end rather than being dropped.
  */
 export function recordSteps(record: RunRecord): ActivityStep[] {
+  const steps = recordBaseSteps(record);
+  if (record.transcript === undefined) return steps;
+  const pools = {
+    call: steps.filter((step) => step.key.startsWith("call-")),
+    note: steps.filter((step) => step.key.startsWith("note-")),
+    evidence: steps.filter((step) => step.key.startsWith("evidence-")),
+  };
+  const lastText = record.transcript.reduce((last, entry, index) => ("text" in entry ? index : last), -1);
+  const ordered: ActivityStep[] = [];
+  record.transcript.forEach((entry, index) => {
+    if ("text" in entry) {
+      if (index !== lastText && entry.text.trim() !== "") ordered.push(proseStep(`prose-${index}`, entry.text));
+      return;
+    }
+    const step = pools[entry.step].shift();
+    if (step !== undefined) ordered.push(step);
+  });
+  return [...ordered, ...pools.call, ...pools.note, ...pools.evidence];
+}
+
+/** A saved run's reply in the chat: what the model said last, or all of it for a record with no transcript. */
+export function recordReply(record: RunRecord, text: string): string {
+  const said = record.transcript?.filter((entry) => "text" in entry).pop();
+  return said !== undefined && "text" in said ? said.text.trim() : text;
+}
+
+function recordBaseSteps(record: RunRecord): ActivityStep[] {
   return [
     ...record.toolCalls.map((call, index): ActivityStep => ({
       key: `call-${index}`,
@@ -603,7 +651,7 @@ export function recordTranscriptSegments(record: RunRecord): Array<
   { type: "text"; key: string; text: string } | { type: "steps"; key: string; steps: ActivityStep[] }
 > | null {
   if (record.transcript === undefined) return null;
-  const steps = recordSteps(record);
+  const steps = recordBaseSteps(record);
   const pools = {
     call: steps.filter((step) => step.key.startsWith("call-")),
     note: steps.filter((step) => step.key.startsWith("note-")),

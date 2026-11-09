@@ -166,6 +166,12 @@ export type TurnRequest = Readonly<{
   tools: readonly TurnTool[];
   messages: readonly TurnMessage[];
   maxOutputTokens?: number;
+  /**
+   * Ask the endpoint for its own web search beside the tools, where its API
+   * has one (OpenAI's Responses API, Anthropic's). Each search comes back as a
+   * `search` event; a transport whose API has no search ignores this.
+   */
+  webSearch?: boolean;
 }>;
 
 export type TurnUsage = Readonly<{
@@ -278,6 +284,8 @@ export type TurnEvent =
    */
   | Readonly<{ kind: "tool-input"; characters: number }>
   | Readonly<{ kind: "tool-call"; call: TurnToolCall }>
+  /** The endpoint's own web search ran, for this query: shown to the user, never acted on by Roqer. */
+  | Readonly<{ kind: "search"; query: string }>
   /**
    * `usage` is absent when the provider did not report it; it is never invented.
    * `serviceTier` is the tier the endpoint says served the turn, in its own
@@ -299,6 +307,7 @@ const TURN_EVENT_KIND_SET: Readonly<Record<TurnEventKind, true>> = {
   reasoning: true,
   "tool-input": true,
   "tool-call": true,
+  search: true,
   completed: true,
   failed: true,
 };
@@ -411,7 +420,9 @@ export function isTurnRequest(value: unknown): value is TurnRequest {
     "tools",
     "messages",
     "maxOutputTokens",
+    "webSearch",
   ])) return false;
+  if (value.webSearch !== undefined && typeof value.webSearch !== "boolean") return false;
   if (!isOpaqueId(value.runId) || !isOpaqueId(value.turnId) ||
     !isTurnModelId(value.modelId) || !isTurnReasoningEffort(value.reasoningEffort)) return false;
   if (!isRecord(value.instructions) || !hasOnlyKeys(value.instructions, ["system", "developer"]) ||
@@ -467,6 +478,8 @@ export function isTurnEvent(value: unknown): value is TurnEvent {
       return hasOnlyKeys(value, ["kind", "characters"]) && isCharacterCount(value.characters);
     case "tool-call":
       return hasOnlyKeys(value, ["kind", "call"]) && isTurnToolCall(value.call);
+    case "search":
+      return hasOnlyKeys(value, ["kind", "query"]) && isBoundedString(value.query, 1_000) && (value.query as string).length > 0;
     case "completed":
       return hasOnlyKeys(value, ["kind", "stopReason", "usage", "serviceTier"]) && typeof value.stopReason === "string" &&
         TURN_STOP_REASONS.includes(value.stopReason as TurnStopReason) &&

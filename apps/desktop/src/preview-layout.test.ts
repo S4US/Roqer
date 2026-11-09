@@ -1,12 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
-  ANIMATION_BOXES_LABEL, ANIMATION_NAME_LABEL, ANIMATION_PREVIEW_TITLE, ANIMATION_RIG_LABEL, BLENDER_MODEL_LABEL, BLENDER_PREVIEW_TITLE, RIG_RANGE_SHEET_TITLE, SCREENSHOT_VIEW_LABEL,
-  SCREENSHOT_VIEW_PLAYTEST, type RunChange, type RunEvidence,
+  ANIMATION_BOXES_LABEL, ANIMATION_NAME_LABEL, ANIMATION_PREVIEW_TITLE, ANIMATION_RIG_LABEL, BLENDER_MODEL_LABEL, BLENDER_PREVIEW_TITLE, IMAGE_NAME_LABEL,
+  IMAGE_PREVIEW_TITLE, RIG_RANGE_SHEET_TITLE, SCREENSHOT_VIEW_LABEL, SCREENSHOT_VIEW_PLAYTEST, type RunChange, type RunEvidence,
 } from "../shared/run-events";
 import {
-  animationRigCaption, hasModelPreview, keptPreviewIds, previewBoxesNote, previewCaption, previewLayout, previewSource, previewSourceLabel, previewSubject, previewTileLabel,
-  previewVersions, shortTarget,
+  animationRigCaption, hasModelPreview, keptPreviewIds, pictureCategory, previewBoxesNote, previewCaption, previewLayout, previewSource, previewSourceLabel,
+  previewSubject, previewTileLabel, previewVersions, shortTarget,
 } from "./preview-layout";
 
 const image = "data:image/jpeg;base64,QUJD";
@@ -57,6 +57,22 @@ test("a picture is labelled by where the host says it came from", () => {
   assert.deepEqual([blender, playtest, shot("s"), other].map(previewSourceLabel), [
     "Blender · before upload", "Playtest", "Studio", "Interface",
   ]);
+});
+
+test("a generated image is a preview of the texture it was named for, and its takes are versions of it", () => {
+  const take = (id: string, name: string, subject?: string): RunEvidence => ({
+    id, kind: "inspection", title: IMAGE_PREVIEW_TITLE, imageDataUrl: image,
+    metadata: [{ label: IMAGE_NAME_LABEL, value: name }, { label: "Kind", value: "light" }],
+    ...(subject === undefined ? {} : { subject }),
+  });
+  assert.equal(previewSource(take("1", "glow")), "image");
+  assert.equal(previewSourceLabel(take("1", "glow")), "Generated · before upload");
+  assert.equal(pictureCategory(take("1", "glow")), "previews");
+  // The host's subject groups the takes; a run saved before it groups by the name label.
+  const versions = previewVersions([take("1", "glow", "image:glow"), take("2", "puff", "image:puff"), take("3", "glow", "image:glow")]);
+  assert.deepEqual(versions.shown.map((item) => item.id), ["2", "3"]);
+  assert.deepEqual(versions.versions.get("3")?.map((item) => item.id), ["1", "3"]);
+  assert.equal(previewSubject(take("9", "glow")), "image:glow");
 });
 
 test("an animation's contact sheet is labelled with its rig, and opens in 3D when its model was kept", () => {

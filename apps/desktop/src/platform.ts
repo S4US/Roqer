@@ -1,3 +1,6 @@
+import type { AssetInsertRequest, AssetLedgerResult, AssetThumbnailRequest, AssetThumbnailResult } from "../shared/asset-ledger";
+import type { EvidenceSoundResult } from "../shared/evidence-sound";
+import type { StudioSelection } from "../shared/studio-selection";
 import { normalizeWorkspace, type AssetAttachment, type WorkspaceState } from "./model";
 import type { StorageStatus } from "../shared/workspace-storage";
 import type { McpServerState } from "../shared/mcp-server";
@@ -10,6 +13,7 @@ import type {
 } from "../shared/custom-providers";
 import type { OpenCloudCheckResult, OpenCloudSave, OpenCloudSettingsResult } from "../shared/open-cloud";
 import type { BlenderSettingsResult } from "../shared/blender";
+import type { ImageSettingsResult, ImageSettingsSave, ImageTestResult } from "../shared/image-generation";
 import type { McpServerSave, McpServersResult, McpServerTestResult } from "../shared/mcp-servers";
 import type { RojoResult } from "../shared/rojo";
 import type { ModelPreviewResult } from "../shared/model-preview";
@@ -138,6 +142,19 @@ export async function importCustomModels(connectionId: string): Promise<CustomMo
 
 const NO_DESKTOP_OPEN_CLOUD = "Roblox Open Cloud settings need the desktop app.";
 
+/** The ledger of what this computer uploaded; a browser has none. */
+export async function getAssetLedger(): Promise<AssetLedgerResult> {
+  return window.workbenchDesktop?.uploads.ledger() ?? { ok: false, message: "The upload ledger needs the desktop app." };
+}
+
+export async function insertLedgerAsset(request: AssetInsertRequest): Promise<StudioActionResult> {
+  return window.workbenchDesktop?.uploads.insert(request) ?? { ok: false, message: "Inserting an asset needs the desktop app." };
+}
+
+export async function getAssetThumbnail(request: AssetThumbnailRequest): Promise<AssetThumbnailResult> {
+  return window.workbenchDesktop?.uploads.thumbnail(request) ?? { ok: false, message: "Thumbnails need the desktop app." };
+}
+
 export async function getOpenCloudSettings(): Promise<OpenCloudSettingsResult> {
   return window.workbenchDesktop?.openCloud.get() ?? { ok: false, message: NO_DESKTOP_OPEN_CLOUD };
 }
@@ -166,6 +183,20 @@ export async function chooseBlender(): Promise<BlenderSettingsResult> {
 
 export async function redetectBlender(): Promise<BlenderSettingsResult> {
   return window.workbenchDesktop?.blender.redetect() ?? { ok: false, message: NO_DESKTOP_BLENDER };
+}
+
+const NO_DESKTOP_IMAGES = "Image generation needs the desktop app.";
+
+export async function getImageSettings(): Promise<ImageSettingsResult> {
+  return window.workbenchDesktop?.images.get() ?? { ok: false, message: NO_DESKTOP_IMAGES };
+}
+
+export async function saveImageSettings(save: ImageSettingsSave): Promise<ImageSettingsResult> {
+  return window.workbenchDesktop?.images.save(save) ?? { ok: false, message: NO_DESKTOP_IMAGES };
+}
+
+export async function testImageSettings(): Promise<ImageTestResult> {
+  return window.workbenchDesktop?.images.test() ?? { ok: false, message: NO_DESKTOP_IMAGES };
 }
 
 const NO_DESKTOP_MCP_SERVERS = "Your own MCP servers need the desktop app.";
@@ -248,6 +279,11 @@ export async function loadModelPreview(id: string): Promise<ModelPreviewResult> 
  */
 export async function loadEvidencePicture(ref: string): Promise<EvidencePictureResult> {
   return window.workbenchDesktop?.previews.loadPicture(ref) ?? { ok: false, reason: "refused" };
+}
+
+/** A saved run's sound, from the store beside the chats; a browser has none. */
+export async function loadEvidenceSound(ref: string): Promise<EvidenceSoundResult> {
+  return window.workbenchDesktop?.previews.loadSound(ref) ?? { ok: false, reason: "refused" };
 }
 
 /**
@@ -581,6 +617,13 @@ export async function copyDiagnostics(endpoint: string): Promise<boolean> {
 /** Show the bridge's log file in the file manager. False without the desktop app. */
 export async function showBridgeLog(): Promise<boolean> {
   return window.workbenchDesktop?.app.showBridgeLog() ?? false;
+}
+
+/** The chat place's Studio selection, for the composer's chip; null without the desktop runtime or an answer. */
+export async function getStudioSelection(endpoint: string, instanceId: string): Promise<StudioSelection | null> {
+  if (!window.workbenchDesktop) return null;
+  const result = await window.workbenchDesktop.studio.getSelection({ endpoint, instanceId });
+  return result.ok ? result.selection : null;
 }
 
 export async function getStudioStatus(endpoint: string): Promise<StudioStatus> {

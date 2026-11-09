@@ -54,6 +54,14 @@ scene, export into `OUTPUT_DIR`), reading Roqer's re-import and preview, and
 bringing the model into Studio through upload and insert, and rendering PNG
 icons for UI. It is distributed under the repository's licence.
 
+The repository-authored
+`skills/roblox-animation-vfx/references/vfx-generated-textures.md` describes
+the opt-in `image` tool: generating single drawn or lit shapes with the user's
+own image model, the prompts for each texture family, reading the measurements
+Roqer attaches, iterating, previewing in Studio and uploading. Its medians come
+from the same texture study as `vfx-textures.md`; no third-party text or asset
+is included. It is distributed under the repository's licence.
+
 The repository-authored `skills/roblox-animation-vfx/references/vfx-textures.md`,
 `vfx-rendered-flipbooks.md` and `vfx-mesh-shapes.md` (once
 `skills/roblox-building/references/blender-vfx.md`) cover drawing particle

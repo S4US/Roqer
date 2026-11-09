@@ -96,3 +96,24 @@ test("a bad list uploads nothing, and a cancelled run uploads nothing further", 
   await assert.rejects(uploadAssets({ uploads: [upload("a"), upload("b")] }, { signal: controller.signal }, cancelling), /cancelled/);
   assert.equal(calls.length, 1, "the second file was never sent");
 });
+
+test("a file the ledger answered for is listed as already on Roblox, with the id to use", async () => {
+  const { uploadAssets } = await import("./upload-assets");
+  const calls: string[] = [];
+  const studio = async (tool: string, args: Record<string, unknown>) => {
+    calls.push(tool);
+    return args.filePath === "C:/a/ring.png"
+      ? { ok: true, data: { status: "already_uploaded", asset_id: "500", assetId: "500", assetType: "Decal", displayName: "Ring", imageId: "501", moderation_state: "Approved", uploadedAt: "2026-11-05T00:00:00.000Z" }, text: "", httpStatus: 200, durationMs: 0 }
+      : { ok: true, data: { asset_id: "600", status: "complete", response: { assetId: "600" } }, text: "", httpStatus: 200, durationMs: 1 };
+  };
+  const outcome = await uploadAssets({ uploads: [
+    { filePath: "C:/a/ring.png", assetType: "Decal", displayName: "Ring" },
+    { filePath: "C:/a/puff.png", assetType: "Decal", displayName: "Puff" },
+  ] }, {}, studio);
+  assert.equal(outcome.ok, true);
+  assert.match(outcome.text, /Ring \(C:\/a\/ring\.png\): not uploaded again, the same bytes went to Roblox before as asset 500, imageId 501, moderation Approved; use that id/);
+  const uploads = (outcome.data as { uploads: Array<Record<string, unknown>> }).uploads;
+  assert.equal(uploads[0].reused, true);
+  assert.equal(uploads[0].status, "complete");
+  assert.equal(uploads[1].reused, undefined);
+});

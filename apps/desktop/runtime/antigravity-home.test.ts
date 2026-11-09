@@ -184,3 +184,27 @@ test("an agy process gets the private home and no API key", () => {
   assert.equal(environment.GOOGLE_API_KEY, undefined);
   assert.equal(environment.ROBLOX_STUDIO_AUTH_TOKEN, undefined);
 });
+
+test("a home made with web search on lets Antigravity's search tool through the gate, and nothing else new", async () => {
+  const home = await createAntigravityHome({ mcp: MCP, webSearch: true });
+  try {
+    assert.equal(home.webSearch, true);
+    const call = (name: string, args: Record<string, unknown>) => ({ conversationId: "c", stepIdx: 1, toolCall: { name, args } });
+    const searched = decision((await runGate(home.home, call("search_web", { query: "roblox" }))).stdout);
+    assert.equal(searched, null, "the search is allowed");
+    const refused = decision((await runGate(home.home, call("read_url_content", { Url: "https://example.com" }))).stdout);
+    assert.equal(refused?.decision, "deny");
+    const shell = decision((await runGate(home.home, call("run_command", { CommandLine: "echo hi" }))).stdout);
+    assert.equal(shell?.decision, "deny");
+  } finally {
+    await home.remove();
+  }
+  const plain = await createAntigravityHome({ mcp: MCP });
+  try {
+    assert.equal(plain.webSearch, false);
+    const call = { conversationId: "c", stepIdx: 1, toolCall: { name: "search_web", args: { query: "roblox" } } };
+    assert.equal(decision((await runGate(plain.home, call)).stdout)?.decision, "deny");
+  } finally {
+    await plain.remove();
+  }
+});

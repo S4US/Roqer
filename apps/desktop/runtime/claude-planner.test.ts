@@ -27,9 +27,10 @@ const QUALIFIED_SKILL_TOOL = "mcp__workbench__load_skill";
 const QUALIFIED_ICON_TOOL = "mcp__workbench__resolve_icon";
 const QUALIFIED_TASK_TOOL = "mcp__workbench__update_task_list";
 const QUALIFIED_QUESTION_TOOL = "mcp__workbench__ask_user";
+const QUALIFIED_LINK_TOOL = "mcp__workbench__open_link";
 /** Everything the planner refuses to start without. */
 const PROVIDER_TOOLS = [
-  QUALIFIED_STUDIO_TOOL, QUALIFIED_SKILL_TOOL, QUALIFIED_ICON_TOOL, QUALIFIED_TASK_TOOL, QUALIFIED_QUESTION_TOOL,
+  QUALIFIED_STUDIO_TOOL, QUALIFIED_SKILL_TOOL, QUALIFIED_ICON_TOOL, QUALIFIED_TASK_TOOL, QUALIFIED_QUESTION_TOOL, QUALIFIED_LINK_TOOL,
 ];
 const AGENT: AgentDefinition = {
   id: "test-agent",
@@ -1117,6 +1118,49 @@ test("with Blender on, Claude may call the blender tool, and a call is one engin
   assert.match(blenderResult, /Blender job finished/);
 });
 
+test("with an image source on, Claude may call the image tool, and a call is one engine operation", async () => {
+  const controller = new AbortController();
+  const { context, recorded } = makeContext(controller, () => ({
+    ok: true, data: { jobId: "0a1b2c3d", images: [] }, text: "Image job 0a1b2c3d: 1 image.", httpStatus: 200, durationMs: 1,
+  }));
+  let launchArgs: string[] = [];
+  let imageResult = "";
+  const planner = createClaudePlanner({
+    ...AGENT_OPTIONS,
+    imageGeneration: true,
+    launcher: {
+      launch: async (args) => {
+        launchArgs = args;
+        const child = new FakeChildProcess();
+        void (async () => {
+          child.writeLine({
+            type: "system",
+            subtype: "init",
+            tools: [...PROVIDER_TOOLS, "mcp__workbench__image"],
+            mcp_servers: [{ name: "workbench", status: "connected" }],
+          });
+          imageResult = await callTool(await mcpTarget(args), { prompt: "a soft white glow", kind: "light", name: "glow" }, "image");
+          child.writeLine({ type: "result", subtype: "success", is_error: false, result: "Generated." });
+          child.finish(0);
+        })();
+        return child.asChild();
+      },
+    },
+    getStatus: async () => ({ kind: "signed-in", message: "Pro connected through Claude Code", planType: "pro" }),
+    cwd: process.cwd(),
+    model: "opus",
+    effort: "high",
+  });
+
+  assert.equal(await planner.run(context), "Generated.");
+  assert.equal(
+    launchArgs[launchArgs.indexOf("--allowedTools") + 1],
+    [...PROVIDER_TOOLS, "mcp__workbench__image"].join(","),
+  );
+  assert.deepEqual(recorded.calls, ["generate_image"]);
+  assert.match(imageResult, /Image job 0a1b2c3d/);
+});
+
 test("in a chat with reference clips, Claude may look closer at one, and a call is one engine read", async () => {
   const controller = new AbortController();
   const { context, recorded } = makeContext(controller, () => ({
@@ -1736,3 +1780,28 @@ test("compacting a chat with no saved conversation says so", async () => {
   }
 });
 
+
+import { CLAUDE_WEB_TOOLS, webToolUses } from "./claude-planner";
+
+test("a search or a page read in one of Claude's messages is read off for the activity, and nothing else is", () => {
+  const message = {
+    type: "assistant",
+    message: {
+      role: "assistant",
+      content: [
+        { type: "text", text: "Checking the docs." },
+        { type: "tool_use", id: "t1", name: "WebSearch", input: { query: "ParticleEmitter FlipbookLayout" } },
+        { type: "tool_use", id: "t2", name: "WebFetch", input: { url: "https://create.roblox.com/docs/reference/engine/classes/ParticleEmitter", prompt: "flipbook" } },
+        { type: "tool_use", id: "t3", name: "mcp__roqer__roblox_studio", input: { operation: "get_place_info" } },
+        { type: "tool_use", id: "t4", name: "WebSearch", input: { notAQuery: 1 } },
+      ],
+    },
+  };
+  assert.deepEqual(webToolUses(message), [
+    { label: "Searched the web", detail: "ParticleEmitter FlipbookLayout" },
+    { label: "Read a web page", detail: "https://create.roblox.com/docs/reference/engine/classes/ParticleEmitter" },
+  ]);
+  assert.deepEqual(webToolUses({ ...message, parent_tool_use_id: "sub" }), [], "a subagent's searches are not the main agent's");
+  assert.deepEqual(webToolUses({ type: "assistant", message: { content: "no blocks" } }), []);
+  assert.deepEqual(CLAUDE_WEB_TOOLS, ["WebSearch", "WebFetch"]);
+});

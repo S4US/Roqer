@@ -160,6 +160,13 @@ export function parseRunTaskList(value: unknown): RunTask[] {
   return tasks;
 }
 
+/** How far a plan has got, for the row that holds it: "3 of 5", and what is stuck if anything is. */
+export function taskProgress(tasks: readonly RunTask[]): string {
+  const done = tasks.filter((task) => task.status === "done").length;
+  const blocked = tasks.filter((task) => task.status === "blocked").length;
+  return `${done} of ${tasks.length}${blocked > 0 ? ` · ${blocked} blocked` : ""}`;
+}
+
 /** One line for the activity layer, e.g. "3 of 5 done · Wiring the prompt". */
 export function summarizeTasks(tasks: readonly RunTask[]): string {
   const done = tasks.filter((task) => task.status === "done").length;

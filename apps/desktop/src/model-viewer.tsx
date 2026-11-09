@@ -430,7 +430,7 @@ export function ModelViewer({ evidence, onShowPicture, compact = false, autoplay
       onClick={() => (playback.playing ? controls.current?.playback?.pause() : controls.current?.playback?.play())}
       aria-label={playback.playing ? "Pause the animation" : "Play the animation"}
     >
-      {playback.playing ? <Pause size={15} /> : <Play size={15} />}
+      {playback.playing ? <Pause size={15} fill="currentColor" /> : <Play size={15} fill="currentColor" />}
     </button>
     <input
       type="range"
@@ -446,7 +446,7 @@ export function ModelViewer({ evidence, onShowPicture, compact = false, autoplay
   </div>;
 
   if (compact) {
-    return <div className="model-viewer" data-status={status} data-compact="true">
+    return <div className="model-viewer" data-theme="dark" data-status={status} data-compact="true">
       <div
         className="model-viewer-canvas"
         ref={host}
@@ -457,7 +457,7 @@ export function ModelViewer({ evidence, onShowPicture, compact = false, autoplay
     </div>;
   }
 
-  return <div className="model-viewer" data-status={status}>
+  return <div className="model-viewer" data-theme="dark" data-status={status}>
     <div
       className="model-viewer-canvas"
       ref={host}
@@ -485,18 +485,20 @@ export function ModelViewer({ evidence, onShowPicture, compact = false, autoplay
         {triangles && <span><Triangle size={13} aria-hidden="true" />{triangles} triangles</span>}
         {objects && <span><Layers size={13} aria-hidden="true" />{objects === "1" ? "1 object" : `${objects} objects`}</span>}
       </div>
-      {bar}
-      <div className="model-viewer-actions">
-        <button type="button" onClick={() => controls.current?.turn(-1)} aria-label="Turn the model left"><RotateCcw size={15} /></button>
-        <button type="button" onClick={() => controls.current?.turn(1)} aria-label="Turn the model right"><RotateCw size={15} /></button>
-        <button type="button" className="model-viewer-reset" onClick={() => controls.current?.reset()}>Reset view</button>
-        <svg className="model-viewer-gizmo" viewBox="0 0 48 48" ref={gizmo} aria-hidden="true">
-          {AXES.map((name) => <g key={name} data-axis={name}>
-            <line x1="24" y1="24" x2="24" y2="24" />
-            <text x="24" y="24">{name.toUpperCase()}</text>
-          </g>)}
-          <circle cx="24" cy="24" r="2.5" />
-        </svg>
+      <svg className="model-viewer-gizmo" viewBox="0 0 48 48" ref={gizmo} aria-hidden="true">
+        {AXES.map((name) => <g key={name} data-axis={name}>
+          <line x1="24" y1="24" x2="24" y2="24" />
+          <text x="24" y="24">{name.toUpperCase()}</text>
+        </g>)}
+        <circle cx="24" cy="24" r="2.5" />
+      </svg>
+      <div className="model-viewer-dock">
+        {bar}
+        <div className="model-viewer-actions">
+          <button type="button" onClick={() => controls.current?.turn(-1)} aria-label="Turn the model left"><RotateCcw size={15} /></button>
+          <button type="button" onClick={() => controls.current?.turn(1)} aria-label="Turn the model right"><RotateCw size={15} /></button>
+          <button type="button" className="model-viewer-reset" onClick={() => controls.current?.reset()}>Reset view</button>
+        </div>
       </div>
     </>}
   </div>;

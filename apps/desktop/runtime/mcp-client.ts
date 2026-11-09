@@ -8,6 +8,7 @@ import {
   type McpToolImage,
   type McpToolOutcome,
 } from "./mcp-types";
+import type { McpToolAudio } from "./mcp-types";
 
 /**
  * Talks to the MCP server's plain HTTP surface (packages/core/src/http-server.ts):
@@ -29,6 +30,17 @@ const TOOL_IMAGE_MEDIA_TYPES = new Set<McpToolImage["mediaType"]>([
   "image/jpeg",
   "image/webp",
   "image/gif",
+]);
+
+// Sounds a result may carry: a Creator Store preview's formats, each within
+// the store's bound, and few enough that a result stays a result.
+const MAX_TOOL_AUDIO = 3;
+const MAX_TOOL_AUDIO_BASE64 = 8 * 1024 * 1024;
+const TOOL_AUDIO_MEDIA_TYPES: ReadonlyMap<string, McpToolAudio["mediaType"]> = new Map([
+  ["audio/mpeg", "audio/mpeg"], ["audio/mp3", "audio/mpeg"],
+  ["audio/ogg", "audio/ogg"], ["application/ogg", "audio/ogg"],
+  ["audio/wav", "audio/wav"], ["audio/x-wav", "audio/wav"], ["audio/wave", "audio/wav"], ["audio/vnd.wave", "audio/wav"],
+  ["audio/flac", "audio/flac"], ["audio/x-flac", "audio/flac"],
 ]);
 
 // A 3D preview may be up to 24 MiB, which is 32 MiB of base64.
@@ -107,6 +119,16 @@ function isToolImage(
   }
   return value.data.length > 0 && value.data.length <= MAX_TOOL_IMAGE_BASE64 &&
     value.data.length % 4 === 0 && /^[A-Za-z0-9+/]+={0,2}$/.test(value.data);
+}
+
+/** An audio block in a format the store keeps, within its bound, with its type spelled one way. */
+function toolAudio(value: unknown): McpToolAudio | undefined {
+  if (!isRecord(value) || value.type !== "audio" || typeof value.data !== "string" || typeof value.mimeType !== "string") return undefined;
+  const mediaType = TOOL_AUDIO_MEDIA_TYPES.get(value.mimeType.toLowerCase());
+  if (mediaType === undefined) return undefined;
+  if (value.data.length === 0 || value.data.length > MAX_TOOL_AUDIO_BASE64 ||
+    value.data.length % 4 !== 0 || !/^[A-Za-z0-9+/]+={0,2}$/.test(value.data)) return undefined;
+  return { data: value.data, mediaType };
 }
 
 /** The base64 of a GLB the tool returned for Roqer's viewer, or undefined. */
@@ -345,19 +367,23 @@ export class McpClient implements McpToolCaller {
     if (envelope) {
       const texts: string[] = [];
       const images: McpToolImage[] = [];
+      const audio: McpToolAudio[] = [];
       let modelFile: string | undefined;
       for (const block of envelope.content as unknown[]) {
+        const sound = isRecord(block) && block.type === "audio" ? toolAudio(block) : undefined;
         if (isRecord(block) && block.type === "text" && typeof block.text === "string") {
           texts.push(block.text);
         } else if (images.length < MAX_TOOL_IMAGES && isToolImage(block)) {
           images.push({ data: block.data, mediaType: block.mimeType });
+        } else if (sound !== undefined) {
+          if (audio.length < MAX_TOOL_AUDIO) audio.push(sound);
         } else {
           modelFile ??= toolModelFile(block);
         }
       }
       text = texts.join("\n");
       data = envelope.structuredContent;
-      const outcome = this.parsedOutcome(envelope, data, text, images, httpStatus, durationMs);
+      const outcome = this.parsedOutcome(envelope, data, text, images, httpStatus, durationMs, audio);
       return modelFile === undefined ? outcome : { ...outcome, modelFile };
     } else {
       data = body;
@@ -373,6 +399,7 @@ export class McpClient implements McpToolCaller {
     images: readonly McpToolImage[],
     httpStatus: number,
     durationMs: number,
+    audio: readonly McpToolAudio[] = [],
   ): McpToolOutcome {
 
     let ok = true;
@@ -407,6 +434,7 @@ export class McpClient implements McpToolCaller {
       data,
       text,
       ...(images.length > 0 ? { images } : {}),
+      ...(audio.length > 0 ? { audio } : {}),
       httpStatus,
       errorCode,
       message,

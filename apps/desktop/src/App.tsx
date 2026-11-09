@@ -1,17 +1,20 @@
 import {
   AlertCircle, AlertTriangle, Archive, Boxes, Check, ChevronDown, ChevronRight, Circle, Download,
   CircleDot, ExternalLink, FileBox, FileCode2, FileText, Folder, FolderPlus, Gamepad2,
-  HelpCircle, Info, ListChecks, Loader2, MessageSquare, MinusCircle, Moon, MoreHorizontal,
-  ArrowUp, Maximize2, Minimize2, PanelLeftClose, PanelLeftOpen, Paperclip, Pencil, Play, Plus, RotateCw, Scissors, Search, Settings, Square,
-  ShieldCheck, Sparkles, Sun, Film,
-  Trash2, X, Zap,
+  HelpCircle, Info, Loader2, MessageSquare, MinusCircle, MoreHorizontal,
+  ArrowUp, Maximize2, Minimize2, PanelLeftClose, PanelLeftOpen, Paperclip, Pencil, Play, Plus, RotateCw, Search, Settings, Square,
+  ShieldCheck, Sparkles, MousePointerClick,
+  Trash2, Upload, X,
 } from "lucide-react";
 import { Fragment, memo, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { createPortal } from "react-dom";
+import { AttachmentChip, MessageFiles, MessagePictures } from "./attachment-views";
+import { isImageAttachment } from "./attachment-detail";
 import { ClipTrimDialog } from "./clip-trim-dialog";
 import { VIDEO_EXTENSIONS, type ClipSelection } from "../shared/reference-clip";
+import { describeSelection, selectionChipParts, selectionKey, selectionToOffer, type StudioSelection } from "../shared/studio-selection";
 import {
-  appendMessage, createChat, createId, createInitialWorkspace, createProject, undeliverNotes,
+  appendMessage, createChat, createId, createInitialWorkspace, createProject, undeliverNotes, withMessageSelection,
   deleteChat, deleteProject, modelPreference, normalizeWorkspace, renameChat,
   renameProject, selectedModelId, setChatCompaction, setChatStudioInstance, chatStudioTarget, chatsByActivity, withdrawMessage,
   type AssetAttachment, type ChatMessage, type WorkspaceState,
@@ -22,29 +25,35 @@ import {
   answerRunQuestion, attachImage, attachVideo, ATTACHABLE_IMAGE_TYPES, ATTACHABLE_VIDEO_TYPES, selectClip, steerRun, compactChat,
   getBridgeState, restartBridge, subscribeToBridge, type McpServerState,
   getUpdateState, installUpdate, subscribeToUpdates, type AppUpdateState,
-  flushWorkspace, getProviderModels, getProviderStatus, openScriptInStudio, respondToRun, saveWorkspace, startRun,
+  flushWorkspace, getProviderModels, getProviderStatus, getStudioSelection, openScriptInStudio, respondToRun, saveWorkspace, startRun,
   subscribeToRuns,
   type ProviderModelCatalog, type ProviderStatus,
   type StudioStatus,
 } from "./platform";
 import {
   activitySteps, applyRunEvent, createRunView, describeOutcome, recordAppliedAndVerified,
-  recordGateIssues, recordHasWarnings, recordOnlyAnswered, recordSteps, recordTranscriptSegments, runAppliedAndVerified,
-  runGateIssues, runHasWarnings, runOnlyAnswered, toRunRecord, hasPicture, transcriptSegments,
+  latestProse, recordGateIssues, recordHasWarnings, recordOnlyAnswered, recordReply, recordSteps, runAppliedAndVerified,
+  runGateIssues, runHasWarnings, runOnlyAnswered, toRunRecord, hasPicture,
   type ActivityStep, type PendingApproval, type RunView,
 } from "./run-view";
 import { EvidencePicture, rememberEvidencePicture } from "./evidence-picture";
+import { EvidenceSound } from "./evidence-sound";
 import { QUESTION_ESCAPE_OPTION, type RunQuestion } from "../shared/question";
-import { summarizeTasks, type RunTask, type RunTaskStatus } from "../shared/tasks";
+import { taskProgress, type RunTask, type RunTaskStatus } from "../shared/tasks";
+import { runResults } from "./results-model";
 import { Markdown, StreamingMarkdown } from "./markdown-view";
+import { usePresence } from "./presence";
+import { useSettledFlag } from "./settled-flag";
 import { SettingsPage } from "./settings-page";
 import { DiagnosticsActions } from "./diagnostics-actions";
 import { sendBlockedNotice } from "./send-blocked";
-import { ResultsCard, type FileExpansion } from "./results-card";
+import type { FileExpansion } from "./results-card";
+import { targetLabel } from "./run-deck-model";
+import { RunDeckProvider, RunDeckToggle, RunResults, useRunDeck } from "./run-deck";
 import { ModelMenu, RunMenu } from "./composer-menus";
 import { ContextMeter } from "./context-meter";
 import { compactUsageNote, contextMeterView, nextContextReading, type ContextReading } from "./context-usage";
-import { blockPreview, characterCount, composedMessage, isLongPaste, lineCount, textSize, type PastedBlock } from "./composer-text";
+import { blockPreview, characterCount, composedMessage, finishBlockEdit, isLongPaste, lineCount, textSize, withBlockText, type PastedBlock } from "./composer-text";
 import { RojoPill } from "./rojo-pill";
 
 /** The key that sends with Enter and makes a new chat with N, named the way this computer's keyboard names it. */
@@ -59,8 +68,8 @@ import {
   type ChangeGroup, type DiffRow, type SyntaxToken,
 } from "./diff-view";
 import {
-  aggregateDuration, buildActivityModel, completedRunMetadataLabel, currentNodeTitle,
-  elapsedLabel, leafNode, MAX_VISIBLE_ALERTS, outputTokensLabel, type ActivityNode, type StepStatus,
+  aggregateDuration, buildActivityModel, completedRunMetadataLabel, countedActions, currentNodeTitle, finishedRunSummary,
+  elapsedLabel, MAX_VISIBLE_ALERTS, outputTokensLabel, type ActivityNode, type StepStatus,
 } from "./activity-model";
 import { CompletionLine } from "./completion-line";
 import {
@@ -137,9 +146,6 @@ const MAX_ATTACHMENTS_PER_MESSAGE = 8;
 /** Matches the bound the run contract enforces on one turn. */
 const MAX_IMAGES_PER_MESSAGE = 4;
 
-const isImageAttachment = (attachment: AssetAttachment): boolean =>
-  attachment.mediaType !== undefined && ATTACHABLE_IMAGE_TYPES.has(attachment.mediaType);
-
 /**
  * One chat's run as the window tracks it. A chat has at most one run at a time,
  * and several chats may run at once: the main process refuses a second run in
@@ -174,7 +180,7 @@ const COMPACT_KEEPS_MESSAGES = 2;
  * a record is written from the same view the model would have been sent.
  */
 function toConversationMessages(messages: readonly ChatMessage[]): ConversationMessage[] {
-  return messages.map(({ role, text, run, attachments: attached, note }) => {
+  return messages.map(({ role, text, run, attachments: attached, note, studioSelection }) => {
     const digest = run === undefined ? undefined : digestRun(run);
     // A replay carries the words, not the files; the count says they existed.
     // Clamped to what the main process accepts, so an odd saved message can
@@ -187,6 +193,7 @@ function toConversationMessages(messages: readonly ChatMessage[]): ConversationM
       ...(digest === undefined || digestIsEmpty(digest) ? {} : { run: digest }),
       ...(role === "user" && pictures + files > 0 ? { attachments: { pictures, files } } : {}),
       ...(note === true && role === "user" ? { note: true as const } : {}),
+      ...(role === "user" && studioSelection !== undefined && studioSelection.count > 0 ? { selection: studioSelection } : {}),
       ...(role === "assistant" && run !== undefined ? { claude: run.planner === "claude-code" } : {}),
     };
   });
@@ -209,23 +216,6 @@ const totalImageSlots = (attached: readonly AssetAttachment[]): number =>
 const isVideoFile = (file: File): boolean =>
   ATTACHABLE_VIDEO_TYPES.has(file.type) ||
   (file.type === "" && VIDEO_EXTENSIONS.has(file.name.slice(file.name.lastIndexOf(".")).toLowerCase()));
-
-/** What the chat can promise about an attachment, given where the run will go. */
-function attachmentDetail(attachment: AssetAttachment, imagesReachModel: boolean, reading: boolean): string {
-  const { clip } = attachment;
-  if (clip !== undefined) {
-    if (reading) return "reading its frames…";
-    if (clip.id === undefined) return "choose the part to send";
-    const length = `${((clip.end - clip.start) / clip.slow).toFixed(2)} s`;
-    return imagesReachModel ? `${length} clip shared with agent as frames` : `${length} clip saved; this sign-in cannot read images`;
-  }
-  if (isImageAttachment(attachment)) {
-    return imagesReachModel ? "image shared with agent" : "image saved; this sign-in cannot read images";
-  }
-  return hasDesktopRuntime() && /\.(rbxmx|txt|md|lua|luau)$/i.test(attachment.name)
-    ? "text shared with agent"
-    : "file details only; contents not read";
-}
 
 function App() {
   // Dark unless this machine has chosen otherwise. Roqer sits beside Studio,
@@ -258,6 +248,8 @@ function App() {
   /** Long pastes, folded out of the text so what was typed stays readable. Sent first, in order. */
   const [pastedBlocks, setPastedBlocks] = useState<PastedBlock[]>([]);
   const [composerExpanded, setComposerExpanded] = useState(false);
+  /** The pasted block open in the larger editor, if one is. Its text is edited there, apart from what was typed. */
+  const [editingBlockId, setEditingBlockId] = useState<string | null>(null);
   const [attachments, setAttachments] = useState<AssetAttachment[]>([]);
   /** Clips whose frames Roqer is reading, and the one whose part is being chosen. */
   const [readingClips, setReadingClips] = useState<ReadonlySet<string>>(() => new Set());
@@ -279,6 +271,7 @@ function App() {
     setComposer("");
     setPastedBlocks([]);
     setComposerExpanded(false);
+    setEditingBlockId(null);
   }, []);
   // The box grows with what is typed, up to a limit the stylesheet sets, and
   // scrolls after that; the expanded editor fills its space instead.
@@ -287,7 +280,7 @@ function App() {
     if (box === null) return;
     box.style.height = "";
     if (!composerExpanded) box.style.height = `${box.scrollHeight}px`;
-  }, [composer, composerExpanded, pastedBlocks.length]);
+  }, [composer, composerExpanded, pastedBlocks.length, editingBlockId]);
   // The transcript keeps room for the composer below its last message, so a
   // composer grown by a long draft never hides what it is replying to.
   const dockRef = useRef<HTMLDivElement>(null);
@@ -295,7 +288,8 @@ function App() {
     const dock = dockRef.current;
     const workspaceElement = dock?.parentElement;
     if (!dock || !workspaceElement || composerExpanded) return;
-    const measure = () => workspaceElement.style.setProperty("--dock-height", `${Math.ceil(dock.getBoundingClientRect().height)}px`);
+    // On the shell, because the Run Deck beside the workspace stops above the dock too.
+    const measure = () => (workspaceElement.closest<HTMLElement>(".app-shell") ?? workspaceElement).style.setProperty("--dock-height", `${Math.ceil(dock.getBoundingClientRect().height)}px`);
     measure();
     const observer = new ResizeObserver(measure);
     observer.observe(dock);
@@ -307,8 +301,10 @@ function App() {
     if (explainingQuestion !== null) composerRef.current?.focus();
   }, [explainingQuestion]);
   const [showConnection, setShowConnection] = useState(false);
+  const connectionPopover = usePresence(showConnection, MENU_LEAVE_MS);
   const connectionRef = useRef<HTMLDivElement>(null);
   const [showSettings, setShowSettings] = useState(false);
+  const settingsPage = usePresence(showSettings, SETTINGS_LEAVE_MS);
   /** The community icon has just taken the dismissed card's place and pulses once. */
   const [communityIconArrived, setCommunityIconArrived] = useState(false);
   /** The chat whose message waits for its compaction to finish before it sends. */
@@ -680,6 +676,50 @@ function App() {
   const runView = selectedRun?.view ?? null;
   const runStarting = selectedRun !== null && selectedRun.runId === null;
   const isRunning = runStarting || (runView !== null && runView.outcome === null);
+  // A run that starts ends a pasted block's edit: the box then belongs to the run's note.
+  useEffect(() => { if (isRunning) setEditingBlockId(null); }, [isRunning]);
+
+  /**
+   * The Studio selection of the chat's place, for the composer's chip. Read
+   * while the window is in front, because that is when the person is writing;
+   * while they are in Studio choosing, nothing is read, and the first read on
+   * coming back shows what they chose. The chip is a yes or no: the paths the
+   * model gets are read again by the main process when the message is sent.
+   */
+  const [studioSelection, setStudioSelection] = useState<StudioSelection | null>(null);
+  const [dismissedSelectionKey, setDismissedSelectionKey] = useState<string | null>(null);
+  const [deckHost, setDeckHost] = useState<HTMLElement | null>(null);
+  const deck = useRunDeck(workspace.selectedChatId, deckHost);
+  const [windowFocused, setWindowFocused] = useState(() => typeof document !== "undefined" && document.hasFocus());
+  useEffect(() => {
+    const focused = () => setWindowFocused(true);
+    const blurred = () => setWindowFocused(false);
+    window.addEventListener("focus", focused);
+    window.addEventListener("blur", blurred);
+    return () => {
+      window.removeEventListener("focus", focused);
+      window.removeEventListener("blur", blurred);
+    };
+  }, []);
+  const selectionPlace = useMemo(() => {
+    if (studioStatus.kind !== "connected") return null;
+    const target = chatStudioTarget(workspace, workspace.selectedProjectId, workspace.selectedChatId);
+    return resolveInstanceId(studioStatus, target.instanceId, target.pinned);
+  }, [studioStatus, workspace]);
+  const useSelection = workspace.preferences.useStudioSelection;
+  useEffect(() => {
+    if (selectionPlace === null || !useSelection) setStudioSelection(null);
+    if (!useSelection || !hydrated || !windowFocused || isRunning || selectionPlace === null || !hasDesktopRuntime()) return;
+    let cancelled = false;
+    const read = async () => {
+      const selection = await getStudioSelection(workspace.preferences.mcpEndpoint, selectionPlace);
+      if (!cancelled) setStudioSelection(selection);
+    };
+    void read();
+    const interval = window.setInterval(() => void read(), 4_000);
+    return () => { cancelled = true; window.clearInterval(interval); };
+  }, [useSelection, hydrated, windowFocused, isRunning, selectionPlace, workspace.preferences.mcpEndpoint]);
+  const selectionChip = selectionToOffer(studioSelection, { enabled: useSelection, running: isRunning, dismissedKey: dismissedSelectionKey });
 
   const compactedFrom = selectedChat?.compaction?.folded ?? 0;
   const compactedUsage = compactUsageNote(selectedChat?.compaction?.usedTokens, selectedChat?.compaction?.windowTokens);
@@ -861,8 +901,10 @@ function App() {
       projectId, chatId, prompt, conversation,
       startId: createId("start"),
       attachmentIds: attachments.map((attachment) => attachment.id),
+      includeSelection: selectionChip !== null,
       approvalMode: next.preferences.approvalMode,
       autoPlaytest: next.preferences.autoPlaytest,
+      webSearch: next.preferences.webSearch,
       endpoint: next.preferences.mcpEndpoint,
       instanceId: (() => {
         const target = chatStudioTarget(next, projectId, chatId);
@@ -967,6 +1009,13 @@ function App() {
       startId: null,
       view: buffered.reduce(applyRunEvent, createRunView(started.runId, prompt, request.approvalMode)),
     });
+    // What Roqer read when the message went, which the chip may not have shown:
+    // recorded on the message, so the chat says what the model was told.
+    if (started.selection !== undefined) {
+      const selection = started.selection;
+      setWorkspace((state) => withMessageSelection(state, projectId, chatId, messageId, selection));
+    }
+    setDismissedSelectionKey(null);
   };
 
   const answerApproval = (decision: "approved" | "rejected") => {
@@ -1300,23 +1349,68 @@ function App() {
    * end of it. Someone who scrolled up to re-read a diff is reading, and
    * yanking them back down because a tool call finished would be the app
    * talking over them.
+   *
+   * Only the reader turns following off, by moving the view up. Measuring the
+   * distance from the end on every scroll event also turned it off by itself:
+   * content arriving during the glide after a send left the view briefly far
+   * from the end, and the chat stopped following a run nobody had scrolled
+   * away from. Reaching the end, or sending a message, turns it back on.
    */
   const scrollRef = useRef<HTMLDivElement>(null);
+  const conversationRef = useRef<HTMLDivElement>(null);
   const following = useRef(true);
+  const lastScrollTop = useRef(0);
+  /**
+   * Until when content that grows without a run event is followed: a reply
+   * revealing between deltas, a picture loading, the composer changing
+   * height. While the chat's run is live, and for a moment after it ends,
+   * while its reply finishes. Outside that, opening a card at the end of an
+   * old reply leaves the view where the reader put it.
+   */
+  const followGrowthUntil = useRef(0);
   const scrollToEnd = useCallback((behavior: ScrollBehavior) => {
     const node = scrollRef.current;
+    // "instant" is explicit because the stylesheet makes this pane scroll smoothly by default.
     if (node) node.scrollTo({ top: node.scrollHeight, behavior });
   }, []);
   const onConversationScroll = useCallback(() => {
     const node = scrollRef.current;
-    if (node) following.current = node.scrollHeight - node.scrollTop - node.clientHeight < 120;
+    if (!node) return;
+    if (node.scrollHeight - node.scrollTop - node.clientHeight <= FOLLOW_SLACK_PX) following.current = true;
+    else if (node.scrollTop < lastScrollTop.current - 1) following.current = false;
+    lastScrollTop.current = node.scrollTop;
   }, []);
+  useEffect(() => {
+    if (isRunning) followGrowthUntil.current = Number.POSITIVE_INFINITY;
+    else if (followGrowthUntil.current === Number.POSITIVE_INFINITY) followGrowthUntil.current = Date.now() + FOLLOW_AFTER_RUN_MS;
+  }, [isRunning]);
+  useEffect(() => {
+    const node = scrollRef.current;
+    const content = conversationRef.current;
+    if (!node || !content) return;
+    const observer = new ResizeObserver(() => {
+      if (following.current && Date.now() < followGrowthUntil.current) scrollToEnd("instant");
+    });
+    observer.observe(content);
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [scrollToEnd]);
 
   // A sent or completed message is a beat the reader is meant to notice, so it
-  // is followed smoothly.
+  // is followed smoothly. Sending is asking to watch the answer, so it follows
+  // even from higher up.
   const messageCount = selectedChat?.messages.length ?? 0;
+  const lastMessageRole = selectedChat?.messages.at(-1)?.role;
+  const countedChat = useRef(workspace.selectedChatId);
   useEffect(() => {
+    // Opening another chat changes the count too; that is not a new message.
+    if (countedChat.current !== workspace.selectedChatId) {
+      countedChat.current = workspace.selectedChatId;
+      return;
+    }
+    if (lastMessageRole === "user") following.current = true;
     if (following.current) scrollToEnd("smooth");
+    // Only a new message is a beat; the role and chat are read for it, not watched.
   }, [messageCount, scrollToEnd]);
 
   // A run's own events arrive many times a second while a reply streams, and
@@ -1327,10 +1421,27 @@ function App() {
     if (following.current) scrollToEnd("instant");
   }, [runView?.lastSeq, runStarting, scrollToEnd]);
 
-  // Another chat opens at its end, and opens there immediately.
-  useEffect(() => {
+  // Another chat opens at its end, before its first frame is painted, and
+  // settles in with a short fade and lift rather than replacing the last one
+  // in a single frame.
+  const openedChat = useRef(workspace.selectedChatId);
+  useLayoutEffect(() => {
     following.current = true;
     scrollToEnd("instant");
+    if (openedChat.current === workspace.selectedChatId) return;
+    openedChat.current = workspace.selectedChatId;
+    if (prefersReducedMotion()) return;
+    // A new chat only fades. Its heading and backdrop are placed against the
+    // workspace, and a transform here would place them against this element
+    // for the length of the animation, so they would drift and then jump back.
+    const empty = (selectedChat?.messages.length ?? 0) === 0;
+    conversationRef.current?.animate(
+      empty
+        ? [{ opacity: 0.3 }, { opacity: 1 }]
+        : [{ opacity: 0.3, transform: "translateY(8px)" }, { opacity: 1, transform: "none" }],
+      { duration: CHAT_ENTER_MS, easing: MOTION_EASE_OUT },
+    );
+    // Only opening a chat animates; what it holds is read for that, not watched.
   }, [workspace.selectedChatId, scrollToEnd]);
 
   useEffect(() => {
@@ -1371,9 +1482,13 @@ function App() {
   const runTimeline = runView?.timeline;
   const runActivities = runView?.activities;
   const runEvidence = runView?.evidence;
+  // The words said before the latest stretch are settled by the time the timeline
+  // changes, so the rows need not rebuild for every streamed token.
+  const runText = useRef("");
+  runText.current = runView?.text ?? "";
   const runSteps = useMemo(
     () => (runTimeline && runActivities && runEvidence
-      ? activitySteps({ timeline: runTimeline, activities: runActivities, evidence: runEvidence })
+      ? activitySteps({ timeline: runTimeline, activities: runActivities, evidence: runEvidence, text: runText.current })
       : []),
     [runTimeline, runActivities, runEvidence],
   );
@@ -1384,8 +1499,9 @@ function App() {
    * thinking, and the Activity heading and approval card already say what those
    * waits are, so the spinner stands down for both.
    */
+  const toolWorking = useSettledFlag(runActivityNodes.some((node) => node.status === "active"), TOOL_SETTLE_MS);
   const thinking = runView !== null && runView.outcome === null
-    ? providerIsThinking(runView, runActivityNodes)
+    ? providerIsThinking(runView, toolWorking)
     : runView === null && runStarting;
   const autoPlaytest = workspace.preferences.autoPlaytest;
   const card = providerCard(provider, providerStatus, hasDesktopRuntime());
@@ -1400,18 +1516,32 @@ function App() {
   /** Exactly what Send would send. */
   const message = composedMessage(pastedBlocks, composer);
   // Offered once there is enough to want more room, and never in the way before.
+  // A chat with nothing in it yet: the question, the composer and the starters sit together mid-pane.
+  const onHome = !composerExpanded && !showRunControls && (selectedChat?.messages.length ?? 0) === 0;
   const canExpand = !isRunning && (pastedBlocks.length > 0 || lineCount(composer) >= 4 || composer.length >= 400);
   const composerHint: ReactNode = message.length >= 1_000
     ? characterCount(message.length)
     : composer.trim() !== "" && !isRunning
       ? <><kbd>{SEND_MODIFIER}</kbd> <kbd>Enter</kbd> to send</>
       : null;
-  /** A pasted block is edited as text: every block goes back into the box, in order, and the box opens large. */
-  const editPastedText = () => {
-    setComposer(composedMessage(pastedBlocks, composer));
-    setPastedBlocks([]);
+  /**
+   * A pasted block opens alone in the larger editor. Closing the editor folds
+   * it back into its block, so the other blocks and what was typed are never
+   * touched, and a block emptied there is removed.
+   */
+  const editingBlock = isRunning || !composerExpanded ? undefined : pastedBlocks.find((block) => block.id === editingBlockId);
+  const editPastedText = (id: string) => {
+    setEditingBlockId(id);
     setComposerExpanded(true);
     window.requestAnimationFrame(() => composerRef.current?.focus());
+  };
+  const closeEditor = () => {
+    setComposerExpanded(false);
+    if (editingBlockId !== null) {
+      setPastedBlocks((current) => finishBlockEdit(current, editingBlockId));
+      setEditingBlockId(null);
+    }
+    composerRef.current?.focus();
   };
 
   const onlyProject = workspace.projects.length < 2;
@@ -1489,7 +1619,8 @@ function App() {
   };
 
   return (
-    <div className="app-shell" data-theme={theme} data-sidebar={sidebarShown ? "shown" : "hidden"} aria-busy={!hydrated}>
+    <RunDeckProvider deck={deck}>
+    <div className="app-shell" data-theme={theme} data-sidebar={sidebarShown ? "shown" : "hidden"} data-deck={deck.target === null ? "closed" : "open"} aria-busy={!hydrated}>
       {/* Settings covers the chat rather than replacing it, so a run keeps
           streaming underneath; while it is open the chat is unreachable. */}
       <aside className="sidebar" id="sidebar" inert={showSettings}>
@@ -1500,11 +1631,11 @@ function App() {
           <div className="brand-copy"><strong>Roqer</strong></div>
           <button className="icon-button sidebar-close" onClick={() => setSidebarShown(false)} aria-label="Hide sidebar" title="Hide sidebar" aria-controls="sidebar" aria-expanded={sidebarShown}><PanelLeftClose size={18} /></button>
         </div>
+        <button className="new-chat-button" onClick={newChat}><Plus size={18} /> New chat <span className="shortcut">{SEND_MODIFIER} N</span></button>
         <div className="sidebar-section-heading">
           <span>Projects</span>
           <button className="icon-button dark" title="Create project" onClick={() => setDialog({ kind: "create-project" })}><FolderPlus size={17} /></button>
         </div>
-        <button className="new-chat-button" onClick={newChat}><Plus size={18} /> New chat <span className="shortcut">{SEND_MODIFIER} N</span></button>
         <nav className="folder-list" aria-label="Project folders">
           {workspace.projects.map((project) => {
             const expanded = expandedProjects.has(project.id);
@@ -1533,7 +1664,7 @@ function App() {
                             other chat. */}
                         {runHere
                           ? <span className="chat-run-mark" role="status" aria-label={needsInput ? "Roqer needs your answer" : "Roqer is working"} title={needsInput ? "Roqer needs your answer" : "Roqer is working"}>{needsInput ? <CircleDot size={13} /> : <Loader2 size={13} />}</span>
-                          : <time>{relativeTime(chat.updatedAt)}</time>}
+                          : null}
                       </button>
                       <RowMenu className="dark chat-menu" label={`${chat.title} options`} items={CHAT_MENU_ITEMS} onSelect={(action) => void chatAction(project.id, chat.id, action)} />
                     </div>;
@@ -1560,7 +1691,7 @@ function App() {
           {canInstallUpdate(updateState) && <button className="settings-button update-ready" onClick={() => void installUpdate()}>
             <Download size={18} /> {appUpdateMessage(updateState)}
           </button>}
-          <div className="settings-row">
+          <div className="sidebar-settings-row">
             <button className="settings-button" onClick={() => setShowSettings(true)}><Settings size={18} /> Settings</button>
             {invite === "icon" && <CommunityIcon url={COMMUNITY_INVITE_URL} arrived={communityIconArrived} onArrived={() => setCommunityIconArrived(false)} />}
           </div>
@@ -1574,12 +1705,11 @@ function App() {
       <main className="workspace" inert={showSettings}>
         <header className="topbar">
           <button className="icon-button menu-button" onClick={() => setSidebarShown(true)} aria-label="Show sidebar" title="Show sidebar" aria-controls="sidebar" aria-expanded={sidebarShown}><PanelLeftOpen size={20} /></button>
-          <div className="chat-heading"><strong>{selectedChat?.title ?? selectedProject?.name ?? "New project"}</strong><span>{selectedProject?.name} · {saveStatus === "saving" ? "saving…" : saveStatus === "error" ? "save failed" : "saved locally"}</span></div>
+          <div className="chat-heading"><strong>{selectedChat?.title ?? selectedProject?.name ?? "New project"}</strong>{saveStatus === "error" && <span className="save-problem" role="alert">Save failed</span>}</div>
           <div className="topbar-actions">
-            <button className="icon-button theme-button" onClick={() => updatePreferences({ theme: theme === "light" ? "dark" : "light" })} aria-label={theme === "light" ? "Switch to dark theme" : "Switch to light theme"} title={theme === "light" ? "Dark theme" : "Light theme"}>{theme === "light" ? <Moon size={18} /> : <Sun size={18} />}</button>
             <div className="connection-wrap" ref={connectionRef}>
               <button className={`connection-pill status-${studioStatus.kind}`} onClick={() => setShowConnection((value) => !value)}><span className="live-dot" /><span className="connection-label">{targetStudio?.name ?? (chatPinned && chatInstanceId !== null ? "This chat's place is not open" : studioStatus.placeName ?? "Roblox Studio")}</span><span className="connection-detail">{studioStatus.message}</span><ChevronDown size={15} /></button>
-              {showConnection && <div className="connection-popover"><div className="popover-title"><div className="studio-icon"><Gamepad2 size={18} /></div><div><strong>Roblox Studio</strong><span>{studioStatus.message}</span></div></div><dl><div><dt>Bridge</dt><dd>{statusLabel(studioStatus.kind)}</dd></div></dl>
+              {connectionPopover.present && <div className="connection-popover" data-leaving={connectionPopover.leaving || undefined}><div className="popover-title"><div className="studio-icon"><Gamepad2 size={18} /></div><div><strong>Roblox Studio</strong><span>{studioStatus.message}</span></div></div><dl><div><dt>Bridge</dt><dd>{statusLabel(studioStatus.kind)}</dd></div></dl>
                 {/* Every connected place, not just the one a run happens to
                     go to. Two places open used to look identical to one. */}
                 {studios.length === 0
@@ -1636,6 +1766,7 @@ function App() {
               </div>}
             </div>
             <RojoPill instanceId={targetStudio?.instanceId ?? null} placeName={targetStudio?.name} refreshSignal={studioStatus} />
+            <RunDeckToggle deck={deck} />
             <RowMenu label="Chat options" iconSize={20} disabled={!selectedChat} items={CHAT_MENU_ITEMS} onSelect={(action) => { if (selectedChat) void chatAction(workspace.selectedProjectId, selectedChat.id, action); }} />
           </div>
         </header>
@@ -1662,7 +1793,7 @@ function App() {
           <button onClick={() => void exportChats(storageRecovery.required ? undefined : workspace)}>Export a copy</button>
         </div>}
 
-        <div className="conversation-scroll" ref={scrollRef} onScroll={onConversationScroll}><div className="conversation">
+        <div className="conversation-scroll" ref={scrollRef} onScroll={onConversationScroll}><div className="conversation" ref={conversationRef}>
           {selectedChat && selectedChat.messages.length > 0
             ? <ConversationMessages
               key={selectedChat.id}
@@ -1671,9 +1802,9 @@ function App() {
               // The live run shows its own notes, with whether Claude has them yet.
               hideTrailingNotes={runView !== null && runView.outcome === null}
             />
-            : <EmptyConversation onSuggestion={setComposer} />}
+            : <EmptyConversation place={targetStudio?.name} />}
           {runView
-            ? <LiveRun view={runView} steps={runSteps} nodes={runActivityNodes} onOpenInStudio={openArtifactInStudio} />
+            ? <LiveRun view={runView} steps={runSteps} nodes={runActivityNodes} thinking={thinking} onOpenInStudio={openArtifactInStudio} />
             // The run is still being started, so the dots stand in for the
             // assistant block that is about to exist.
             : runStarting && <div className="mock-run"><section className="message assistant-message"><div className="message-content">
@@ -1681,7 +1812,7 @@ function App() {
             </div></section></div>}
         </div></div>
 
-        <div className={`composer-dock${composerExpanded ? " expanded" : ""}`} ref={dockRef}>
+        <div className={`composer-dock${composerExpanded ? " expanded" : ""}${onHome ? " home" : ""}`} ref={dockRef}>
           {pendingApproval && <div className="approval-dock"><ApprovalCard pending={pendingApproval} onApprove={() => answerApproval("approved")} onReject={() => answerApproval("rejected")} /></div>}
           {/* Keyed by the question, so each new one arrives with its own rings. */}
           {pendingQuestion && <div className="approval-dock question-dock" key={pendingQuestion.callId}><QuestionCard question={pendingQuestion} explaining={answeringInWords} onAnswer={answerQuestion} onExplain={explainAnswer} /></div>}
@@ -1704,9 +1835,9 @@ function App() {
           >
             {composerExpanded
               ? <div className="composer-expanded-head">
-                <strong>Message</strong>
-                <span>{textSize(message)}</span>
-                <button type="button" className="text-button" onClick={() => { setComposerExpanded(false); composerRef.current?.focus(); }}><Minimize2 size={14} aria-hidden="true" /> Collapse</button>
+                <strong>{editingBlock ? "Pasted text" : "Message"}</strong>
+                <span>{textSize(editingBlock ? editingBlock.text : message)}</span>
+                <button type="button" className="text-button" onClick={closeEditor}><Minimize2 size={14} aria-hidden="true" /> {editingBlock ? "Done" : "Collapse"}</button>
               </div>
               : canExpand && <button type="button" className="icon-button composer-expand" onClick={() => { setComposerExpanded(true); composerRef.current?.focus(); }} aria-label="Open the larger editor" title="Open the larger editor"><Maximize2 size={15} /></button>}
             {thinking && <div className="composer-status" role="status"><Loader2 size={13} /><span>Thinking…</span></div>}
@@ -1719,18 +1850,34 @@ function App() {
             {/* A disabled composer with no reason reads as a broken one. This
                 says where the run is and offers the two things that can be done
                 about it from here: go to it, or stop it. */}
-            {draggingImage && <div className="composer-drop-hint">Drop an image or a video to attach it</div>}
+            {compactNotice?.chatId === workspace.selectedChatId && <div className="composer-status" role="status"><span>{compactNotice.text}</span></div>}
+            {draggingImage && <div className="composer-drop-hint"><Upload size={18} aria-hidden="true" />Drop an image or a video to attach it</div>}
             {sendAfterCompact !== null && sendAfterCompact === workspace.selectedChatId && <div className="attachment-notice compact-queued" role="status">
               <span><Loader2 size={13} className="spin" aria-hidden="true" /> Queued: your message sends as soon as compacting finishes. You can keep editing it.</span>
               <button onClick={() => setSendAfterCompact(null)}>Cancel</button>
             </div>}
-            {attachmentError && <div className="attachment-notice" role="alert">{attachmentError}<button onClick={() => setAttachmentError(null)} aria-label="Dismiss"><X size={14} /></button></div>}
-            {attachments.length > 0 && <div className="attachment-row">{attachments.map((attachment) => <div className={`attachment-chip${attachment.clip === undefined ? "" : " clip"}`} key={attachment.id}>
-              {attachment.thumbnailDataUrl ? <img className="attachment-thumbnail" src={attachment.thumbnailDataUrl} alt="" /> : attachment.clip === undefined ? <FileBox size={16} /> : <Film size={16} />}
-              <div><strong>{attachment.name}</strong><span>{readingClips.has(attachment.id) && <Loader2 size={11} className="attachment-reading" />}{formatBytes(attachment.size)} · {attachmentDetail(attachment, imagesReachModel, readingClips.has(attachment.id))}</span></div>
-              {attachment.clip !== undefined && <button onClick={() => setTrimmingClip(attachment.id)} disabled={readingClips.has(attachment.id)} aria-label={`Choose the part of ${attachment.name} to send`} title="Choose the part to send"><Scissors size={14} /></button>}
-              <button onClick={() => { void releaseAttachments([attachment.id]); setAttachments((current) => current.filter((item) => item.id !== attachment.id)); }} aria-label={`Remove ${attachment.name}`}><X size={14} /></button>
-            </div>)}</div>}
+            {attachmentError && <div className="attachment-notice" role="alert"><AlertTriangle size={14} aria-hidden="true" /><span>{attachmentError}</span><button onClick={() => setAttachmentError(null)} aria-label="Dismiss"><X size={14} /></button></div>}
+            {selectionChip !== null && (() => {
+              const { name, className, more } = selectionChipParts(selectionChip);
+              return <div className="selection-chip" role="status" aria-label={`Using your Studio selection: ${describeSelection(selectionChip)}`}>
+                <div className="selection-chip-text" title={["Using your Studio selection:", ...selectionChip.items.map((item) => item.path), ...(selectionChip.count > selectionChip.items.length ? [`and ${selectionChip.count - selectionChip.items.length} more`] : [])].join("\n")}>
+                  <MousePointerClick size={13} aria-hidden="true" />
+                  <strong>{name}</strong>
+                  {className !== undefined && <span>{className}</span>}
+                  {more > 0 && <span className="selection-chip-more">+{more} more</span>}
+                </div>
+                <button type="button" onClick={() => setDismissedSelectionKey(selectionKey(selectionChip))} aria-label="Send without your selection" title="Send without your selection"><X size={13} /></button>
+              </div>;
+            })()}
+            {attachments.length > 0 && <div className="attachment-row">{attachments.map((attachment) => <AttachmentChip
+              key={attachment.id}
+              attachment={attachment}
+              imagesReachModel={imagesReachModel}
+              reading={readingClips.has(attachment.id)}
+              readsText={hasDesktopRuntime()}
+              onTrim={() => setTrimmingClip(attachment.id)}
+              onRemove={() => { void releaseAttachments([attachment.id]); setAttachments((current) => current.filter((item) => item.id !== attachment.id)); }}
+            />)}</div>}
             {(() => {
               const trimming = attachments.find((attachment) => attachment.id === trimmingClip);
               return trimming?.clip === undefined ? null : <ClipTrimDialog
@@ -1740,15 +1887,19 @@ function App() {
                 onConfirm={(selection) => { setTrimmingClip(null); void readClip(trimming.id, selection); }}
               />;
             })()}
-            {pastedBlocks.map((block) => <div className="pasted-block" key={block.id}>
+            {!editingBlock && pastedBlocks.map((block) => <div className="pasted-block" key={block.id}>
               <FileText size={17} aria-hidden="true" />
               <div><strong>Pasted text</strong><span>{textSize(block.text)} · <code>{blockPreview(block.text)}</code></span></div>
-              <button type="button" className="small-button" onClick={editPastedText}>Edit</button>
+              <button type="button" className="small-button" onClick={() => editPastedText(block.id)}>Edit</button>
               <button type="button" className="icon-button" onClick={() => setPastedBlocks((current) => current.filter((entry) => entry.id !== block.id))} aria-label="Remove pasted text"><X size={14} /></button>
             </div>)}
-            <textarea ref={composerRef} value={composer} onChange={(event) => setComposer(event.target.value)} onKeyDown={(event) => {
+            <textarea ref={composerRef} value={editingBlock ? editingBlock.text : composer} onChange={(event) => {
+              const text = event.target.value;
+              if (editingBlock) setPastedBlocks((current) => withBlockText(current, editingBlock.id, text));
+              else setComposer(text);
+            }} onKeyDown={(event) => {
               if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) { event.preventDefault(); void sendPrompt(); }
-              if (event.key === "Escape" && composerExpanded) { event.preventDefault(); setComposerExpanded(false); }
+              if (event.key === "Escape" && composerExpanded) { event.preventDefault(); closeEditor(); }
             }} onPaste={(event) => {
               const images = droppedImages(event.clipboardData?.files);
               if (images.length > 0) {
@@ -1757,13 +1908,14 @@ function App() {
                 return;
               }
               // A note or an answer stays plain text: it is short by nature,
-              // and it is sent the moment it is written.
-              if (steering || explaining) return;
+              // and it is sent the moment it is written. A paste into a block
+              // being edited is part of that block.
+              if (steering || explaining || editingBlock) return;
               const text = event.clipboardData?.getData("text/plain") ?? "";
               if (!isLongPaste(text)) return;
               event.preventDefault();
               setPastedBlocks((current) => [...current, { id: createId("paste"), text }]);
-            }} placeholder={explaining ? "Your answer, in your own words" : pendingQuestion ? "Or write your own answer…" : steering ? "Add a note. Roqer reads it at its next step." : "Describe what you want to build or change…"} aria-label="Message" disabled={isRunning && !steering} />
+            }} placeholder={explaining ? "Your answer, in your own words" : pendingQuestion ? "Or write your own answer…" : steering ? "Add a note. Roqer reads it at its next step." : editingBlock ? "Pasted text" : "Describe what you want to build or change…"} aria-label={editingBlock ? "Pasted text" : "Message"} disabled={isRunning && !steering} />
             <div className="composer-toolbar">
               {/* A note carries words only; a picture cannot be attached to a
                   turn that is already in progress. */}
@@ -1790,10 +1942,11 @@ function App() {
                 disabled={isRunning}
                 onApprovalMode={(mode) => updatePreferences({ approvalMode: mode })}
                 onAutoPlaytest={(on) => updatePreferences({ autoPlaytest: on })}
+                webSearch={workspace.preferences.webSearch}
+                onWebSearch={(on) => updatePreferences({ webSearch: on })}
               />
               <div className="toolbar-spacer" />
               {composerHint !== null && <span className="composer-hint">{composerHint}</span>}
-              {composerHint === null && compactNotice?.chatId === workspace.selectedChatId && <span className="composer-hint">{compactNotice.text}</span>}
               <ContextMeter
                 view={contextView}
                 modelName={selectedModel?.displayName ?? null}
@@ -1813,13 +1966,17 @@ function App() {
                 : !showRunControls && <button className="send-button" onClick={() => void sendPrompt()} disabled={!hydrated || !storageAvailable || storageRecovery.required || isRunning || message === "" || sendAfterCompact !== null || (hasDesktopRuntime() && providerStatus.kind === "signed-in" && !selectedModel)} aria-label={compacting ? "Send once compacting finishes" : "Send message"} title={compacting ? "Sends once compacting finishes" : undefined}><ArrowUp size={18} /></button>}
             </div>
           </div>
+          {onHome && <Starters onSuggestion={setComposer} />}
         </div>
       </main>
 
-      {showSettings && <SettingsPage preferences={workspace.preferences} studioStatus={studioStatus} updateState={updateState} onPreferences={updatePreferences} onStudioRefresh={() => void refreshStudioStatus()} onProviderChanged={() => { void refreshProviderStatus(); void refreshProviderModels(); }} onExport={() => void exportChats(storageRecovery.required ? undefined : workspace)} notice={settingsNotice ?? undefined} onClose={() => { setShowSettings(false); setSettingsNotice(null); }} />}
+      <aside className="run-deck" aria-label="Run Deck" ref={setDeckHost} inert={showSettings} />
+
+      {settingsPage.present && <SettingsPage leaving={settingsPage.leaving} preferences={workspace.preferences} studioStatus={studioStatus} updateState={updateState} onPreferences={updatePreferences} onStudioRefresh={() => void refreshStudioStatus()} onProviderChanged={() => { void refreshProviderStatus(); void refreshProviderModels(); }} onExport={() => void exportChats(storageRecovery.required ? undefined : workspace)} notice={settingsNotice ?? undefined} onClose={() => { setShowSettings(false); setSettingsNotice(null); }} />}
       {renderDialog()}
       {!hydrated && <div className="loading-overlay"><div><span /><strong>Opening your workspace…</strong></div></div>}
     </div>
+    </RunDeckProvider>
   );
 }
 
@@ -1856,6 +2013,11 @@ function RowMenu({ label, items, onSelect, className = "", iconSize = 16, disabl
   disabled?: boolean;
 }) {
   const [anchor, setAnchor] = useState<MenuAnchor | null>(null);
+  // Where the menu last opened, so it can fade out where it was.
+  const [lastAnchor, setLastAnchor] = useState<MenuAnchor | null>(null);
+  if (anchor !== null && anchor !== lastAnchor) setLastAnchor(anchor);
+  const shownAnchor = anchor ?? lastAnchor;
+  const menu = usePresence(anchor !== null, MENU_LEAVE_MS);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
   const itemRefs = useRef<Array<HTMLButtonElement | null>>([]);
@@ -1917,8 +2079,8 @@ function RowMenu({ label, items, onSelect, className = "", iconSize = 16, disabl
       aria-haspopup="menu" aria-expanded={anchor !== null}
       onClick={() => anchor ? close() : open()}
     ><MoreHorizontal size={iconSize} /></button>
-    {anchor && createPortal(
-      <div className="row-menu" role="menu" aria-label={label} ref={menuRef} style={{ top: anchor.top, bottom: anchor.bottom, right: anchor.right }}>
+    {menu.present && shownAnchor !== null && createPortal(
+      <div className="row-menu" role="menu" aria-label={label} ref={menuRef} data-leaving={menu.leaving || undefined} data-placement={shownAnchor.bottom === undefined ? "below" : "above"} style={{ top: shownAnchor.top, bottom: shownAnchor.bottom, right: shownAnchor.right }}>
         {items.map((item, index) => <button
           className={`row-menu-item ${item.danger ? "danger" : ""}`}
           type="button" role="menuitem" key={item.id} disabled={item.disabled} title={item.title}
@@ -1936,24 +2098,23 @@ function RowMenu({ label, items, onSelect, className = "", iconSize = 16, disabl
 
 type OpenInStudio = (target: string, instanceId?: string) => Promise<{ ok: boolean; message: string }>;
 
-const ConversationMessageView = memo(function ConversationMessageView({ message, latestRun, onOpenInStudio }: {
+const ConversationMessageView = memo(function ConversationMessageView({ message, latestRun, arrived = false, onOpenInStudio }: {
   message: ChatMessage;
+  /** Sent while this chat was open, rather than loaded with it: only such a message animates in. */
+  arrived?: boolean;
   /** Whether this is the newest reply that came from a run; only its diffs open by default. */
   latestRun: boolean;
   onOpenInStudio: OpenInStudio;
 }) {
   return message.role === "user" ? (
-    <section className={`message user-message${message.note === true ? " note-message" : ""}`} key={message.id}>
+    <section className={`message user-message${message.note === true ? " note-message" : ""}${arrived ? " message-arrived" : ""}`} key={message.id}>
       {message.note === true && <span className="note-label">Note sent while Roqer was working</span>}
+      {message.attachments !== undefined && <MessagePictures attachments={message.attachments} />}
       <p className="user-prompt">{message.text}</p>
-      {message.attachments && message.attachments.length > 0 && <div className="message-attachments">{message.attachments.map((asset) => asset.clip !== undefined
-        ? <figure key={asset.id} className="message-attachment-clip" title={asset.name}>
-          {asset.thumbnailDataUrl ? <img className="message-attachment-image" src={asset.thumbnailDataUrl} alt={`Attached clip: ${asset.name}`} /> : <span><FileBox size={13} />{asset.name}</span>}
-          <figcaption><Film size={12} /> {((asset.clip.end - asset.clip.start) / asset.clip.slow).toFixed(2)} s clip</figcaption>
-        </figure>
-        : asset.thumbnailDataUrl
-          ? <img key={asset.id} className="message-attachment-image" src={asset.thumbnailDataUrl} alt={`Attached image: ${asset.name}`} title={asset.name} />
-          : <span key={asset.id}><FileBox size={13} />{asset.name}</span>)}</div>}
+      {message.studioSelection !== undefined && message.studioSelection.count > 0 && <div className="message-selection" title={message.studioSelection.items.map((item) => item.path).join("\n")}>
+        <MousePointerClick size={12} aria-hidden="true" /> Selected in Studio: <code>{describeSelection(message.studioSelection)}</code>
+      </div>}
+      {message.attachments !== undefined && <MessageFiles attachments={message.attachments} />}
     </section>
   ) : (
     <section className="message assistant-message" key={message.id}><div className="message-content">
@@ -1979,6 +2140,9 @@ const ConversationMessages = memo(function ConversationMessages({ messages: allM
   // The component is keyed by chat, so this index belongs to one transcript.
   // Appended messages leave it untouched and remain visible at the bottom.
   const [visibleFrom, setVisibleFrom] = useState(() => initialConversationWindowStart(messages.length));
+  // What the chat held when it opened. Those messages, and earlier ones shown
+  // later, appear with the chat; only a message sent since animates in.
+  const [loadedIds] = useState(() => new Set(messages.map((message) => message.id)));
   const revealCount = Math.min(visibleFrom, CONVERSATION_WINDOW_SIZE);
   // The newest reply that came from a run, not the newest message: a prompt
   // just sent must not fold the diffs of the reply it is a follow-up to.
@@ -1996,7 +2160,7 @@ const ConversationMessages = memo(function ConversationMessages({ messages: allM
       </button>
     </div>}
     {messages.slice(visibleFrom).map((message) => (
-      <ConversationMessageView key={message.id} message={message} latestRun={message.id === latestRunId} onOpenInStudio={onOpenInStudio} />
+      <ConversationMessageView key={message.id} message={message} latestRun={message.id === latestRunId} arrived={!loadedIds.has(message.id)} onOpenInStudio={onOpenInStudio} />
     ))}
   </>;
 });
@@ -2029,8 +2193,13 @@ const SUGGESTIONS = [
   "Read the main server script",
 ];
 
-function EmptyConversation({ onSuggestion }: { onSuggestion: (value: string) => void }) {
-  return <div className="empty-conversation"><div className="empty-illustration"><Sparkles size={27} /></div><h1>Explore your place</h1><p>Ask about the connected place, its scripts, or project structure.</p><div className="suggestion-grid">{SUGGESTIONS.map((suggestion) => <button key={suggestion} onClick={() => onSuggestion(suggestion)}><Zap size={15} />{suggestion}</button>)}</div></div>;
+function EmptyConversation({ place }: { place: string | undefined }) {
+  return <><div className="home-studs" aria-hidden="true" /><div className="empty-conversation"><h1>What should change in {place ?? "your place"}?</h1></div></>;
+}
+
+/** Things to start from, directly under the composer on a new chat. */
+function Starters({ onSuggestion }: { onSuggestion: (value: string) => void }) {
+  return <div className="home-starters">{SUGGESTIONS.map((suggestion) => <button type="button" key={suggestion} onClick={() => onSuggestion(suggestion)}>{suggestion}</button>)}</div>;
 }
 
 /**
@@ -2053,10 +2222,39 @@ function EmptyConversation({ onSuggestion }: { onSuggestion: (value: string) => 
  * nothing during the other two rather than claiming the model is busy while a
  * playtest boots or while an approval sits unanswered.
  */
-function providerIsThinking(view: RunView, nodes: readonly ActivityNode[]): boolean {
+/** The app's standard ease: quick to start, long to settle, as iOS moves sheets and panels. Matches `--ease-out`. */
+const MOTION_EASE_OUT = "cubic-bezier(.32, .72, 0, 1)";
+/** How long another chat takes to settle in. */
+const CHAT_ENTER_MS = 260;
+
+function prefersReducedMotion(): boolean {
+  return window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+}
+
+/** How long a menu or popover takes to fade out, and Settings to close. Match the leave rules in styles.css. */
+const MENU_LEAVE_MS = 120;
+const SETTINGS_LEAVE_MS = 180;
+
+/** How long a section of a run's strip takes to slide shut. Matches `--motion-base` in styles.css. */
+const PANEL_LEAVE_MS = 220;
+
+/** How close to the end of the chat counts as being at it. */
+const FOLLOW_SLACK_PX = 48;
+/** How long after a run ends the chat still follows its reply, which may still be revealing. */
+const FOLLOW_AFTER_RUN_MS = 2_500;
+
+/**
+ * How long a tool step must run before "Thinking" gives way to it. A run of
+ * quick tool calls otherwise hid and showed the notice several times a second,
+ * which read as flicker; a step this short is shown in Activity alone.
+ */
+const TOOL_SETTLE_MS = 900;
+
+/** `toolWorking`: a tool step has been running for at least `TOOL_SETTLE_MS`. */
+function providerIsThinking(view: RunView, toolWorking: boolean): boolean {
   if (view.outcome !== null) return false;
   if (view.pendingApproval !== null || view.pendingQuestion !== null) return false;
-  return !nodes.some((node) => node.status === "active");
+  return !toolWorking;
 }
 
 /**
@@ -2094,8 +2292,8 @@ const WAITING_REASSURANCE_AFTER_MS = 30_000;
  * left for the user to guess.
  *
  * The clock is per waiting spell rather than per run: this unmounts whenever
- * the provider stops being the thing that is working, so a tool call or an
- * approval resets it and the number always means "how long has it been quiet".
+ * the provider stops being the thing that is working, so a tool call longer
+ * than a moment, or an approval, resets it and the number always means "how long has it been quiet".
  * Beside it, once the model has streamed anything, is how much it has written
  * in this response: the clock says time is passing, the count says the model
  * is still producing.
@@ -2132,46 +2330,14 @@ function WaitingNotice({ label, detail, output }: { label: string; detail?: stri
   </div>;
 }
 
-/** One stretch of the reply, between steps. */
-function TranscriptText({ text, streaming }: { text: string; streaming: boolean }) {
-  if (text.trim() === "") return null;
-  return streaming
-    ? <StreamingMarkdown text={text.trim()} className="result-copy streaming-copy" />
-    : <Markdown text={text.trim()} className="result-copy" />;
-}
-
-/** A short run of steps is listed in full; a long one is folded by phase. */
-const INLINE_STEPS_UNFOLDED = 6;
-
-/**
- * The steps taken between two stretches of prose, listed where they happened,
- * the way Claude Code shows each tool between its messages. Each row opens to
- * the operation, its target, and what came back.
- */
-const InlineSteps = memo(function InlineSteps({ steps }: { steps: ActivityStep[] }) {
-  const [expanded, setExpanded] = useState<Record<string, boolean>>({});
-  const onToggle = useCallback((key: string, open: boolean) => {
-    setExpanded((current) => (current[key] === open ? current : { ...current, [key]: open }));
-  }, []);
-  const nodes = useMemo(
-    () => (steps.length <= INLINE_STEPS_UNFOLDED ? steps.map(leafNode) : buildActivityModel(steps)),
-    [steps],
-  );
-  return <ol className="activity-timeline inline-steps">
-    {nodes.map((node) => (node.children.length === 0
-      ? <ActivityLeaf key={node.key} node={node} />
-      : <ActivityGroup key={node.key} node={node} open={expanded[node.key] ?? node.status === "active"} onToggle={onToggle} />))}
-  </ol>;
-});
-
-function LiveRun({ view, steps, nodes, onOpenInStudio }: { view: RunView; steps: ActivityStep[]; nodes: ActivityNode[]; onOpenInStudio: OpenInStudio }) {
+function LiveRun({ view, steps, nodes, thinking, onOpenInStudio }: { view: RunView; steps: ActivityStep[]; nodes: ActivityNode[]; thinking: boolean; onOpenInStudio: OpenInStudio }) {
   const answered = view.text.trim() !== "";
   const running = view.outcome === null;
   const appliedAndVerified = runAppliedAndVerified(view);
   const onlyAnswered = runOnlyAnswered(view);
   const showOutcome = !appliedAndVerified && !onlyAnswered;
   const completionNote = completedRunMetadataLabel(
-    view.planner === DEMO_PLANNER ? "Demo" : view.approvalMode,
+    view.planner === DEMO_PLANNER ? "Demo" : null,
     view.startedAt,
     view.finishedAt,
   );
@@ -2179,30 +2345,13 @@ function LiveRun({ view, steps, nodes, onOpenInStudio }: { view: RunView; steps:
   // row, a question to answer (docked above the composer), or the first words
   // of the reply.
   const produced = view.tasks.length > 0 || steps.length > 0 || answered || view.pendingQuestion !== null;
-  // The same rule the composer's spinner uses, so the two can never disagree
+  // `thinking` is the composer's own value, so the two can never disagree
   // about who is working. A run waiting on Studio or on the user is not
   // thinking, and both of those already say so elsewhere.
-  const thinking = running && providerIsThinking(view, nodes);
   const renderFiles = useCallback((files: ChangeGroup[], expansion: FileExpansion) => <ChangeSet groups={files} expansion={expansion} onOpenInStudio={onOpenInStudio} />, [onOpenInStudio]);
-  // Keyed on what the segments are built from, which a streamed delta leaves
-  // alone: only the open stretch of prose grows, and it is sliced at render.
-  const { timeline, activities, evidence } = view;
-  const segments = useMemo(() => transcriptSegments({ timeline, activities, evidence }), [timeline, activities, evidence]);
   return <div className="mock-run"><section className="message assistant-message"><div className="message-content">
     {view.planner === DEMO_PLANNER && <p className="run-tag"><span className="run-badge">Demo</span></p>}
-    <TaskList tasks={view.tasks} />
-    <div className="transcript">
-      {segments.map((segment, index) => segment.type === "steps"
-        ? <InlineSteps key={segment.key} steps={segment.steps} />
-        : <TranscriptText
-          key={segment.key}
-          text={view.text.slice(segment.start, segment.end ?? undefined)}
-          // Formatted as it streams, re-rendered a few times a second rather
-          // than on every delta, which would make a long reply quadratic.
-          streaming={running && index === segments.length - 1}
-        />)}
-    </div>
-    {running && !produced && <TypingIndicator done={false} />}
+    {running && <TypingIndicator done={produced} />}
     {thinking && <WaitingNotice
       // Every turn opens with a progress label, so this is normally the
       // planner's own words; the fallback is for a planner that sends none.
@@ -2210,14 +2359,16 @@ function LiveRun({ view, steps, nodes, onOpenInStudio }: { view: RunView; steps:
       {...(view.status?.detail === undefined ? {} : { detail: view.status.detail })}
       output={view.outputTokens}
     />}
-    <ResultsCard runId={view.runId} changes={view.changes} evidence={view.evidence} renderFiles={renderFiles} />
+    <RunStrip tasks={view.tasks} steps={steps} nodes={nodes} running={running} runId={view.runId} changes={view.changes} evidence={view.evidence} latest renderFiles={renderFiles} />
+    {/* Formatted and revealed smoothly as it streams. When the run ends, the
+        saved reply takes over from the same point, keyed by the run. */}
+    {answered && <StreamingMarkdown text={latestProse(view)} live done={!running} handoffKey={view.runId} className={running ? "result-copy streaming-copy" : "result-copy"} />}
     {appliedAndVerified && <AppliedStatus />}
     {view.outcome !== null && showOutcome && <OutcomeCard
       outcome={view.outcome}
       warnings={runHasWarnings(view)}
-      // Once the answer is on screen, repeating it on the card says nothing.
-      summary={view.outcome === "completed" && answered ? runFacts(view) : view.summary}
-      note={failureNote(view.failures.length)}
+      // Once the answer is on screen, repeating it says nothing; Activity above has the counts.
+      summary={view.outcome === "completed" && answered ? "" : view.summary}
       issues={runGateIssues(view)}
     />}
     {!running && <CompletionLine metadata={completionNote} usage={view.usage ?? undefined} />}
@@ -2256,11 +2407,6 @@ function countLine(calls: number, changes: number, failed: number): string {
   if (changes > 0) parts.push(`${changes} ${changes === 1 ? "change" : "changes"}`);
   if (failed > 0) parts.push(`${failed} failed`);
   return parts.join(" · ");
-}
-
-function runFacts(view: RunView): string {
-  const finished = view.activities.filter((activity) => activity.state === "done" || activity.state === "failed");
-  return countLine(finished.length, view.changes.length, finished.filter((activity) => activity.state === "failed").length);
 }
 
 const KIND_ICON: Record<ActivityKind, React.ReactNode> = {
@@ -2319,38 +2465,48 @@ function NodeLine({ node }: { node: ActivityNode }) {
   return <>
     <NodeIcon node={node} />
     <span className="node-title" title={node.title}>{node.title}</span>
-    <span className="node-finding">{node.finding ?? ""}</span>
+    <span className="node-finding" title={node.finding}>{node.finding ?? ""}</span>
   </>;
 }
 
 /**
- * Everything about a step that only matters when something looks wrong: the
- * operation the agent actually called, the full instance path, what it cost,
- * and the payload that came back.
+ * One thing the run did. The row itself opens what only matters when something
+ * looks wrong: the operation the agent actually called, the full instance path,
+ * what it cost, the payload that came back, and what it proved. Built when opened,
+ * because a long run has hundreds of these.
  */
-function StepDetails({ step }: { step: ActivityStep }) {
-  if (step.tool === undefined) return null;
-  const entries: RunMetadata[] = [{ label: "Operation", value: step.tool }];
+function ActivityLeaf({ node }: { node: ActivityNode }) {
+  const [open, setOpen] = useState(false);
+  const details = usePresence(open, PANEL_LEAVE_MS);
+  const { step } = node;
+  if (step === undefined || (step.tool === undefined && step.evidence === undefined)) {
+    return <li className="activity-node">
+      <div className="node-row" data-status={node.status} data-kind={node.kind}><span className="node-caret" /><NodeLine node={node} /></div>
+    </li>;
+  }
+  const entries: RunMetadata[] = step.tool === undefined ? [] : [{ label: "Operation", value: step.tool }];
   if (step.target) entries.push({ label: "Target", value: step.target });
   if (step.durationMs !== undefined) entries.push({ label: "Duration", value: formatDuration(step.durationMs) });
   if (step.resultSummary) entries.push({ label: "Result", value: step.resultSummary });
-  return <CardDetails label="Details">
-    <MetadataList entries={entries} />
-    {step.detail && <pre className="tool-output"><code>{step.detail}</code></pre>}
-  </CardDetails>;
-}
-
-/** One operation, with its raw account of itself behind a disclosure. */
-function ActivityLeaf({ node }: { node: ActivityNode }) {
+  const proved = [...(step.evidence === undefined ? [] : [step.evidence]), ...(step.attached ?? [])];
   return <li className="activity-node">
-    <div className="node-row" data-status={node.status} data-kind={node.kind}><span className="node-caret" /><NodeLine node={node} /></div>
-    {node.step && <StepDetails step={node.step} />}
-    {node.step?.evidence && <EvidenceDetail evidence={node.step.evidence} />}
+    <details onToggle={(event) => setOpen(event.currentTarget.open)}>
+      <summary className="node-row" data-status={node.status} data-kind={node.kind}>
+        <ChevronRight size={12} className="node-caret" />
+        <NodeLine node={node} />
+      </summary>
+      {/* Rendered only while open, and kept as it slides shut. */}
+      {details.present && <div className="node-details">
+        {entries.length > 0 && <MetadataList entries={entries} />}
+        {step.detail && <pre className="tool-output"><code>{step.detail}</code></pre>}
+        {proved.map((evidence) => <EvidenceBody key={evidence.id} evidence={evidence} />)}
+      </div>}
+    </details>
   </li>;
 }
 
 /**
- * A phase of the run, folded to one line.
+ * A run of neighbouring steps, folded to one line.
  *
  * Anything that went wrong inside stays listed under the collapsed row: a group
  * is a way to put routine work away, never a way to put a failure away. The
@@ -2383,94 +2539,129 @@ function ActivityGroup({ node, open, onToggle }: {
 }
 
 /** An evidence entry's payload: what was read back, and what proves it. */
-function EvidenceDetail({ evidence }: { evidence: RunEvidence }) {
+function EvidenceBody({ evidence }: { evidence: RunEvidence }) {
   const lines = evidence.lines ?? [];
   const metadata = evidence.metadata ?? [];
-  if (!evidence.detail && lines.length === 0 && metadata.length === 0 && !hasPicture(evidence)) return null;
-  return <CardDetails label={evidenceDetailLabel(evidence.kind)}>
+  return <div className="node-evidence">
+    <strong>{evidenceDetailLabel(evidence.kind)}</strong>
     {evidence.detail && <p className="evidence-note">{evidence.detail}</p>}
     {hasPicture(evidence) && <EvidencePicture className="evidence-image" evidence={evidence} alt={evidence.title} />}
+    {evidence.soundRef !== undefined && <EvidenceSound evidence={evidence} />}
     {lines.length > 0 && (evidence.format === "code"
       // A source read-back is verbatim: indentation and blank lines are part of
       // what is being shown, so it is a code block, not a list of strings.
       ? <pre className="evidence-code"><code>{lines.join("\n")}</code></pre>
       : <ul className="evidence-lines">{lines.map((line, index) => <li key={`${evidence.id}-${index}`}>{line}</li>)}</ul>)}
     {metadata.length > 0 && <MetadataList entries={metadata} />}
-  </CardDetails>;
+  </div>;
 }
 
 /**
- * The activity layer: everything the agent did, in one place, out of the way.
+ * What a run did, as one row: its Plan, its Activity and its results.
  *
- * Closed until the reader opens it, and it never opens or closes itself. A
- * project inspection is forty rows; unrolling that over the answer while the
- * run works, then rolling it back up the moment the run ends, moves the page
- * under the reader twice for something they did not ask to see. So the section
- * holds one line instead — the operation in flight, or the last one finished —
- * with the step and failure counts beside it, and the whole list one click
- * away. Nothing is removed and nothing is decided for the reader.
+ * Each was a bar of its own, so every reply sat under a stack of three that look
+ * alike. Plan and Activity open underneath the row, independently; results open
+ * in the Run Deck. Activity stays closed until the reader opens it and never
+ * opens or closes itself: a project inspection is forty rows, and unrolling that
+ * over the answer while the run works moves the page under the reader for
+ * something they did not ask to see. The Plan is open while there is work left,
+ * because it says what the agent promised, until the reader says otherwise.
  *
  * A failure is the exception to putting things away: it stays listed under the
- * closed section, the way a folded phase keeps its own alerts on screen, since
- * nothing else on the page would report it.
+ * closed row, since nothing else on the page would report it. One line each, so
+ * the answer stays near; the full reason is in the row's tooltip and in Activity.
+ *
+ * Memoised, because this is what a live run re-renders for every streamed token
+ * otherwise. Its inputs only change when an event of their own kind arrives.
  */
-/**
- * Memoised, with the change set and the task list below, because these are
- * what a live run re-renders for every streamed token otherwise. Their inputs
- * only change when an event of their own kind arrives, so between those a
- * delta reconciles the streaming paragraph and nothing else.
- */
-const ActivitySection = memo(function ActivitySection({ steps, nodes, running }: { steps: ActivityStep[]; nodes?: ActivityNode[]; running: boolean }) {
+const RunStrip = memo(function RunStrip({ tasks, settled = false, steps, nodes, running, runId, changes, evidence, latest, renderFiles }: {
+  tasks: readonly RunTask[];
+  /** A finished run's plan, folded when every task is done. */
+  settled?: boolean;
+  steps: ActivityStep[];
+  nodes?: ActivityNode[];
+  running: boolean;
+  runId: string;
+  changes: readonly RunChange[];
+  evidence: readonly RunEvidence[];
+  latest: boolean;
+  renderFiles: (files: ChangeGroup[], expansion: FileExpansion) => ReactNode;
+}) {
   // Which groups the reader has opened or closed by hand. Without it, the next
   // event would re-assert the default and shut a group under their cursor.
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
-  const [open, setOpen] = useState(false);
+  const [activityOpen, setActivityOpen] = useState(false);
+  const [planChoice, setPlanChoice] = useState<boolean | null>(null);
   const resolvedNodes = useMemo(() => nodes ?? buildActivityModel(steps), [nodes, steps]);
+  const hasResults = useMemo(() => runResults(changes, evidence).tabs.length > 0, [changes, evidence]);
   const onToggle = useCallback((key: string, open: boolean) => {
     setExpanded((current) => (current[key] === open ? current : { ...current, [key]: open }));
   }, []);
-  if (steps.length === 0) return null;
+  const planOpen = planChoice ?? (!settled || tasks.some((task) => task.status !== "done"));
+  // Both sections slide shut rather than vanish, so their rows stay a moment
+  // after closing. Above the early return: a strip drawn before its run has a
+  // step must call the same hooks as one drawn after.
+  const plan = usePresence(planOpen && tasks.length > 0, PANEL_LEAVE_MS);
+  const activity = usePresence(activityOpen, PANEL_LEAVE_MS);
+  if (tasks.length === 0 && steps.length === 0 && !hasResults) return null;
 
   const failed = steps.filter((step) => step.state === "failed").length;
-  // Notes are commentary on the run, not things it did, so they are not counted.
-  const actions = steps.filter((step) => step.kind !== "note").length;
+  const actions = countedActions(resolvedNodes);
   const counted = `${actions} ${actions === 1 ? "step" : "steps"}${failed > 0 ? ` · ${failed} failed` : ""}`;
-  const current = currentNodeTitle(resolvedNodes);
+  // Live, what it is doing. Finished, the last step says nothing about the run.
+  const current = running ? currentNodeTitle(resolvedNodes) : finishedRunSummary(resolvedNodes);
   // Failures only. A step waiting on a decision has the approval card above the
   // composer, and repeating it here says the same thing twice.
   const alerts = resolvedNodes
     .flatMap((node) => (node.children.length === 0 ? [node] : node.alerts))
     .filter((node) => node.status === "failed")
     .slice(0, MAX_VISIBLE_ALERTS);
-  return <>
-    <details className="activity-section" open={open} onToggle={(event) => setOpen(event.currentTarget.open)}>
-      <summary>
-        <ChevronRight size={14} />
-        <strong>Activity</strong>
-        <span className="activity-summary">{current ?? counted}</span>
-        {current !== null && <span className="activity-count">{counted}</span>}
+  return <div className="run-strip">
+    <div className="run-strip-row">
+      {tasks.length > 0 && <button type="button" className="strip-seg strip-plan" aria-expanded={planOpen} onClick={() => setPlanChoice(!planOpen)}>
+        <ChevronRight size={14} aria-hidden="true" />
+        <span className="strip-text"><strong>Plan</strong><span>{taskProgress(tasks)}</span></span>
+      </button>}
+      {steps.length > 0 && <button type="button" className="strip-seg strip-activity" aria-expanded={activityOpen} onClick={() => setActivityOpen(!activityOpen)}>
+        <ChevronRight size={14} aria-hidden="true" />
+        <span className="strip-text">
+          <strong>Activity</strong>
+          {current !== null && <span className="strip-current">{current}</span>}
+          <span className="strip-count">{counted}</span>
+        </span>
         {running && <span className="working-label"><i /></span>}
-      </summary>
-      {/* The rows exist only while the section is open. A closed details
-          element hides its children but still has them built, and a chat of
-          old runs holds thousands. */}
-      {open && <ol className="activity-timeline">
-        {resolvedNodes.map((node) => (node.children.length === 0
-          ? <ActivityLeaf key={node.key} node={node} />
-          : <ActivityGroup
-            key={node.key}
-            node={node}
-            open={expanded[node.key] ?? node.status === "active"}
-            onToggle={onToggle}
-          />))}
-      </ol>}
-    </details>
-    {!open && alerts.length > 0 && <ul className="group-alerts section-alerts">
+      </button>}
+      <RunResults runId={runId} changes={changes} evidence={evidence} latest={latest} renderFiles={renderFiles} />
+    </div>
+    {plan.present && tasks.length > 0 && <ul className="strip-plan-rows" data-leaving={plan.leaving || undefined}>{tasks.map((task) => <li key={task.id} className={`task-row task-${task.status}`}>
+      {TASK_ICON[task.status]}
+      <span className="task-title">{task.title}</span>
+      {task.requiresRuntimeEvidence && <em
+        className="task-flag"
+        title={`Needs ${(task.requiredEvidence ?? ["runtime"]).join(", ")} evidence to be called done`}
+      >
+        {(task.requiredEvidence ?? ["runtime"]).join("/")}
+      </em>}
+    </li>)}</ul>}
+    {/* The rows exist only while the section is open. A closed section has no
+        use for them, and a chat of old runs holds thousands. */}
+    {activity.present && <ol className="activity-timeline" data-leaving={activity.leaving || undefined}>
+      {resolvedNodes.map((node) => (node.children.length === 0
+        ? <ActivityLeaf key={node.key} node={node} />
+        : <ActivityGroup
+          key={node.key}
+          node={node}
+          open={expanded[node.key] ?? node.status === "active"}
+          onToggle={onToggle}
+        />))}
+    </ol>}
+    {!activityOpen && alerts.length > 0 && <ul className="group-alerts section-alerts">
       {alerts.map((alert) => <li key={alert.key} className="node-row" data-status={alert.status} data-kind={alert.kind}>
         <span className="node-caret" /><NodeLine node={alert} />
       </li>)}
+      {failed > alerts.length && <li><button type="button" className="more-failed" onClick={() => setActivityOpen(true)}>{failed - alerts.length} more failed</button></li>}
     </ul>}
-  </>;
+  </div>;
 });
 
 function ApprovalCard({ pending, onApprove, onReject }: { pending: PendingApproval; onApprove: () => void; onReject: () => void }) {
@@ -2658,9 +2849,10 @@ function ArtifactCard({ group, expanded, onExpandedChange, onOpenInStudio }: {
     if ((event.target as HTMLElement).closest("button, a") !== null) return;
     onExpandedChange(!expanded);
   };
+  const fileLabel = targetLabel(group.target);
   return <article className="diff-artifact">
     <div className="diff-header" onClick={toggleFromHeader}>
-      <div className="diff-file">{assetChange ? <FileBox size={14} /> : <FileCode2 size={14} />}<code title={group.target}>{group.target}</code></div>
+      <div className="diff-file">{assetChange ? <FileBox size={14} /> : <FileCode2 size={14} />}<code title={group.target}>{fileLabel.name}{fileLabel.parent !== undefined && <span className="diff-file-parent">{fileLabel.parent}</span>}</code></div>
       <div className="diff-actions">
         {openableInStudio && <button className={`open-studio-action state-${openState.kind}`} type="button" onClick={() => void openScript()} disabled={openState.kind === "opening"} title={openState.message ?? "Open this script in Roblox Studio"}>
           {openState.kind === "opened" ? <Check size={13} /> : openState.kind === "error" ? <AlertCircle size={13} /> : <ExternalLink size={13} />}
@@ -2686,7 +2878,7 @@ function ArtifactCard({ group, expanded, onExpandedChange, onOpenInStudio }: {
         {earlier.map((change) => <ChangeBody change={change} key={change.id} />)}
       </CardDetails>}
     </div>}
-    {revisions.length > 0 && <CardDetails label="Revision details"><MetadataList entries={revisions} /></CardDetails>}
+    {expanded && revisions.length > 0 && <CardDetails label="Revision details"><MetadataList entries={revisions} /></CardDetails>}
   </article>;
 }
 
@@ -2725,20 +2917,23 @@ function AppliedStatus() {
  * script it never read back and a run that skipped a playtest it promised are
  * different problems with different fixes.
  */
-function OutcomeCard({ outcome, summary, note, warnings = false, issues = [] }: { outcome: RunOutcome; summary: string; note: string; warnings?: boolean; issues?: string[] }) {
-  const label = describeOutcome(outcome, warnings);
-  return <div className={`completed-run-card outcome-${outcome} ${warnings ? "outcome-warnings" : ""}`}>
-    <div className="completion-mark">{outcome === "completed" && !warnings ? <Check size={22} /> : <AlertCircle size={22} />}</div>
-    <div>
-      <strong>{label}</strong>
-      <p>{summary}</p>
-      {issues.length > 0 && <ul className="gate-issues">
-        {issues.map((issue, index) => <li key={index}>{issue}</li>)}
-      </ul>}
-    </div>
-    <span>{note || label}</span>
+function OutcomeCard({ outcome, summary, warnings = false, issues = [] }: { outcome: RunOutcome; summary: string; warnings?: boolean; issues?: string[] }) {
+  // A gate issue is a reason not to call the run plainly complete.
+  const warned = warnings || issues.length > 0;
+  return <div className="run-outcome" data-outcome={outcome} data-warnings={warned || undefined}>
+    <p>
+      {outcome === "completed" && !warned ? <Check size={14} aria-hidden="true" /> : <AlertCircle size={14} aria-hidden="true" />}
+      <strong>{describeOutcome(outcome, warned)}</strong>
+      {summary !== "" && <span>{summary}</span>}
+    </p>
+    {issues.length > 0 && <ul className="gate-issues">
+      {issues.map((issue, index) => <li key={index}>{issue}</li>)}
+    </ul>}
   </div>;
 }
+
+/** So a run with no plan does not hand the row a new array every render. */
+const NO_TASKS: readonly RunTask[] = [];
 
 const TASK_ICON: Record<RunTaskStatus, React.ReactNode> = {
   pending: <Circle size={13} />,
@@ -2746,45 +2941,6 @@ const TASK_ICON: Record<RunTaskStatus, React.ReactNode> = {
   done: <Check size={13} />,
   blocked: <AlertCircle size={13} />,
 };
-
-/**
- * What the agent said it would do, above what it actually did.
- *
- * A task that declared it needs runtime evidence is marked, because that is the
- * promise the completion gate will hold the run to, and seeing it beforehand is
- * what makes the caveat at the end legible instead of surprising.
- */
-const TaskList = memo(function TaskList({ tasks, settled = false }: {
-  tasks: readonly RunTask[];
-  /** A finished run's plan: folded to its heading when every task is done. */
-  settled?: boolean;
-}) {
-  if (tasks.length === 0) return null;
-  const rows = <ul>{tasks.map((task) => <li key={task.id} className={`task-row task-${task.status}`}>
-      {TASK_ICON[task.status]}
-      <span className="task-title">{task.title}</span>
-      {task.requiresRuntimeEvidence && (
-        <em
-          className="task-flag"
-          title={`Needs ${(task.requiredEvidence ?? ["runtime"]).join(", ")} evidence to be called done`}
-        >
-          {(task.requiredEvidence ?? ["runtime"]).join("/")}
-        </em>
-      )}
-    </li>)}</ul>;
-  const heading = <><strong>Plan</strong><span>{summarizeTasks(tasks)}</span></>;
-  if (!settled) {
-    return <div className="task-list">
-      <div className="task-list-heading"><ListChecks size={14} />{heading}</div>
-      {rows}
-    </div>;
-  }
-  // Folded, it lines up with the Activity row beneath it: caret, name, count.
-  return <details className="task-list" open={tasks.some((task) => task.status !== "done")}>
-    <summary className="task-list-heading"><ChevronRight size={14} className="task-list-caret" />{heading}</summary>
-    {rows}
-  </details>;
-});
 
 /**
  * The agent's one bounded question.
@@ -2835,35 +2991,21 @@ function RunRecordView({ record, text, latest, onOpenInStudio }: { record: RunRe
   const onlyAnswered = recordOnlyAnswered(record, text);
   const showOutcome = !appliedAndVerified && !onlyAnswered;
   const outcomeNote = completedRunMetadataLabel(
-    record.planner === DEMO_PLANNER ? "Demo" : record.approvalMode,
+    record.planner === DEMO_PLANNER ? "Demo" : null,
     record.startedAt,
     record.finishedAt,
   );
   const steps = useMemo(() => recordSteps(record), [record]);
-  const segments = useMemo(() => recordTranscriptSegments(record), [record]);
   const renderFiles = useCallback((files: ChangeGroup[], expansion: FileExpansion) => <ChangeSet groups={files} expansion={expansion} onOpenInStudio={onOpenInStudio} />, [onOpenInStudio]);
   return <>
-    <TaskList tasks={record.tasks ?? []} settled />
-    {segments !== null
-      ? <>
-        <div className="transcript">
-          {segments.map((segment) => segment.type === "steps"
-            ? <InlineSteps key={segment.key} steps={segment.steps} />
-            : <TranscriptText key={segment.key} text={segment.text} streaming={false} />)}
-        </div>
-        <ResultsCard runId={record.runId} changes={record.changes} evidence={record.evidence} collapsed={!latest} renderFiles={renderFiles} />
-      </>
-      : <>
-        <ActivitySection steps={steps} running={false} />
-        <ResultsCard runId={record.runId} changes={record.changes} evidence={record.evidence} collapsed={!latest} renderFiles={renderFiles} />
-        <Markdown text={text} className="result-copy" />
-      </>}
+    <RunStrip tasks={record.tasks ?? NO_TASKS} settled steps={steps} running={false} runId={record.runId} changes={record.changes} evidence={record.evidence} latest={latest} renderFiles={renderFiles} />
+    {/* Carries on a reveal the live view had not finished; an older reply shows at once. */}
+    <StreamingMarkdown text={recordReply(record, text)} done handoffKey={record.runId} className="result-copy" />
     {appliedAndVerified && <AppliedStatus />}
     {showOutcome && <OutcomeCard
       outcome={record.outcome}
       warnings={warnings}
-      summary={countLine(record.toolCalls.length, record.changes.length, failed)}
-      note={failureNote(failed)}
+      summary={record.outcome === "completed" ? "" : countLine(record.toolCalls.length, record.changes.length, failed)}
       issues={recordGateIssues(record)}
     />}
     <CompletionLine metadata={outcomeNote} usage={record.usage} />
@@ -2933,27 +3075,8 @@ function ConfirmModal({ heading, description, confirmLabel, onConfirm, onClose }
   </div></div>;
 }
 
-function relativeTime(value: string): string {
-  const minutes = Math.floor(Math.max(0, Date.now() - new Date(value).getTime()) / 60_000);
-  if (minutes < 1) return "now";
-  if (minutes < 60) return `${minutes}m`;
-  const hours = Math.floor(minutes / 60);
-  return hours < 24 ? `${hours}h` : `${Math.floor(hours / 24)}d`;
-}
-
-function formatBytes(value: number): string {
-  if (value < 1_024) return `${value} B`;
-  if (value < 1_048_576) return `${(value / 1_024).toFixed(1)} KB`;
-  return `${(value / 1_048_576).toFixed(1)} MB`;
-}
-
 function formatDuration(milliseconds: number): string {
   return milliseconds < 1_000 ? `${Math.round(milliseconds)}ms` : `${(milliseconds / 1_000).toFixed(1)}s`;
-}
-
-function failureNote(count: number): string {
-  if (count === 0) return "";
-  return `${count} ${count === 1 ? "issue" : "issues"}`;
 }
 
 function statusLabel(kind: StudioStatus["kind"]): string {

@@ -36,6 +36,8 @@ export type UploadedAsset = {
   displayName: string;
   assetType: string;
   status: "complete" | "processing" | "failed" | "not uploaded";
+  /** Answered from the upload ledger: the same bytes were uploaded before, and this is that asset. */
+  reused?: true;
   assetId?: string;
   /** For a Decal, what ImageLabel.Image and ParticleEmitter.Texture use. */
   imageId?: string | null;
@@ -88,11 +90,13 @@ function uploaded(request: UploadRequest, outcome: McpToolOutcome): UploadedAsse
     ? outcome.message || text(data.error) || outcome.text || "the upload failed"
     : isRecord(data.error) ? text(data.error.message) ?? "Roblox reported an error" : undefined;
   if (failedWith !== undefined) return { ...base, status: "failed", error: failedWith.slice(0, 300) };
-  const status = data.status === "complete" || data.done === true ? "complete" : "processing";
+  const reused = data.status === "already_uploaded";
+  const status = reused || data.status === "complete" || data.done === true ? "complete" : "processing";
   const moderation = isRecord(response.moderationResult) ? text(response.moderationResult.moderationState) : undefined;
   return {
     ...base,
     status,
+    ...(reused ? { reused: true as const } : {}),
     ...(text(data.asset_id) ?? text(response.assetId) ? { assetId: text(data.asset_id) ?? text(response.assetId) } : {}),
     ...("imageId" in data || "imageId" in response ? { imageId: text(data.imageId) ?? text(response.imageId) ?? null } : {}),
     ...("decalId" in data || "decalId" in response ? { decalId: text(data.decalId) ?? text(response.decalId) ?? null } : {}),
@@ -109,6 +113,9 @@ function line(asset: UploadedAsset): string {
     asset.assetId === undefined ? undefined : `asset ${asset.assetId}`,
     asset.imageId ? `imageId ${asset.imageId}` : undefined,
   ].filter((part): part is string => part !== undefined).join(", ");
+  if (asset.reused === true) {
+    return `- ${name}: not uploaded again, the same bytes went to Roblox before${ids === "" ? "" : ` as ${ids}`}${asset.moderationState ? `, moderation ${asset.moderationState}` : ""}; use that id`;
+  }
   const pending = asset.status === "processing" || (asset.assetType === "Decal" && !asset.imageId);
   const check = pending && asset.operationId !== undefined
     ? `; still processing: check it with upload_asset {action: 'status', operationId: '${asset.operationId}'}`
