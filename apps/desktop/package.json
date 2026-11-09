@@ -1,6 +1,7 @@
 {
   "name": "@roqer/desktop",
   "productName": "Roqer",
+  "desktopName": "roqer.desktop",
   "version": "0.3.0",
   "private": true,
   "description": "Roqer, a local desktop agent for Roblox Studio.",

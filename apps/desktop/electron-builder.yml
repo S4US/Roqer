@@ -96,6 +96,10 @@ mac:
 linux:
   # Otherwise taken from the package name, @roqer/desktop, which is not a usable file name.
   executableName: roqer
+  # Electron reports package.json's desktopName ("roqer.desktop") as the
+  # window's Wayland app_id and X11 WM_CLASS. This names the .desktop entry
+  # after it too, so the desktop links the running window to its entry and icon.
+  syncDesktopName: true
   target:
     - AppImage
   icon: public/roqer-app-icon.svg

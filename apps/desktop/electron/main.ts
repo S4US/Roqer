@@ -2858,8 +2858,12 @@ function createWindow(): void {
     backgroundColor: windowBackground,
     title: "Roqer",
     // Windows takes the multi-size application artwork from here for the
-    // window and taskbar; macOS uses the bundle's own icon.
-    icon: path.join(__dirname, "roqer-app-icon.ico"),
+    // window and taskbar. Electron decodes .ico only on Windows, so Linux gets
+    // the PNG of the same artwork. macOS uses the bundle's own icon.
+    icon: path.join(
+      __dirname,
+      process.platform === "win32" ? "roqer-app-icon.ico" : "roqer-app-icon.png",
+    ),
     show: false,
     autoHideMenuBar: true,
     webPreferences: {

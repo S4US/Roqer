@@ -53,12 +53,17 @@ export async function buildDesktopRuntime() {
       path.join(desktopRoot, "dist-electron", "clip-decoder.html"),
     ),
     fs.cp(agentSource, agentOutput, { recursive: true }),
-    // The Windows window/taskbar icon is read from beside the compiled main at
-    // runtime, so it has to travel with it rather than being resolved out of
-    // the source tree.
+    // The window icons are read from beside the compiled main at runtime, so
+    // they have to travel with it rather than being resolved out of the source
+    // tree. Windows takes the .ico; Electron decodes .ico only on Windows, so
+    // Linux takes the PNG rendered from the same artwork.
     fs.cp(
       path.join(desktopRoot, "public", "roqer-app-icon.ico"),
       path.join(desktopRoot, "dist-electron", "roqer-app-icon.ico"),
+    ),
+    fs.cp(
+      path.join(desktopRoot, "public", "roqer-app-icon.png"),
+      path.join(desktopRoot, "dist-electron", "roqer-app-icon.png"),
     ),
   ]);
 }
