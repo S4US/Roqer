@@ -94,6 +94,8 @@ mac:
   category: public.app-category.developer-tools
 
 linux:
+  # Otherwise taken from the package name, @roqer/desktop, which is not a usable file name.
+  executableName: roqer
   target:
     - AppImage
   icon: public/roqer-app-icon.svg
