@@ -150,10 +150,25 @@ async function closeWorker(control, launch) {
 await configureStudioDirectoryIsolation({ requireStudioClosed: false });
 const logsDirectory = resolveStudioLogsDir();
 const baselineLogs = studioLogNames(logsDirectory);
-const workers = Array.from(
-  { length: WORKER_COUNT },
-  (_unused, index) => createIsolatedStudioDirectory({ prefix: `parallel-${index + 1}` }),
-);
+// Made one at a time, so a worker that cannot be made leaves nothing behind:
+// those already made give back what they took. Under Vinegar the second worker
+// is refused because the first has borrowed the one plugins folder, and without
+// this the first kept it, leaving Studio with no plugins until the next suite.
+const workers = [];
+try {
+  for (let index = 0; index < WORKER_COUNT; index += 1) {
+    workers.push(createIsolatedStudioDirectory({ prefix: `parallel-${index + 1}` }));
+  }
+} catch (error) {
+  for (const worker of workers) {
+    try {
+      worker.cleanup();
+    } catch (cleanupError) {
+      console.error(`Could not clean up Studio worker ${worker.workingDirectory}:`, cleanupError);
+    }
+  }
+  throw error;
+}
 const portLeases = await Promise.all(
   Array.from({ length: WORKER_COUNT }, () => acquireSuitePort({ env: {} })),
 );
