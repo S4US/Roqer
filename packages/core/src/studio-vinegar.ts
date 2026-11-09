@@ -1,7 +1,9 @@
 import { execFile, execFileSync } from 'child_process';
 import { existsSync, readdirSync, readFileSync, statSync } from 'fs';
 import os from 'os';
-import path from 'path';
+// Vinegar runs on Linux, so every path here is a POSIX one, whatever host the
+// code or its tests happen to run on. (path.posix.posix is path.posix.)
+import { posix as path } from 'path';
 import { promisify } from 'util';
 
 /**

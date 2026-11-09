@@ -1,4 +1,5 @@
-import path from 'path';
+// Vinegar's paths are Linux ones on every host, so the expected ones are built the same way.
+import { posix as path } from 'path';
 
 import {
   buildVinegarLaunchCommand,
