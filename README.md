@@ -48,6 +48,7 @@ a sword, the Scarlet Requiem, with a combo, a flash step, and three special atta
 - **Point at things.** Select something in Studio, and when you send, Roqer tells the model what you selected, so "make this open when touched" needs no path.
 - **Built for Roblox.** Bundled Roblox skills, Creator Store search and insertion, and Open Cloud uploads with your own key.
 - **Your own MCP servers.** Add other MCP servers in Settings and the agent can use their tools, with the risk of each tool set by you and every call approved like a Studio call.
+- **Project instructions.** Write standing instructions once per project, such as where code lives or which libraries to use, and every chat in it sends them to the model.
 - **Web search, when you say so.** A switch in the run menu lets the model search through your own provider, with every search shown in the run's activity.
 - **Links you give.** Paste a link in the chat and the agent can read the page or picture, with any provider and with web search off. It can open only links you wrote.
 - **Local.** No Roqer account or server. Chats are saved on your computer, and the conversation goes straight to your model provider.

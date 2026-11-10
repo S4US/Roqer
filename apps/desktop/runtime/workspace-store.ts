@@ -214,7 +214,13 @@ export class WorkspaceStore {
           const encoded = await readBounded(chatPath, MAX_CHAT_BYTES);
           if (`${digest(encoded)}.json` !== reference.content) throw new Error("digest mismatch");
           const chatRaw: unknown = JSON.parse(encoded);
-          const chatWorkspace = { ...raw, projects: [{ ...project, chats: [chatRaw] }] };
+          // Only the chat is on trial here. The project's own fields are
+          // checked once, with the whole workspace, below; damaged project
+          // instructions must not make every chat in the project look damaged
+          // and be salvaged empty.
+          const probeProject: Record<string, unknown> = { ...project, chats: [chatRaw] };
+          delete probeProject.instructions;
+          const chatWorkspace = { ...raw, projects: [probeProject] };
           delete (chatWorkspace as Record<string, unknown>).formatVersion;
           const parsedChatWorkspace = normalizeWorkspace(chatWorkspace);
           const candidate = parsedChatWorkspace.projects[0]?.chats[0];
@@ -303,6 +309,7 @@ export class WorkspaceStore {
         name: project.name,
         createdAt: project.createdAt,
         updatedAt: project.updatedAt,
+        ...(project.instructions === undefined ? {} : { instructions: project.instructions }),
         chats: references,
       });
     }

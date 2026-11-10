@@ -92,13 +92,13 @@ const tokenCount = (value: unknown): number | undefined =>
  * prompt, so Roqer's instructions open the first message of a session; a kept
  * session already has them in its conversation.
  */
-function sessionInstructions(options: AntigravityPlannerOptions, autoPlaytest: boolean, webSearch = false): string {
+function sessionInstructions(options: AntigravityPlannerOptions, autoPlaytest: boolean, webSearch = false, projectInstructions?: string): string {
   return [
     "<system-instructions>",
     options.agent.systemInstructions,
     "</system-instructions>",
     "<developer-instructions>",
-    runDeveloperInstructions(options.agent.developerInstructions, autoPlaytest, webSearch),
+    runDeveloperInstructions(options.agent.developerInstructions, autoPlaytest, webSearch, projectInstructions),
     webSearch
       ? `In this session your tools are the "${ANTIGRAVITY_MCP_SERVER_NAME}" MCP server's tools, called through call_mcp_tool, and Antigravity's own web search. Its other built-in tools (shell commands, file edits, reading a page by URL, browser, subagents) are turned off and every call to one is refused. Work in Roblox Studio only through the "${ANTIGRAVITY_MCP_SERVER_NAME}" tools.`
       : `In this session your tools are the "${ANTIGRAVITY_MCP_SERVER_NAME}" MCP server's tools, called through call_mcp_tool. Antigravity's own built-in tools (shell commands, file edits, web search, browser, subagents) are turned off and every call to one is refused. Work in Roblox Studio only through the "${ANTIGRAVITY_MCP_SERVER_NAME}" tools.`,
@@ -428,12 +428,17 @@ export class AntigravitySession {
  * carry them into a run against another.
  */
 function sessionKey(
-  options: AntigravityPlannerOptions, { autoPlaytest, instanceId, webSearch }: Pick<PlannerContext, "autoPlaytest" | "instanceId" | "webSearch">,
+  options: AntigravityPlannerOptions,
+  { autoPlaytest, instanceId, webSearch, projectInstructions }: Pick<PlannerContext, "autoPlaytest" | "instanceId" | "webSearch" | "projectInstructions">,
 ): string {
   return JSON.stringify([
     instanceId, options.model, autoPlaytest,
     options.agent.id, options.agent.version, options.blender === true, options.referenceClips === true,
     options.externalMcp === true, webSearch === true, options.imageGeneration === true,
+    // The project's instructions are fixed when the session starts, so an
+    // edit starts a new one. None adds nothing, so a key from before they
+    // existed still matches.
+    ...(projectInstructions === undefined ? [] : [projectInstructions]),
   ]);
 }
 
@@ -638,7 +643,7 @@ export function createAntigravityPlanner(options: AntigravityPlannerOptions): Pl
         if (settled) return await completion.promise;
         const prompt = resumed
           ? buildFollowUpPrompt(context.conversation, context.prompt, (name) => skills.isLoaded(name))
-          : `${sessionInstructions(options, context.autoPlaytest, context.webSearch)}\n\n${buildConversationPrompt(context.conversation, context.prompt)}`;
+          : `${sessionInstructions(options, context.autoPlaytest, context.webSearch, context.projectInstructions)}\n\n${buildConversationPrompt(context.conversation, context.prompt)}`;
         session.writeUserMessage(attachments === "" ? prompt : `${prompt}\n\n${attachments}`);
 
         return await completion.promise;

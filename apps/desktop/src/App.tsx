@@ -2,7 +2,7 @@ import {
   AlertCircle, AlertTriangle, Archive, Boxes, Check, ChevronDown, ChevronRight, Circle, Download,
   CircleDot, ExternalLink, FileBox, FileCode2, FileText, Folder, FolderPlus, Gamepad2,
   HelpCircle, Info, Loader2, MessageSquare, MinusCircle, MoreHorizontal,
-  ArrowUp, Maximize2, Minimize2, PanelLeftClose, PanelLeftOpen, Paperclip, Pencil, Play, Plus, RotateCw, Search, Settings, Square,
+  ArrowUp, Maximize2, Minimize2, PanelLeftClose, PanelLeftOpen, Paperclip, Pencil, Play, Plus, RotateCw, ScrollText, Search, Settings, Square,
   ShieldCheck, Sparkles, MousePointerClick,
   Trash2, Upload, X,
 } from "lucide-react";
@@ -11,12 +11,13 @@ import { createPortal } from "react-dom";
 import { AttachmentChip, MessageFiles, MessagePictures } from "./attachment-views";
 import { isImageAttachment } from "./attachment-detail";
 import { ClipTrimDialog } from "./clip-trim-dialog";
+import { MAX_PROJECT_INSTRUCTIONS_CHARS, normalizeProjectInstructions } from "../shared/project-instructions";
 import { VIDEO_EXTENSIONS, type ClipSelection } from "../shared/reference-clip";
 import { describeSelection, selectionChipParts, selectionKey, selectionToOffer, type StudioSelection } from "../shared/studio-selection";
 import {
   appendMessage, createChat, createId, createInitialWorkspace, createProject, undeliverNotes, withMessageSelection,
   deleteChat, deleteProject, modelPreference, normalizeWorkspace, renameChat,
-  renameProject, selectedModelId, setChatCompaction, setChatStudioInstance, chatStudioTarget, chatsByActivity, withdrawMessage,
+  renameProject, projectInstructions, selectedModelId, setProjectInstructions, setChatCompaction, setChatStudioInstance, chatStudioTarget, chatsByActivity, withdrawMessage,
   type AssetAttachment, type ChatMessage, type WorkspaceState,
 } from "./model";
 import {
@@ -101,12 +102,14 @@ import { providerLabel, type ProviderId } from "../shared/provider";
 type Dialog =
   | { kind: "create-project" }
   | { kind: "rename-project"; projectId: string }
+  | { kind: "project-instructions"; projectId: string }
   | { kind: "delete-project"; projectId: string }
   | { kind: "rename-chat"; projectId: string; chatId: string }
   | { kind: "delete-chat"; projectId: string; chatId: string };
 
 const RENAME_ACTION = "rename";
 const DELETE_ACTION = "delete";
+const INSTRUCTIONS_ACTION = "instructions";
 
 /** Where the stylesheet stops docking the sidebar beside the workspace and
  *  starts laying it over the top. Kept in step with the matching breakpoint in
@@ -905,6 +908,10 @@ function App() {
       approvalMode: next.preferences.approvalMode,
       autoPlaytest: next.preferences.autoPlaytest,
       webSearch: next.preferences.webSearch,
+      ...(() => {
+        const instructions = projectInstructions(next, projectId);
+        return instructions === undefined ? {} : { projectInstructions: instructions };
+      })(),
       endpoint: next.preferences.mcpEndpoint,
       instanceId: (() => {
         const target = chatStudioTarget(next, projectId, chatId);
@@ -1547,6 +1554,7 @@ function App() {
   const onlyProject = workspace.projects.length < 2;
   const projectMenuItems: readonly RowMenuItem[] = [
     { id: RENAME_ACTION, label: "Rename project", icon: <Pencil size={14} /> },
+    { id: INSTRUCTIONS_ACTION, label: "Project instructions", icon: <ScrollText size={14} /> },
     {
       id: DELETE_ACTION,
       label: "Delete project",
@@ -1582,6 +1590,13 @@ function App() {
         label="Project name" placeholder="Obby prototype" initialValue={project.name}
         confirmLabel="Save name" confirmIcon={<Check size={15} />}
         onSubmit={(value) => { setWorkspace((current) => renameProject(current, project.id, value)); closeDialog(); }}
+        onClose={closeDialog}
+      />;
+    }
+    if (dialog.kind === "project-instructions") {
+      return <InstructionsModal
+        projectName={project.name} initialValue={project.instructions ?? ""}
+        onSubmit={(value) => { setWorkspace((current) => setProjectInstructions(current, project.id, value)); closeDialog(); }}
         onClose={closeDialog}
       />;
     }
@@ -1647,7 +1662,9 @@ function App() {
                   </button>
                   <RowMenu className="dark" label={`${project.name} options`} items={projectMenuItems} onSelect={(action) => setDialog(action === RENAME_ACTION
                     ? { kind: "rename-project", projectId: project.id }
-                    : { kind: "delete-project", projectId: project.id })} />
+                    : action === INSTRUCTIONS_ACTION
+                      ? { kind: "project-instructions", projectId: project.id }
+                      : { kind: "delete-project", projectId: project.id })} />
                 </div>
                 {expanded && <div className="chat-list">
                   {project.chats.length === 0 && <p className="empty-folder">No chats yet</p>}
@@ -1857,6 +1874,18 @@ function App() {
               <button onClick={() => setSendAfterCompact(null)}>Cancel</button>
             </div>}
             {attachmentError && <div className="attachment-notice" role="alert"><AlertTriangle size={14} aria-hidden="true" /><span>{attachmentError}</span><button onClick={() => setAttachmentError(null)} aria-label="Dismiss"><X size={14} /></button></div>}
+            {(() => {
+              // Every run in this project sends these, so the composer says so
+              // and opens them in one click.
+              const instructions = projectInstructions(workspace, workspace.selectedProjectId);
+              if (instructions === undefined) return null;
+              return <button type="button" className="selection-chip instructions-chip"
+                onClick={() => setDialog({ kind: "project-instructions", projectId: workspace.selectedProjectId })}
+                title={`Every run in this project gets these instructions:\n\n${instructions.length > 400 ? `${instructions.slice(0, 400)}…` : instructions}`}
+                aria-label="Project instructions are on. Open them">
+                <span className="selection-chip-text"><ScrollText size={13} aria-hidden="true" /><strong>Project instructions</strong></span>
+              </button>;
+            })()}
             {selectionChip !== null && (() => {
               const { name, className, more } = selectionChipParts(selectionChip);
               return <div className="selection-chip" role="status" aria-label={`Using your Studio selection: ${describeSelection(selectionChip)}`}>
@@ -3050,6 +3079,38 @@ function NameModal({ heading, description, label, placeholder, initialValue = ""
     <p>{description}</p>
     <label><span>{label}</span><input autoFocus value={name} onFocus={(event) => event.target.select()} onChange={(event) => setName(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") submit(); }} placeholder={placeholder} /></label>
     <div className="modal-actions"><button className="secondary-action" onClick={onClose}>Cancel</button><button className="primary-action" disabled={!name.trim()} onClick={submit}>{confirmIcon} {confirmLabel}</button></div>
+  </div></div>;
+}
+
+/**
+ * The standing instructions for a project's chats.
+ *
+ * Saving empty text removes them. The bound is the one a run enforces, so the
+ * dialog never saves text that a run would then refuse to send.
+ */
+function InstructionsModal({ projectName, initialValue, onSubmit, onClose }: {
+  projectName: string;
+  initialValue: string;
+  onSubmit: (value: string) => void;
+  onClose: () => void;
+}) {
+  const [text, setText] = useState(initialValue);
+  const fieldId = useId();
+  const length = text.trim().length;
+  const tooLong = length > MAX_PROJECT_INSTRUCTIONS_CHARS;
+  const unsendable = !tooLong && length > 0 && normalizeProjectInstructions(text) === null;
+  const unchanged = text.trim() === initialValue.trim();
+  useEscapeToClose(onClose);
+  return <div className="modal-backdrop" role="presentation" onMouseDown={onClose}><div className="name-modal instructions-modal" role="dialog" aria-modal="true" aria-label="Project instructions" onMouseDown={(event) => event.stopPropagation()}>
+    <div className="modal-header"><div><h2>Project instructions</h2></div><button className="icon-button" onClick={onClose} aria-label="Close"><X size={19} /></button></div>
+    <p>Every chat in {projectName} sends these to the model with each message. Use them for things the model should always know, like where code lives or which libraries to use. They cannot turn approvals off.</p>
+    <label htmlFor={fieldId}><span>Instructions</span></label>
+    <textarea id={fieldId} autoFocus value={text} onChange={(event) => setText(event.target.value)} rows={10}
+      placeholder={"Use Knit for services.\nAll UI goes in StarterGui/HUD.\nNever change ServerStorage/Legacy."} />
+    <div className={`instructions-count ${tooLong || unsendable ? "instructions-count-over" : ""}`} role={tooLong || unsendable ? "alert" : undefined}>
+      {unsendable ? "Remove the control characters before saving." : `${length.toLocaleString()} / ${MAX_PROJECT_INSTRUCTIONS_CHARS.toLocaleString()}`}
+    </div>
+    <div className="modal-actions"><button className="secondary-action" onClick={onClose}>Cancel</button><button className="primary-action" disabled={tooLong || unsendable || unchanged} onClick={() => onSubmit(text)}><Check size={15} /> {length === 0 && initialValue !== "" ? "Remove instructions" : "Save instructions"}</button></div>
   </div></div>;
 }
 

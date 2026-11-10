@@ -622,7 +622,10 @@ export function createAgentLoopPlanner(options: AgentLoopPlannerOptions): Planne
       const tools = loopTools(options.skillLibrary, options.blender === true, options.referenceClips === true, options.externalMcp === true, options.imageGeneration === true);
       const instructions = {
         system: options.agent.systemInstructions,
-        developer: runDeveloperInstructions(options.agent.developerInstructions, context.autoPlaytest, context.webSearch),
+        // Built for each run and sent with every turn, so an edit to the
+        // project's instructions applies to the next run without a new
+        // conversation; the session key leaves them out.
+        developer: runDeveloperInstructions(options.agent.developerInstructions, context.autoPlaytest, context.webSearch, context.projectInstructions),
       };
       if (!acceptsImages && context.images.length > 0) {
         context.status(

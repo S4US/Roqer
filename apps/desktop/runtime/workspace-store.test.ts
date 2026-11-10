@@ -358,3 +358,30 @@ test("a workspace that needs recovery moves no pictures, and recovering removes 
   await reopened.recover();
   assert.deepEqual(await storedPictures(directory), before);
 }));
+
+test("a project's instructions are saved in the manifest and come back on the next load", async () => withDirectory(async (directory) => {
+  const state = workspaceWithChats(chat("with-instructions"));
+  state.projects[0].instructions = "Use Knit for services.";
+  await new WorkspaceStore(directory).save(state);
+  const manifest = JSON.parse(await readFile(join(directory, "workspace-manifest.json"), "utf8")) as { projects: Array<{ instructions?: string }> };
+  assert.equal(manifest.projects[0].instructions, "Use Knit for services.");
+  const loaded = await new WorkspaceStore(directory).load() as WorkspaceState;
+  assert.equal(loaded.projects[0].instructions, "Use Knit for services.");
+  assert.equal(workspaceNeedsRecovery(loaded), false);
+}));
+
+test("damaged project instructions lock the workspace for recovery without emptying the project's chats", async () => withDirectory(async (directory) => {
+  const state = workspaceWithChats(chat("kept-chat", "keep this message"));
+  state.projects[0].instructions = "Use Knit for services.";
+  await new WorkspaceStore(directory).save(state);
+  const manifestPath = join(directory, "workspace-manifest.json");
+  const manifest = JSON.parse(await readFile(manifestPath, "utf8")) as { projects: Array<{ instructions?: unknown }> };
+  manifest.projects[0].instructions = "x".repeat(8_001);
+  await writeFile(manifestPath, JSON.stringify(manifest), "utf8");
+
+  const store = new WorkspaceStore(directory);
+  const loaded = await store.load() as WorkspaceState;
+  assert.equal(store.status().required, true, "text the user wrote is never dropped silently");
+  assert.equal(loaded.projects[0].chats[0].messages.length, 1, "the project's chats are not salvaged as empty");
+  assert.equal(loaded.projects[0].chats[0].messages[0].text, "keep this message");
+}));

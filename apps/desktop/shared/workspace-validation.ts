@@ -1,3 +1,4 @@
+import { isProjectInstructions } from "./project-instructions";
 import { isAttachmentClip } from "./reference-clip";
 import { isRunRecord, withoutMalformedUsage } from "./run-events";
 
@@ -57,6 +58,9 @@ export function malformedWorkspace(value: unknown): boolean {
       typeof project.updatedAt !== "string" ||
       !Array.isArray(project.chats) || projectIds.has(project.id)) { malformed = true; continue; }
     projectIds.add(project.id);
+    // Normalization drops instructions a run could not send, which would
+    // discard text the user wrote.
+    if (project.instructions !== undefined && !isProjectInstructions(project.instructions)) malformed = true;
     for (const chat of project.chats) {
       if (!isRecord(chat) ||
         typeof chat.id !== "string" ||

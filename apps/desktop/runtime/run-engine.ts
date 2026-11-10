@@ -110,6 +110,11 @@ export type PlannerContext = {
    * before the switch existed reads as a run without search.
    */
   webSearch?: boolean;
+  /**
+   * The instructions the user wrote for the chat's project; the planners send
+   * them after Roqer's own settings. Absent when the project has none.
+   */
+  projectInstructions?: string;
   signal: AbortSignal;
   /** Run a read or write tool. Policy and approval are applied by the engine. */
   call(tool: string, args: Record<string, unknown>): Promise<McpToolOutcome>;
@@ -504,6 +509,7 @@ export class RunSession {
       instanceId: this.request.instanceId,
       autoPlaytest: this.request.autoPlaytest,
       webSearch: this.request.webSearch === true,
+      ...(this.request.projectInstructions === undefined ? {} : { projectInstructions: this.request.projectInstructions }),
       signal: this.abortController.signal,
       call: (tool, args) => this.callTool(tool, args),
       say: (text) => this.emit({ type: "message-delta", text }),

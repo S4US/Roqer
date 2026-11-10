@@ -352,6 +352,36 @@ account, and Codex's per-thread switch has not been checked against every
 Codex version, so a Codex that ignores it simply leaves the model without
 search.
 
+### Project instructions
+
+Each project can hold standing instructions for every chat in it: where code
+lives, which libraries to use, what never to change. Open a project's menu in
+the sidebar and choose **Project instructions**. Saving empty text removes
+them. A project with instructions shows a **Project instructions** chip above
+the composer; click it to read or change them.
+
+Every run in the project sends them to the model, whichever provider drives
+it, in a block of their own that is labelled as yours. They are your
+preferences, not Roqer's rules: they cannot turn approvals off, widen which
+tools the model may use, or change what Full auto does, because the run
+engine enforces those whatever the model is told. When they disagree with a
+message you send, the model is told the message wins.
+
+The limit is 8,000 characters, because the text is sent with every turn.
+Claude Code, Codex and Antigravity fix their instructions when a chat's
+session starts, so a change starts a new session at the next message. The
+chat's earlier messages still reach the new session: Claude Code resumes the
+saved conversation, and Codex and Antigravity are sent the chat's earlier
+messages as text. A Custom model gets the current instructions with every
+turn, so its conversation simply continues. A run records the prompt it was
+sent but not the project's instructions at the time, so an older run does not
+show which instructions it had.
+
+Roqer runs Codex and Antigravity with homes of their own and Claude Code
+without your settings files, so instructions you set up for those clients
+outside Roqer are not where Roqer's runs look. Use project instructions
+instead.
+
 ### Links you give
 
 A link you write in a message, in a note during a run, or in an earlier message
