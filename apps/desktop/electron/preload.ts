@@ -155,6 +155,13 @@ function connector(provider: ProviderId) {
         ? value
         : { ok: false, message: `The ${label} sign-in request returned an invalid result.` };
     },
+    /** Sign out of the subscription; the main process asks the user first where that reaches beyond Roqer. */
+    logout: async (): Promise<ProviderLoginResult> => {
+      const value: unknown = await ipcRenderer.invoke("provider:logout", provider);
+      return isProviderLoginResult(value)
+        ? value
+        : { ok: false, message: `The ${label} sign-out request returned an invalid result.` };
+    },
     /** Install the client this subscription runs through; the main process asks the user first. */
     install: async (): Promise<ProviderInstallResult> => {
       const value: unknown = await ipcRenderer.invoke("provider:install", provider);

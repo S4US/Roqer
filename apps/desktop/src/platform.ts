@@ -328,6 +328,13 @@ export async function cancelProviderLogin(provider: ProviderId): Promise<Provide
   return bridge.cancelLogin();
 }
 
+/** Sign out of a subscription. The main process confirms with the user where that reaches beyond Roqer. */
+export async function logoutProvider(provider: ProviderId): Promise<ProviderLoginResult> {
+  const bridge = connector(provider);
+  if (!bridge) return { ok: false, message: `${providerLabel(provider)} sign-out needs the desktop app.` };
+  return bridge.logout();
+}
+
 /** Finish a sign-in that came back with `awaitingCode`. */
 export async function submitProviderCode(provider: ProviderId, code: string): Promise<ProviderLoginResult> {
   const bridge = connector(provider);

@@ -86,6 +86,9 @@ export type ProviderLoginResult =
   | { ok: true; message: string; awaitingCode?: boolean }
   | { ok: false; message: string };
 
+/** What a sign-out says when the user declined its confirmation, which is not a failure to show. */
+export const SIGN_OUT_CANCELLED = "Sign-out cancelled.";
+
 /**
  * The result of installing a subscription's client. A failure carries the
  * official install command, when there is one, so the user can run it
