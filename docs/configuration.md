@@ -164,6 +164,15 @@ Where the CLI keeps its sign-in in a file rather than the system keyring (over
 SSH, in WSL or a container, or on Linux without a keyring), Roqer's runs cannot
 see it, because they use a private home folder; Roqer is tested on Windows.
 
+To sign out, choose Sign out next to the account in Settings. For ChatGPT
+this signs out of Roqer's own Codex home only; the Codex CLI keeps its own
+sign-in. Claude Code keeps one sign-in for your whole user account, so signing
+out of Claude in Roqer also signs out Claude Code in your terminal and other
+apps; Roqer asks you to confirm that first. Roqer refuses to sign out while a
+run on that account is still going. Antigravity has no Sign out button,
+because its CLI has no known way to sign out without its own interface; sign
+out in the Antigravity app or CLI instead.
+
 The Antigravity CLI normally checks for updates in a background process each
 time it starts, and on Windows that process briefly shows a console window
 when the CLI was started by an app rather than a terminal. Roqer turns that

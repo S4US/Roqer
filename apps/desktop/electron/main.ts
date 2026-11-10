@@ -150,6 +150,7 @@ import {
   isEnabledProvider,
   isReasoningEffort,
   providerLabel,
+  SIGN_OUT_CANCELLED,
   type ProviderId,
   type ProviderInstallResult,
   type ProviderLoginResult,
@@ -1703,6 +1704,64 @@ async function cancelProviderLogin(event: IpcMainInvokeEvent, value: unknown): P
   return { ok: true, message: "Sign-in cancelled." };
 }
 
+/**
+ * Sign out of a subscription. ChatGPT signs out of Roqer's own Codex home only.
+ * Claude Code keeps one sign-in for the whole computer, so the user confirms
+ * that in a dialog this process shows; the renderer only names the provider.
+ * Antigravity is not offered: its CLI has no known way to sign out headless.
+ */
+async function logoutProvider(event: IpcMainInvokeEvent, value: unknown): Promise<ProviderLoginResult> {
+  if (!isTrusted(event.sender) || shuttingDown) return { ok: false, message: "This window may not sign out." };
+  const provider = providerArgument(value);
+  if (provider !== "chatgpt" && provider !== "claude") return { ok: false, message: "Roqer cannot sign out of this provider." };
+  const label = providerLabel(provider);
+  const busy = (): string | null => {
+    if (runHolds.providerBusy(provider)) return `Stop the ${label} run first, then sign out.`;
+    if (provider === "claude" && compactingChats.size > 0) return "Wait for the chat being compacted, then sign out.";
+    return null;
+  };
+  const refused = busy();
+  if (refused !== null) return { ok: false, message: refused };
+
+  if (provider === "claude") {
+    const options: MessageBoxOptions = {
+      type: "question",
+      buttons: ["Sign out", "Cancel"],
+      defaultId: 1,
+      cancelId: 1,
+      noLink: true,
+      title: "Sign out of Claude Code",
+      message: "Sign out of Claude Code on this computer?",
+      detail: "Roqer uses the same Claude Code sign-in as your terminal and other apps, so this signs them out too. " +
+        "Choose Connect to sign in again.",
+    };
+    const window = BrowserWindow.fromWebContents(event.sender);
+    const choice = window ? await dialog.showMessageBox(window, options) : await dialog.showMessageBox(options);
+    if (choice.response !== 0) return { ok: false, message: SIGN_OUT_CANCELLED };
+    // A run may have started while the dialog was open.
+    const startedMeanwhile = busy();
+    if (startedMeanwhile !== null) return { ok: false, message: startedMeanwhile };
+  }
+
+  try {
+    // Nothing kept for the account may outlive its sign-in, so it goes first.
+    if (provider === "claude") {
+      await claudeSessions.closeAll();
+      claudeLimits?.forget();
+      return await claudeProvider().logout();
+    }
+    await codexThreads.closeAll();
+    codexLimits?.forget();
+    const client = chatGptProvider();
+    const pending = pendingChatGptLogin;
+    pendingChatGptLogin = null;
+    if (pending !== null) await client.cancelChatGptLogin(pending.loginId);
+    return await client.logoutChatGpt();
+  } catch (error) {
+    return { ok: false, message: error instanceof Error ? error.message : `${label} could not sign out.` };
+  }
+}
+
 async function submitProviderCode(event: IpcMainInvokeEvent, payload: unknown): Promise<ProviderLoginResult> {
   if (!isTrusted(event.sender)) return { ok: false, message: "This window may not finish sign-in." };
   const provider = isRecord(payload) ? providerArgument(payload.provider) : null;
@@ -2360,7 +2419,7 @@ async function startRun(event: IpcMainInvokeEvent, payload: unknown): Promise<Ru
     // so two starts that arrive together cannot both get them. A cancelled
     // start lets go at once rather than at its next await: it never executes
     // after the cancel, and the person may send again straight away.
-    const begun = runHolds.begin(request.chatId, request.instanceId);
+    const begun = runHolds.begin(request.chatId, request.instanceId, request.provider);
     if (!begun.ok) return { ok: false, message: begun.message };
     const runHold = begun.hold;
     hold = runHold;
@@ -3197,6 +3256,7 @@ app.whenReady().then(async () => {
   ipcMain.handle("provider:login-wait", waitForProviderLogin);
   ipcMain.handle("provider:login-open", openProviderLogin);
   ipcMain.handle("provider:login-cancel", cancelProviderLogin);
+  ipcMain.handle("provider:logout", logoutProvider);
   ipcMain.handle("provider:install", installProviderClient);
   ipcMain.handle("provider:limits", getProviderLimits);
   ipcMain.handle("custom-providers:list", listCustomConnections);

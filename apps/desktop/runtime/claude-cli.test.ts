@@ -461,3 +461,42 @@ test("Claude Code starts without API credentials, so the subscription login is t
   assert.equal(environment.ANTHROPIC_AUTH_TOKEN, undefined);
   assert.equal(environment.PATH, "C:\\bin");
 });
+
+test("signing out of Claude runs `claude auth logout` and confirms it with a fresh status read", async () => {
+  const script = scripted(statusStep(SIGNED_IN), (child) => child.finish(0), statusStep({ loggedIn: false, authMethod: "none" }, 1));
+  const client = new ClaudeCodeClient({ spawnProcess: script.spawnProcess });
+  assert.equal((await client.getStatus()).kind, "signed-in");
+
+  assert.deepEqual(await client.logout(), { ok: true, message: "Signed out of Claude Code." });
+  assert.deepEqual(script.calls, [["auth", "status", "--json"], ["auth", "logout"], ["auth", "status", "--json"]]);
+});
+
+test("a Claude sign-out that leaves the account signed in, or cannot be confirmed, is not reported as done", async () => {
+  const ignored = scripted(statusStep(SIGNED_IN), (child) => child.finish(0), statusStep(SIGNED_IN));
+  const stillIn = new ClaudeCodeClient({ spawnProcess: ignored.spawnProcess });
+  await stillIn.getStatus();
+  // The signed-in answer read before the sign-out is not reused for the check.
+  assert.deepEqual(await stillIn.logout(), { ok: false, message: "Claude Code is still signed in." });
+  assert.equal(ignored.calls.length, 3);
+
+  const unreadable = scripted((child) => child.finish(0), (child) => { child.stdout.write("garbled"); child.finish(0); });
+  const unknown = await new ClaudeCodeClient({ spawnProcess: unreadable.spawnProcess }).logout();
+  assert.equal(unknown.ok, false);
+  assert.match(unknown.message, /could not confirm the sign-out/);
+});
+
+test("signing out of Claude stops a sign-in that was waiting", async () => {
+  let loginChild: FakeChildProcess | null = null;
+  const script = scripted(
+    (child) => { loginChild = child; child.stdout.write("Visit https://claude.com/cai/oauth/authorize?x=1\n"); },
+    (child) => child.finish(0),
+    statusStep({ loggedIn: false }, 1),
+  );
+  const client = new ClaudeCodeClient({ spawnProcess: script.spawnProcess });
+  await client.beginLogin();
+  assert.notEqual(client.pendingLoginUrl(), null);
+
+  assert.equal((await client.logout()).ok, true);
+  assert.equal(client.pendingLoginUrl(), null);
+  assert.ok(loginChild !== null && (loginChild as FakeChildProcess).killed, "the waiting sign-in process was stopped");
+});

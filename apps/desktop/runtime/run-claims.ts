@@ -50,17 +50,23 @@ export type RunHold = {
   release(): void;
 };
 
-/** Every run's chat and Studio place, so the main process enforces one run per chat and one writing run per place. */
+/**
+ * Every run's chat and Studio place, so the main process enforces one run per
+ * chat and one writing run per place. It also counts the runs on each model
+ * provider, so signing out of a provider can wait for them.
+ */
 export class RunHolds {
   private readonly chats = new RunClaims();
   private readonly places = new RunClaims();
+  private readonly providers = new Map<string, number>();
 
   /**
    * Claim the chat and, when the run names one, its place. Nothing is held when
    * either is refused. The chat is checked first, so a run of this same chat
-   * that is still stopping is reported as that, not as another chat.
+   * that is still stopping is reported as that, not as another chat. The
+   * provider, when named, counts as in use until the hold is released.
    */
-  begin(chatId: string, instanceId: string | null): { ok: true; hold: RunHold } | { ok: false; message: string } {
+  begin(chatId: string, instanceId: string | null, provider?: string): { ok: true; hold: RunHold } | { ok: false; message: string } {
     const chat = this.chats.claim(chatId);
     if (chat === null) return { ok: false, message: CHAT_BUSY };
     let place: RunClaim | null = null;
@@ -71,6 +77,7 @@ export class RunHolds {
         return { ok: false, message: STUDIO_PLACE_BUSY };
       }
     }
+    if (provider !== undefined) this.providers.set(provider, (this.providers.get(provider) ?? 0) + 1);
     let released = false;
     const hold: RunHold = {
       holdPlace: (id) => {
@@ -81,6 +88,11 @@ export class RunHolds {
         return place !== null;
       },
       release: () => {
+        if (!released && provider !== undefined) {
+          const left = (this.providers.get(provider) ?? 1) - 1;
+          if (left > 0) this.providers.set(provider, left);
+          else this.providers.delete(provider);
+        }
         released = true;
         this.chats.release(chat);
         this.places.release(place);
@@ -92,5 +104,10 @@ export class RunHolds {
   /** Whether a run is starting or working in the chat. */
   chatBusy(chatId: string): boolean {
     return this.chats.holds(chatId);
+  }
+
+  /** Whether a run is starting or working on the provider. */
+  providerBusy(provider: string): boolean {
+    return this.providers.has(provider);
   }
 }

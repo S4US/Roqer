@@ -3,7 +3,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import { appVersionDetail, type AppUpdateState } from "../shared/app-update";
 import type { CustomConnectionView } from "../shared/custom-providers";
-import { ENABLED_PROVIDER_IDS, providerLabel, type ProviderId, type ProviderStatus } from "../shared/provider";
+import { ENABLED_PROVIDER_IDS, providerLabel, SIGN_OUT_CANCELLED, type ProviderId, type ProviderStatus } from "../shared/provider";
 import { NO_LIMITS, type ProviderLimits } from "../shared/provider-limits";
 import type { StudioStatus } from "../shared/studio-status";
 import type { WorkspaceState } from "./model";
@@ -16,7 +16,7 @@ import { McpServerSettings, type McpServerVisit } from "./mcp-server-settings";
 import { OpenCloudSettings } from "./open-cloud-settings";
 import { AssetLedgerSettings } from "./asset-ledger-settings";
 import {
-  cancelProviderLogin, getAppVersion, getProviderLimits, getProviderStatus, installProviderClient, loginProvider, openProviderLogin, submitProviderCode,
+  cancelProviderLogin, getAppVersion, getProviderLimits, getProviderStatus, installProviderClient, loginProvider, logoutProvider, openProviderLogin, submitProviderCode,
   waitForProviderLogin,
 } from "./platform";
 import { planUsageView } from "./plan-usage";
@@ -301,10 +301,16 @@ function PageHead({ title, lede }: { title: string; lede?: string }) {
 }
 
 /**
- * One subscription account: whether it is signed in, and signing in when it
- * is not, or installing the client it runs through when that is missing. Each
- * row asks about its own provider, so both accounts show their real state
- * whichever one the composer is using.
+ * Subscriptions Roqer can sign out of. Antigravity's CLI has no known way to
+ * sign out without its own interface, so it is signed out in Antigravity.
+ */
+const SIGN_OUT_PROVIDERS: ReadonlySet<ProviderId> = new Set(["chatgpt", "claude"]);
+
+/**
+ * One subscription account: whether it is signed in, signing in when it is
+ * not and out when it is, or installing the client it runs through when that
+ * is missing. Each row asks about its own provider, so both accounts show
+ * their real state whichever one the composer is using.
  */
 function AccountRow({ provider, onChanged }: { provider: ProviderId; onChanged: () => void }) {
   const [status, setStatus] = useState<ProviderStatus>({ kind: "checking", message: "Checking…" });
@@ -315,6 +321,9 @@ function AccountRow({ provider, onChanged }: { provider: ProviderId; onChanged: 
   const [installing, setInstalling] = useState(false);
   const [installNote, setInstallNote] = useState<{ message: string; command?: string } | null>(null);
   const [limits, setLimits] = useState<ProviderLimits>(NO_LIMITS);
+  const [signingOut, setSigningOut] = useState(false);
+  /** Why the last sign-out did not happen; null when there is nothing to say. */
+  const [signOutError, setSignOutError] = useState<string | null>(null);
   /** What the row says while a sign-in is open in the browser; null when none is. */
   const [waitingMessage, setWaitingMessage] = useState<string | null>(null);
   /** Bumped when a sign-in is cancelled, replaced, or settled by a pasted code, so an older wait cannot touch the row. */
@@ -337,6 +346,7 @@ function AccountRow({ provider, onChanged }: { provider: ProviderId; onChanged: 
   const connect = async () => {
     setPending(true);
     setCodeError(null);
+    setSignOutError(null);
     const result = await loginProvider(provider);
     setPending(false);
     if (!result.ok) {
@@ -390,6 +400,17 @@ function AccountRow({ provider, onChanged }: { provider: ProviderId; onChanged: 
     onChanged();
   };
 
+  const signOut = async () => {
+    setSigningOut(true);
+    setSignOutError(null);
+    const result = await logoutProvider(provider);
+    setSigningOut(false);
+    // Declining the confirmation is not an error worth showing.
+    if (!result.ok && result.message !== SIGN_OUT_CANCELLED) setSignOutError(result.message);
+    await refresh();
+    onChanged();
+  };
+
   const finish = async () => {
     setPending(true);
     const result = await submitProviderCode(provider, code);
@@ -427,7 +448,10 @@ function AccountRow({ provider, onChanged }: { provider: ProviderId; onChanged: 
           <button type="button" className="small-button" onClick={() => void cancel()}>Cancel</button>
         </>
         : canCheckOnly
-          ? <button type="button" className="small-button" disabled={installing} onClick={() => void refresh()}>Check</button>
+          ? <>
+            <button type="button" className="small-button" disabled={installing || signingOut} onClick={() => void refresh()}>Check</button>
+            {signedIn && SIGN_OUT_PROVIDERS.has(provider) && <button type="button" className="small-button" disabled={signingOut} onClick={() => void signOut()}>{signingOut ? "Signing out…" : "Sign out"}</button>}
+          </>
           : <button type="button" className="small-button" disabled={pending || status.kind === "checking"} onClick={() => void connect()}>{pending ? "Opening…" : "Connect"}</button>}
     </SettingsRow>
     {usage !== null && <div className="plan-usage">
@@ -441,6 +465,7 @@ function AccountRow({ provider, onChanged }: { provider: ProviderId; onChanged: 
       </div>)}
       <p className="plan-usage-note">{usage.footnote}</p>
     </div>}
+    {signOutError !== null && <p className="custom-message error">{signOutError}</p>}
     {/* A failed install says why and gives the vendor's command to run by hand;
         a declined one just says so. */}
     {installNote !== null && status.kind === "not-installed" && <p className={`custom-message${installNote.command === undefined ? "" : " error"}`}>

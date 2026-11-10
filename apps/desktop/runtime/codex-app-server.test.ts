@@ -307,7 +307,7 @@ test("app-server runs in Roqer's own Codex home without the bridge credential", 
 });
 
 /** An app-server that answers sign-in requests and lets a test send its notifications. */
-function loginServer(options: { signedIn?: () => boolean } = {}) {
+function loginServer(options: { signedIn?: () => boolean; logout?: (id: unknown, reply: (message: unknown) => void) => void } = {}) {
   const methods: Array<{ method: string; params: unknown }> = [];
   let send: ((message: unknown) => void) | null = null;
   const child = fakeProcess((message, reply) => {
@@ -319,6 +319,10 @@ function loginServer(options: { signedIn?: () => boolean } = {}) {
       reply({ id: message.id, result: { type: "chatgpt", loginId: "login-1", authUrl: "https://auth.openai.com/oauth/authorize?x=1" } });
     }
     if (method === "account/login/cancel") reply({ id: message.id, result: { status: "canceled" } });
+    if (method === "account/logout") {
+      if (options.logout) options.logout(message.id, reply);
+      else reply({ id: message.id, result: {} });
+    }
     if (method === "account/read") {
       reply({ id: message.id, result: { account: options.signedIn?.() ? { type: "chatgpt", planType: "plus" } : null } });
     }
@@ -376,4 +380,30 @@ test("a ChatGPT sign-in is still noticed without Codex's notice, and gives up in
   await new Promise((resolve) => setImmediate(resolve));
   assert.ok(idle.methods.some(({ method }) => method === "account/login/cancel"));
   idle.client.close();
+});
+
+test("signing out of ChatGPT asks Codex and is confirmed by reading the account again", async () => {
+  let signedIn = true;
+  const server = loginServer({
+    signedIn: () => signedIn,
+    logout: (id, reply) => { signedIn = false; reply({ id, result: {} }); },
+  });
+  assert.deepEqual(await server.client.logoutChatGpt(), { ok: true, message: "Signed out of ChatGPT." });
+  const asked = server.methods.map(({ method }) => method);
+  assert.ok(asked.indexOf("account/logout") < asked.lastIndexOf("account/read"), "the account is read after the sign-out");
+  assert.equal(server.methods.find(({ method }) => method === "account/logout")?.params, null);
+  server.client.close();
+});
+
+test("a ChatGPT sign-out that Codex refuses, or that leaves the account signed in, is not reported as done", async () => {
+  const refused = loginServer({
+    signedIn: () => true,
+    logout: (id, reply) => reply({ id, error: { code: -32000, message: "keyring locked" } }),
+  });
+  assert.deepEqual(await refused.client.logoutChatGpt(), { ok: false, message: "Codex could not sign out: keyring locked" });
+  refused.client.close();
+
+  const ignored = loginServer({ signedIn: () => true });
+  assert.deepEqual(await ignored.client.logoutChatGpt(), { ok: false, message: "Codex is still signed in to ChatGPT." });
+  ignored.client.close();
 });

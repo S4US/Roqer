@@ -487,6 +487,31 @@ export class ClaudeCodeClient implements ClaudeLauncher {
     return { ok: false, message: "The Claude sign-in did not finish. Choose Connect to try again." };
   }
 
+  /**
+   * Sign Claude Code out with `claude auth logout`. Claude Code keeps one
+   * sign-in for the user's account on this computer, so this signs out every
+   * Claude Code they run, not only Roqer's. Success is confirmed by a fresh
+   * status read, never by the exit code alone.
+   */
+  async logout(): Promise<ProviderLoginResult> {
+    this.cancelLogin();
+    this.modelListing = null;
+    this.forgetStatus();
+    try {
+      await this.collect(["auth", "logout"], STATUS_TIMEOUT_MS);
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      return { ok: false, message: `Claude Code could not sign out: ${detail}` };
+    } finally {
+      // Whatever the process did, the account may have changed.
+      this.forgetStatus();
+    }
+    const status = await this.getStatus();
+    if (status.kind === "signed-out") return { ok: true, message: "Signed out of Claude Code." };
+    if (status.kind === "signed-in") return { ok: false, message: "Claude Code is still signed in." };
+    return { ok: false, message: `Roqer could not confirm the sign-out. ${status.message}` };
+  }
+
   /** The printed fallback address of the sign-in in progress, if one is. */
   pendingLoginUrl(): string | null {
     return this.pendingLogin?.authUrl ?? null;

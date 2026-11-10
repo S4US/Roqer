@@ -289,6 +289,24 @@ export class CodexAppServerClient {
     }
   }
 
+  /**
+   * Sign out of ChatGPT. Codex deletes the sign-in stored in its home, which
+   * for Roqer is Roqer's own, so the user's ~/.codex is not touched. Success
+   * is confirmed by reading the account again.
+   */
+  async logoutChatGpt(): Promise<ProviderLoginResult> {
+    try {
+      await this.request("account/logout", null);
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      return { ok: false, message: `Codex could not sign out: ${detail}` };
+    }
+    const status = await this.getChatGptStatus();
+    if (status.kind === "signed-out") return { ok: true, message: "Signed out of ChatGPT." };
+    if (status.kind === "signed-in") return { ok: false, message: "Codex is still signed in to ChatGPT." };
+    return { ok: false, message: `Roqer could not confirm the sign-out. ${status.message}` };
+  }
+
   async listChatGptModels(): Promise<ChatGptModelCatalog> {
     const models: ChatGptModel[] = [];
     let defaultModelId: string | null = null;

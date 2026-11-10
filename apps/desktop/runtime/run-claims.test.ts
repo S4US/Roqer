@@ -111,3 +111,25 @@ test("releasing a hold twice cannot free what a later run took", () => {
   assert.equal(holds.chatBusy("chat-a"), true);
   assert.deepEqual(holds.begin("chat-b", "place-a"), { ok: false, message: STUDIO_PLACE_BUSY });
 });
+
+test("a provider is in use from a run's start until its hold is released, however often", () => {
+  const holds = new RunHolds();
+  const first = held(holds.begin("chat-a", null, "claude"));
+  const second = held(holds.begin("chat-b", null, "claude"));
+  assert.equal(holds.providerBusy("claude"), true);
+  assert.equal(holds.providerBusy("chatgpt"), false);
+
+  first.release();
+  first.release();
+  assert.equal(holds.providerBusy("claude"), true, "a second release of one hold does not free another run's use");
+
+  second.release();
+  assert.equal(holds.providerBusy("claude"), false);
+});
+
+test("a refused start does not count against its provider", () => {
+  const holds = new RunHolds();
+  held(holds.begin("chat-a", "place-a"));
+  assert.equal(holds.begin("chat-b", "place-a", "claude").ok, false);
+  assert.equal(holds.providerBusy("claude"), false);
+});

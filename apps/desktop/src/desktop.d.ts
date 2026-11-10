@@ -28,6 +28,7 @@ type ProviderConnector = {
   waitForLogin(): Promise<ProviderLoginResult>;
   openLogin(): Promise<ProviderLoginResult>;
   cancelLogin(): Promise<ProviderLoginResult>;
+  logout(): Promise<ProviderLoginResult>;
   install(): Promise<ProviderInstallResult>;
   limits(): Promise<ProviderLimits>;
   models(): Promise<ProviderModelCatalog>;
