@@ -15,6 +15,8 @@
 :root {
   font-family: "Geist Variable", "Geist", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   font-weight: 400;
+  /* No faux bold or slant: both families load upright and italic faces in
+     main.tsx, so <em> and italic syntax comments get a real italic. */
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   /* Native controls -- a select's open list, checkboxes, autofill -- are drawn
@@ -169,7 +171,9 @@ html, body, #root { width: 100%; height: 100%; margin: 0; }
 /* The theme is on the document before the first render (see main.tsx), so the
    canvas is the right colour from the first frame, whichever theme is saved. */
 body { overflow: hidden; background: var(--canvas); }
-button, textarea, select { font: inherit; }
+/* Chromium gives form controls their own font (Arial at 13.33px), so each one
+   is told to inherit Geist; a rule that sets only font-size keeps the family. */
+button, input, textarea, select { font: inherit; }
 button { cursor: pointer; }
 button:focus-visible, textarea:focus-visible, select:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .sidebar button:focus-visible { outline-color: var(--sidebar-indicator); }
