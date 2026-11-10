@@ -842,6 +842,12 @@ button:focus-visible, textarea:focus-visible, select:focus-visible, input:focus-
 .name-modal label > span { color: var(--muted); font-size: var(--type-label); font-weight: var(--weight-medium); }
 .name-modal input { width: 100%; height: 39px; padding: 0 11px; color: var(--ink); background: var(--surface-sunken); border: 1px solid var(--border); border-radius: 9px; outline: 0; font-size: var(--type-body); }
 .name-modal input:focus { background: var(--surface); border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.name-modal.instructions-modal { width: min(560px, calc(100% - 32px)); }
+.instructions-modal > label { margin-bottom: 7px; }
+.instructions-modal textarea { width: 100%; min-height: 180px; max-height: 50vh; padding: 9px 11px; color: var(--ink); background: var(--surface-sunken); border: 1px solid var(--border); border-radius: 9px; outline: 0; font: inherit; font-size: var(--type-body); line-height: 1.5; resize: vertical; }
+.instructions-modal textarea:focus { background: var(--surface); border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.instructions-count { margin-top: 6px; color: var(--faint); font-size: var(--type-meta); text-align: right; }
+.instructions-count-over { color: var(--danger); }
 .modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 20px; }
 .context-compact { display: flex; flex-direction: column; gap: 8px; margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border); color: var(--muted); font-size: 12px; line-height: 1.5; }
 .context-compact button { align-self: flex-start; height: 28px; padding: 0 10px; color: var(--ink); background: var(--surface); border: 1px solid var(--border); border-radius: 7px; font-size: 12px; font-weight: var(--weight-medium); }
@@ -1574,6 +1580,10 @@ a.small-button:focus-visible { outline: 2px solid var(--accent); outline-offset:
 .selection-chip > button:hover { color: var(--ink); background: var(--surface-raised); }
 .selection-chip > button:focus-visible { color: var(--ink); outline: 2px solid var(--accent); outline-offset: -1px; }
 .composer-card .selection-chip + textarea { padding-top: 8px; }
+.instructions-chip { cursor: pointer; padding-right: 8px; font-family: inherit; }
+.instructions-chip:hover { color: var(--ink); border-color: var(--border); }
+.instructions-chip:focus-visible { outline: 2px solid var(--accent); outline-offset: -1px; }
+.instructions-chip + .selection-chip { margin-top: 6px; }
 .message-selection { display: inline-flex; align-items: center; gap: 5px; max-width: 640px; margin-top: 6px; color: var(--faint); font-size: var(--type-meta); }
 .message-selection code { overflow: hidden; color: var(--muted); font: var(--weight-regular) 11.5px/1.4 "Geist Mono Variable", monospace; text-overflow: ellipsis; white-space: nowrap; }
 .sound-list { display: flex; flex-direction: column; gap: 8px; margin: 0; padding: 10px 12px 12px; list-style: none; }

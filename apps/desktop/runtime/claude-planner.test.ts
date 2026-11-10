@@ -1805,3 +1805,24 @@ test("a search or a page read in one of Claude's messages is read off for the ac
   assert.deepEqual(webToolUses({ type: "assistant", message: { content: "no blocks" } }), []);
   assert.deepEqual(CLAUDE_WEB_TOOLS, ["WebSearch", "WebFetch"]);
 });
+
+test("Claude's system prompt carries the project's instructions, and editing them starts a new process", async () => {
+  const sessions = new ProviderSessionStore<ClaudeSession>();
+  const provider = savingLauncher();
+  const planner = createClaudePlanner({ ...PLANNER_DEFAULTS, launcher: provider.launcher, chatId: "chat-1", sessions });
+  const { context } = makeContext(new AbortController());
+
+  await planner.run({ ...context, projectInstructions: "Use Knit for services." });
+  assert.match(provider.launches[0].systemPrompt, /<\/run-settings>\s+<project-instructions>[\s\S]*Use Knit for services\.\n<\/project-instructions>\s+<\/developer-instructions>/);
+
+  const second = { ...followUp(context, "Answer 1", "Again."), projectInstructions: "Use Knit for services." };
+  await planner.run(second);
+  assert.equal(provider.launches.length, 1, "unchanged instructions keep the process");
+
+  await planner.run({ ...followUp(second, "Answer 2", "And again."), projectInstructions: "Use Nevermore." });
+  assert.equal(provider.launches.length, 2);
+  assert.equal(provider.launches[0].child.killed, true);
+  assert.match(provider.launches[1].systemPrompt, /Use Nevermore\./);
+  assert.doesNotMatch(provider.launches[1].systemPrompt, /Use Knit/);
+  await sessions.closeAll();
+});

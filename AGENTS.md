@@ -187,11 +187,15 @@ The renderer is untrusted relative to the Electron main process.
 - Validate renderer requests and sender identity in the main process.
 - Keep MCP, provider, filesystem, and secret handling in the main process.
 - Enforce approval policy in the runtime, not only in the interface.
-- Renderer text reaches the model on exactly one channel: the prompt and the
-  mid-run note (`shared/steer.ts`), both recorded where the user can see them.
-  An answer to `ask_user` is an index into a host-controlled list, never text —
-  the "none of these" option is host-appended, and its explanation travels as a
-  note. Do not add a second text channel or widen the answer one.
+- Renderer text reaches the model on exactly one channel: the prompt, the
+  mid-run note (`shared/steer.ts`), and the project's instructions
+  (`shared/project-instructions.ts`), each bounded and visible to the user
+  where it is written. The project's instructions reach the model after
+  Roqer's own settings, labelled as the user's preferences, and they never
+  change policy, which the runtime enforces. An answer to `ask_user` is an
+  index into a host-controlled list, never text — the "none of these" option
+  is host-appended, and its explanation travels as a note. Do not add another
+  text channel or widen the answer one.
 - Unknown tools and malformed events must fail closed.
 - Irreversible actions must require explicit user confirmation in every mode but
   `Full auto`, which the user selects precisely to run a session unattended and

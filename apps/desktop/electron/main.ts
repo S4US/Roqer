@@ -67,6 +67,7 @@ import { BLENDER_OPERATION, type BlenderSettingsResult, type BlenderSettingsView
 import {
   isStudioSelectionRequest, selectionContextText, type StudioSelection, type StudioSelectionResult,
 } from "../shared/studio-selection";
+import { isProjectInstructions } from "../shared/project-instructions";
 import type { RojoPickOutcome, RojoResult } from "../shared/rojo";
 import type { ModelPreviewResult } from "../shared/model-preview";
 import type { EvidencePictureResult } from "../shared/evidence-picture";
@@ -2346,7 +2347,7 @@ function parseStartRequest(value: unknown): RunStartRequest | null {
   if (!isRecord(value)) return null;
   const {
     projectId, chatId, prompt, conversation, approvalMode, autoPlaytest, endpoint, instanceId, provider, model, effort, startId, attachmentIds,
-    includeSelection, webSearch,
+    includeSelection, webSearch, projectInstructions: rawProjectInstructions,
   } = value;
   if (typeof projectId !== "string" || projectId === "" || projectId.length > 1_000) return null;
   if (typeof chatId !== "string" || chatId === "" || chatId.length > 1_000) return null;
@@ -2355,6 +2356,11 @@ function parseStartRequest(value: unknown): RunStartRequest | null {
   if (attachmentIds !== undefined && (!Array.isArray(attachmentIds) || attachmentIds.length > 8 || !attachmentIds.every((id) => typeof id === "string" && id.length <= 100))) return null;
   if (includeSelection !== undefined && typeof includeSelection !== "boolean") return null;
   if (webSearch !== undefined && typeof webSearch !== "boolean") return null;
+  // The window sends the project's instructions as it saved them. A value the
+  // project could not have saved refuses the run rather than sending something
+  // other than what the user sees in the project's settings.
+  if (rawProjectInstructions !== undefined && !isProjectInstructions(rawProjectInstructions)) return null;
+  const projectInstructions = rawProjectInstructions;
   if (!isConversationContext(conversation)) return null;
   if (!APPROVAL_MODES.includes(approvalMode as ApprovalMode)) return null;
   if (typeof autoPlaytest !== "boolean") return null;
@@ -2379,6 +2385,7 @@ function parseStartRequest(value: unknown): RunStartRequest | null {
     attachmentIds,
     includeSelection,
     webSearch,
+    ...(projectInstructions === undefined ? {} : { projectInstructions }),
   };
 }
 

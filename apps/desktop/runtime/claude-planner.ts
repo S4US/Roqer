@@ -151,11 +151,11 @@ async function writeMcpConfig(directory: string, server: WorkbenchMcpServerHandl
   return file;
 }
 
-function systemPrompt(options: ClaudePlannerOptions, autoPlaytest: boolean, webSearch = false): string {
+function systemPrompt(options: ClaudePlannerOptions, autoPlaytest: boolean, webSearch = false, projectInstructions?: string): string {
   return [
     options.agent.systemInstructions,
     "<developer-instructions>",
-    runDeveloperInstructions(options.agent.developerInstructions, autoPlaytest, webSearch),
+    runDeveloperInstructions(options.agent.developerInstructions, autoPlaytest, webSearch, projectInstructions),
     "</developer-instructions>",
   ].join("\n\n");
 }
@@ -681,6 +681,7 @@ export class ClaudeSession {
     ref: SessionRef | null = null,
     slashCommands = false,
     webSearch = false,
+    projectInstructions?: string,
   ): Promise<ClaudeSession> {
     let session: ClaudeSession | null = null;
     const server = await startWorkbenchMcpServer({
@@ -695,7 +696,7 @@ export class ClaudeSession {
       workingDirectory = await fs.mkdtemp(path.join(os.tmpdir(), "workbench-claude-"));
       if (signal.aborted) throw new Error("Run was cancelled.");
       const configPath = await writeMcpConfig(workingDirectory, server);
-      const systemPromptPath = await writeSystemPrompt(workingDirectory, systemPrompt(options, autoPlaytest, webSearch));
+      const systemPromptPath = await writeSystemPrompt(workingDirectory, systemPrompt(options, autoPlaytest, webSearch, projectInstructions));
       if (signal.aborted) throw new Error("Run was cancelled.");
       child = await options.launcher.launch(buildArguments(options, configPath, systemPromptPath, ref, slashCommands, webSearch));
       session = new ClaudeSession(key, child, server, workingDirectory, createSkillToolRunner(options.skillLibrary));
@@ -792,13 +793,18 @@ export class ClaudeSession {
  * would carry them into a run against another.
  */
 function sessionKey(
-  options: ClaudePlannerOptions, { autoPlaytest, instanceId, webSearch }: Pick<PlannerContext, "autoPlaytest" | "instanceId" | "webSearch">,
+  options: ClaudePlannerOptions,
+  { autoPlaytest, instanceId, webSearch, projectInstructions }: Pick<PlannerContext, "autoPlaytest" | "instanceId" | "webSearch" | "projectInstructions">,
 ): string {
   return JSON.stringify([
     instanceId,
     options.model, options.supportsEffort ? options.effort : null, autoPlaytest,
     options.agent.id, options.agent.version, options.blender === true, options.referenceClips === true,
     options.externalMcp === true, webSearch === true, options.imageGeneration === true,
+    // The project's instructions are fixed when the session starts, so an
+    // edit starts a new one. None adds nothing, so a key from before they
+    // existed still matches.
+    ...(projectInstructions === undefined ? [] : [projectInstructions]),
   ]);
 }
 
@@ -1109,13 +1115,13 @@ export function createClaudePlanner(options: ClaudePlannerOptions): Planner {
         if (session === undefined && saved !== undefined) {
           session = await ClaudeSession.open(
             options, key, context.autoPlaytest, context.signal,
-            { id: saved.sessionId, resume: true, usage: saved.usage }, false, context.webSearch,
+            { id: saved.sessionId, resume: true, usage: saved.usage }, false, context.webSearch, context.projectInstructions,
           );
           opening = "resumed";
         }
         if (session === undefined) {
           const ref = registry === undefined ? null : { id: randomUUID(), resume: false };
-          session = await ClaudeSession.open(options, key, context.autoPlaytest, context.signal, ref, false, context.webSearch);
+          session = await ClaudeSession.open(options, key, context.autoPlaytest, context.signal, ref, false, context.webSearch, context.projectInstructions);
         }
         if (settled) return await completion.promise;
         if (context.signal.aborted) throw new Error("Run was cancelled.");

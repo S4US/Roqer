@@ -439,3 +439,38 @@ test("a web search step is permitted only in a home with search on, and its quer
   assert.equal(antigravitySearchQuery(searching), "flipbook particle roblox");
   assert.equal(antigravitySearchQuery(step("search_web", {})), "the web");
 });
+
+test("an Antigravity session opens with the project's instructions, and editing them starts a new session", async () => {
+  const sessions = new ProviderSessionStore<AntigravitySession>();
+  let turn = 0;
+  const inputs: Array<Record<string, unknown>> = [];
+  const fake = fakeLauncher((child) => child.writeLine(INIT), (child, message) => {
+    inputs.push(message);
+    turn += 1;
+    child.writeLine(reply(turn * 10, `Answer ${turn}.`));
+    child.writeLine({ event: "result", result: { status: "SUCCESS", response: `Answer ${turn}.`, usage: { input_tokens: 1, output_tokens: 1, thinking_tokens: 0, cache_read_tokens: 0 } } });
+  });
+  const options = { ...BASE_OPTIONS, launcher: fake.launcher, sessions, chatId: "chat-1" };
+  const history = (answer: string, ...earlier: Array<{ role: "user" | "assistant"; text: string }>) => ({
+    messages: [...earlier, { role: "user" as const, text: "Read Main and tell me what it does" }, { role: "assistant" as const, text: answer }],
+    truncated: false,
+  });
+
+  await createAntigravityPlanner(options).run(makeContext(new AbortController(), { projectInstructions: "Use Knit for services." }).context);
+  assert.match(firstText(inputs[0]), /<project-instructions>[\s\S]*Use Knit for services\.\n<\/project-instructions>[\s\S]*<\/developer-instructions>/);
+
+  await createAntigravityPlanner(options).run(makeContext(new AbortController(), {
+    prompt: "Read Main and tell me what it does", conversation: history("Answer 1."), projectInstructions: "Use Knit for services.",
+  }).context);
+  assert.equal(fake.launches.length, 1, "unchanged instructions keep the session");
+
+  await createAntigravityPlanner(options).run(makeContext(new AbortController(), {
+    prompt: "And then?",
+    conversation: history("Answer 2.", { role: "user", text: "Read Main and tell me what it does" }, { role: "assistant", text: "Answer 1." }),
+    projectInstructions: "Use Nevermore.",
+  }).context);
+  assert.equal(fake.launches.length, 2);
+  assert.match(firstText(inputs[2]), /Use Nevermore\./);
+  assert.doesNotMatch(firstText(inputs[2]), /Use Knit/);
+  sessions.closeAll();
+});

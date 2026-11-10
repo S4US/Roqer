@@ -14,8 +14,10 @@ import {
   deleteChat,
   deleteProject,
   normalizeWorkspace,
+  projectInstructions,
   renameChat,
   renameProject,
+  setProjectInstructions,
   setChatStudioInstance,
   withdrawMessage,
 } from "./model";
@@ -472,4 +474,34 @@ test("web search is off unless the user turned it on, and a saved choice to turn
   delete older.webSearch;
   assert.equal(normalizeWorkspace({ ...workspace, preferences: older }).preferences.webSearch, false);
   assert.equal(normalizeWorkspace({ ...workspace, preferences: { ...workspace.preferences, webSearch: "yes" } }).preferences.webSearch, false);
+});
+
+import { malformedWorkspace } from "../shared/workspace-validation";
+
+test("a project keeps the instructions the user wrote, and clearing them leaves none stored", () => {
+  const initial = createInitialWorkspace();
+  const projectId = initial.projects[0].id;
+  const set = setProjectInstructions(initial, projectId, "  Use Knit for services.\n");
+  assert.equal(projectInstructions(set, projectId), "Use Knit for services.");
+  assert.equal(set.projects[0].updatedAt, initial.projects[0].updatedAt, "writing instructions is not work on the place");
+  assert.deepEqual(normalizeWorkspace(JSON.parse(JSON.stringify(set))), set, "they survive a save and a load");
+
+  const cleared = setProjectInstructions(set, projectId, "  ");
+  assert.equal(projectInstructions(cleared, projectId), undefined);
+  assert.equal("instructions" in cleared.projects[0], false);
+
+  const refused = setProjectInstructions(set, projectId, "x".repeat(8_001));
+  assert.equal(refused, set, "text a run could not send leaves the project as it was");
+  assert.equal(projectInstructions(initial, "missing"), undefined);
+});
+
+test("a workspace from before project instructions loads with none, and a damaged value needs recovery", () => {
+  const initial = createInitialWorkspace();
+  assert.equal(malformedWorkspace(initial), false);
+  assert.equal(normalizeWorkspace(initial).projects[0].instructions, undefined);
+  const damaged = { ...initial, projects: [{ ...initial.projects[0], instructions: 7 }] };
+  assert.equal(malformedWorkspace(damaged), true, "normalizing would drop text the user wrote");
+  const tooLong = { ...initial, projects: [{ ...initial.projects[0], instructions: "x".repeat(8_001) }] };
+  assert.equal(malformedWorkspace(tooLong), true);
+  assert.equal(malformedWorkspace({ ...initial, projects: [{ ...initial.projects[0], instructions: "Use Knit." }] }), false);
 });

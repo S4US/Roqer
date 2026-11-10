@@ -1955,3 +1955,15 @@ test("the run's usage sums every response's count, cached input taken out of the
   assert.equal(tally.add({ inputTokens: -1, outputTokens: 1 }), null);
   assert.deepEqual(tally.add({ inputTokens: 10, outputTokens: 1 }), { inputTokens: 10, outputTokens: 1, requests: 1 });
 });
+test("a kept Custom conversation sends the project's instructions as they are now, not as they were when it started", async () => {
+  const sessions = new ProviderSessionStore<AgentLoopSession>();
+  const { context } = makeContext(new AbortController());
+  const transport = gateway([DONE("Done 1."), DONE("Done 2.")]);
+  await keepingPlanner(transport, sessions).run({ ...context, projectInstructions: "Use Knit for services." });
+  await keepingPlanner(gateway([]), sessions).run({ ...followUp(context, "Done 1.", "Again."), projectInstructions: "Use Nevermore." });
+
+  assert.equal(transport.requests.length, 2, "the conversation was kept");
+  assert.match(transport.requests[0].instructions.developer ?? "", /<project-instructions>[\s\S]*Use Knit for services\./);
+  assert.match(transport.requests[1].instructions.developer ?? "", /Use Nevermore\./);
+  assert.doesNotMatch(transport.requests[1].instructions.developer ?? "", /Use Knit/);
+});

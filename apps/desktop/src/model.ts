@@ -17,6 +17,7 @@ export type Theme = "light" | "dark";
 export type { ApprovalMode } from "../shared/policy";
 import type { ApprovalMode } from "../shared/policy";
 import { isChatCompaction, type ChatCompaction } from "../shared/chat-compaction";
+import { isProjectInstructions, normalizeProjectInstructions } from "../shared/project-instructions";
 
 export type AssetAttachment = {
   id: string;
@@ -93,6 +94,12 @@ export type Project = {
   name: string;
   createdAt: string;
   updatedAt: string;
+  /**
+   * Standing instructions the user wrote for every chat in this project, sent
+   * to the model with each run (see `shared/project-instructions.ts`). Absent
+   * when there are none; never an empty string.
+   */
+  instructions?: string;
   chats: Chat[];
 };
 
@@ -374,6 +381,9 @@ export function normalizeWorkspace(value: unknown, themeFallback: Theme = "dark"
       name: project.id === DEFAULT_PROJECT_ID && project.name === "DEFAULT" ? "Default" : project.name,
       createdAt: project.createdAt,
       updatedAt: project.updatedAt,
+      // Additive: a workspace saved before these existed has none. A damaged
+      // value is caught by `malformedWorkspace` before it gets here.
+      ...(isProjectInstructions(project.instructions) ? { instructions: project.instructions } : {}),
       chats,
     }];
   });
@@ -532,6 +542,32 @@ export function renameProject(state: WorkspaceState, projectId: string, name: st
       ? { ...project, name: trimmed }
       : project),
   };
+}
+
+/**
+ * Replace a project's instructions. Empty text removes them. Text a run could
+ * not send (over the bound, or with control characters) leaves the project
+ * unchanged; the editor refuses it before it gets here.
+ *
+ * Like renaming, this leaves `updatedAt` alone: it is not work on the place.
+ */
+export function setProjectInstructions(state: WorkspaceState, projectId: string, text: string): WorkspaceState {
+  const instructions = normalizeProjectInstructions(text);
+  if (instructions === null && text.trim() !== "") return state;
+  return {
+    ...state,
+    projects: state.projects.map((project) => {
+      if (project.id !== projectId) return project;
+      const rest = { ...project };
+      delete rest.instructions;
+      return instructions === null ? rest : { ...rest, instructions };
+    }),
+  };
+}
+
+/** The instructions a run in this project sends, or undefined for none. */
+export function projectInstructions(state: WorkspaceState, projectId: string): string | undefined {
+  return state.projects.find((project) => project.id === projectId)?.instructions;
 }
 
 /** The place a chat works in: its own choice, or the last one picked anywhere. */

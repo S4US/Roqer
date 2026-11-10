@@ -45,6 +45,12 @@ export type RunRequest = {
    * in records written before the switch existed.
    */
   webSearch?: boolean;
+  /**
+   * The instructions the user wrote for the chat's project, already
+   * normalized (see `shared/project-instructions.ts`). Absent when the project
+   * has none.
+   */
+  projectInstructions?: string;
   /** Loopback MCP endpoint, e.g. http://127.0.0.1:58741 */
   endpoint: string;
   /** Studio instance to target, or null to let the server resolve a default. */

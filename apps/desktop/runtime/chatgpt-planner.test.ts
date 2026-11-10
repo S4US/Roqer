@@ -834,10 +834,12 @@ function sessionRun(
   model = "gpt-test",
   instanceId: string | null = null,
   runUsage: PlannerContext["runUsage"] = () => undefined,
+  projectInstructions?: string,
 ) {
   const context: PlannerContext = {
     prompt, conversation: { messages, truncated: false }, images: [],
     instanceId, autoPlaytest: false, signal: new AbortController().signal,
+    ...(projectInstructions === undefined ? {} : { projectInstructions }),
     progress: () => undefined, outputTokens: () => undefined, contextUsage: () => undefined, runUsage, status: () => undefined, say: () => undefined,
     recordChange: () => undefined, recordEvidence: () => undefined, setTasks: () => undefined,
     tasks: () => [], changes: () => [], evidence: () => [], decisions: () => [], takeSteers: () => [],
@@ -1165,4 +1167,22 @@ test("a Codex web search item passes only when the user turned search on, and is
   assert.equal(codexWebSearch({ method: "item/started", params: { item: { type: "commandExecution" } } }), null);
   // Search being on does not let anything else through.
   assert.equal(disallowedCodexItem({ method: "item/started", params: { item: { type: "commandExecution" } } }, { webSearch: true }), "shell");
+});
+
+test("a Codex thread's developer instructions carry the project's instructions, and editing them starts a new thread", async () => {
+  const appServer = new AnsweringAppServer();
+  const sessions = new ProviderSessionStore<CodexThread>();
+  const history = [{ role: "user" as const, text: "Build the shop." }, { role: "assistant" as const, text: "Answer 1" }];
+
+  await sessionRun(appServer, sessions, "Build the shop.", [], "gpt-test", null, undefined, "Use Knit for services.");
+  await sessionRun(appServer, sessions, "Add a button.", history, "gpt-test", null, undefined, "Use Knit for services.");
+  assert.equal(appServer.threadsStarted, 1, "unchanged instructions keep the thread");
+
+  await sessionRun(appServer, sessions, "Add a sign.", [...history, { role: "user", text: "Add a button." }, { role: "assistant", text: "Answer 2" }], "gpt-test", null, undefined, "Use Nevermore.");
+  assert.equal(appServer.threadsStarted, 2);
+  const developer = appServer.requests
+    .filter((request) => request.method === "thread/start")
+    .map((request) => (request.params as { developerInstructions: string }).developerInstructions);
+  assert.match(developer[0], /<project-instructions>[\s\S]*Use Knit for services\.\n<\/project-instructions>$/);
+  assert.match(developer[1], /Use Nevermore\./);
 });
