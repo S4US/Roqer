@@ -283,21 +283,23 @@ const APPROVAL_CHOICES: ReadonlyArray<{ value: ApprovalMode; label: string; deta
 ];
 
 /** How a run behaves: what it may change without asking, and whether it playtests its own work. */
-export function RunMenu({ approvalMode, autoPlaytest, webSearch, disabled, onApprovalMode, onAutoPlaytest, onWebSearch }: {
+export function RunMenu({ approvalMode, autoPlaytest, webSearch, review, disabled, onApprovalMode, onAutoPlaytest, onWebSearch, onReview }: {
   approvalMode: ApprovalMode;
   autoPlaytest: boolean;
   webSearch: boolean;
+  review: boolean;
   disabled: boolean;
   onApprovalMode: (mode: ApprovalMode) => void;
   onAutoPlaytest: (on: boolean) => void;
   onWebSearch: (on: boolean) => void;
+  onReview: (on: boolean) => void;
 }) {
   const tone = approvalMode === "Full auto" ? " full-auto" : approvalMode === "Auto approve" ? " auto" : "";
   return <ComposerMenu
     className={`run-menu${tone}`}
     label="How the run behaves"
     disabled={disabled}
-    trigger={<span className="composer-menu-label"><ShieldCheck size={15} aria-hidden="true" />{approvalMode}<em>{autoPlaytest ? "Playtest on" : "Playtest off"}{webSearch ? " · Web on" : ""}</em></span>}
+    trigger={<span className="composer-menu-label"><ShieldCheck size={15} aria-hidden="true" />{approvalMode}<em>{autoPlaytest ? "Playtest on" : "Playtest off"}{webSearch ? " · Web on" : ""}{review ? " · Review on" : ""}</em></span>}
   >
     {(close) => <>
       <span className="model-menu-group-label">Before changing your place</span>
@@ -320,6 +322,10 @@ export function RunMenu({ approvalMode, autoPlaytest, webSearch, disabled, onApp
       <div className="run-menu-playtest">
         <span className="run-choice-text"><strong>Web search</strong><span>Let the model search the web through your provider. Each search shows in the activity; what it reads is third-party text, and in Full auto nothing stops an action a page leads to.</span></span>
         <SettingsSwitch label="Web search" checked={webSearch} onChange={onWebSearch} />
+      </div>
+      <div className="run-menu-playtest">
+        <span className="run-choice-text"><strong>Review the result</strong><span>After a run that changed your place, the same model checks the result in a second pass that can only read. It uses more of your tokens or allowance, and its findings are an opinion, not something Roqer verified.</span></span>
+        <SettingsSwitch label="Review the result" checked={review} onChange={onReview} />
       </div>
     </>}
   </ComposerMenu>;

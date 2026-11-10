@@ -3,7 +3,7 @@ import test from "node:test";
 import { evaluateCompletion, REVISION_AFTER_LABEL, type CompletionVerification } from "../shared/completion";
 import type { RunTask } from "../shared/tasks";
 import type {
-  RunChange, RunEvent, RunEventBody, RunEvidence, RunOutcome, RunUsage, ToolProposal,
+  RunChange, RunEvent, RunEventBody, RunEvidence, RunOutcome, RunReview, RunUsage, ToolProposal,
 } from "../shared/run-events";
 import {
   BLENDER_MODEL_LABEL, BLENDER_PREVIEW_TITLE, isRunRecord, MAX_EVIDENCE_IMAGE_CHARACTERS, MAX_TRANSCRIPT_ENTRIES,
@@ -37,6 +37,7 @@ type CompletedBody = {
   summary: string;
   verification?: CompletionVerification;
   usage?: RunUsage;
+  review?: RunReview;
 };
 
 type TestEventBody = Exclude<RunEventBody, { type: "run-completed" }> | CompletedBody;
@@ -87,6 +88,30 @@ const started: RunEventBody = {
   effort: "medium",
   planner: "inspection",
 };
+
+test("a review arrives with the run's end and is kept on its record, apart from the gate's verdict", () => {
+  const review: RunReview = {
+    verdict: "issues",
+    findings: [{ severity: "high", target: "Workspace.Door", detail: "It never closes again." }],
+    planner: "claude-code",
+    model: "Claude Sonnet",
+    usage: { inputTokens: 900, outputTokens: 40 },
+  };
+  const live = fold(stream(started, { type: "message-delta", text: "Done." }));
+  assert.equal(live.review, null);
+
+  const view = fold(stream(started, { type: "message-delta", text: "Done." }, { type: "run-completed", outcome: "completed", summary: "Done.", review }));
+  assert.deepEqual(view.review, review);
+  assert.equal(view.verification?.verified, true, "a review with findings does not make the gate's verdict worse");
+  assert.deepEqual(runGateIssues(view), []);
+
+  const record = toRunRecord(view);
+  assert.ok(isRunRecord(record));
+  assert.deepEqual(record?.review, review);
+
+  const plain = toRunRecord(fold(stream(started, { type: "run-completed", outcome: "completed", summary: "Done." })));
+  assert.equal(plain !== null && "review" in plain, false, "a run with no review records none");
+});
 
 /**
  * The completion card is a receipt for work. A greeting is not work, and

@@ -72,6 +72,7 @@ import {
   elapsedLabel, MAX_VISIBLE_ALERTS, outputTokensLabel, type ActivityNode, type StepStatus,
 } from "./activity-model";
 import { CompletionLine } from "./completion-line";
+import { ReviewCard, PromptDraftContext } from "./review-card";
 import {
   CONVERSATION_WINDOW_SIZE, earlierConversationWindowStart, initialConversationWindowStart,
 } from "./conversation-window";
@@ -295,6 +296,12 @@ function App() {
     observer.observe(dock);
     return () => observer.disconnect();
   }, [composerExpanded]);
+  // A review's findings go into the box for the person to read, change and
+  // send themselves; after words already there, never in place of them.
+  const draftPrompt = useCallback((text: string) => {
+    setComposer((current) => current.trim() === "" ? text : `${current.trimEnd()}\n\n${text}`);
+    window.requestAnimationFrame(() => composerRef.current?.focus());
+  }, []);
   // Choosing to explain moves the person's attention from the card to the
   // box, so the box takes focus rather than waiting to be clicked.
   useEffect(() => {
@@ -905,6 +912,7 @@ function App() {
       approvalMode: next.preferences.approvalMode,
       autoPlaytest: next.preferences.autoPlaytest,
       webSearch: next.preferences.webSearch,
+      review: next.preferences.review,
       endpoint: next.preferences.mcpEndpoint,
       instanceId: (() => {
         const target = chatStudioTarget(next, projectId, chatId);
@@ -1793,7 +1801,7 @@ function App() {
           <button onClick={() => void exportChats(storageRecovery.required ? undefined : workspace)}>Export a copy</button>
         </div>}
 
-        <div className="conversation-scroll" ref={scrollRef} onScroll={onConversationScroll}><div className="conversation" ref={conversationRef}>
+        <div className="conversation-scroll" ref={scrollRef} onScroll={onConversationScroll}><div className="conversation" ref={conversationRef}><PromptDraftContext.Provider value={draftPrompt}>
           {selectedChat && selectedChat.messages.length > 0
             ? <ConversationMessages
               key={selectedChat.id}
@@ -1810,7 +1818,7 @@ function App() {
             : runStarting && <div className="mock-run"><section className="message assistant-message"><div className="message-content">
               <TypingIndicator done={false} />
             </div></section></div>}
-        </div></div>
+        </PromptDraftContext.Provider></div></div>
 
         <div className={`composer-dock${composerExpanded ? " expanded" : ""}${onHome ? " home" : ""}`} ref={dockRef}>
           {pendingApproval && <div className="approval-dock"><ApprovalCard pending={pendingApproval} onApprove={() => answerApproval("approved")} onReject={() => answerApproval("rejected")} /></div>}
@@ -1944,6 +1952,8 @@ function App() {
                 onAutoPlaytest={(on) => updatePreferences({ autoPlaytest: on })}
                 webSearch={workspace.preferences.webSearch}
                 onWebSearch={(on) => updatePreferences({ webSearch: on })}
+                review={workspace.preferences.review}
+                onReview={(on) => updatePreferences({ review: on })}
               />
               <div className="toolbar-spacer" />
               {composerHint !== null && <span className="composer-hint">{composerHint}</span>}
@@ -2371,6 +2381,7 @@ function LiveRun({ view, steps, nodes, thinking, onOpenInStudio }: { view: RunVi
       summary={view.outcome === "completed" && answered ? "" : view.summary}
       issues={runGateIssues(view)}
     />}
+    {view.review !== null && <ReviewCard review={view.review} latest />}
     {!running && <CompletionLine metadata={completionNote} usage={view.usage ?? undefined} />}
     <RunNotes notes={view.notes} delivered={view.notesDelivered} running={running} />
     {view.desynchronized && <p className="run-warning"><AlertCircle size={14} /> Some updates were missed, so this timeline may be incomplete.</p>}
@@ -3008,6 +3019,7 @@ function RunRecordView({ record, text, latest, onOpenInStudio }: { record: RunRe
       summary={record.outcome === "completed" ? "" : countLine(record.toolCalls.length, record.changes.length, failed)}
       issues={recordGateIssues(record)}
     />}
+    {record.review !== undefined && <ReviewCard review={record.review} latest={latest} />}
     <CompletionLine metadata={outcomeNote} usage={record.usage} />
     {/* Notes the run ended before reading stay visible, so they can be sent again. */}
     {record.notes !== undefined && record.notesDelivered !== undefined && record.notesDelivered < record.notes.length &&

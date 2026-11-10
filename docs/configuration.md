@@ -352,6 +352,45 @@ account, and Codex's per-thread switch has not been checked against every
 Codex version, so a Codex that ignores it simply leaves the model without
 search.
 
+### Review the result
+
+The run menu beside the composer has a Review the result switch, off by
+default. With it on, a run that completed and changed your place is followed
+by a review pass: a second run on the same provider and model, with a
+conversation of its own, that decides whether the result does what you asked.
+
+The reviewer does not see the first run's conversation. Roqer gives it a
+packet written from its own record: your request, your notes and answers, the
+task list, each recorded change with its diff, the recorded evidence, the
+completion gate's verdict, and the reply. It then checks the work in Studio.
+
+What a review may do is enforced by Roqer, not asked of the model:
+
+- It is read-only in every mode, Full auto included. Every operation that
+  changes the place, starts a playtest, runs Luau, uploads or spends is
+  refused, and nothing asks you to approve one.
+- It may make at most 24 Studio calls and take at most 10 minutes. It has no
+  Blender, image, reference clip or MCP server tools, and it cannot ask you a
+  question.
+- Nothing it does is added to the run's record. The reply, the tasks, the
+  changes, the evidence and the completion gate's verdict are the first run's.
+
+The result is a card under the run: no problems, up to five findings each with
+a severity and a place, or a review that did not finish. A review is a model's
+opinion. Roqer does not verify it, so the card never says "verified" and
+"Applied and verified" keeps meaning what Roqer itself checked. A reply Roqer
+cannot read as a verdict is shown as a review that did not finish, never as a
+pass. Stop ends the review and keeps the run's result.
+
+Nothing fixes a finding by itself. Put these in the message box writes the
+findings into the composer for you to read, change and send as your next
+message.
+
+A review costs what a second, shorter run costs, from the same tokens or
+subscription allowance; the card shows what it used when the provider reports
+it. It is skipped when the run changed nothing, failed, or was stopped. It
+judges gameplay from the recorded evidence, since it cannot playtest.
+
 ### Links you give
 
 A link you write in a message, in a note during a run, or in an earlier message

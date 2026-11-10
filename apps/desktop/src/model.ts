@@ -106,6 +106,12 @@ export type Preferences = {
    * model's words out of the machine.
    */
   webSearch: boolean;
+  /**
+   * Whether a run that changed something is reviewed by a second, read-only
+   * model run before it ends. Off by default: a review spends the user's
+   * tokens or subscription allowance, and takes time.
+   */
+  review: boolean;
   mcpEndpoint: string;
   /**
    * The Studio place runs go to, or `null` to use whichever connected first.
@@ -233,6 +239,7 @@ export function createInitialWorkspace(theme: Theme = "dark"): WorkspaceState {
       approvalMode: DEFAULT_APPROVAL_MODE,
       autoPlaytest: true,
       webSearch: false,
+      review: false,
       mcpEndpoint: DEFAULT_MCP_ENDPOINT,
       studioInstanceId: null,
       discordPresence: true,
@@ -389,6 +396,8 @@ export function normalizeWorkspace(value: unknown, themeFallback: Theme = "dark"
     // Off unless the user turned it on: a workspace saved before the switch
     // existed never agreed to send anything to a search engine.
     webSearch: rawPreferences.webSearch === true,
+    // Off unless the user turned it on: a review costs what a second run costs.
+    review: rawPreferences.review === true,
     mcpEndpoint: typeof rawPreferences.mcpEndpoint === "string" && rawPreferences.mcpEndpoint !== ""
       ? rawPreferences.mcpEndpoint
       : DEFAULT_MCP_ENDPOINT,

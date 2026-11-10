@@ -463,6 +463,17 @@ test("the Studio selection is off unless the user turned it on, and a saved choi
   assert.equal(normalizeWorkspace({ ...workspace, preferences: { ...workspace.preferences, useStudioSelection: "yes" } }).preferences.useStudioSelection, false);
 });
 
+test("the review pass is off unless the user turned it on, and a saved choice to turn it on is kept", () => {
+  const workspace = normalizeWorkspace(createInitialWorkspace());
+  assert.equal(workspace.preferences.review, false);
+  const on = normalizeWorkspace({ ...workspace, preferences: { ...workspace.preferences, review: true } });
+  assert.equal(on.preferences.review, true);
+  const older: Record<string, unknown> = { ...workspace.preferences };
+  delete older.review;
+  assert.equal(normalizeWorkspace({ ...workspace, preferences: older }).preferences.review, false);
+  assert.equal(normalizeWorkspace({ ...workspace, preferences: { ...workspace.preferences, review: "yes" } }).preferences.review, false);
+});
+
 test("web search is off unless the user turned it on, and a saved choice to turn it on is kept", () => {
   const workspace = normalizeWorkspace(createInitialWorkspace());
   assert.equal(workspace.preferences.webSearch, false);

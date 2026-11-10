@@ -32,6 +32,21 @@ test("client agent bundle separates system and developer instructions and catalo
   assert.ok(runtime.provenance.skillPack.customizedSkills.includes("roblox-ui-design"));
 });
 
+test("the reviewer is the same agent with the reviewing brief and an identity of its own", async () => {
+  const runtime = await loadAgentRuntime(agentRoot);
+  const { definition, reviewer } = runtime;
+  // A provider keys a kept conversation by the agent's id, so a different id
+  // is what stops a working conversation from being continued as a review.
+  assert.equal(reviewer.id, "studio-workbench-reviewer");
+  assert.notEqual(reviewer.id, definition.id);
+  assert.equal(reviewer.systemInstructions, definition.systemInstructions, "the same rules about what is data and who instructs");
+  assert.match(reviewer.developerInstructions, /^# Reviewing a finished run/);
+  assert.match(reviewer.developerInstructions, /This review is read-only, and Roqer enforces that/);
+  assert.match(reviewer.developerInstructions, /"verdict": "pass"/);
+  assert.match(reviewer.developerInstructions, /Available client skills/);
+  assert.doesNotMatch(reviewer.developerInstructions, /Inspect before changing anything/, "none of the working brief");
+});
+
 /**
  * The bridge contract used to live only in `roblox-studio-mcp`, which the
  * instructions required loading for any Studio task. That cost a model turn at
@@ -110,6 +125,7 @@ test("instructions and skills name only operations that exist", async () => {
   const files = [
     path.join(agentRoot, "system.md"),
     path.join(agentRoot, "developer.md"),
+    path.join(agentRoot, "reviewer.md"),
     ...await markdownFiles(path.join(agentRoot, "skills")),
   ];
 

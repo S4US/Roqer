@@ -13,6 +13,12 @@ export type AgentDefinition = Readonly<{
 
 export type AgentRuntime = Readonly<{
   definition: AgentDefinition;
+  /**
+   * The same agent as a reviewer of a finished run: the same system rules and
+   * skill catalog, with the reviewing brief in place of the working one. Its
+   * own id, so no provider continues a working conversation as a review.
+   */
+  reviewer: AgentDefinition;
   skillLibrary: SkillLibrary;
   provenance: AgentProvenance;
 }>;
@@ -105,9 +111,10 @@ export async function loadAgentRuntime(root: string): Promise<AgentRuntime> {
   const manifestValue: unknown = JSON.parse(await fs.readFile(path.join(root, "manifest.json"), "utf8"));
   if (!isManifest(manifestValue)) throw new Error("The client agent manifest is invalid.");
 
-  const [systemSource, developerSource, skillLibrary, licenseNotice] = await Promise.all([
+  const [systemSource, developerSource, reviewerSource, skillLibrary, licenseNotice] = await Promise.all([
     fs.readFile(path.join(root, "system.md"), "utf8"),
     fs.readFile(path.join(root, "developer.md"), "utf8"),
+    fs.readFile(path.join(root, "reviewer.md"), "utf8"),
     openSkillLibrary(path.join(root, "skills")),
     fs.readFile(bundleFile(root, manifestValue.skillPack.license.notice), "utf8"),
   ]);
@@ -117,6 +124,10 @@ export async function loadAgentRuntime(root: string): Promise<AgentRuntime> {
     "Resolved developer instructions",
     `${developerBase}\n\n${catalogInstructions(skillLibrary.catalog)}`,
   );
+  const reviewerInstructions = boundedInstructions(
+    "Resolved reviewer instructions",
+    `${boundedInstructions("Reviewer instructions", reviewerSource)}\n\n${catalogInstructions(skillLibrary.catalog)}`,
+  );
 
   return Object.freeze({
     definition: Object.freeze({
@@ -124,6 +135,13 @@ export async function loadAgentRuntime(root: string): Promise<AgentRuntime> {
       version: manifestValue.version,
       systemInstructions,
       developerInstructions,
+      skills: skillLibrary.catalog,
+    }),
+    reviewer: Object.freeze({
+      id: `${manifestValue.id}-reviewer`,
+      version: manifestValue.version,
+      systemInstructions,
+      developerInstructions: reviewerInstructions,
       skills: skillLibrary.catalog,
     }),
     skillLibrary,

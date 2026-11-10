@@ -1701,6 +1701,26 @@ a.small-button:focus-visible { outline: 2px solid var(--accent); outline-offset:
 .run-outcome[data-outcome="cancelled"] > p, .run-outcome[data-outcome="refused"] > p { color: var(--muted); }
 .run-outcome .gate-issues { margin: 5px 0 0 20px; }
 
+/* The review pass: a model's opinion of the result, set apart from what the host checked above it. */
+.run-review { margin-top: 12px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px; font-size: var(--type-meta); animation: enter .22s cubic-bezier(.22, .8, .26, 1) both; }
+.run-review-title { display: flex; align-items: center; gap: 6px; margin: 0; color: var(--ink); }
+.run-review-title > svg { flex: none; }
+.run-review-title strong { font-weight: var(--weight-medium); }
+.run-review[data-verdict="passed"] .run-review-title { color: var(--success); }
+.run-review[data-verdict="issues"] .run-review-title { color: var(--warning); }
+.run-review[data-verdict="incomplete"] .run-review-title { color: var(--muted); }
+.run-review-byline, .run-review-usage { margin: 3px 0 0; color: var(--muted); }
+.run-review-summary { margin: 7px 0 0; color: var(--ink); }
+.run-review-findings { margin: 8px 0 0; padding: 0; list-style: none; display: grid; gap: 7px; }
+.run-review-findings li { display: flex; flex-wrap: wrap; align-items: baseline; gap: 3px 7px; }
+.run-review-findings code { overflow-wrap: anywhere; }
+.run-review-detail { flex: 1 1 100%; color: var(--ink); overflow-wrap: anywhere; }
+.run-review-severity { padding: 0 6px; border: 1px solid currentColor; border-radius: 999px; font-weight: var(--weight-medium); color: var(--muted); }
+.run-review-severity[data-severity="high"] { color: var(--danger); }
+.run-review-severity[data-severity="medium"] { color: var(--warning); }
+.run-review-action { display: inline-flex; align-items: center; gap: 6px; margin-top: 10px; }
+@media (prefers-reduced-motion: reduce) { .run-review { animation: fade .16s ease both; } }
+
 /* Activity: a timeline. Failures stay under the closed section, and say when there are more. */
 .activity-timeline { padding: 8px 14px 10px; }
 .more-failed { height: 26px; margin-left: 21px; padding: 0 6px; color: var(--accent); background: transparent; border: 0; border-radius: 6px; font-size: 12.5px; font-weight: var(--weight-medium); }

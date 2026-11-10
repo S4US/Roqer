@@ -72,6 +72,24 @@ test("a finished run recovered from the journal keeps its usage, and a damaged o
   } finally { await fixture.cleanup(); }
 });
 
+test("a finished run recovered from the journal keeps its review", async () => {
+  const fixture = await temporaryJournal();
+  const review = {
+    verdict: "issues" as const, findings: [{ severity: "medium" as const, detail: "A debug print is left in Shop." }],
+    planner: "claude-code", model: "m",
+  };
+  try {
+    await fixture.journal.start("run-1", { projectId: "project", chatId: "chat" }, "make it", "Ask first");
+    fixture.journal.record(event({
+      type: "run-completed", runId: "run-1", seq: 1, at: "2026-01-01T00:00:00.000Z", outcome: "completed", summary: "Done.",
+      verification: { verified: true, issues: [] }, review,
+    }));
+    await fixture.journal.drain();
+    const [recovered] = await new RunJournal(fixture.root).recover();
+    assert.deepEqual(recovered.message.run?.review, review);
+  } finally { await fixture.cleanup(); }
+});
+
 test("a recovered run keeps the user's notes and answers, and its newest changes", async () => {
   const fixture = await temporaryJournal();
   const at = "2026-01-01T00:00:00.000Z";

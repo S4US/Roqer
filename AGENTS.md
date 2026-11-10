@@ -199,6 +199,12 @@ The renderer is untrusted relative to the Electron main process.
   tool with no risk classification still stops for the user in `Full auto`.
 - Cancellation must stop in-flight work and prevent later tool calls from the
   cancelled run.
+- The review pass is a second planner run that only reads. The run engine
+  decides every call it makes as `Read only` decides it, in every mode, bounds
+  its calls and its time, and keeps what it does out of the run's record. Its
+  verdict is a model's opinion: it never changes the completion gate's verdict,
+  and a reply the host cannot read as a verdict is recorded as incomplete,
+  never as a pass.
 
 Persisted state is a versioned data contract. Use explicit migrations, atomic
 writes, validation on load, and recovery that preserves damaged data for

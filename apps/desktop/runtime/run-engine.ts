@@ -27,6 +27,7 @@ import type {
   RunFailure,
   RunOutcome,
   RunRequest,
+  RunReview,
   RunUsage,
   ToolProposal,
 } from "../shared/run-events";
@@ -41,7 +42,11 @@ import { isAnswerIndex, isEscapeAnswer, MAX_QUESTIONS_PER_RUN, QUESTION_ESCAPE_O
 import type { RunDecision } from "../shared/run-digest";
 import { MAX_STEERS_PER_RUN, normalizeSteer } from "../shared/steer";
 import type { RunTask } from "../shared/tasks";
+import { MAX_REVIEW_REASON_CHARS, parseReviewVerdict } from "../shared/review";
 import { summarizeToolOutcome } from "./result-summary";
+import {
+  buildReviewPacket, REVIEW_CALL_BUDGET, REVIEW_TIME_LIMIT_MS, reviewBudgetOutcome, reviewConversation,
+} from "./review";
 
 /** Thrown by `PlannerContext.call` when the run was cancelled. */
 export class RunCancelledError extends Error {
@@ -228,6 +233,15 @@ export type RunEngineOptions = {
    */
   bridge?: BridgeRecoveryHost;
   planner: Planner;
+  /**
+   * The planner that reviews the result, when the user turned the review pass
+   * on for this run. It runs once, after the work, only when the run completed
+   * and changed something, with a fresh conversation and a context that can
+   * read Studio and nothing else. Absent means the run has no review.
+   */
+  reviewer?: Planner;
+  /** How long a review may take. Injectable for tests. */
+  reviewTimeLimitMs?: number;
   request: RunRequest;
   /** Images attached to the starting message; never persisted with the run. */
   images?: readonly PlannerImage[];
@@ -332,6 +346,35 @@ function refusedToolOutcome(
   };
 }
 
+/** A provider's usage report, copied field by field so nothing but the figures is kept. */
+function copyRunUsage(usage: RunUsage): RunUsage {
+  const { inputTokens, cacheReadTokens, cacheWriteTokens, outputTokens, requests, costUsd, perRequest } = usage;
+  return {
+    inputTokens,
+    ...(cacheReadTokens === undefined ? {} : { cacheReadTokens }),
+    ...(cacheWriteTokens === undefined ? {} : { cacheWriteTokens }),
+    outputTokens,
+    ...(requests === undefined ? {} : { requests }),
+    ...(costUsd === undefined ? {} : { costUsd }),
+    ...(perRequest === undefined ? {} : {
+      perRequest: perRequest.map((request) => ({
+        inputTokens: request.inputTokens,
+        ...(request.cacheReadTokens === undefined ? {} : { cacheReadTokens: request.cacheReadTokens }),
+        ...(request.cacheWriteTokens === undefined ? {} : { cacheWriteTokens: request.cacheWriteTokens }),
+        outputTokens: request.outputTokens,
+        ...(request.after === undefined ? {} : { after: [...request.after] }),
+      })),
+    }),
+  };
+}
+
+/** Why a review ended without a verdict, in words safe to keep with the run. */
+function reviewFailureReason(error: unknown): string {
+  const message = (error instanceof Error ? error.message : String(error)).replace(/\s+/g, " ").trim();
+  const reason = message === "" ? "The review did not finish." : `The review did not finish: ${message}`;
+  return reason.length <= MAX_REVIEW_REASON_CHARS ? reason : `${reason.slice(0, MAX_REVIEW_REASON_CHARS - 1).trimEnd()}…`;
+}
+
 /** An event before the engine stamps it with `runId`, `seq`, and `at`. */
 type PendingEvent = RunEventBody;
 
@@ -390,6 +433,8 @@ export class RunSession {
   private readonly caller: McpToolCaller;
   private readonly bridge: BridgeRecoveryHost | undefined;
   private readonly planner: Planner;
+  private readonly reviewer: Planner | undefined;
+  private readonly reviewTimeLimitMs: number;
   private readonly request: RunRequest;
   private readonly images: readonly PlannerImage[];
   private readonly previewImage: RunEngineOptions["previewImage"];
@@ -411,6 +456,12 @@ export class RunSession {
   private seq = 0;
   private completed = false;
   private cancelled = false;
+  /**
+   * True while the review pass runs. Every call is then decided as `Read only`
+   * decides it, whatever mode the run was started in: the reviewer's context
+   * is the only thing calling, and a review never changes the place.
+   */
+  private reviewing = false;
   /** Set when the host ended the run; the outcome is then `failed` with this as the reason. */
   private abortReason: string | undefined;
 
@@ -440,12 +491,16 @@ export class RunSession {
   private questionsAsked = 0;
   private readonly recordedDecisions: RunDecision[] = [];
   private readonly pendingSteers: string[] = [];
+  /** Every note the run accepted, oldest first: part of what a review judges the result against. */
+  private readonly acceptedSteers: string[] = [];
   private steersAccepted = 0;
 
   constructor(options: RunEngineOptions) {
     this.caller = options.caller;
     this.bridge = options.bridge;
     this.planner = options.planner;
+    this.reviewer = options.reviewer;
+    this.reviewTimeLimitMs = options.reviewTimeLimitMs ?? REVIEW_TIME_LIMIT_MS;
     this.request = options.request;
     this.images = options.images ?? [];
     const { previewImage, storePicture } = options;
@@ -490,6 +545,7 @@ export class RunSession {
       approvalMode: this.request.approvalMode,
       autoPlaytest: this.request.autoPlaytest,
       ...(this.request.webSearch === undefined ? {} : { webSearch: this.request.webSearch }),
+      ...(this.reviewer === undefined ? {} : { review: true }),
       endpoint: this.request.endpoint,
       instanceId: this.request.instanceId,
       model: this.request.model,
@@ -524,25 +580,7 @@ export class RunSession {
       },
       runUsage: (usage) => {
         if (this.completed || !isRunUsage(usage)) return;
-        // Copied field by field, so nothing but the figures reaches the record.
-        const { inputTokens, cacheReadTokens, cacheWriteTokens, outputTokens, requests, costUsd, perRequest } = usage;
-        this.usage = {
-          inputTokens,
-          ...(cacheReadTokens === undefined ? {} : { cacheReadTokens }),
-          ...(cacheWriteTokens === undefined ? {} : { cacheWriteTokens }),
-          outputTokens,
-          ...(requests === undefined ? {} : { requests }),
-          ...(costUsd === undefined ? {} : { costUsd }),
-          ...(perRequest === undefined ? {} : {
-            perRequest: perRequest.map((request) => ({
-              inputTokens: request.inputTokens,
-              ...(request.cacheReadTokens === undefined ? {} : { cacheReadTokens: request.cacheReadTokens }),
-              ...(request.cacheWriteTokens === undefined ? {} : { cacheWriteTokens: request.cacheWriteTokens }),
-              outputTokens: request.outputTokens,
-              ...(request.after === undefined ? {} : { after: [...request.after] }),
-            })),
-          }),
-        };
+        this.usage = copyRunUsage(usage);
       },
       recordChange: (change) => {
         const taskId = this.currentTasks.find((task) => task.status === "active")?.id;
@@ -638,12 +676,128 @@ export class RunSession {
     // gate looks at the evidence, and so a failed teardown counts against it.
     await this.cleanupOwnedPlaytests();
     const verification = this.evaluateGate(outcome);
+    // After the gate, so the reviewer reads the host's final verdict and
+    // nothing the reviewer does can change it.
+    const review = outcome === "completed" ? await this.runReview(summary, verification) : undefined;
     this.emit({
       type: "run-completed", outcome, summary, verification,
       ...(this.usage === undefined ? {} : { usage: this.usage }),
+      ...(review === undefined ? {} : { review }),
     });
     this.completed = true;
     return outcome;
+  }
+
+  /**
+   * The review pass: a second planner checks the finished work, read-only.
+   *
+   * It runs only for a run that completed and changed something, since there
+   * is otherwise nothing to review. The reviewer gets a context of its own:
+   * - its prompt is the host's record of the run, not the worker's conversation;
+   * - every call is decided as `Read only` decides it, and counted against a budget;
+   * - it cannot ask the user, plan tasks, record changes or evidence, or speak
+   *   into the run's reply, so the run's record stays the worker's;
+   * - its usage is kept apart from the run's.
+   *
+   * A review never fails the run and never changes the gate's verdict. Any
+   * ending but a readable verdict is recorded as `incomplete`: stopped by the
+   * user, out of time, a provider error, or a reply that is not a verdict.
+   */
+  private async runReview(reply: string, verification: CompletionVerification): Promise<RunReview | undefined> {
+    const reviewer = this.reviewer;
+    if (reviewer === undefined || this.recordedChanges.length === 0 || this.cancelled) return undefined;
+
+    const controller = new AbortController();
+    const stop = () => controller.abort();
+    this.abortController.signal.addEventListener("abort", stop, { once: true });
+    let timedOut = false;
+    const timer = setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+    }, this.reviewTimeLimitMs);
+
+    let usage: RunUsage | undefined;
+    let calls = 0;
+    const context: PlannerContext = {
+      prompt: buildReviewPacket({
+        prompt: this.request.prompt,
+        notes: this.acceptedSteers,
+        decisions: this.recordedDecisions,
+        tasks: this.currentTasks,
+        changes: this.recordedChanges,
+        evidence: this.recordedEvidence,
+        verification,
+        reply,
+      }),
+      conversation: reviewConversation(this.request.conversation),
+      // What the user attached is part of what they asked for.
+      images: this.images,
+      instanceId: this.request.instanceId,
+      autoPlaytest: false,
+      webSearch: false,
+      signal: controller.signal,
+      call: async (tool, args) => {
+        if (controller.signal.aborted) throw new RunCancelledError();
+        if (calls >= REVIEW_CALL_BUDGET) return reviewBudgetOutcome(tool);
+        calls += 1;
+        return this.callTool(tool, args);
+      },
+      // The reply on screen is the worker's; the reviewer's words are read as a verdict below.
+      say: () => undefined,
+      // Shown while it lasts and never kept: the timeline keeps the review's calls and its verdict.
+      status: (label, detail) => this.emit({ type: "status", label, detail, transient: true }),
+      progress: (label, detail) => this.emit({ type: "status", label, detail, transient: true }),
+      outputTokens: () => undefined,
+      contextUsage: () => undefined,
+      runUsage: (reported) => {
+        if (isRunUsage(reported)) usage = copyRunUsage(reported);
+      },
+      recordChange: () => undefined,
+      recordEvidence: () => undefined,
+      setTasks: () => undefined,
+      tasks: () => this.currentTasks,
+      changes: () => this.recordedChanges,
+      evidence: () => this.recordedEvidence,
+      decisions: () => this.recordedDecisions,
+      // A note sent now was written for the worker, which has finished; it
+      // stays queued and the run ends with it shown as not delivered.
+      takeSteers: () => [],
+      askUser: async () => {
+        throw new Error("A review cannot ask the user a question. Decide from what Studio shows, and list what you could not check as a finding.");
+      },
+      checkCompletion: () => verification,
+    };
+
+    this.emit({
+      type: "status",
+      label: "Reviewing the result",
+      detail: "A second pass is checking what this run changed. It can read Studio and cannot change it.",
+    });
+    this.reviewing = true;
+    const base = { planner: reviewer.id, model: this.request.model };
+    let review: RunReview;
+    try {
+      const parsed = parseReviewVerdict(await reviewer.run(context));
+      review = parsed.verdict === "incomplete"
+        ? { verdict: "incomplete", findings: [], reason: parsed.reason, ...base }
+        : { ...parsed, ...base };
+    } catch (error) {
+      review = {
+        verdict: "incomplete",
+        findings: [],
+        reason: timedOut
+          ? "The review ran out of time and was stopped."
+          : this.cancelled ? "The review was stopped." : reviewFailureReason(error),
+        ...base,
+      };
+    } finally {
+      this.reviewing = false;
+      clearTimeout(timer);
+      this.abortController.signal.removeEventListener("abort", stop);
+      // A reviewer that is still running after its time is up gets no more calls.
+      controller.abort();
+    }
+    return usage === undefined ? review : { ...review, usage };
   }
 
   /** Resolve a pending approval. Returns false if the callId is not pending. */
@@ -684,6 +838,7 @@ export class RunSession {
     if (normalized === null || this.steersAccepted >= MAX_STEERS_PER_RUN) return false;
     this.steersAccepted += 1;
     this.pendingSteers.push(normalized);
+    this.acceptedSteers.push(normalized);
     this.emit({ type: "steer", text: normalized });
     return true;
   }
@@ -877,13 +1032,19 @@ export class RunSession {
     // `Full auto` waives confirmation for the actions Roqer has classified.
     // A tool missing from the risk table has no classification to waive, so it
     // falls back to asking rather than running unattended on a guess.
-    const mode = this.request.approvalMode === "Full auto" && !classified
-      ? "Ask first"
-      : this.request.approvalMode;
+    // A review is read-only in every mode, `Full auto` included: the user chose
+    // that mode for the work, not for a second model's reading of it.
+    const mode = this.reviewing
+      ? "Read only"
+      : this.request.approvalMode === "Full auto" && !classified
+        ? "Ask first"
+        : this.request.approvalMode;
     const decision = decideToolPolicy(mode, risk);
 
     if (decision.outcome === "deny") {
-      this.rejectedActions.set(actionKey, decision.reason);
+      // A refusal made for the review is the review's, not the run's: the
+      // same action is not thereby one the user rejected.
+      if (!this.reviewing) this.rejectedActions.set(actionKey, decision.reason);
       this.emit({
         type: "approval-resolved",
         callId,
@@ -982,7 +1143,9 @@ export class RunSession {
       detail,
     });
 
-    if (!outcome.ok) {
+    // A read the reviewer got wrong is shown as a failed call and no more: the
+    // run's failures are the work's, and the gate has already been decided.
+    if (!outcome.ok && !this.reviewing) {
       const errorCode = outcome.errorCode ?? "tool_failed";
       this.emitFailure({
         code: errorCode,

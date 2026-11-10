@@ -7,6 +7,10 @@ import { isRunDecision, type RunDecision } from "./run-digest";
 import { MAX_STEER_CHARS, MAX_STEERS_PER_RUN, isSteerNote } from "./steer";
 import { isModelPreviewId } from "./model-preview";
 import {
+  MAX_REVIEW_FINDINGS, MAX_REVIEW_REASON_CHARS, MAX_REVIEW_SUMMARY_CHARS, REVIEW_VERDICTS, isReviewFinding,
+  type ReviewFinding, type ReviewVerdict,
+} from "./review";
+import {
   isRunTaskList,
   RUN_EVIDENCE_REQUIREMENTS,
   type RunEvidenceRequirement,
@@ -45,6 +49,12 @@ export type RunRequest = {
    * in records written before the switch existed.
    */
   webSearch?: boolean;
+  /**
+   * Whether a second, read-only model run reviews the result when this run
+   * has changed something (`shared/review.ts`). Off unless the user turned it
+   * on for the chat; absent in records written before the switch existed.
+   */
+  review?: boolean;
   /** Loopback MCP endpoint, e.g. http://127.0.0.1:58741 */
   endpoint: string;
   /** Studio instance to target, or null to let the server resolve a default. */
@@ -204,6 +214,28 @@ export type RunEvidence = {
   changeKind?: RunChange["kind"];
 };
 
+/**
+ * What a review pass said about a finished run (`shared/review.ts`).
+ *
+ * A model's opinion, recorded beside the gate's verdict and never folded into
+ * it: `verification` stays what the host observed.
+ */
+export type RunReview = {
+  verdict: ReviewVerdict;
+  /** Empty unless the verdict is `issues`. */
+  findings: ReviewFinding[];
+  /** The reviewer's own one-paragraph account of what it checked. */
+  summary?: string;
+  /** Why there is no verdict; only with `incomplete`. */
+  reason?: string;
+  /** Which planner reviewed, e.g. "claude-code". */
+  planner: string;
+  /** The model that reviewed, as the run named it. */
+  model: string | null;
+  /** The tokens the review used, apart from the run's own, when its provider reported any. */
+  usage?: RunUsage;
+};
+
 export type RunFailure = {
   code: string;
   message: string;
@@ -293,6 +325,7 @@ export type RunEvent =
     approvalMode: ApprovalMode;
     autoPlaytest: boolean;
     webSearch?: boolean;
+    review?: boolean;
     endpoint: string;
     instanceId: string | null;
     model: string | null;
@@ -393,6 +426,8 @@ export type RunEvent =
     verification: CompletionVerification;
     /** The tokens the run used, when its provider reported any. */
     usage?: RunUsage;
+    /** The review pass's result, when the run had one. */
+    review?: RunReview;
   });
 
 export type RunEventType = RunEvent["type"];
@@ -463,6 +498,11 @@ export type RunRecord = {
    * record is judged, since a measurement says nothing about the work.
    */
   usage?: RunUsage;
+  /**
+   * The review pass's result, for a run that had one. Optional for the same
+   * reason as `decisions`: most runs have none.
+   */
+  review?: RunReview;
   /**
    * What the run said and did, in the order it happened: each piece of prose,
    * and a marker for each tool call, note, and piece of evidence between them.
@@ -793,6 +833,20 @@ export function withoutMalformedUsage(value: unknown): unknown {
   return rest;
 }
 
+/** A review as `RunReview` describes it, within the bounds `shared/review.ts` sets. */
+export function isRunReview(value: unknown): value is RunReview {
+  if (!isRecord(value) || !REVIEW_VERDICTS.includes(value.verdict as ReviewVerdict)) return false;
+  if (!Array.isArray(value.findings) || value.findings.length > MAX_REVIEW_FINDINGS || !value.findings.every(isReviewFinding)) return false;
+  // A verdict and its findings must agree, so a damaged record cannot show a
+  // pass beside a problem or a problem with nothing named.
+  if ((value.verdict === "issues") !== (value.findings.length > 0)) return false;
+  return (value.summary === undefined || (isString(value.summary) && value.summary.length <= MAX_REVIEW_SUMMARY_CHARS)) &&
+    (value.reason === undefined || (isString(value.reason) && value.reason.length <= MAX_REVIEW_REASON_CHARS)) &&
+    isString(value.planner) &&
+    (value.model === null || isString(value.model)) &&
+    (value.usage === undefined || isRunUsage(value.usage));
+}
+
 function isFailure(value: unknown): value is RunFailure {
   return isRecord(value) &&
     isString(value.code) &&
@@ -833,6 +887,7 @@ export function isRunEvent(value: unknown): value is RunEvent {
         APPROVAL_MODES.includes(value.approvalMode as string) &&
         typeof value.autoPlaytest === "boolean" &&
         (value.webSearch === undefined || typeof value.webSearch === "boolean") &&
+        (value.review === undefined || typeof value.review === "boolean") &&
         isString(value.endpoint) &&
         isString(value.planner) &&
         (value.model === null || isString(value.model)) &&
@@ -889,7 +944,8 @@ export function isRunEvent(value: unknown): value is RunEvent {
       return OUTCOMES.includes(value.outcome as string) &&
         isString(value.summary) &&
         isCompletionVerification(value.verification) &&
-        (value.usage === undefined || isRunUsage(value.usage));
+        (value.usage === undefined || isRunUsage(value.usage)) &&
+        (value.review === undefined || isRunReview(value.review));
     default:
       return false;
   }
@@ -919,6 +975,7 @@ export function isRunRecord(value: unknown): value is RunRecord {
       (Number.isInteger(value.notesDelivered) && (value.notesDelivered as number) >= 0 &&
         (value.notesDelivered as number) <= (Array.isArray(value.notes) ? value.notes.length : 0))) &&
     (value.usage === undefined || isRunUsage(value.usage)) &&
+    (value.review === undefined || isRunReview(value.review)) &&
     (value.transcript === undefined ||
       (Array.isArray(value.transcript) && value.transcript.length <= MAX_TRANSCRIPT_ENTRIES &&
         value.transcript.every(isTranscriptEntry)));

@@ -10,7 +10,7 @@ import type { RunTask } from "../shared/tasks";
 import {
   MAX_INLINE_EVIDENCE_IMAGES, MAX_RECORDED_EVIDENCE_IMAGES, MAX_TRANSCRIPT_ENTRIES, RUN_EVENT_SCHEMA_VERSION,
   type RunChange, type RunEvent, type RunEvidence, type RunFailure,
-  type RunOutcome, type RunRecord, type RunUsage, type ToolProposal, type TranscriptEntry,
+  type RunOutcome, type RunRecord, type RunReview, type RunUsage, type ToolProposal, type TranscriptEntry,
 } from "../shared/run-events";
 import { compactTokenCount } from "./context-usage";
 import { keptPreviewIds, pictureCategory, type PictureCategory } from "./preview-layout";
@@ -141,6 +141,8 @@ export type RunView = {
   verification: CompletionVerification | null;
   /** The tokens the run used, delivered with `run-completed` when the provider reported any. */
   usage: RunUsage | null;
+  /** The review pass's result, delivered with `run-completed` when the run had one. */
+  review: RunReview | null;
   startedAt: string;
   finishedAt: string;
   lastSeq: number;
@@ -177,6 +179,7 @@ export function createRunView(runId: string, prompt: string, approvalMode: Appro
     summary: "",
     verification: null,
     usage: null,
+    review: null,
     startedAt: "",
     finishedAt: "",
     lastSeq: 0,
@@ -352,6 +355,7 @@ export function applyRunEvent(view: RunView, event: RunEvent): RunView {
         summary: event.summary,
         verification: event.verification,
         usage: event.usage ?? null,
+        review: event.review ?? null,
         finishedAt: event.at,
         status: null,
         outputTokens: null,
@@ -713,6 +717,7 @@ export function toRunRecord(view: RunView): RunRecord | null {
     ...(view.decisions.length > 0 ? { decisions: view.decisions } : {}),
     ...(view.notes.length > 0 ? { notes: view.notes, notesDelivered: view.notesDelivered } : {}),
     ...(view.usage !== null ? { usage: view.usage } : {}),
+    ...(view.review !== null ? { review: view.review } : {}),
     ...(transcript !== undefined ? { transcript } : {}),
   };
 }

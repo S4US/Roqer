@@ -258,6 +258,8 @@ function recoveredMessage(snapshot: Snapshot): ChatMessage {
     ...(snapshot.decisions !== undefined && snapshot.decisions.length > 0 ? { decisions: snapshot.decisions } : {}),
     ...(snapshot.notes !== undefined && snapshot.notes.length > 0 ? { notes: snapshot.notes } : {}),
     ...(snapshot.completion?.usage !== undefined ? { usage: snapshot.completion.usage } : {}),
+    // A run whose record was cut short is not the run the review read.
+    ...(!interrupted && !clipped && snapshot.completion?.review !== undefined ? { review: snapshot.completion.review } : {}),
   };
   const text = snapshot.text.trim() ? `${snapshot.text.trim()}\n\n${summary}` : summary;
   return { id: `recovered-${snapshot.runId}`, role: "assistant", text, createdAt: finishedAt || recoveredAt, run };

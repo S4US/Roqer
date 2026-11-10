@@ -2092,15 +2092,27 @@ async function resolveCustomRun(modelKey: string | null): Promise<CustomRun | { 
 /** The agent that drives a run, chosen by the provider the user connected. */
 function plannerFor(
   request: RunStartRequest, agentRuntime: AgentRuntime, runId: string, modelName: string | undefined, custom?: CustomRun, blender = false, referenceClips = false,
-  externalMcp = false, imageGeneration = false,
+  externalMcp = false, imageGeneration = false, role: "worker" | "reviewer" = "worker",
 ): Planner {
   const cwd = app.getPath("userData");
-  // A conversation kept by one provider has not seen what another provider
-  // does in the same chat, so a run on any other provider retires it.
-  if (request.provider !== "claude") claudeSessions.drop(request.chatId);
-  if (request.provider !== "antigravity") antigravitySessions.drop(request.chatId);
-  if (request.provider !== "chatgpt") codexThreads.drop(request.chatId);
-  if (request.provider !== "custom") customConversations.drop(request.chatId);
+  // The reviewer of a run is the same provider and model with the reviewing
+  // brief, a conversation of its own that is never kept, and none of the tools
+  // that make things: it reads Studio, and the engine refuses it anything else.
+  const reviewing = role === "reviewer";
+  const agent = reviewing ? agentRuntime.reviewer : agentRuntime.definition;
+  if (reviewing) {
+    blender = false;
+    referenceClips = false;
+    externalMcp = false;
+    imageGeneration = false;
+  } else {
+    // A conversation kept by one provider has not seen what another provider
+    // does in the same chat, so a run on any other provider retires it.
+    if (request.provider !== "claude") claudeSessions.drop(request.chatId);
+    if (request.provider !== "antigravity") antigravitySessions.drop(request.chatId);
+    if (request.provider !== "chatgpt") codexThreads.drop(request.chatId);
+    if (request.provider !== "custom") customConversations.drop(request.chatId);
+  }
   if (request.provider === "custom") {
     if (custom === undefined) throw new Error("Choose one of your own models before starting.");
     // Roqer's own loop, pointed at the user's endpoint: the same tools,
@@ -2111,7 +2123,7 @@ function plannerFor(
       runId,
       modelId: custom.model.id,
       effort: request.effort,
-      agent: agentRuntime.definition,
+      agent,
       skillLibrary: agentRuntime.skillLibrary,
       plannerId: "custom-endpoint",
       label: custom.connection.name,
@@ -2126,9 +2138,7 @@ function plannerFor(
       referenceClips,
       externalMcp,
       imageGeneration,
-      chatId: request.chatId,
-      sessions: customConversations,
-      transportKey: customTransportKey(custom),
+      ...(reviewing ? {} : { chatId: request.chatId, sessions: customConversations, transportKey: customTransportKey(custom) }),
     });
   }
   if (request.provider === "claude") {
@@ -2143,11 +2153,9 @@ function plannerFor(
       // still holds the listing that says whether it takes an effort.
       supportsEffort: client.modelSupportsEffort(request.model!),
       ...(modelName === undefined ? {} : { modelName }),
-      agent: agentRuntime.definition,
+      agent,
       skillLibrary: agentRuntime.skillLibrary,
-      chatId: request.chatId,
-      sessions: claudeSessions,
-      registry: claudeSessionRegistry(),
+      ...(reviewing ? {} : { chatId: request.chatId, sessions: claudeSessions, registry: claudeSessionRegistry() }),
       blender,
       referenceClips,
       externalMcp,
@@ -2163,10 +2171,9 @@ function plannerFor(
       // shows one model with a choice of effort, and this turns it back.
       model: client.modelSlug(request.model!, request.effort),
       ...(modelName === undefined ? {} : { modelName }),
-      agent: agentRuntime.definition,
+      agent,
       skillLibrary: agentRuntime.skillLibrary,
-      chatId: request.chatId,
-      sessions: antigravitySessions,
+      ...(reviewing ? {} : { chatId: request.chatId, sessions: antigravitySessions }),
       blender,
       referenceClips,
       externalMcp,
@@ -2180,10 +2187,9 @@ function plannerFor(
     model: request.model!,
     ...(modelName === undefined ? {} : { modelName }),
     effort: request.effort,
-    agent: agentRuntime.definition,
+    agent,
     skillLibrary: agentRuntime.skillLibrary,
-    chatId: request.chatId,
-    sessions: codexThreads,
+    ...(reviewing ? {} : { chatId: request.chatId, sessions: codexThreads }),
     blender,
     referenceClips,
     externalMcp,
@@ -2346,7 +2352,7 @@ function parseStartRequest(value: unknown): RunStartRequest | null {
   if (!isRecord(value)) return null;
   const {
     projectId, chatId, prompt, conversation, approvalMode, autoPlaytest, endpoint, instanceId, provider, model, effort, startId, attachmentIds,
-    includeSelection, webSearch,
+    includeSelection, webSearch, review,
   } = value;
   if (typeof projectId !== "string" || projectId === "" || projectId.length > 1_000) return null;
   if (typeof chatId !== "string" || chatId === "" || chatId.length > 1_000) return null;
@@ -2355,6 +2361,7 @@ function parseStartRequest(value: unknown): RunStartRequest | null {
   if (attachmentIds !== undefined && (!Array.isArray(attachmentIds) || attachmentIds.length > 8 || !attachmentIds.every((id) => typeof id === "string" && id.length <= 100))) return null;
   if (includeSelection !== undefined && typeof includeSelection !== "boolean") return null;
   if (webSearch !== undefined && typeof webSearch !== "boolean") return null;
+  if (review !== undefined && typeof review !== "boolean") return null;
   if (!isConversationContext(conversation)) return null;
   if (!APPROVAL_MODES.includes(approvalMode as ApprovalMode)) return null;
   if (typeof autoPlaytest !== "boolean") return null;
@@ -2379,6 +2386,7 @@ function parseStartRequest(value: unknown): RunStartRequest | null {
     attachmentIds,
     includeSelection,
     webSearch,
+    review,
   };
 }
 
@@ -2564,6 +2572,11 @@ async function startRun(event: IpcMainInvokeEvent, payload: unknown): Promise<Ru
     const planner = smokeTest
       ? createInspectionPlanner()
       : plannerFor(resolvedRequest, agentRuntime, runId, modelName, customRun, blender, clips, externalMcp, imageGeneration);
+    // Built now, with the model the run resolved, and run by the engine only
+    // if the run completes having changed something.
+    const reviewer = smokeTest || resolvedRequest.review !== true
+      ? undefined
+      : plannerFor(resolvedRequest, agentRuntime, `${runId}:review`, modelName, customRun, false, false, false, false, "reviewer");
     journalId = runId;
     await runJournal().start(runId, request, request.prompt, request.approvalMode);
     if (cancelled()) return stopped;
@@ -2643,6 +2656,7 @@ async function startRun(event: IpcMainInvokeEvent, payload: unknown): Promise<Ru
       ])),
       bridge: bridgeRecoveryFor(client.endpoint),
       planner,
+      ...(reviewer === undefined ? {} : { reviewer }),
       request: { ...resolvedRequest, runId },
       images: attachmentContext.images,
       previewImage: previewToolImage,
