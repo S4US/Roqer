@@ -139,6 +139,12 @@ export type Preferences = {
    * reaches the model only once they choose to send it.
    */
   useStudioSelection: boolean;
+  /**
+   * Whether a message is sent with Ctrl+Enter (Cmd+Enter on a Mac), leaving
+   * Enter for a new line. On by default. Off, Enter sends and Shift+Enter
+   * starts a new line; Ctrl+Enter still sends either way.
+   */
+  ctrlEnterToSend: boolean;
   /** Whether the community invite card was dismissed, leaving only its icon. */
   communityInviteDismissed: boolean;
   /** Which managed sign-in drives runs. */
@@ -244,6 +250,7 @@ export function createInitialWorkspace(theme: Theme = "dark"): WorkspaceState {
       studioInstanceId: null,
       discordPresence: true,
       useStudioSelection: false,
+      ctrlEnterToSend: true,
       communityInviteDismissed: false,
       provider: DEFAULT_PROVIDER_ID,
       chatGptModelId: null,
@@ -414,6 +421,9 @@ export function normalizeWorkspace(value: unknown, themeFallback: Theme = "dark"
     // Off unless the user turned it on: a workspace saved before this existed
     // gets the same answer a new install does.
     useStudioSelection: rawPreferences.useStudioSelection === true,
+    // On unless the user turned it off: a workspace saved before the switch
+    // existed keeps sending the way it always did.
+    ctrlEnterToSend: rawPreferences.ctrlEnterToSend !== false,
     // Additive: a workspace saved before the invite existed has not seen it,
     // so it is offered once to people who were already using Roqer too.
     communityInviteDismissed: rawPreferences.communityInviteDismissed === true,

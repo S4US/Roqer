@@ -22,6 +22,15 @@ import {
   withdrawMessage,
 } from "./model";
 
+test("Ctrl+Enter sends unless the user turned it off, and a saved choice is kept", () => {
+  assert.equal(createInitialWorkspace().preferences.ctrlEnterToSend, true);
+  const saved = JSON.parse(JSON.stringify(createInitialWorkspace()));
+  delete saved.preferences.ctrlEnterToSend;
+  assert.equal(normalizeWorkspace(saved).preferences.ctrlEnterToSend, true, "a workspace from before the switch sends as it did");
+  saved.preferences.ctrlEnterToSend = false;
+  assert.equal(normalizeWorkspace(saved).preferences.ctrlEnterToSend, false);
+});
+
 test("a new workspace contains no invented projects, chats, or messages", () => {
   const state = createInitialWorkspace();
   assert.equal(state.projects.length, 1);
