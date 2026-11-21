@@ -8,7 +8,7 @@ import os from "node:os";
 
 import {
   CLAUDE_TOOL_CALL_TIMEOUT_MS, claudeContextUsage, claudeContextWindow, claudeResultUsage, ClaudeRunUsage, claudeSessionFile,
-  compactClaudeChat, createClaudePlanner, streamedOutput, streamedReasoning, thinkingTokensDelta, type ClaudeSession,
+  compactClaudeChat, createClaudePlanner, streamedOutput, streamedReasoning, thinkingTokensDelta, responseThinkingTotal, type ClaudeSession,
 } from "./claude-planner";
 import { ClaudeSessionRegistry } from "./claude-session-registry";
 import { timeoutForTool } from "../shared/mcp-tools";
@@ -1228,6 +1228,16 @@ test("hidden thinking is counted from Claude Code's thinking_tokens reports, the
   assert.equal(report({ estimated_tokens_delta: "12" }), null);
   assert.equal(thinkingTokensDelta({ type: "system", subtype: "status", estimated_tokens_delta: 10 }), null);
   assert.equal(streamedOutput({ type: "stream_event", parent_tool_use_id: null, event: { type: "content_block_delta", delta: { type: "thinking_delta", thinking: "" } } }), null);
+});
+
+test("a finished response's thinking tokens are Claude's own count, the main agent's only", () => {
+  const delta = (usage: Record<string, unknown>, parent: string | null = null) =>
+    responseThinkingTotal({ type: "stream_event", parent_tool_use_id: parent, event: { type: "message_delta", usage } });
+  assert.equal(delta({ output_tokens: 653, output_tokens_details: { thinking_tokens: 446 } }), 446);
+  assert.equal(delta({ output_tokens: 12 }), null, "no figure, no count");
+  assert.equal(delta({ output_tokens_details: { thinking_tokens: 30 } }, "toolu_1"), null, "a sub-agent's thinking is not the run's");
+  assert.equal(delta({ output_tokens_details: { thinking_tokens: -1 } }), null);
+  assert.equal(responseThinkingTotal({ type: "stream_event", event: { type: "message_start" } }), null);
 });
 
 test("summarised reasoning is passed on from the main agent's thinking blocks, each opening a paragraph", () => {

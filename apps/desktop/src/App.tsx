@@ -2331,8 +2331,10 @@ const WAITING_REASSURANCE_AFTER_MS = 30_000;
  * Deliberately not a live region. The composer already announces "Thinking…",
  * and one announcement is enough.
  */
-function WaitingNotice({ label, detail, output, reasoning, chain, chainOpen, onToggleChain }: {
+function WaitingNotice({ label, detail, output, reasoningTokens, reasoning, chain, chainOpen, onToggleChain }: {
   label: string; detail?: string; output: RunView["outputTokens"];
+  /** The run's reasoning tokens so far; null when the provider reports none. */
+  reasoningTokens: RunView["reasoningTokens"];
   /** The model's summarised reasoning in this response so far; empty when the provider shows none or the user hid it. */
   reasoning: string;
   /** Every piece of reasoning in the run so far, one per response; empty when hidden. */
@@ -2376,10 +2378,17 @@ function WaitingNotice({ label, detail, output, reasoning, chain, chainOpen, onT
     <span className="waiting-bar" aria-hidden="true"><span /></span>
     {/* Only once something has streamed: a count sitting at zero reads as
         more stuck than no count at all. */}
-    {counted && <p className="waiting-count" title={output.exact
-      ? "Tokens the model reported for this response."
-      : "Estimated while the model works, from what it has streamed and the thinking Claude Code reports."}
-    >{outputTokensLabel(output.tokens, output.exact)} so far</p>}
+    {/* The run's reasoning in all when the provider reports it; otherwise
+        what this response has written. */}
+    {reasoningTokens !== null && reasoningTokens.tokens > 0
+      ? <p className="waiting-count" title={reasoningTokens.exact
+        ? "Tokens the model spent reasoning in this run, as Claude reported them."
+        : "Tokens the model spent reasoning in this run: Claude's figures for finished responses, and an estimate for the one in progress."}
+      >{outputTokensLabel(reasoningTokens.tokens, reasoningTokens.exact)} of reasoning in this run</p>
+      : counted && <p className="waiting-count" title={output.exact
+        ? "Tokens the model reported for this response."
+        : "Estimated while the model works, from what it has streamed and the thinking Claude Code reports."}
+      >{outputTokensLabel(output.tokens, output.exact)} so far</p>}
     {detail !== undefined && detail !== "" && <p className="waiting-detail">{detail}</p>}
     {elapsedMs >= WAITING_REASSURANCE_AFTER_MS && <p className="waiting-detail">
       {counted
@@ -2442,18 +2451,22 @@ function LiveRun({ view, steps, nodes, thinking, showReasoning, onOpenInStudio }
   return <div className="mock-run"><section className="message assistant-message"><div className="message-content">
     {view.planner === DEMO_PLANNER && <p className="run-tag"><span className="run-badge">Demo</span></p>}
     {running && <TypingIndicator done={produced || thinking} />}
+    <RunStrip tasks={view.tasks} steps={steps} nodes={nodes} running={running} runId={view.runId} changes={view.changes} evidence={view.evidence} latest renderFiles={renderFiles} />
+    {/* Under Plan and Activity: what the model is doing now comes after what it has done. */}
     {thinking && <WaitingNotice
       // Every turn opens with a progress label, so this is normally the
       // planner's own words; the fallback is for a planner that sends none.
-      label={view.status?.label ?? "Working"}
-      {...(view.status?.detail === undefined ? {} : { detail: view.status.detail })}
+      // The provider's own progress only: a usage warning or a note Roqer
+      // adds belongs to the run's Activity, not to what the model is doing.
+      label={view.progress?.label ?? "Working"}
+      {...(view.progress?.detail === undefined ? {} : { detail: view.progress.detail })}
       output={view.outputTokens}
+      reasoningTokens={view.reasoningTokens}
       reasoning={showReasoning ? view.thinking : ""}
       chain={showReasoning ? view.reasoning : []}
       chainOpen={chainOpen}
       onToggleChain={() => setChainOpen((open) => !open)}
     />}
-    <RunStrip tasks={view.tasks} steps={steps} nodes={nodes} running={running} runId={view.runId} changes={view.changes} evidence={view.evidence} latest renderFiles={renderFiles} />
     {/* Formatted and revealed smoothly as it streams. When the run ends, the
         saved reply takes over from the same point, keyed by the run. */}
     {answered && <StreamingMarkdown text={latestProse(view)} live done={!running} handoffKey={view.runId} className={running ? "result-copy streaming-copy" : "result-copy"} />}

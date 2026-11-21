@@ -332,6 +332,13 @@ export type RunEvent =
    */
   | (RunEventBase & { type: "output-tokens"; tokens: number; exact: boolean })
   /**
+   * How many tokens the model has spent reasoning in this run so far, for the
+   * Thinking card: the provider's own figures for finished responses plus an
+   * estimate for the one in progress (`exact` false while there is one). Live
+   * state like `output-tokens`: never a step, never kept.
+   */
+  | (RunEventBase & { type: "reasoning-tokens"; tokens: number; exact: boolean })
+  /**
    * A piece of the model's reasoning, as the provider summarises it, for the
    * waiting card's "Show reasoning". Live state like `output-tokens`: never a
    * step, never kept in the chat's record. Bounded by `MAX_THINKING_DELTA_CHARS`.
@@ -861,6 +868,7 @@ export function isRunEvent(value: unknown): value is RunEvent {
       return isString(value.label) &&
         (value.transient === undefined || typeof value.transient === "boolean");
     case "output-tokens":
+    case "reasoning-tokens":
       return typeof value.tokens === "number" && Number.isSafeInteger(value.tokens) && value.tokens >= 0 &&
         typeof value.exact === "boolean";
     case "thinking-delta":

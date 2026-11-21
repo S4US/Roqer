@@ -157,6 +157,35 @@ test("the model's reasoning is live state for the response in progress, never a 
   ]);
 });
 
+test("the Thinking card keeps the provider's own progress when Roqer adds a note such as a usage warning", () => {
+  const view = fold(stream(
+    started,
+    { type: "status", label: "Thinking with Opus 5.5", transient: true },
+    { type: "status", label: "Close to your Claude usage limit", detail: "Weekly limit, resets Thu 6:00 AM." },
+  ));
+  assert.deepEqual(view.progress, { label: "Thinking with Opus 5.5", detail: undefined });
+  assert.equal(view.status?.label, "Close to your Claude usage limit", "the warning is still the latest status");
+  assert.equal(view.timeline.filter((entry) => entry.type === "note").length, 1, "and it is kept in the timeline");
+});
+
+test("the run's reasoning tokens are a run total, kept across tool calls and never recorded", () => {
+  const events = stream(
+    started,
+    { type: "reasoning-tokens", tokens: 120, exact: false },
+    { type: "reasoning-tokens", tokens: 446, exact: true },
+    { type: "tool-proposed", proposal: proposal("call-1") },
+    { type: "reasoning-tokens", tokens: 510, exact: false },
+    { type: "run-completed", outcome: "completed", summary: "Done." },
+  );
+  const upTo = (count: number) => fold(events.slice(0, count));
+  assert.equal(upTo(1).reasoningTokens, null);
+  assert.deepEqual(upTo(3).reasoningTokens, { tokens: 446, exact: true });
+  assert.deepEqual(upTo(4).reasoningTokens, { tokens: 446, exact: true }, "a tool call does not clear the run's total");
+  assert.deepEqual(upTo(5).reasoningTokens, { tokens: 510, exact: false });
+  assert.deepEqual(upTo(5).timeline.filter((entry) => entry.type === "note"), [], "a count is never a step");
+  assert.doesNotMatch(JSON.stringify(toRunRecord(upTo(6))), /reasoningTokens/);
+});
+
 test("a run's reasoning chain keeps its latest part when it grows past the bound", () => {
   const block = "x".repeat(MAX_RUN_REASONING_CHARS / 2);
   let chain = withReasoning([], block, true, 0);

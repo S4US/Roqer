@@ -327,6 +327,20 @@ export function streamedReasoning(message: JsonRecord): string | null {
 }
 
 /**
+ * The thinking tokens a finished main-agent response used, from the usage on
+ * its `message_delta`, or null for any other message. Unlike the live
+ * reports, this is the API's own count, including thinking never shown.
+ */
+export function responseThinkingTotal(message: JsonRecord): number | null {
+  if (message.type !== "stream_event" || message.parent_tool_use_id != null) return null;
+  const event = message.event;
+  if (!isRecord(event) || event.type !== "message_delta" || !isRecord(event.usage)) return null;
+  const details = event.usage.output_tokens_details;
+  const tokens = isRecord(details) ? details.thinking_tokens : undefined;
+  return typeof tokens === "number" && Number.isSafeInteger(tokens) && tokens >= 0 ? tokens : null;
+}
+
+/**
  * How many tokens the main agent just thought, from Claude Code's
  * `system/thinking_tokens` report, or null for any other message.
  *
@@ -920,6 +934,8 @@ export function createClaudePlanner(options: ClaudePlannerOptions): Planner {
        * as text, so without this a long think reads as no progress at all.
        */
       let responseThinkingTokens = 0;
+      /** The thinking tokens Claude reported for this run's finished responses. */
+      let runThinkingTokens = 0;
       /** The latest main-agent response's context, as Claude Code reported it. */
       let contextReading: { usedTokens: number; model: string | null } | null = null;
       /** This run's share of the session's usage, from the moment the session is bound. */
@@ -1055,8 +1071,13 @@ export function createClaudePlanner(options: ClaudePlannerOptions): Planner {
 
         const thinking = thinkingTokensDelta(message);
         if (thinking !== null) {
+          // With reasoning summaries on, Claude Code estimates the summary,
+          // not the thinking behind it, which runs many times longer: only
+          // Claude's own figure at the end of each response is counted then.
+          if (options.thinkingSummaries === true) return;
           responseThinkingTokens += thinking;
           context.outputTokens(estimateTurnOutputTokens(responseCharacters) + responseThinkingTokens, false);
+          context.reasoningTokens?.(runThinkingTokens + responseThinkingTokens, false);
           return;
         }
 
@@ -1067,12 +1088,20 @@ export function createClaudePlanner(options: ClaudePlannerOptions): Planner {
             responseCharacters = 0;
             responseThinkingTokens = 0;
           }
-          if (output?.characters !== undefined) {
+          const reasoning = streamedReasoning(message);
+          // A summary of the reasoning is not output the model wrote.
+          if (output?.characters !== undefined && !(options.thinkingSummaries === true && reasoning !== null)) {
             responseCharacters += output.characters;
             context.outputTokens(estimateTurnOutputTokens(responseCharacters) + responseThinkingTokens, false);
           }
           if (output?.exact !== undefined) context.outputTokens(output.exact, true);
-          const reasoning = streamedReasoning(message);
+          // A finished response's own figure replaces the estimate for it.
+          const thought = responseThinkingTotal(message);
+          if (thought !== null) {
+            runThinkingTokens += thought;
+            responseThinkingTokens = 0;
+            context.reasoningTokens?.(runThinkingTokens, true);
+          }
           if (reasoning !== null) context.thinking?.(reasoning);
           const chunk = streamedProse(message);
           if (chunk === null) return;

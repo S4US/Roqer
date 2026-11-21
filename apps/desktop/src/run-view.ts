@@ -102,11 +102,22 @@ export type RunView = {
   approvalMode: ApprovalMode;
   status: { label: string; detail?: string } | null;
   /**
+   * What the provider itself is doing now ("Thinking with Opus 5.5"), from
+   * transient statuses only, for the Thinking card. A note Roqer adds -- a
+   * usage warning, a note sent -- goes to the timeline and never replaces it.
+   */
+  progress: { label: string; detail?: string } | null;
+  /**
    * How much the model has written in the response it is producing now. Live
    * state for the waiting line: anything that hands the turn to a tool, an
    * approval, or the user clears it, since the next response counts afresh.
    */
   outputTokens: { tokens: number; exact: boolean } | null;
+  /**
+   * How many tokens the model has spent reasoning in this run so far, for the
+   * Thinking card. A run total, so nothing in the run clears it.
+   */
+  reasoningTokens: { tokens: number; exact: boolean } | null;
   /**
    * The model's reasoning in the response it is producing now, as the
    * provider summarises it, for the waiting card. Live state cleared with
@@ -205,7 +216,9 @@ export function createRunView(runId: string, prompt: string, approvalMode: Appro
     planner: "",
     approvalMode,
     status: null,
+    progress: null,
     outputTokens: null,
+    reasoningTokens: null,
     thinking: "",
     reasoning: [],
     contextUsage: null,
@@ -265,6 +278,7 @@ export function applyRunEvent(view: RunView, event: RunEvent): RunView {
       return {
         ...base,
         status: { label: event.label, detail: event.detail },
+        progress: event.transient ? { label: event.label, detail: event.detail } : base.progress,
         timeline: event.transient ? base.timeline : [...base.timeline, {
           type: "note",
           key: `note-${event.seq}`,
@@ -274,6 +288,8 @@ export function applyRunEvent(view: RunView, event: RunEvent): RunView {
       };
     case "output-tokens":
       return { ...base, outputTokens: { tokens: event.tokens, exact: event.exact } };
+    case "reasoning-tokens":
+      return { ...base, reasoningTokens: { tokens: event.tokens, exact: event.exact } };
     case "thinking-delta":
       return {
         ...base,
