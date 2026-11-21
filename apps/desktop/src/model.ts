@@ -81,6 +81,15 @@ export type Chat = {
    * the same game does not have to be pointed at it again.
    */
   studioInstanceId?: string;
+  /**
+   * The reasoning effort this chat's runs ask for, chosen in this chat.
+   *
+   * Absent means the chat has never had one of its own, which falls back to
+   * the workspace preference. A chat without one is given the preference's
+   * value before the preference changes (`setDefaultReasoningEffort`), so a
+   * choice made in one chat never changes the effort of another.
+   */
+  reasoningEffort?: ReasoningEffort;
   messages: ChatMessage[];
   /**
    * The chat's earlier messages, folded into a record by a manual compact. Only
@@ -378,6 +387,9 @@ export function normalizeWorkspace(value: unknown, themeFallback: Theme = "dark"
         studioInstanceId: typeof chat.studioInstanceId === "string" && chat.studioInstanceId !== ""
           ? chat.studioInstanceId
           : undefined,
+        // Additive: a chat saved before efforts were kept per chat has none,
+        // and follows the workspace preference as it did then.
+        ...(isReasoningEffort(chat.reasoningEffort) ? { reasoningEffort: chat.reasoningEffort } : {}),
         messages,
         ...(compaction === undefined ? {} : { compaction }),
       }];
@@ -666,6 +678,66 @@ export function setChatStudioInstance(
         chats: project.chats.map((chat) => chat.id === chatId
           ? { ...chat, studioInstanceId: instanceId ?? undefined }
           : chat),
+      }
+      : project),
+  };
+}
+
+/** The reasoning effort a chat's next run asks for: its own choice, else the workspace default. */
+export function chatReasoningEffort(
+  state: WorkspaceState,
+  projectId: string,
+  chatId: string | null,
+): ReasoningEffort {
+  if (chatId === null) return state.preferences.reasoningEffort;
+  const chat = state.projects.find((project) => project.id === projectId)?.chats
+    .find((candidate) => candidate.id === chatId);
+  return chat?.reasoningEffort ?? state.preferences.reasoningEffort;
+}
+
+/**
+ * Change the effort new chats start with.
+ *
+ * Every chat that has none of its own follows this default, so before it
+ * changes each such chat is given the value it has been using. Changing the
+ * default therefore never changes what any existing chat asks for.
+ */
+export function setDefaultReasoningEffort(state: WorkspaceState, effort: ReasoningEffort): WorkspaceState {
+  const previous = state.preferences.reasoningEffort;
+  if (previous === effort) return state;
+  return {
+    ...state,
+    preferences: { ...state.preferences, reasoningEffort: effort },
+    projects: state.projects.map((project) => project.chats.some((chat) => chat.reasoningEffort === undefined)
+      ? {
+        ...project,
+        chats: project.chats.map((chat) => chat.reasoningEffort === undefined ? { ...chat, reasoningEffort: previous } : chat),
+      }
+      : project),
+  };
+}
+
+/**
+ * Record the reasoning effort chosen in a chat.
+ *
+ * It is kept on the chat, so only that chat's runs change, and becomes the
+ * default the next new chat starts with, the way the Studio place does. With
+ * no chat open only the default changes.
+ */
+export function setChatReasoningEffort(
+  state: WorkspaceState,
+  projectId: string,
+  chatId: string | null,
+  effort: ReasoningEffort,
+): WorkspaceState {
+  const next = setDefaultReasoningEffort(state, effort);
+  if (chatId === null) return next;
+  return {
+    ...next,
+    projects: next.projects.map((project) => project.id === projectId
+      ? {
+        ...project,
+        chats: project.chats.map((chat) => chat.id === chatId ? { ...chat, reasoningEffort: effort } : chat),
       }
       : project),
   };
