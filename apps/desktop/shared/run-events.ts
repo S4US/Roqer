@@ -76,6 +76,11 @@ export type RunStartRequest = Omit<RunRequest, "runId"> & {
    * process reads the paths from Studio, so the window cannot compose them.
    */
   includeSelection?: boolean;
+  /**
+   * Whether the user wants to see the model's reasoning while it works
+   * (Settings, App). Off, Roqer does not ask the provider for it at all.
+   */
+  showReasoning?: boolean;
 };
 
 export type RunOutcome =

@@ -35,7 +35,7 @@ import {
   activitySteps, applyRunEvent, createRunView, describeOutcome, recordAppliedAndVerified,
   latestProse, recordGateIssues, recordHasWarnings, recordOnlyAnswered, recordReply, recordSteps, runAppliedAndVerified,
   runGateIssues, runHasWarnings, runOnlyAnswered, toRunRecord, hasPicture,
-  type ActivityStep, type PendingApproval, type RunView,
+  type ActivityStep, type PendingApproval, type ReasoningBlock, type RunView,
 } from "./run-view";
 import { EvidencePicture, rememberEvidencePicture } from "./evidence-picture";
 import { EvidenceSound } from "./evidence-sound";
@@ -908,6 +908,7 @@ function App() {
       approvalMode: next.preferences.approvalMode,
       autoPlaytest: next.preferences.autoPlaytest,
       webSearch: next.preferences.webSearch,
+      showReasoning: next.preferences.showReasoning,
       ...(() => {
         const instructions = projectInstructions(next, projectId);
         return instructions === undefined ? {} : { projectInstructions: instructions };
@@ -1821,7 +1822,7 @@ function App() {
             />
             : <EmptyConversation place={targetStudio?.name} />}
           {runView
-            ? <LiveRun view={runView} steps={runSteps} nodes={runActivityNodes} thinking={thinking} onOpenInStudio={openArtifactInStudio} />
+            ? <LiveRun view={runView} steps={runSteps} nodes={runActivityNodes} thinking={thinking} showReasoning={workspace.preferences.showReasoning} onOpenInStudio={openArtifactInStudio} />
             // The run is still being started, so the dots stand in for the
             // assistant block that is about to exist.
             : runStarting && <div className="mock-run"><section className="message assistant-message"><div className="message-content">
@@ -2330,10 +2331,13 @@ const WAITING_REASSURANCE_AFTER_MS = 30_000;
  * Deliberately not a live region. The composer already announces "Thinking…",
  * and one announcement is enough.
  */
-function WaitingNotice({ label, detail, output, reasoning, showReasoning, onToggleReasoning }: {
+function WaitingNotice({ label, detail, output, reasoning, chain, chainOpen, onToggleChain }: {
   label: string; detail?: string; output: RunView["outputTokens"];
-  /** The model's summarised reasoning in this response so far; empty when the provider shows none. */
-  reasoning: string; showReasoning: boolean; onToggleReasoning: () => void;
+  /** The model's summarised reasoning in this response so far; empty when the provider shows none or the user hid it. */
+  reasoning: string;
+  /** Every piece of reasoning in the run so far, one per response; empty when hidden. */
+  chain: readonly ReasoningBlock[];
+  chainOpen: boolean; onToggleChain: () => void;
 }) {
   const startedAt = useRef(Date.now());
   const [elapsedMs, setElapsedMs] = useState(0);
@@ -2352,14 +2356,17 @@ function WaitingNotice({ label, detail, output, reasoning, showReasoning, onTogg
   // longer, so only the provider's own figure is shown then. The reasoning
   // itself says the model is working.
   const counted = output !== null && output.tokens > 0 && (output.exact || thoughts === "");
-  // The open panel follows the reasoning as it grows, unless the reader has
-  // scrolled up to read something earlier.
-  const reasoningRef = useRef<HTMLDivElement>(null);
-  const followReasoning = useRef(true);
+  const thoughtsInRun = useMemo(() => chain
+    .map((block, index) => ({ ...block, index, text: block.text.trim() }))
+    .filter((block) => block.text !== ""), [chain]);
+  const chainLength = thoughtsInRun.reduce((total, block) => total + block.text.length, 0);
+  // The open chain follows new reasoning, unless the reader scrolled up to read.
+  const chainRef = useRef<HTMLOListElement>(null);
+  const followChain = useRef(true);
   useLayoutEffect(() => {
-    const box = reasoningRef.current;
-    if (box !== null && followReasoning.current) box.scrollTop = box.scrollHeight;
-  }, [thoughts, showReasoning]);
+    const list = chainRef.current;
+    if (list !== null && followChain.current) list.scrollTop = list.scrollHeight;
+  }, [chainLength, chainOpen]);
   return <div className="waiting-notice" role="status" aria-live="off">
     <div className="waiting-head">
       <span className="waiting-icon" aria-hidden="true"><Brain size={15} /></span>
@@ -2379,17 +2386,26 @@ function WaitingNotice({ label, detail, output, reasoning, showReasoning, onTogg
         ? "Still working. On a big request the model can plan for several minutes before its first step."
         : "Some models work for a minute or more before their first word."}
     </p>}
-    {thoughts !== "" && <div className="waiting-reasoning">
-      <button type="button" className="waiting-reasoning-toggle" aria-expanded={showReasoning} onClick={onToggleReasoning}>
-        {showReasoning ? <ChevronDown size={13} aria-hidden="true" /> : <ChevronRight size={13} aria-hidden="true" />}
-        {showReasoning ? "Hide reasoning" : "Show reasoning"}
+    {thoughtsInRun.length > 0 && <div className="waiting-reasoning">
+      <button type="button" className="waiting-reasoning-toggle" aria-expanded={chainOpen} onClick={onToggleChain}>
+        {chainOpen ? <ChevronDown size={13} aria-hidden="true" /> : <ChevronRight size={13} aria-hidden="true" />}
+        {chainOpen ? "Hide reasoning" : "Show reasoning"}
+        <span className="waiting-reasoning-count">{thoughtsInRun.length} {thoughtsInRun.length === 1 ? "thought" : "thoughts"} in this run</span>
       </button>
-      {showReasoning
-        ? <div className="waiting-reasoning-text" ref={reasoningRef} onScroll={(event) => {
-          const box = event.currentTarget;
-          followReasoning.current = box.scrollHeight - box.scrollTop - box.clientHeight < 24;
-        }}>{thoughts}</div>
-        : <p className="waiting-reasoning-preview">{latestThought(thoughts)}</p>}
+      {chainOpen
+        ? <ol className="waiting-reasoning-chain" ref={chainRef} onScroll={(event) => {
+          const list = event.currentTarget;
+          followChain.current = list.scrollHeight - list.scrollTop - list.clientHeight < 24;
+        }}>
+          {thoughtsInRun.map((block, position) => <li key={block.index}>
+            <span className="waiting-reasoning-label">
+              Thought {position + 1}
+              {block.afterSteps > 0 && <em>after {block.afterSteps} tool {block.afterSteps === 1 ? "call" : "calls"}</em>}
+            </span>
+            <p>{block.text}</p>
+          </li>)}
+        </ol>
+        : thoughts !== "" && <p className="waiting-reasoning-preview">{latestThought(thoughts)}</p>}
     </div>}
   </div>;
 }
@@ -2401,7 +2417,7 @@ function latestThought(text: string): string {
   return latest.length > 180 ? `…${latest.slice(latest.length - 179)}` : latest;
 }
 
-function LiveRun({ view, steps, nodes, thinking, onOpenInStudio }: { view: RunView; steps: ActivityStep[]; nodes: ActivityNode[]; thinking: boolean; onOpenInStudio: OpenInStudio }) {
+function LiveRun({ view, steps, nodes, thinking, showReasoning, onOpenInStudio }: { view: RunView; steps: ActivityStep[]; nodes: ActivityNode[]; thinking: boolean; showReasoning: boolean; onOpenInStudio: OpenInStudio }) {
   const answered = view.text.trim() !== "";
   const running = view.outcome === null;
   const appliedAndVerified = runAppliedAndVerified(view);
@@ -2420,9 +2436,9 @@ function LiveRun({ view, steps, nodes, thinking, onOpenInStudio }: { view: RunVi
   // about who is working. A run waiting on Studio or on the user is not
   // thinking, and both of those already say so elsewhere.
   const renderFiles = useCallback((files: ChangeGroup[], expansion: FileExpansion) => <ChangeSet groups={files} expansion={expansion} onOpenInStudio={onOpenInStudio} />, [onOpenInStudio]);
-  // Kept for the whole run, so a reader who opened the reasoning keeps it open
+  // Kept for the whole run, so a reader who opened the chain keeps it open
   // through every think between tool calls.
-  const [showReasoning, setShowReasoning] = useState(false);
+  const [chainOpen, setChainOpen] = useState(false);
   return <div className="mock-run"><section className="message assistant-message"><div className="message-content">
     {view.planner === DEMO_PLANNER && <p className="run-tag"><span className="run-badge">Demo</span></p>}
     {running && <TypingIndicator done={produced || thinking} />}
@@ -2432,9 +2448,10 @@ function LiveRun({ view, steps, nodes, thinking, onOpenInStudio }: { view: RunVi
       label={view.status?.label ?? "Working"}
       {...(view.status?.detail === undefined ? {} : { detail: view.status.detail })}
       output={view.outputTokens}
-      reasoning={view.thinking}
-      showReasoning={showReasoning}
-      onToggleReasoning={() => setShowReasoning((shown) => !shown)}
+      reasoning={showReasoning ? view.thinking : ""}
+      chain={showReasoning ? view.reasoning : []}
+      chainOpen={chainOpen}
+      onToggleChain={() => setChainOpen((open) => !open)}
     />}
     <RunStrip tasks={view.tasks} steps={steps} nodes={nodes} running={running} runId={view.runId} changes={view.changes} evidence={view.evidence} latest renderFiles={renderFiles} />
     {/* Formatted and revealed smoothly as it streams. When the run ends, the

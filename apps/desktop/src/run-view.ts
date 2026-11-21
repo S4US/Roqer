@@ -114,6 +114,13 @@ export type RunView = {
    */
   thinking: string;
   /**
+   * Every piece of reasoning the run has shown so far, one per response, in
+   * order, with how many activity steps came before it. Live state for the
+   * Reasoning section under Activity: never a step, never kept in the record.
+   * Bounded to the latest `MAX_RUN_REASONING_CHARS` in all.
+   */
+  reasoning: readonly ReasoningBlock[];
+  /**
    * How full the model's context window was at its latest response, as the
    * provider reported it. Null until the run's first report. Unlike
    * `outputTokens` nothing clears it: it describes the conversation, not the
@@ -160,6 +167,36 @@ export type RunView = {
 
 /** The most reasoning the waiting card keeps for one response: its latest part. */
 export const MAX_LIVE_THINKING_CHARS = 40_000;
+/** The most reasoning a run's Reasoning section keeps in all; the oldest goes first. */
+export const MAX_RUN_REASONING_CHARS = 200_000;
+
+/** One response's reasoning, and how many activity steps the run had made before it. */
+export type ReasoningBlock = Readonly<{ text: string; afterSteps: number }>;
+
+/**
+ * Add streamed reasoning to the run's chain: to the response in progress, or,
+ * when it is the first reasoning of a new response, as a block of its own.
+ */
+export function withReasoning(
+  blocks: readonly ReasoningBlock[], text: string, newResponse: boolean, afterSteps: number,
+): readonly ReasoningBlock[] {
+  const last = blocks[blocks.length - 1];
+  const next = newResponse || last === undefined
+    ? [...blocks, { text, afterSteps }]
+    : [...blocks.slice(0, -1), { ...last, text: `${last.text}${text}` }];
+  let total = next.reduce((sum, block) => sum + block.text.length, 0);
+  let start = 0;
+  while (total > MAX_RUN_REASONING_CHARS && start < next.length - 1) {
+    total -= next[start].text.length;
+    start += 1;
+  }
+  const kept = next.slice(start);
+  if (total > MAX_RUN_REASONING_CHARS) {
+    const only = kept[0];
+    return [{ ...only, text: only.text.slice(-MAX_RUN_REASONING_CHARS) }];
+  }
+  return kept;
+}
 
 export function createRunView(runId: string, prompt: string, approvalMode: ApprovalMode): RunView {
   return {
@@ -170,6 +207,7 @@ export function createRunView(runId: string, prompt: string, approvalMode: Appro
     status: null,
     outputTokens: null,
     thinking: "",
+    reasoning: [],
     contextUsage: null,
     text: "",
     activities: [],
@@ -237,7 +275,12 @@ export function applyRunEvent(view: RunView, event: RunEvent): RunView {
     case "output-tokens":
       return { ...base, outputTokens: { tokens: event.tokens, exact: event.exact } };
     case "thinking-delta":
-      return { ...base, thinking: `${base.thinking}${event.text}`.slice(-MAX_LIVE_THINKING_CHARS) };
+      return {
+        ...base,
+        thinking: `${base.thinking}${event.text}`.slice(-MAX_LIVE_THINKING_CHARS),
+        // A response that had shown no reasoning yet starts a block of its own.
+        reasoning: withReasoning(base.reasoning, event.text, base.thinking === "", base.activities.length),
+      };
     case "context-usage":
       return { ...base, contextUsage: { usedTokens: event.usedTokens, windowTokens: event.windowTokens } };
     case "message-delta": {

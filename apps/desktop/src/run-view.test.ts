@@ -14,7 +14,7 @@ import {
   recordAppliedAndVerified, recordGateIssues, recordHasWarnings, recordOnlyAnswered, recordSteps, recordTranscriptSegments,
   runAppliedAndVerified, runGateIssues, runHasWarnings, runOnlyAnswered, toRunRecord, transcriptSegments, usageLabel,
   type RunView,
-  latestProse, recordReply,
+  latestProse, recordReply, withReasoning, MAX_RUN_REASONING_CHARS,
 } from "./run-view";
 import { completedRunDurationLabel } from "./activity-model";
 
@@ -150,6 +150,25 @@ test("the model's reasoning is live state for the response in progress, never a 
   assert.equal(upTo(6).thinking, "Reading the result.");
   assert.equal(upTo(7).thinking, "", "a finished run shows none");
   assert.doesNotMatch(JSON.stringify(toRunRecord(upTo(7))), /Reading the result/, "the chat's record never keeps it");
+  // The whole chain stays for the Reasoning section: one block per response, in order.
+  assert.deepEqual(upTo(7).reasoning, [
+    { text: "Planning the shop. Checking prices.", afterSteps: 0 },
+    { text: "Reading the result.", afterSteps: 1 },
+  ]);
+});
+
+test("a run's reasoning chain keeps its latest part when it grows past the bound", () => {
+  const block = "x".repeat(MAX_RUN_REASONING_CHARS / 2);
+  let chain = withReasoning([], block, true, 0);
+  chain = withReasoning(chain, block, true, 1);
+  chain = withReasoning(chain, "newest", true, 2);
+  assert.deepEqual(chain.map((entry) => entry.afterSteps), [1, 2], "the oldest block goes first");
+  assert.ok(chain.reduce((total, entry) => total + entry.text.length, 0) <= MAX_RUN_REASONING_CHARS);
+  // One block alone past the bound keeps its end.
+  const huge = withReasoning([], "y".repeat(MAX_RUN_REASONING_CHARS + 10), true, 0);
+  assert.equal(huge[0].text.length, MAX_RUN_REASONING_CHARS);
+  // More of the same response joins its block rather than starting one.
+  assert.deepEqual(withReasoning([{ text: "a", afterSteps: 0 }], "b", false, 3), [{ text: "ab", afterSteps: 0 }]);
 });
 
 test("a run that only answered carries no completion card, live or recorded", () => {

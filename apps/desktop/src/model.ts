@@ -139,6 +139,12 @@ export type Preferences = {
    * reaches the model only once they choose to send it.
    */
   useStudioSelection: boolean;
+  /**
+   * Whether a run shows the model's reasoning while it thinks: the latest line
+   * on the Thinking card, and the run's whole chain when the card is opened.
+   * On by default. Off, Roqer does not ask the provider for the reasoning.
+   */
+  showReasoning: boolean;
   /** Whether the community invite card was dismissed, leaving only its icon. */
   communityInviteDismissed: boolean;
   /** Which managed sign-in drives runs. */
@@ -244,6 +250,7 @@ export function createInitialWorkspace(theme: Theme = "dark"): WorkspaceState {
       studioInstanceId: null,
       discordPresence: true,
       useStudioSelection: false,
+      showReasoning: true,
       communityInviteDismissed: false,
       provider: DEFAULT_PROVIDER_ID,
       chatGptModelId: null,
@@ -414,6 +421,9 @@ export function normalizeWorkspace(value: unknown, themeFallback: Theme = "dark"
     // Off unless the user turned it on: a workspace saved before this existed
     // gets the same answer a new install does.
     useStudioSelection: rawPreferences.useStudioSelection === true,
+    // On unless the user turned it off: a workspace saved before the switch
+    // existed shows the reasoning, as a new install does.
+    showReasoning: rawPreferences.showReasoning !== false,
     // Additive: a workspace saved before the invite existed has not seen it,
     // so it is offered once to people who were already using Roqer too.
     communityInviteDismissed: rawPreferences.communityInviteDismissed === true,

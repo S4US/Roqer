@@ -45,10 +45,11 @@ the saved session under the new settings.
 
 While Claude thinks before its first word, the waiting card shows how long it
 has been thinking and, with Claude Code 2.1.325 or later, a summary of its
-reasoning as it goes: the latest line on the card, and all of it under "Show
-reasoning". The summary is live only and is not kept in the chat. With an
-older Claude Code the card counts the tokens thought so far instead. One
-response can think for many minutes.
+reasoning as it goes: the latest line on the card, and under "Show reasoning"
+every thought of the run so far, in order. The reasoning is live only and is
+not kept in the chat. Turn it off in Settings, under App; Roqer then does not
+ask Claude Code for it. With an older Claude Code the card counts the tokens
+thought so far instead. One response can think for many minutes.
 
 ## Notes while Claude works
 
