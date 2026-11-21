@@ -43,6 +43,9 @@ A Claude Code process is reused while the chat's model, effort, place and
 tools stay the same. Otherwise the process is closed, and the next run resumes
 the saved session under the new settings.
 
+Each chat keeps its own thinking effort. Choosing one in a chat changes only
+that chat, and a new chat starts with the last effort chosen.
+
 While Claude thinks before its first word, the waiting card shows how long it
 has been thinking and, with Claude Code 2.1.325 or later, a summary of its
 reasoning as it goes: the latest line on the card, and under "Show reasoning"

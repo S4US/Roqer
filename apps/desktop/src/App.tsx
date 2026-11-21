@@ -18,6 +18,7 @@ import {
   appendMessage, createChat, createId, createInitialWorkspace, createProject, undeliverNotes, withMessageSelection,
   deleteChat, deleteProject, modelPreference, normalizeWorkspace, renameChat,
   renameProject, projectInstructions, selectedModelId, setProjectInstructions, setChatCompaction, setChatStudioInstance, chatStudioTarget, chatsByActivity, withdrawMessage,
+  chatReasoningEffort, setChatReasoningEffort, setDefaultReasoningEffort,
   type AssetAttachment, type ChatMessage, type WorkspaceState,
 } from "./model";
 import {
@@ -55,6 +56,7 @@ import { ModelMenu, RunMenu } from "./composer-menus";
 import { ContextMeter } from "./context-meter";
 import { compactUsageNote, contextMeterView, nextContextReading, type ContextReading } from "./context-usage";
 import { blockPreview, characterCount, composedMessage, finishBlockEdit, isLongPaste, lineCount, textSize, withBlockText, type PastedBlock } from "./composer-text";
+import { ComposerDrafts, draftKey, type ComposerDraft } from "./composer-drafts";
 import { RojoPill } from "./rojo-pill";
 
 /** The key that sends with Enter and makes a new chat with N, named the way this computer's keyboard names it. */
@@ -344,6 +346,31 @@ function App() {
   const recordedRuns = useRef(new Set<string>());
   const latestWorkspace = useRef(workspace);
   latestWorkspace.current = workspace;
+  /** The drafts of the chats not on screen; see composer-drafts.ts. */
+  const drafts = useRef(new ComposerDrafts());
+  /** What the box holds as of the latest render, kept as a draft when the person leaves the chat. */
+  const boxNow = useRef<ComposerDraft>({ text: composer, pastedBlocks, attachments });
+  boxNow.current = { text: composer, pastedBlocks, attachments };
+  /** Put a draft in the box, replacing whatever it held without releasing it. */
+  const loadDraft = useCallback((draft: ComposerDraft) => {
+    clearComposer();
+    setComposer(draft.text);
+    setPastedBlocks([...draft.pastedBlocks]);
+    setAttachments([...draft.attachments]);
+    setTrimmingClip(null);
+    setAttachmentError(null);
+  }, [clearComposer]);
+  /**
+   * Keep what is being written in the open chat, and bring back what was
+   * being written in the chat (or the project with no chat yet) being opened.
+   */
+  const switchDraft = useCallback((to: string) => {
+    const open = latestWorkspace.current;
+    const from = draftKey(open.selectedProjectId, open.selectedChatId);
+    if (from === to) return;
+    drafts.current.put(from, boxNow.current);
+    loadDraft(drafts.current.take(to));
+  }, [loadDraft]);
   /** Whether the box holds nothing typed or pasted, as of the latest render. */
   const composerEmpty = useRef(true);
   composerEmpty.current = composer === "" && pastedBlocks.length === 0;
@@ -632,14 +659,15 @@ function App() {
         ? current.preferences.reasoningEffort
         : model.defaultReasoningEffort;
       if (model.id === chosen && effort === current.preferences.reasoningEffort) return current;
-      return {
+      // Only the default for new chats is corrected: a chat's own choice is
+      // kept, and a run sends the model's default while it is unsupported.
+      return setDefaultReasoningEffort({
         ...current,
         preferences: {
           ...current.preferences,
           ...modelPreference(current.preferences.provider, model.id),
-          reasoningEffort: effort,
         },
-      };
+      }, effort);
     });
   }, [hydrated, modelCatalog]);
 
@@ -919,9 +947,13 @@ function App() {
       })(),
       provider: next.preferences.provider,
       model: availableModel?.id ?? null,
-      effort: availableModel?.supportedReasoningEfforts.some((entry) => entry.reasoningEffort === next.preferences.reasoningEffort)
-        ? next.preferences.reasoningEffort
-        : availableModel?.defaultReasoningEffort ?? "medium",
+      effort: (() => {
+        // This chat's own effort, so a choice made in another chat never reaches it.
+        const effort = chatReasoningEffort(next, projectId, chatId);
+        return availableModel?.supportedReasoningEfforts.some((entry) => entry.reasoningEffort === effort)
+          ? effort
+          : availableModel?.defaultReasoningEffort ?? "medium";
+      })(),
     };
     const attempt = ++runAttempt.current;
     const contextTarget = { chatId, provider: request.provider, model: request.model };
@@ -1078,20 +1110,21 @@ function App() {
   const newChat = useCallback(() => {
     if (!hydrated || !storageAvailable || storageRecovery.required) return;
     const next = createChat(workspace);
+    switchDraft(draftKey(next.selectedProjectId, next.selectedChatId));
     setWorkspace(next);
     setExpandedProjects((current) => new Set(current).add(next.selectedProjectId));
-    clearComposer(); void releaseAttachments(attachments.map((asset) => asset.id)); setAttachments([]); dismissOverlaySidebar();
-  }, [workspace, attachments, hydrated, storageAvailable, storageRecovery.required, dismissOverlaySidebar, clearComposer]);
+    dismissOverlaySidebar();
+  }, [workspace, hydrated, storageAvailable, storageRecovery.required, dismissOverlaySidebar, switchDraft]);
 
   const closeDialog = useCallback(() => setDialog(null), []);
 
   const addProject = (name: string) => {
     if (!storageAvailable || storageRecovery.required) return;
     const next = createProject(workspace, name);
+    switchDraft(draftKey(next.selectedProjectId, next.selectedChatId));
     setWorkspace(next);
     setExpandedProjects((current) => new Set(current).add(next.selectedProjectId));
     closeDialog();
-    clearComposer();
   };
 
   /**
@@ -1108,9 +1141,15 @@ function App() {
     if (!storageAvailable || storageRecovery.required) return;
     resetRun(chatId, true);
     void forgetChatSessions(chatId);
+    // The deleted chat's draft goes with it; another chat's stays where it is.
+    void releaseAttachments(drafts.current.discard([draftKey(projectId, chatId)]));
+    const open = latestWorkspace.current;
+    if (open.selectedChatId === chatId) {
+      void releaseAttachments(attachments.map((asset) => asset.id));
+      const after = deleteChat(open, projectId, chatId);
+      loadDraft(drafts.current.take(draftKey(after.selectedProjectId, after.selectedChatId)));
+    }
     setWorkspace((current) => deleteChat(current, projectId, chatId));
-    clearComposer();
-    setAttachments([]);
     closeDialog();
   };
 
@@ -1120,21 +1159,30 @@ function App() {
       resetRun(chat.id, true);
       void forgetChatSessions(chat.id);
     }
+    const open = latestWorkspace.current;
+    const removed = open.projects.find((project) => project.id === projectId);
+    void releaseAttachments(drafts.current.discard([
+      draftKey(projectId, null),
+      ...(removed?.chats ?? []).map((chat) => draftKey(projectId, chat.id)),
+    ]));
+    if (open.selectedProjectId === projectId) {
+      void releaseAttachments(attachments.map((asset) => asset.id));
+      const after = deleteProject(open, projectId);
+      loadDraft(drafts.current.take(draftKey(after.selectedProjectId, after.selectedChatId)));
+    }
     setWorkspace((current) => deleteProject(current, projectId));
     setExpandedProjects((current) => {
       const next = new Set(current);
       next.delete(projectId);
       return next;
     });
-    clearComposer();
-    setAttachments([]);
     closeDialog();
   };
 
   const selectChat = (projectId: string, chatId: string) => {
+    switchDraft(draftKey(projectId, chatId));
     setWorkspace((current) => ({ ...current, selectedProjectId: projectId, selectedChatId: chatId }));
-    clearComposer();
-    void releaseAttachments(attachments.map((asset) => asset.id)); setAttachments([]); dismissOverlaySidebar();
+    dismissOverlaySidebar();
   };
 
   const selectProject = (projectId: string) => {
@@ -1146,12 +1194,12 @@ function App() {
     // Folding the open project away is tidying the sidebar: the chat stays
     // open, with what was being written in it.
     if (projectId === workspace.selectedProjectId) return;
-    // Another project opens on another chat, so the draft goes the way it does
-    // when a chat is picked, rather than following into a chat it was not for.
+    // Another project opens on another chat, so the draft is kept with the
+    // chat it was written in, and that chat's own draft comes back.
     const project = workspace.projects.find((candidate) => candidate.id === projectId);
-    setWorkspace((current) => ({ ...current, selectedProjectId: projectId, selectedChatId: project === undefined ? null : chatsByActivity(project.chats)[0]?.id ?? null }));
-    clearComposer();
-    void releaseAttachments(attachments.map((asset) => asset.id)); setAttachments([]);
+    const chatId = project === undefined ? null : chatsByActivity(project.chats)[0]?.id ?? null;
+    switchDraft(draftKey(projectId, chatId));
+    setWorkspace((current) => ({ ...current, selectedProjectId: projectId, selectedChatId: chatId }));
   };
 
   const updatePreferences = (changes: Partial<WorkspaceState["preferences"]>) => {
@@ -1222,6 +1270,8 @@ function App() {
     try {
       const read = await selectClip(id, selection);
       setAttachments((current) => current.map((attachment) => (attachment.id === id ? read : attachment)));
+      // Or in the draft of a chat left while it was read.
+      drafts.current.replaceAttachment(read);
     } catch (error) {
       // A clip removed while it was read, with its message or by hand, needs no word.
       if (attachmentsRef.current.some((attachment) => attachment.id === id)) {
@@ -1954,15 +2004,29 @@ function App() {
                 status={providerStatus}
                 catalog={modelCatalog}
                 selectedModel={selectedModel}
-                effort={workspace.preferences.reasoningEffort}
+                effort={(() => {
+                  // What this chat's next run would send: its own effort, or
+                  // the model's default while the model does not offer it.
+                  const effort = chatReasoningEffort(workspace, workspace.selectedProjectId, workspace.selectedChatId);
+                  return selectedModel == null || selectedModel.supportedReasoningEfforts.some((entry) => entry.reasoningEffort === effort)
+                    ? effort
+                    : selectedModel.defaultReasoningEffort;
+                })()}
                 disabled={isRunning}
                 onManage={() => setShowSettings(true)}
-                onEffort={(reasoningEffort) => updatePreferences({ reasoningEffort })}
+                onEffort={(reasoningEffort) => setWorkspace((current) => setChatReasoningEffort(
+                  current, current.selectedProjectId, current.selectedChatId, reasoningEffort,
+                ))}
                 onPick={(nextProvider, model) => {
-                  const effort = model.supportedReasoningEfforts.some((entry) => entry.reasoningEffort === workspace.preferences.reasoningEffort)
-                    ? workspace.preferences.reasoningEffort
-                    : model.defaultReasoningEffort;
-                  updatePreferences({ provider: nextProvider, ...modelPreference(nextProvider, model.id), reasoningEffort: effort });
+                  setWorkspace((current) => {
+                    const effort = model.supportedReasoningEfforts.some((entry) => entry.reasoningEffort === current.preferences.reasoningEffort)
+                      ? current.preferences.reasoningEffort
+                      : model.defaultReasoningEffort;
+                    return setDefaultReasoningEffort({
+                      ...current,
+                      preferences: { ...current.preferences, provider: nextProvider, ...modelPreference(nextProvider, model.id) },
+                    }, effort);
+                  });
                 }}
               />
               <RunMenu

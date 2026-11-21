@@ -20,7 +20,64 @@ import {
   setProjectInstructions,
   setChatStudioInstance,
   withdrawMessage,
+  chatReasoningEffort,
+  setChatReasoningEffort,
+  setDefaultReasoningEffort,
 } from "./model";
+
+test("a chat's reasoning effort is its own: choosing one in a chat never changes another", () => {
+  // Two chats in two projects, both from before efforts were kept per chat.
+  let state = createChat(createInitialWorkspace());
+  const firstProject = state.selectedProjectId;
+  const first = state.selectedChatId!;
+  state = createChat(createProject(state, "BID OR BOOM!"));
+  const secondProject = state.selectedProjectId;
+  const second = state.selectedChatId!;
+  assert.notEqual(firstProject, secondProject);
+  assert.equal(chatReasoningEffort(state, firstProject, first), "medium");
+  assert.equal(chatReasoningEffort(state, secondProject, second), "medium");
+
+  state = setChatReasoningEffort(state, firstProject, first, "xhigh");
+  assert.equal(chatReasoningEffort(state, firstProject, first), "xhigh");
+  assert.equal(chatReasoningEffort(state, secondProject, second), "medium");
+
+  state = setChatReasoningEffort(state, secondProject, second, "low");
+  assert.equal(chatReasoningEffort(state, firstProject, first), "xhigh");
+  assert.equal(chatReasoningEffort(state, secondProject, second), "low");
+
+  // The last choice is what a new chat starts with, and starting one moves nobody.
+  state = createChat(state);
+  assert.equal(chatReasoningEffort(state, state.selectedProjectId, state.selectedChatId), "low");
+  assert.equal(chatReasoningEffort(state, firstProject, first), "xhigh");
+});
+
+test("changing the default effort keeps every existing chat on the effort it was using", () => {
+  let state = createChat(createInitialWorkspace());
+  const projectId = state.selectedProjectId;
+  const chatId = state.selectedChatId!;
+  state = setDefaultReasoningEffort(state, "high");
+  assert.equal(state.preferences.reasoningEffort, "high");
+  assert.equal(chatReasoningEffort(state, projectId, chatId), "medium");
+  // No change, no rewrite.
+  assert.equal(setDefaultReasoningEffort(state, "high"), state);
+  // With no chat open only the default moves.
+  const draft = setChatReasoningEffort(state, projectId, null, "max");
+  assert.equal(draft.preferences.reasoningEffort, "max");
+  assert.equal(chatReasoningEffort(draft, projectId, chatId), "medium");
+});
+
+test("a chat's reasoning effort survives being written to disk and read back, and junk is dropped", () => {
+  const base = createChat(createInitialWorkspace());
+  const projectId = base.selectedProjectId;
+  const chatId = base.selectedChatId!;
+  const saved = JSON.parse(JSON.stringify(setChatReasoningEffort(base, projectId, chatId, "max")));
+  assert.equal(chatReasoningEffort(normalizeWorkspace(saved), projectId, chatId), "max");
+  saved.projects[0].chats[0].reasoningEffort = "ludicrous";
+  saved.preferences.reasoningEffort = "low";
+  const restored = normalizeWorkspace(saved);
+  assert.equal(restored.projects[0].chats[0].reasoningEffort, undefined);
+  assert.equal(chatReasoningEffort(restored, projectId, chatId), "low");
+});
 
 test("a new workspace contains no invented projects, chats, or messages", () => {
   const state = createInitialWorkspace();
