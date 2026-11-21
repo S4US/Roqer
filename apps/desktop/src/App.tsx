@@ -81,7 +81,7 @@ import { evidenceDetailLabel, type ActivityKind } from "../shared/activity";
 import { boundConversation, MAX_MESSAGE_ATTACHMENTS, type ConversationMessage } from "../shared/conversation";
 import { compactChatSummary } from "../shared/chat-compaction";
 import { digestIsEmpty, digestRun } from "../shared/run-digest";
-import { MAX_STEER_CHARS } from "../shared/steer";
+import { MAX_STEER_CHARS, pictureNoteText } from "../shared/steer";
 import { describePolicyReason } from "../shared/policy";
 import { mcpServerMessage } from "../shared/mcp-server";
 import { appUpdateMessage, canInstallUpdate, updateInProgress } from "../shared/app-update";
@@ -804,6 +804,10 @@ function App() {
   const showRunControls = runStarting || runView !== null;
   /** The composer addresses the running agent rather than starting a run. */
   const steering = isRunning && !runStarting;
+  /** Whether a note to the run on screen may carry pictures: only a provider that can show them takes them. */
+  const notesTakePictures = steering && selectedRun !== null && selectedRun.demo === null && selectedRun.contextTarget.provider === "claude";
+  /** Whether files can be added now: before a run, or to a note that can carry them. */
+  const canAttach = !isRunning || notesTakePictures;
   /**
    * The pending question the person chose to answer in their own words. The
    * question stays pending -- the run stays paused -- until the note is sent,
@@ -829,21 +833,37 @@ function App() {
    */
   const sendSteer = async () => {
     const text = composer.trim();
-    if (!text || !steering) return;
+    // Pictures pasted, dropped or attached go with the note; on their own they are a note too.
+    const sent = attachments;
+    if ((!text && sent.length === 0) || !steering) return;
     if (text.length > MAX_STEER_CHARS) { setAttachmentError(`Shorten the note to ${MAX_STEER_CHARS.toLocaleString()} characters.`); return; }
     if (!selectedRun) return;
+    if (sent.length > 0 && !notesTakePictures) {
+      setAttachmentError(`Pictures can't go with a note to ${providerLabel(selectedRun.contextTarget.provider)}. Send them with your next message.`);
+      return;
+    }
+    const unread = sent.find((attachment) => attachment.clip !== undefined && (attachment.clip.id === undefined || readingClips.has(attachment.id)));
+    if (unread !== undefined) {
+      setAttachmentError(readingClips.has(unread.id)
+        ? `Roqer is still reading “${unread.name}”. Send once it has finished.`
+        : `Choose the part of “${unread.name}” to send first.`);
+      return;
+    }
     const target = { projectId: selectedRun.projectId, chatId: selectedRun.chatId };
-    const accepted = selectedRun.demo
+    const result = selectedRun.demo
       ? selectedRun.demo.steer(text)
-      : selectedRun.runId !== null && await steerRun(selectedRun.runId, text);
-    if (!accepted) {
-      setAttachmentError("Roqer had already finished. Send it as a new message.");
+      : selectedRun.runId !== null && await steerRun(selectedRun.runId, text, sent.length === 0 ? undefined : sent.map((attachment) => attachment.id));
+    if (result !== true) {
+      setAttachmentError(typeof result === "string" ? result : "Roqer had already finished. Send it as a new message.");
       return;
     }
     setWorkspace((current) => appendMessage(current, target.projectId, target.chatId, {
-      id: createId("message"), role: "user", text, createdAt: new Date().toISOString(), note: true,
+      id: createId("message"), role: "user", text: text || pictureNoteText(sent.length), createdAt: new Date().toISOString(), note: true,
+      ...(sent.length === 0 ? {} : { attachments: sent }),
     }));
     setComposer("");
+    // Released by the main process with the note, as a message's files are with its run.
+    if (sent.length > 0) setAttachments([]);
     const pending = runView?.pendingQuestion;
     if (pending) {
       setExplainingQuestion(null);
@@ -1836,14 +1856,14 @@ function App() {
           <div
             className={`composer-card${draggingImage ? " dropping" : ""}`}
             onDragOver={(event) => {
-              if (isRunning || !Array.from(event.dataTransfer.items).some((item) => item.kind === "file")) return;
+              if (!canAttach || !Array.from(event.dataTransfer.items).some((item) => item.kind === "file")) return;
               event.preventDefault();
               setDraggingImage(true);
             }}
             onDragLeave={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setDraggingImage(false); }}
             onDrop={(event) => {
               setDraggingImage(false);
-              if (isRunning) return;
+              if (!canAttach) return;
               const images = droppedImages(event.dataTransfer.files);
               if (images.length === 0) return;
               event.preventDefault();
@@ -1946,9 +1966,9 @@ function App() {
               setPastedBlocks((current) => [...current, { id: createId("paste"), text }]);
             }} placeholder={explaining ? "Your answer, in your own words" : pendingQuestion ? "Or write your own answer…" : steering ? "Add a note. Roqer reads it at its next step." : editingBlock ? "Pasted text" : "Describe what you want to build or change…"} aria-label={editingBlock ? "Pasted text" : "Message"} disabled={isRunning && !steering} />
             <div className="composer-toolbar">
-              {/* A note carries words only; a picture cannot be attached to a
-                  turn that is already in progress. */}
-              <button className="attach-button" onClick={() => void attachAsset()} title="Attach an asset pack" aria-label="Attach an asset pack" disabled={isRunning}><Paperclip size={17} /></button>
+              {/* While a run works, files go with a note, and only to a
+                  provider that can show the model pictures mid-run. */}
+              <button className="attach-button" onClick={() => void attachAsset()} title={steering ? "Attach a picture to your note" : "Attach an asset pack"} aria-label={steering ? "Attach a picture to your note" : "Attach an asset pack"} disabled={!canAttach}><Paperclip size={17} /></button>
               <ModelMenu
                 provider={provider}
                 status={providerStatus}
@@ -1991,7 +2011,7 @@ function App() {
               {steering
                 ? pendingQuestion && composer.trim()
                   ? <button className="send-button answer-send" onClick={() => void sendSteer()}>Send as answer <ArrowUp size={16} aria-hidden="true" /></button>
-                  : <button className="send-button" onClick={() => void sendSteer()} disabled={!composer.trim()} aria-label="Send note to the running task"><ArrowUp size={18} /></button>
+                  : <button className="send-button" onClick={() => void sendSteer()} disabled={!composer.trim() && attachments.length === 0} aria-label="Send note to the running task"><ArrowUp size={18} /></button>
                 : !showRunControls && <button className="send-button" onClick={() => void sendPrompt()} disabled={!hydrated || !storageAvailable || storageRecovery.required || isRunning || message === "" || sendAfterCompact !== null || (hasDesktopRuntime() && providerStatus.kind === "signed-in" && !selectedModel)} aria-label={compacting ? "Send once compacting finishes" : "Send message"} title={compacting ? "Sends once compacting finishes" : undefined}><ArrowUp size={18} /></button>}
             </div>
           </div>

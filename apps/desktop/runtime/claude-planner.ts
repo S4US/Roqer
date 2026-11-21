@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import readline from "node:readline";
 
-import type { Planner, PlannerContext } from "./run-engine";
+import type { Planner, PlannerContext, SteerNote } from "./run-engine";
 import {
   MAX_RECORDED_REQUESTS, MAX_REQUEST_TOOL_CHARS, MAX_REQUEST_TOOLS, type RunRequestUsage, type RunUsage,
 } from "../shared/run-events";
@@ -850,6 +850,8 @@ const MISSING_SESSION = /no conversation found/i;
 export function createClaudePlanner(options: ClaudePlannerOptions): Planner {
   return {
     id: "claude-code",
+    // A note's pictures go to Claude Code in the same user message as its words.
+    notePictures: true,
     async run(context: PlannerContext): Promise<string> {
       if (context.signal.aborted) throw new Error("Run was cancelled.");
       context.progress("Connecting to Claude", "Using your managed Claude Code sign-in");
@@ -887,11 +889,21 @@ export function createClaudePlanner(options: ClaudePlannerOptions): Planner {
       /** After a turn ended with notes unread: waiting for the turn Claude Code starts for them. */
       let noteTurn: ReturnType<typeof setTimeout> | null = null;
       let notePoll: ReturnType<typeof setInterval> | null = null;
-      const sendNotes = (steers: string[]) => {
-        const texts = steers.map(steerText);
+      const sendNotes = (notes: readonly SteerNote[]) => {
+        const texts = notes.map((note) => steerText(note.text));
         unread.push(...texts);
-        session!.writeUserMessage(texts.map((text) => ({ type: "text", text })));
-        context.status("Sent your note to Claude", steers.length === 1 ? steers[0] : `${steers.length} notes sent.`);
+        // Each note's words, then every picture sent with them, in one user
+        // message: Claude Code shows the model all of it at its next step.
+        session!.writeUserMessage([
+          ...notes.map((note, index) => ({ type: "text", text: note.context === undefined ? texts[index] : `${texts[index]}\n\n${note.context}` })),
+          ...notes.flatMap((note) => note.images.map((image) => ({
+            type: "image",
+            source: { type: "base64", media_type: image.mediaType, data: image.data },
+          }))),
+        ]);
+        const pictures = notes.reduce((total, note) => total + note.images.length, 0);
+        const withPictures = pictures === 0 ? "" : ` with ${pictures === 1 ? "a picture" : `${pictures} pictures`}`;
+        context.status(`Sent your note to Claude${withPictures}`, notes.length === 1 ? notes[0].text : `${notes.length} notes sent.`);
       };
       /**
        * Hand queued notes to Claude Code now rather than at the end of the
@@ -901,8 +913,9 @@ export function createClaudePlanner(options: ClaudePlannerOptions): Planner {
        */
       const deliverNotes = () => {
         if (settled || session === undefined) return;
-        const steers = context.takeSteers({ confirmLater: true });
-        if (steers.length > 0) sendNotes(steers);
+        const notes = context.takeNotes?.({ confirmLater: true }) ??
+          context.takeSteers({ confirmLater: true }).map((text): SteerNote => ({ text, images: [] }));
+        if (notes.length > 0) sendNotes(notes);
       };
       const noteEchoed = (message: JsonRecord) => {
         let echoed = userMessageText(message);

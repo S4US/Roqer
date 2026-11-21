@@ -49,6 +49,11 @@ A note you send while a Claude run works reaches Claude at its next step,
 beside the result of the tool call in progress, the way a message typed into
 Claude Code mid-turn does. It does not wait for the turn to end.
 
+A note can carry pictures: paste, drop or attach them while the run works, and
+they reach Claude in the same message as the note's words. Pictures sent with
+nothing written are a note of their own. Only Claude runs take pictures in a
+note; with another provider, send them with your next message.
+
 Under the run, each note shows where it is:
 
 - **Queued** until Claude Code puts it in front of the model. Roqer starts

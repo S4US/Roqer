@@ -176,6 +176,8 @@ let shutdownFinishedForQuit = false;
  */
 const trustedSenders = new Set<number>();
 const runSessions = new Map<string, RunSession>();
+/** Each working run's chat, for the files a note sends: a clip is read from its chat's folder. */
+const runChats = new Map<string, string>();
 const runExecutions = new Set<Promise<unknown>>();
 const pendingRuns = new PendingRuns();
 /** Calls the person back to the window while a run waits on them. Null while there is no window. */
@@ -2704,6 +2706,7 @@ async function startRun(event: IpcMainInvokeEvent, payload: unknown): Promise<Ru
     });
 
     runSessions.set(runId, session);
+    runChats.set(runId, request.chatId);
     // Driven from the session map rather than from one run, so a second run
     // finishing does not report the app idle while the first is still going.
     presence.setRunning(true);
@@ -2715,6 +2718,7 @@ async function startRun(event: IpcMainInvokeEvent, payload: unknown): Promise<Ru
       const closingServers = externalMcpSession?.close()
         .catch((error) => console.error("Roqer could not close the run's MCP servers:", error));
       runSessions.delete(runId);
+      runChats.delete(runId);
       runHold.release();
       // However the run ended, it waits on no one now.
       runAttention?.endRun(runId);
@@ -2820,13 +2824,33 @@ function answerRun(event: IpcMainInvokeEvent, payload: unknown): boolean {
   return runSessions.get(runId)?.resolveQuestion(callId, answerIndex) ?? false;
 }
 
-function steerRun(event: IpcMainInvokeEvent, payload: unknown): boolean {
+/**
+ * Queue a note. True when queued, false when the run has ended or refused it,
+ * and a message when the files sent with it could not be read.
+ */
+async function steerRun(event: IpcMainInvokeEvent, payload: unknown): Promise<boolean | string> {
   if (!isTrusted(event.sender) || !isRecord(payload)) return false;
-  const { runId, text } = payload;
+  const { runId, text, attachmentIds } = payload;
   if (typeof runId !== "string") return false;
+  const session = runSessions.get(runId);
+  if (session === undefined) return false;
   // The session bounds and normalizes the text, and refuses it once the run
   // has ended.
-  return runSessions.get(runId)?.steer(text) ?? false;
+  if (attachmentIds === undefined) return session.steer(text);
+  if (!Array.isArray(attachmentIds) || attachmentIds.length === 0 || attachmentIds.length > 8 ||
+    !attachmentIds.every((id) => typeof id === "string" && id.length <= 100)) return false;
+  // Read the same way a message's files are: pictures as pictures, other
+  // files as text, a clip from the chat's own folder.
+  let attached: Awaited<ReturnType<typeof attachments.context>>;
+  try {
+    attached = await attachments.context(attachmentIds, { images: true, scope: clipScope(runChats.get(runId) ?? "") });
+  } catch (error) {
+    return error instanceof Error ? error.message : "The files could not be read.";
+  }
+  const accepted = session.steer(text, { images: attached.images, context: attached.text });
+  // Sent with the note, the files are the note's now, as a message's are its run's.
+  if (accepted) attachments.release(attachmentIds);
+  return accepted;
 }
 
 function cancelRun(event: IpcMainInvokeEvent, payload: unknown): void {
