@@ -3,7 +3,7 @@ import {
   CircleDot, ExternalLink, FileBox, FileCode2, FileText, Folder, FolderPlus, Gamepad2,
   HelpCircle, Info, Loader2, MessageSquare, MinusCircle, MoreHorizontal,
   ArrowUp, Maximize2, Minimize2, PanelLeftClose, PanelLeftOpen, Paperclip, Pencil, Play, Plus, RotateCw, ScrollText, Search, Settings, Square,
-  ShieldCheck, Sparkles, MousePointerClick,
+  ShieldCheck, MousePointerClick,
   Trash2, Upload, X,
 } from "lucide-react";
 import { Fragment, memo, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
@@ -61,6 +61,7 @@ import { RojoPill } from "./rojo-pill";
 const SEND_MODIFIER = typeof navigator !== "undefined" && /Mac/.test(navigator.userAgent) ? "⌘" : "Ctrl";
 
 import { providerCard } from "./provider-card";
+import { SubscriptionCard } from "./subscription-card";
 import { COMMUNITY_INVITE_URL, communityInvite } from "./community-invite";
 import { CommunityCard, CommunityIcon } from "./community-links";
 import { approvalCode } from "./approval-code";
@@ -1693,7 +1694,7 @@ function App() {
         </nav>
         <div className="sidebar-footer">
           {invite === "card" && <CommunityCard url={COMMUNITY_INVITE_URL} onDismiss={dismissCommunityInvite} />}
-          <div className="subscription-card"><Sparkles size={16} /><div><strong>{card.title}</strong><span>{card.detail}</span></div>{card.badge !== undefined && <span className="runtime-badge">{card.badge}</span>}</div>
+          <SubscriptionCard card={card} provider={provider} signedIn={hasDesktopRuntime() && providerStatus.kind === "signed-in"} />
           {/* The download is the part that takes a while, and it used to be
               the part nothing showed: the install button appeared only once it
               was over, so a person who had heard there was an update saw

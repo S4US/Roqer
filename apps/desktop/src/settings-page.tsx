@@ -19,7 +19,8 @@ import {
   cancelProviderLogin, getAppVersion, getProviderLimits, getProviderStatus, installProviderClient, loginProvider, logoutProvider, openProviderLogin, submitProviderCode,
   waitForProviderLogin,
 } from "./platform";
-import { planUsageView } from "./plan-usage";
+import { planUsageView, USAGE_SCOPES } from "./plan-usage";
+import { PlanUsageList } from "./plan-usage-list";
 import { SettingsGroup, SettingsRow, SettingsSwitch } from "./settings-parts";
 
 /**
@@ -52,13 +53,6 @@ const ACCOUNT_PROVIDERS = ENABLED_PROVIDER_IDS.filter((provider) => provider !==
 const ACCOUNT_CLIENTS: Partial<Record<ProviderId, string>> = {
   chatgpt: "Codex", claude: "Claude Code", antigravity: "Antigravity CLI",
 };
-
-/**
- * What a plan's limits cover: ChatGPT meters Codex apart from chat, while
- * Claude's limits are shared by every Claude app. Antigravity meters groups of
- * models apart, and the meter shows its Gemini group.
- */
-const USAGE_SCOPES: Partial<Record<ProviderId, string>> = { chatgpt: "Codex", claude: "Claude", antigravity: "Gemini models" };
 
 /**
  * Where Roqer's source and licence are published. The About group shows them
@@ -454,17 +448,7 @@ function AccountRow({ provider, onChanged }: { provider: ProviderId; onChanged: 
           </>
           : <button type="button" className="small-button" disabled={pending || status.kind === "checking"} onClick={() => void connect()}>{pending ? "Opening…" : "Connect"}</button>}
     </SettingsRow>
-    {usage !== null && <div className="plan-usage">
-      {usage.reached && <p className="plan-usage-reached">{name} reports this plan's usage limit is reached.</p>}
-      {usage.rows.map((row) => <div key={row.label} className={`plan-usage-row ${row.tone}`}>
-        <span className="plan-usage-label">{row.label}</span>
-        <span className="plan-usage-track" role="meter" aria-label={row.label} aria-valuemin={0} aria-valuemax={100} aria-valuenow={row.percent}>
-          <span style={{ width: `${row.percent}%` }} />
-        </span>
-        <span className="plan-usage-detail">{row.detail}</span>
-      </div>)}
-      <p className="plan-usage-note">{usage.footnote}</p>
-    </div>}
+    {usage !== null && <div className="plan-usage"><PlanUsageList usage={usage} name={name} /></div>}
     {signOutError !== null && <p className="custom-message error">{signOutError}</p>}
     {/* A failed install says why and gives the vendor's command to run by hand;
         a declined one just says so. */}

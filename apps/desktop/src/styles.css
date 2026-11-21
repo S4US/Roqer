@@ -271,6 +271,13 @@ button:focus-visible, textarea:focus-visible, select:focus-visible, input:focus-
 .subscription-card div { display: flex; flex-direction: column; gap: 1px; }
 .subscription-card strong { font-size: var(--type-label); font-weight: var(--weight-medium); }
 .subscription-card span { color: var(--muted); font-size: var(--type-meta); }
+/* The card opens the plan's usage above itself, on hover or click. */
+.subscription-wrap { position: relative; }
+.subscription-button { width: 100%; font: inherit; text-align: left; cursor: pointer; }
+.subscription-button:hover, .subscription-button[aria-expanded="true"] { border-color: var(--border); background: var(--surface-raised); }
+.subscription-usage { position: absolute; bottom: calc(100% + 6px); left: 0; z-index: 40; display: grid; gap: 8px; width: 340px; max-width: calc(100vw - 24px); padding: 12px 14px; background: var(--surface-raised); border: 1px solid var(--border); border-radius: 12px; box-shadow: var(--shadow-md); animation: enter .16s cubic-bezier(.22, .8, .26, 1) both; }
+.subscription-usage-title { margin: 0; color: var(--ink); font-size: var(--type-label); font-weight: var(--weight-medium); }
+.subscription-usage .plan-usage-row { grid-template-columns: 92px minmax(50px, 1fr) auto; gap: 10px; }
 .subscription-card .runtime-badge { padding: 4px 6px; color: var(--muted); background: var(--surface-sunken); border: 1px solid var(--border-subtle); border-radius: 6px; font-size: var(--type-meta); font-weight: var(--weight-regular); }
 .settings-button { display: flex; align-items: center; gap: 10px; width: 100%; margin-top: 8px; padding: 0 10px; color: var(--muted); background: transparent; border: 0; border-radius: 9px; font-weight: var(--weight-medium); }
 .settings-button:hover { color: var(--ink); background: var(--sidebar-active); }
