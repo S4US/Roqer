@@ -8,7 +8,7 @@ import os from "node:os";
 
 import {
   CLAUDE_TOOL_CALL_TIMEOUT_MS, claudeContextUsage, claudeContextWindow, claudeResultUsage, ClaudeRunUsage, claudeSessionFile,
-  compactClaudeChat, createClaudePlanner, streamedOutput, type ClaudeSession,
+  compactClaudeChat, createClaudePlanner, streamedOutput, streamedReasoning, thinkingTokensDelta, type ClaudeSession,
 } from "./claude-planner";
 import { ClaudeSessionRegistry } from "./claude-session-registry";
 import { timeoutForTool } from "../shared/mcp-tools";
@@ -1217,6 +1217,30 @@ test("Claude Code's stream is counted for the waiting line: what streamed, then 
   assert.equal(event({ type: "content_block_delta", index: 0, delta: { type: "signature_delta", signature: "sig" } }), null);
   assert.equal(event({ type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "Sub-agent" } }, "toolu_1"), null);
   assert.equal(event({ type: "message_delta", usage: { output_tokens: -1 } }), null);
+});
+
+test("hidden thinking is counted from Claude Code's thinking_tokens reports, the main agent's only", () => {
+  // Opus 5.5 streams its thinking as empty deltas; this report is the only sign of a long think.
+  const report = (extra: Record<string, unknown>) => thinkingTokensDelta({ type: "system", subtype: "thinking_tokens", ...extra });
+  assert.equal(report({ estimated_tokens: 150, estimated_tokens_delta: 100 }), 100);
+  assert.equal(report({ estimated_tokens: 150, estimated_tokens_delta: 100, parent_tool_use_id: "toolu_1" }), null);
+  assert.equal(report({ estimated_tokens_delta: -5 }), null);
+  assert.equal(report({ estimated_tokens_delta: "12" }), null);
+  assert.equal(thinkingTokensDelta({ type: "system", subtype: "status", estimated_tokens_delta: 10 }), null);
+  assert.equal(streamedOutput({ type: "stream_event", parent_tool_use_id: null, event: { type: "content_block_delta", delta: { type: "thinking_delta", thinking: "" } } }), null);
+});
+
+test("summarised reasoning is passed on from the main agent's thinking blocks, each opening a paragraph", () => {
+  const event = (value: Record<string, unknown>, parent: string | null = null) =>
+    streamedReasoning({ type: "stream_event", parent_tool_use_id: parent, event: value });
+  assert.equal(event({ type: "content_block_start", index: 0, content_block: { type: "thinking", thinking: "" } }), "\n\n");
+  assert.equal(event({ type: "content_block_delta", index: 0, delta: { type: "thinking_delta", thinking: "I'm multiplying" } }), "I'm multiplying");
+  // Hidden thinking streams empty deltas; a signature, text, a sub-agent and other block starts are not reasoning.
+  assert.equal(event({ type: "content_block_delta", index: 0, delta: { type: "thinking_delta", thinking: "" } }), null);
+  assert.equal(event({ type: "content_block_delta", index: 0, delta: { type: "signature_delta", signature: "sig" } }), null);
+  assert.equal(event({ type: "content_block_delta", index: 1, delta: { type: "text_delta", text: "Done." } }), null);
+  assert.equal(event({ type: "content_block_start", index: 1, content_block: { type: "text", text: "" } }), null);
+  assert.equal(event({ type: "content_block_delta", index: 0, delta: { type: "thinking_delta", thinking: "Sub" } }, "toolu_1"), null);
 });
 
 test("Claude Code's context is what the main agent's response read and wrote, against the window its result names", () => {

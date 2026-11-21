@@ -685,3 +685,23 @@ export class ClaudeCodeClient implements ClaudeLauncher {
     });
   }
 }
+
+/** The first Claude Code release Roqer has seen take `--thinking-display`. */
+export const CLAUDE_THINKING_DISPLAY_VERSION = "2.1.325";
+
+/**
+ * Whether a Claude Code of this version takes `--thinking-display`. The flag
+ * is hidden from its help, and an older client would refuse the whole run over
+ * an option it does not know, so an unknown or older version goes without it.
+ */
+export function claudeTakesThinkingDisplay(version: string | null): boolean {
+  if (version === null) return false;
+  const parts = (text: string) => text.split(".").map((part) => Number.parseInt(part, 10));
+  const have = parts(version);
+  const need = parts(CLAUDE_THINKING_DISPLAY_VERSION);
+  if (have.length < 3 || have.some((part) => !Number.isSafeInteger(part))) return false;
+  for (let index = 0; index < need.length; index += 1) {
+    if (have[index] !== need[index]) return have[index] > need[index];
+  }
+  return true;
+}

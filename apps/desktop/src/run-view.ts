@@ -108,6 +108,12 @@ export type RunView = {
    */
   outputTokens: { tokens: number; exact: boolean } | null;
   /**
+   * The model's reasoning in the response it is producing now, as the
+   * provider summarises it, for the waiting card. Live state cleared with
+   * `outputTokens`, and bounded to the last `MAX_LIVE_THINKING_CHARS`.
+   */
+  thinking: string;
+  /**
    * How full the model's context window was at its latest response, as the
    * provider reported it. Null until the run's first report. Unlike
    * `outputTokens` nothing clears it: it describes the conversation, not the
@@ -152,6 +158,9 @@ export type RunView = {
   desynchronized: boolean;
 };
 
+/** The most reasoning the waiting card keeps for one response: its latest part. */
+export const MAX_LIVE_THINKING_CHARS = 40_000;
+
 export function createRunView(runId: string, prompt: string, approvalMode: ApprovalMode): RunView {
   return {
     runId,
@@ -160,6 +169,7 @@ export function createRunView(runId: string, prompt: string, approvalMode: Appro
     approvalMode,
     status: null,
     outputTokens: null,
+    thinking: "",
     contextUsage: null,
     text: "",
     activities: [],
@@ -226,6 +236,8 @@ export function applyRunEvent(view: RunView, event: RunEvent): RunView {
       };
     case "output-tokens":
       return { ...base, outputTokens: { tokens: event.tokens, exact: event.exact } };
+    case "thinking-delta":
+      return { ...base, thinking: `${base.thinking}${event.text}`.slice(-MAX_LIVE_THINKING_CHARS) };
     case "context-usage":
       return { ...base, contextUsage: { usedTokens: event.usedTokens, windowTokens: event.windowTokens } };
     case "message-delta": {
@@ -245,6 +257,7 @@ export function applyRunEvent(view: RunView, event: RunEvent): RunView {
       return {
         ...base,
         outputTokens: null,
+        thinking: "",
         activities: [...base.activities, {
           callId: event.proposal.callId,
           tool: event.proposal.tool,
@@ -263,6 +276,7 @@ export function applyRunEvent(view: RunView, event: RunEvent): RunView {
         ...base,
         pendingApproval: { callId: event.callId, proposal: event.proposal, reason: event.reason },
         outputTokens: null,
+        thinking: "",
         activities: updateActivity(base, event.callId, { state: "awaiting-approval" }),
       };
     case "approval-resolved":
@@ -279,6 +293,7 @@ export function applyRunEvent(view: RunView, event: RunEvent): RunView {
       return {
         ...base,
         outputTokens: null,
+        thinking: "",
         activities: updateActivity(base, event.callId, {
           state: event.ok ? "done" : "failed",
           durationMs: event.durationMs,
@@ -320,6 +335,7 @@ export function applyRunEvent(view: RunView, event: RunEvent): RunView {
         ...base,
         pendingQuestion: event.question,
         outputTokens: null,
+        thinking: "",
         timeline: [...base.timeline, {
           type: "note",
           key: `note-${event.seq}`,
@@ -355,6 +371,7 @@ export function applyRunEvent(view: RunView, event: RunEvent): RunView {
         finishedAt: event.at,
         status: null,
         outputTokens: null,
+        thinking: "",
         // A finished run has nothing left to approve or ask.
         pendingApproval: null,
         pendingQuestion: null,

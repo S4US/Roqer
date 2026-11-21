@@ -131,6 +131,27 @@ test("an output count is live state for the response in progress, cleared when t
   assert.equal(upTo(7).outputTokens, null, "a finished run shows no count");
 });
 
+test("the model's reasoning is live state for the response in progress, never a step and never recorded", () => {
+  const events = stream(
+    started,
+    { type: "status", label: "Thinking with Claude", transient: true },
+    { type: "thinking-delta", text: "Planning the shop. " },
+    { type: "thinking-delta", text: "Checking prices." },
+    { type: "tool-proposed", proposal: proposal("call-1") },
+    { type: "thinking-delta", text: "Reading the result." },
+    { type: "run-completed", outcome: "completed", summary: "Done." },
+  );
+  const upTo = (count: number) => fold(events.slice(0, count));
+
+  assert.equal(upTo(2).thinking, "");
+  assert.equal(upTo(4).thinking, "Planning the shop. Checking prices.");
+  assert.deepEqual(upTo(4).timeline, [], "reasoning is never a step");
+  assert.equal(upTo(5).thinking, "", "a tool taking over ends that response's reasoning");
+  assert.equal(upTo(6).thinking, "Reading the result.");
+  assert.equal(upTo(7).thinking, "", "a finished run shows none");
+  assert.doesNotMatch(JSON.stringify(toRunRecord(upTo(7))), /Reading the result/, "the chat's record never keeps it");
+});
+
 test("a run that only answered carries no completion card, live or recorded", () => {
   const answered = fold(stream(
     started,
