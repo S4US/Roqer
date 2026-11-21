@@ -908,7 +908,6 @@ function App() {
       approvalMode: next.preferences.approvalMode,
       autoPlaytest: next.preferences.autoPlaytest,
       webSearch: next.preferences.webSearch,
-      showReasoning: next.preferences.showReasoning,
       ...(() => {
         const instructions = projectInstructions(next, projectId);
         return instructions === undefined ? {} : { projectInstructions: instructions };

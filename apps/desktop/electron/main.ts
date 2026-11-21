@@ -2348,7 +2348,7 @@ function parseStartRequest(value: unknown): RunStartRequest | null {
   if (!isRecord(value)) return null;
   const {
     projectId, chatId, prompt, conversation, approvalMode, autoPlaytest, endpoint, instanceId, provider, model, effort, startId, attachmentIds,
-    includeSelection, webSearch, showReasoning, projectInstructions: rawProjectInstructions,
+    includeSelection, webSearch, projectInstructions: rawProjectInstructions,
   } = value;
   if (typeof projectId !== "string" || projectId === "" || projectId.length > 1_000) return null;
   if (typeof chatId !== "string" || chatId === "" || chatId.length > 1_000) return null;
@@ -2357,7 +2357,6 @@ function parseStartRequest(value: unknown): RunStartRequest | null {
   if (attachmentIds !== undefined && (!Array.isArray(attachmentIds) || attachmentIds.length > 8 || !attachmentIds.every((id) => typeof id === "string" && id.length <= 100))) return null;
   if (includeSelection !== undefined && typeof includeSelection !== "boolean") return null;
   if (webSearch !== undefined && typeof webSearch !== "boolean") return null;
-  if (showReasoning !== undefined && typeof showReasoning !== "boolean") return null;
   // The window sends the project's instructions as it saved them. A value the
   // project could not have saved refuses the run rather than sending something
   // other than what the user sees in the project's settings.
@@ -2387,7 +2386,6 @@ function parseStartRequest(value: unknown): RunStartRequest | null {
     attachmentIds,
     includeSelection,
     webSearch,
-    ...(showReasoning === undefined ? {} : { showReasoning }),
     ...(projectInstructions === undefined ? {} : { projectInstructions }),
   };
 }
@@ -2574,9 +2572,10 @@ async function startRun(event: IpcMainInvokeEvent, payload: unknown): Promise<Ru
     // Reasoning summaries are asked for only from a Claude Code known to take
     // the flag; the version is cached per executable, so this costs nothing
     // after the first run.
-    // Not asked for at all when the user turned the reasoning off in Settings.
+    // Always asked for, whatever Settings says: the switch only shows or hides
+    // it, so turning it on in the middle of a run shows what the run has
+    // already thought rather than nothing until the next run.
     const thinkingSummaries = !smokeTest && resolvedRequest.provider === "claude" &&
-      resolvedRequest.showReasoning !== false &&
       claudeTakesThinkingDisplay(await readClientVersion("claude"));
     if (cancelled()) return stopped;
     const planner = smokeTest

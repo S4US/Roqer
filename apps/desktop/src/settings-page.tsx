@@ -245,7 +245,7 @@ export function SettingsPage({ leaving = false, preferences, studioStatus, updat
                 <button type="button" aria-pressed={preferences.theme === "light"} onClick={() => onPreferences({ theme: "light" })}><Sun size={14} aria-hidden="true" />Light</button>
               </div>
             </SettingsRow>
-            <SettingsRow title="Show the model's reasoning" detail="While the model thinks, the Thinking card shows what it is working out, and opens on the run's whole chain of reasoning. Claude only.">
+            <SettingsRow title="Show the model's reasoning" detail="While the model thinks, the Thinking card shows what it is working out, and opens on the run's whole chain of reasoning. Takes effect at once, also during a run. Claude only.">
               <SettingsSwitch label="Show the model's reasoning" checked={preferences.showReasoning} onChange={(showReasoning) => onPreferences({ showReasoning })} />
             </SettingsRow>
             <SettingsRow title="Show Roqer on Discord" detail="Your profile shows that Roqer is open and whether it is busy. Never your place, scripts, or tasks.">

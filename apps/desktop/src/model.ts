@@ -142,7 +142,8 @@ export type Preferences = {
   /**
    * Whether a run shows the model's reasoning while it thinks: the latest line
    * on the Thinking card, and the run's whole chain when the card is opened.
-   * On by default. Off, Roqer does not ask the provider for the reasoning.
+   * On by default. Display only: runs receive the reasoning either way, so
+   * turning it on mid-run shows everything the run has thought so far.
    */
   showReasoning: boolean;
   /** Whether the community invite card was dismissed, leaving only its icon. */
