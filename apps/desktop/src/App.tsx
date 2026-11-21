@@ -18,6 +18,7 @@ import {
   appendMessage, createChat, createId, createInitialWorkspace, createProject, undeliverNotes, withMessageSelection,
   deleteChat, deleteProject, modelPreference, normalizeWorkspace, renameChat,
   renameProject, projectInstructions, selectedModelId, setProjectInstructions, setChatCompaction, setChatStudioInstance, chatStudioTarget, chatsByActivity, withdrawMessage,
+  chatReasoningEffort, setChatReasoningEffort, setDefaultReasoningEffort,
   type AssetAttachment, type ChatMessage, type WorkspaceState,
 } from "./model";
 import {
@@ -632,14 +633,15 @@ function App() {
         ? current.preferences.reasoningEffort
         : model.defaultReasoningEffort;
       if (model.id === chosen && effort === current.preferences.reasoningEffort) return current;
-      return {
+      // Only the default for new chats is corrected: a chat's own choice is
+      // kept, and a run sends the model's default while it is unsupported.
+      return setDefaultReasoningEffort({
         ...current,
         preferences: {
           ...current.preferences,
           ...modelPreference(current.preferences.provider, model.id),
-          reasoningEffort: effort,
         },
-      };
+      }, effort);
     });
   }, [hydrated, modelCatalog]);
 
@@ -919,9 +921,13 @@ function App() {
       })(),
       provider: next.preferences.provider,
       model: availableModel?.id ?? null,
-      effort: availableModel?.supportedReasoningEfforts.some((entry) => entry.reasoningEffort === next.preferences.reasoningEffort)
-        ? next.preferences.reasoningEffort
-        : availableModel?.defaultReasoningEffort ?? "medium",
+      effort: (() => {
+        // This chat's own effort, so a choice made in another chat never reaches it.
+        const effort = chatReasoningEffort(next, projectId, chatId);
+        return availableModel?.supportedReasoningEfforts.some((entry) => entry.reasoningEffort === effort)
+          ? effort
+          : availableModel?.defaultReasoningEffort ?? "medium";
+      })(),
     };
     const attempt = ++runAttempt.current;
     const contextTarget = { chatId, provider: request.provider, model: request.model };
@@ -1954,15 +1960,29 @@ function App() {
                 status={providerStatus}
                 catalog={modelCatalog}
                 selectedModel={selectedModel}
-                effort={workspace.preferences.reasoningEffort}
+                effort={(() => {
+                  // What this chat's next run would send: its own effort, or
+                  // the model's default while the model does not offer it.
+                  const effort = chatReasoningEffort(workspace, workspace.selectedProjectId, workspace.selectedChatId);
+                  return selectedModel == null || selectedModel.supportedReasoningEfforts.some((entry) => entry.reasoningEffort === effort)
+                    ? effort
+                    : selectedModel.defaultReasoningEffort;
+                })()}
                 disabled={isRunning}
                 onManage={() => setShowSettings(true)}
-                onEffort={(reasoningEffort) => updatePreferences({ reasoningEffort })}
+                onEffort={(reasoningEffort) => setWorkspace((current) => setChatReasoningEffort(
+                  current, current.selectedProjectId, current.selectedChatId, reasoningEffort,
+                ))}
                 onPick={(nextProvider, model) => {
-                  const effort = model.supportedReasoningEfforts.some((entry) => entry.reasoningEffort === workspace.preferences.reasoningEffort)
-                    ? workspace.preferences.reasoningEffort
-                    : model.defaultReasoningEffort;
-                  updatePreferences({ provider: nextProvider, ...modelPreference(nextProvider, model.id), reasoningEffort: effort });
+                  setWorkspace((current) => {
+                    const effort = model.supportedReasoningEfforts.some((entry) => entry.reasoningEffort === current.preferences.reasoningEffort)
+                      ? current.preferences.reasoningEffort
+                      : model.defaultReasoningEffort;
+                    return setDefaultReasoningEffort({
+                      ...current,
+                      preferences: { ...current.preferences, provider: nextProvider, ...modelPreference(nextProvider, model.id) },
+                    }, effort);
+                  });
                 }}
               />
               <RunMenu
