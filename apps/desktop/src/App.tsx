@@ -804,6 +804,19 @@ function App() {
   const showRunControls = runStarting || runView !== null;
   /** The composer addresses the running agent rather than starting a run. */
   const steering = isRunning && !runStarting;
+  /**
+   * The files sent with each note of the run on screen, in the order sent:
+   * every note the window sends is saved to the chat with its files as it is
+   * accepted, in the same order as the run's notes, so the live notes can show
+   * their pictures before the run's record takes their place.
+   */
+  const liveNotePictures = useMemo(() => {
+    const startedAt = runView?.startedAt ?? "";
+    if (selectedChat === undefined || startedAt === "") return [];
+    return selectedChat.messages
+      .filter((message) => message.note === true && message.createdAt >= startedAt)
+      .map((message) => message.attachments ?? []);
+  }, [selectedChat, runView?.startedAt]);
   /** Whether a note to the run on screen may carry pictures: only a provider that can show them takes them. */
   const notesTakePictures = steering && selectedRun !== null && selectedRun.demo === null && selectedRun.contextTarget.provider === "claude";
   /** Whether files can be added now: before a run, or to a note that can carry them. */
@@ -1841,7 +1854,7 @@ function App() {
             />
             : <EmptyConversation place={targetStudio?.name} />}
           {runView
-            ? <LiveRun view={runView} steps={runSteps} nodes={runActivityNodes} thinking={thinking} onOpenInStudio={openArtifactInStudio} />
+            ? <LiveRun view={runView} steps={runSteps} nodes={runActivityNodes} thinking={thinking} notePictures={liveNotePictures} onOpenInStudio={openArtifactInStudio} />
             // The run is still being started, so the dots stand in for the
             // assistant block that is about to exist.
             : runStarting && <div className="mock-run"><section className="message assistant-message"><div className="message-content">
@@ -2379,7 +2392,12 @@ function WaitingNotice({ label, detail, output }: { label: string; detail?: stri
   </div>;
 }
 
-function LiveRun({ view, steps, nodes, thinking, onOpenInStudio }: { view: RunView; steps: ActivityStep[]; nodes: ActivityNode[]; thinking: boolean; onOpenInStudio: OpenInStudio }) {
+function LiveRun({ view, steps, nodes, thinking, notePictures, onOpenInStudio }: {
+  view: RunView; steps: ActivityStep[]; nodes: ActivityNode[]; thinking: boolean;
+  /** The files sent with each of this run's notes, in the order the notes were sent. */
+  notePictures: readonly (readonly AssetAttachment[])[];
+  onOpenInStudio: OpenInStudio;
+}) {
   const answered = view.text.trim() !== "";
   const running = view.outcome === null;
   const appliedAndVerified = runAppliedAndVerified(view);
@@ -2421,7 +2439,7 @@ function LiveRun({ view, steps, nodes, thinking, onOpenInStudio }: { view: RunVi
       issues={runGateIssues(view)}
     />}
     {!running && <CompletionLine metadata={completionNote} usage={view.usage ?? undefined} />}
-    <RunNotes notes={view.notes} delivered={view.notesDelivered} running={running} />
+    <RunNotes notes={view.notes} delivered={view.notesDelivered} running={running} pictures={notePictures} />
     {view.desynchronized && <p className="run-warning"><AlertCircle size={14} /> Some updates were missed, so this timeline may be incomplete.</p>}
   </div></section></div>;
 }
@@ -2431,12 +2449,18 @@ function LiveRun({ view, steps, nodes, thinking, onOpenInStudio }: { view: RunVi
  * in Roqer, or with the model. Claude reads a note at its next step; a
  * provider that cannot take one mid-turn gets it when its turn ends.
  */
-function RunNotes({ notes, delivered, running }: { notes: string[]; delivered: number; running: boolean }) {
+function RunNotes({ notes, delivered, running, pictures = [] }: {
+  notes: string[]; delivered: number; running: boolean;
+  /** The files sent with each note, by the note's position; a saved run's notes have none here. */
+  pictures?: readonly (readonly AssetAttachment[])[];
+}) {
   if (notes.length === 0) return null;
   return <ul className="run-notes" aria-label="Your notes">
     {notes.map((note, index) => {
       const sent = index < delivered;
+      const attached = pictures[index] ?? [];
       return <li key={index} className={`run-note${sent ? " sent" : ""}`}>
+        {attached.length > 0 && <MessagePictures attachments={attached} />}
         <p className="run-note-text">{note}</p>
         <span className="run-note-status">
           {sent
