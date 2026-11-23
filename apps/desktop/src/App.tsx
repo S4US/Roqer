@@ -18,7 +18,7 @@ import {
   appendMessage, createChat, createId, createInitialWorkspace, createProject, undeliverNotes, withMessageSelection,
   deleteChat, deleteProject, modelPreference, normalizeWorkspace, renameChat,
   renameProject, projectInstructions, selectedModelId, setProjectInstructions, setChatCompaction, setChatStudioInstance, chatStudioTarget, chatsByActivity, withdrawMessage,
-  chatReasoningEffort, setChatReasoningEffort, setDefaultReasoningEffort,
+  chatReasoningEffort, setChatReasoningEffort, setDefaultReasoningEffort, chatModel, setChatModel,
   type AssetAttachment, type ChatMessage, type WorkspaceState,
 } from "./model";
 import {
@@ -590,7 +590,10 @@ function App() {
     return () => window.clearInterval(interval);
   }, [hydrated, refreshStudioStatus]);
 
-  const provider = workspace.preferences.provider;
+  // The open chat's provider and model, or the workspace default for a chat
+  // that has none of its own: the account and model list shown are its.
+  const openChatModel = chatModel(workspace, workspace.selectedProjectId, workspace.selectedChatId);
+  const provider = openChatModel.provider;
   const providerRef = useRef<ProviderId>(provider);
 
   const refreshProviderStatus = useCallback(async () => {
@@ -647,6 +650,11 @@ function App() {
   useEffect(() => {
     if (!hydrated || modelCatalog.models.length === 0) return;
     setWorkspace((current) => {
+      // The catalog is the open chat's provider's. Only the default for new
+      // chats is corrected here, and only when it names that provider; a
+      // chat's own choice that the provider no longer lists falls back to its
+      // default when the chat sends, as it always did.
+      if (current.preferences.provider !== providerRef.current) return current;
       const chosen = selectedModelId(current.preferences, current.preferences.provider);
       // A remembered choice the provider no longer lists falls back to its
       // default rather than blocking the run.
@@ -894,8 +902,11 @@ function App() {
         : `Choose the part of “${unread.name}” to send first.`);
       return;
     }
-    const chosenModelId = selectedModelId(workspace.preferences, provider);
-    const availableModel = modelCatalog.models.find((model) => model.id === chosenModelId);
+    const chosenModelId = openChatModel.modelId;
+    // A model the provider no longer lists falls back to its default rather than blocking the run.
+    const availableModel = modelCatalog.models.find((model) => model.id === chosenModelId) ??
+      modelCatalog.models.find((model) => model.id === modelCatalog.defaultModelId) ??
+      modelCatalog.models[0];
     if (hasDesktopRuntime() && (providerStatus.kind !== "signed-in" || !availableModel)) {
       setSettingsNotice(sendBlockedNotice(provider, providerStatus, modelCatalog.message));
       setShowSettings(true);
@@ -945,7 +956,8 @@ function App() {
         const target = chatStudioTarget(next, projectId, chatId);
         return resolveInstanceId(studioStatus, target.instanceId, target.pinned);
       })(),
-      provider: next.preferences.provider,
+      // The open chat's own provider, whose catalog chose the model.
+      provider,
       model: availableModel?.id ?? null,
       effort: (() => {
         // This chat's own effort, so a choice made in another chat never reaches it.
@@ -1564,8 +1576,9 @@ function App() {
   const card = providerCard(provider, providerStatus, hasDesktopRuntime());
   const invite = hydrated ? communityInvite(COMMUNITY_INVITE_URL, workspace.preferences.communityInviteDismissed, workspace.projects) : "none";
   const imagesReachModel = hasDesktopRuntime();
-  const selectedModel = modelCatalog.models
-    .find((model) => model.id === selectedModelId(workspace.preferences, provider)) ?? null;
+  const selectedModel = modelCatalog.models.find((model) => model.id === openChatModel.modelId) ??
+    modelCatalog.models.find((model) => model.id === modelCatalog.defaultModelId) ??
+    modelCatalog.models[0] ?? null;
   const contextView = contextMeterView(
     workspace.selectedChatId === null ? undefined : contextReadings.get(workspace.selectedChatId),
     { provider, model: selectedModel?.id ?? null },
@@ -2032,10 +2045,11 @@ function App() {
                     const effort = model.supportedReasoningEfforts.some((entry) => entry.reasoningEffort === current.preferences.reasoningEffort)
                       ? current.preferences.reasoningEffort
                       : model.defaultReasoningEffort;
-                    return setDefaultReasoningEffort({
-                      ...current,
-                      preferences: { ...current.preferences, provider: nextProvider, ...modelPreference(nextProvider, model.id) },
-                    }, effort);
+                    // Kept on the open chat only; other chats keep theirs.
+                    return setDefaultReasoningEffort(
+                      setChatModel(current, current.selectedProjectId, current.selectedChatId, nextProvider, model.id),
+                      effort,
+                    );
                   });
                 }}
               />

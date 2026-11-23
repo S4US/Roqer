@@ -22,6 +22,8 @@ import {
   withdrawMessage,
   chatReasoningEffort,
   setChatReasoningEffort,
+  chatModel,
+  setChatModel,
   setDefaultReasoningEffort,
 } from "./model";
 
@@ -86,6 +88,42 @@ test("a chat's reasoning effort survives being written to disk and read back, an
   const restored = normalizeWorkspace(saved);
   assert.equal(restored.projects[0].chats[0].reasoningEffort, undefined);
   assert.equal(chatReasoningEffort(restored, projectId, chatId), "low");
+});
+
+test("a chat's model is its own: choosing one in a chat never changes another's", () => {
+  let state = createChat(createInitialWorkspace());
+  const firstProject = state.selectedProjectId;
+  const first = state.selectedChatId!;
+  state = createChat(createProject(state, "BID OR BOOM!"));
+  const secondProject = state.selectedProjectId;
+  const second = state.selectedChatId!;
+  const before = chatModel(state, firstProject, first);
+  assert.deepEqual(chatModel(state, secondProject, second), before);
+
+  state = setChatModel(state, secondProject, second, "chatgpt", "gpt-6.2-astra");
+  assert.deepEqual(chatModel(state, secondProject, second), { provider: "chatgpt", modelId: "gpt-6.2-astra" });
+  assert.deepEqual(chatModel(state, firstProject, first), before, "the other chat keeps what it was using");
+
+  state = setChatModel(state, firstProject, first, "claude", "opus");
+  assert.deepEqual(chatModel(state, firstProject, first), { provider: "claude", modelId: "opus" });
+  assert.deepEqual(chatModel(state, secondProject, second), { provider: "chatgpt", modelId: "gpt-6.2-astra" });
+
+  // The last choice is what a new chat starts with, and starting one moves nobody.
+  state = createChat(state);
+  assert.deepEqual(chatModel(state, state.selectedProjectId, state.selectedChatId), { provider: "claude", modelId: "opus" });
+  assert.deepEqual(chatModel(state, secondProject, second), { provider: "chatgpt", modelId: "gpt-6.2-astra" });
+});
+
+test("a chat's model survives a save, and a provider that can no longer run is dropped", () => {
+  const base = createChat(createInitialWorkspace());
+  const projectId = base.selectedProjectId;
+  const chatId = base.selectedChatId!;
+  const saved = JSON.parse(JSON.stringify(setChatModel(base, projectId, chatId, "chatgpt", "gpt-6.2-astra")));
+  assert.deepEqual(chatModel(normalizeWorkspace(saved), projectId, chatId), { provider: "chatgpt", modelId: "gpt-6.2-astra" });
+  saved.projects[0].chats[0].model = { provider: "retired-vendor", modelId: "x" };
+  const restored = normalizeWorkspace(saved);
+  assert.equal(restored.projects[0].chats[0].model, undefined);
+  assert.deepEqual(chatModel(restored, projectId, chatId), { provider: restored.preferences.provider, modelId: selectedModelId(restored.preferences, restored.preferences.provider) });
 });
 
 test("a new workspace contains no invented projects, chats, or messages", () => {
