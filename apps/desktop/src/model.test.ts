@@ -25,6 +25,15 @@ import {
   setDefaultReasoningEffort,
 } from "./model";
 
+test("Ctrl+Enter sends unless the user turned it off, and a saved choice is kept", () => {
+  assert.equal(createInitialWorkspace().preferences.ctrlEnterToSend, true);
+  const saved = JSON.parse(JSON.stringify(createInitialWorkspace()));
+  delete saved.preferences.ctrlEnterToSend;
+  assert.equal(normalizeWorkspace(saved).preferences.ctrlEnterToSend, true, "a workspace from before the switch sends as it did");
+  saved.preferences.ctrlEnterToSend = false;
+  assert.equal(normalizeWorkspace(saved).preferences.ctrlEnterToSend, false);
+});
+
 test("a chat's reasoning effort is its own: choosing one in a chat never changes another", () => {
   // Two chats in two projects, both from before efforts were kept per chat.
   let state = createChat(createInitialWorkspace());

@@ -1576,10 +1576,15 @@ function App() {
   // A chat with nothing in it yet: the question, the composer and the starters sit together mid-pane.
   const onHome = !composerExpanded && !showRunControls && (selectedChat?.messages.length ?? 0) === 0;
   const canExpand = !isRunning && (pastedBlocks.length > 0 || lineCount(composer) >= 4 || composer.length >= 400);
+  // Enter sends when the user turned Ctrl+Enter off, except where text is
+  // long by nature: the larger editor and a pasted block keep Enter for lines.
+  const enterSends = !workspace.preferences.ctrlEnterToSend && !composerExpanded && editingBlockId === null;
   const composerHint: ReactNode = message.length >= 1_000
     ? characterCount(message.length)
     : composer.trim() !== "" && !isRunning
-      ? <><kbd>{SEND_MODIFIER}</kbd> <kbd>Enter</kbd> to send</>
+      ? enterSends
+        ? <><kbd>Enter</kbd> to send · <kbd>Shift</kbd> <kbd>Enter</kbd> for a new line</>
+        : <><kbd>{SEND_MODIFIER}</kbd> <kbd>Enter</kbd> to send</>
       : null;
   /**
    * A pasted block opens alone in the larger editor. Closing the editor folds
@@ -1978,6 +1983,11 @@ function App() {
               else setComposer(text);
             }} onKeyDown={(event) => {
               if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) { event.preventDefault(); void sendPrompt(); }
+              // A word still being composed (an input method) is confirmed with Enter, not sent.
+              else if (event.key === "Enter" && enterSends && !event.shiftKey && !event.altKey && !event.nativeEvent.isComposing) {
+                event.preventDefault();
+                void sendPrompt();
+              }
               if (event.key === "Escape" && composerExpanded) { event.preventDefault(); closeEditor(); }
             }} onPaste={(event) => {
               const images = droppedImages(event.clipboardData?.files);
