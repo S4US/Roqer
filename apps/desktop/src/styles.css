@@ -1472,6 +1472,25 @@ a.small-button:focus-visible { outline: 2px solid var(--accent); outline-offset:
 .applied-status { display: inline-flex; align-items: center; gap: 6px; margin-top: 11px; color: var(--success); font-size: var(--type-meta); font-weight: var(--weight-medium); }
 .applied-status > svg { flex: 0 0 auto; }
 .run-completion-metadata { margin: 8px 0 0 !important; color: var(--muted) !important; font-size: var(--type-meta) !important; font-variant-numeric: tabular-nums; }
+/* Under a reply: copy its text. The newest reply keeps the row in view; an
+   older one shows it on hover or keyboard focus, so a long chat stays quiet. */
+.message-actions { display: flex; align-items: center; gap: 2px; margin: 6px 0 0 -6px; opacity: 0; transition: opacity .15s ease; }
+.message-actions[data-latest], .assistant-message:hover .message-actions, .message-actions:focus-within { opacity: 1; }
+.message-action { display: inline-flex; align-items: center; gap: 5px; height: 28px; min-width: 28px; padding: 0 7px; color: var(--muted); background: transparent; border: 0; border-radius: 7px; font-size: var(--type-meta); transition: color .15s ease, background .15s ease; }
+.message-action:hover { color: var(--ink); background: var(--surface-sunken); }
+.message-action:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.message-action[data-state="copied"] { color: var(--ink); }
+.message-action-label:empty { display: none; }
+/* A passage of a reply quoted in a sent message. */
+.user-prompt > p { margin: 0; }
+.user-quote { margin: 0; padding: 1px 0 1px 10px; color: var(--ink-secondary); border-left: 2px solid var(--border-strong); white-space: pre-wrap; }
+.user-prompt > :not(:first-child) { margin-top: 10px; }
+/* Over text selected in a reply: quote it in the message box. */
+.quote-selection { position: fixed; z-index: 130; display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 11px; color: var(--ink); background: var(--surface-raised); border: 1px solid var(--border); border-radius: 8px; box-shadow: var(--shadow-lg); font-size: var(--type-label); font-weight: var(--weight-medium); transform: translate(-50%, -100%); animation: quote-selection-in .12s ease-out; }
+.quote-selection[data-placement="below"] { transform: translate(-50%, 0); }
+.quote-selection:hover { border-color: var(--border-strong); }
+@keyframes quote-selection-in { from { opacity: 0; } to { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .quote-selection { animation: none; } .message-actions { transition: none; } }
 
 /* -- Secondary card detail ------------------------------------------------ */
 .card-details { border-top: 1px solid var(--border); }

@@ -57,6 +57,8 @@ import { ContextMeter } from "./context-meter";
 import { compactUsageNote, contextMeterView, nextContextReading, type ContextReading } from "./context-usage";
 import { blockPreview, characterCount, composedMessage, finishBlockEdit, isLongPaste, lineCount, textSize, withBlockText, type PastedBlock } from "./composer-text";
 import { ComposerDrafts, draftKey, type ComposerDraft } from "./composer-drafts";
+import { CopyReplyButton, QuoteSelection } from "./message-actions";
+import { messageParts, quoteMarkdown, withQuote } from "./message-quote";
 import { RojoPill } from "./rojo-pill";
 
 /** The key that sends with Enter and makes a new chat with N, named the way this computer's keyboard names it. */
@@ -1427,6 +1429,19 @@ function App() {
    */
   const scrollRef = useRef<HTMLDivElement>(null);
   const conversationRef = useRef<HTMLDivElement>(null);
+  /** Adds text picked out of a reply to the message box as a quote, and puts the caret after it. */
+  const quoteIntoComposer = useCallback((text: string) => {
+    const quote = quoteMarkdown(text);
+    if (quote === "") return;
+    setComposer((current) => withQuote(current, quote));
+    window.setTimeout(() => {
+      const box = composerRef.current;
+      if (box === null) return;
+      box.focus();
+      box.setSelectionRange(box.value.length, box.value.length);
+      box.scrollTop = box.scrollHeight;
+    }, 0);
+  }, []);
   const following = useRef(true);
   const lastScrollTop = useRef(0);
   /**
@@ -1896,6 +1911,7 @@ function App() {
               <TypingIndicator done={false} />
             </div></section></div>}
         </div></div>
+        <QuoteSelection containerRef={conversationRef} onQuote={quoteIntoComposer} />
 
         <div className={`composer-dock${composerExpanded ? " expanded" : ""}${onHome ? " home" : ""}`} ref={dockRef}>
           {pendingApproval && <div className="approval-dock"><ApprovalCard pending={pendingApproval} onApprove={() => answerApproval("approved")} onReject={() => answerApproval("rejected")} /></div>}
@@ -2215,8 +2231,10 @@ function RowMenu({ label, items, onSelect, className = "", iconSize = 16, disabl
 
 type OpenInStudio = (target: string, instanceId?: string) => Promise<{ ok: boolean; message: string }>;
 
-const ConversationMessageView = memo(function ConversationMessageView({ message, latestRun, arrived = false, onOpenInStudio }: {
+const ConversationMessageView = memo(function ConversationMessageView({ message, latestRun, latestReply = false, arrived = false, onOpenInStudio }: {
   message: ChatMessage;
+  /** The chat's newest reply: its actions stay in view, an older one's show on hover. */
+  latestReply?: boolean;
   /** Sent while this chat was open, rather than loaded with it: only such a message animates in. */
   arrived?: boolean;
   /** Whether this is the newest reply that came from a run; only its diffs open by default. */
@@ -2227,7 +2245,7 @@ const ConversationMessageView = memo(function ConversationMessageView({ message,
     <section className={`message user-message${message.note === true ? " note-message" : ""}${arrived ? " message-arrived" : ""}`} key={message.id}>
       {message.note === true && <span className="note-label">Note sent while Roqer was working</span>}
       {message.attachments !== undefined && <MessagePictures attachments={message.attachments} />}
-      <p className="user-prompt">{message.text}</p>
+      <UserPrompt text={message.text} />
       {message.studioSelection !== undefined && message.studioSelection.count > 0 && <div className="message-selection" title={message.studioSelection.items.map((item) => item.path).join("\n")}>
         <MousePointerClick size={12} aria-hidden="true" /> Selected in Studio: <code>{describeSelection(message.studioSelection)}</code>
       </div>}
@@ -2238,9 +2256,29 @@ const ConversationMessageView = memo(function ConversationMessageView({ message,
       {message.run
         ? <RunRecordView record={message.run} text={message.text} latest={latestRun} onOpenInStudio={onOpenInStudio} />
         : <Markdown text={message.text} className="result-copy" />}
+      <ReplyActions text={message.run ? recordReply(message.run, message.text) : message.text} latest={latestReply} />
     </div></section>
   );
 });
+
+/** A sent message, with any passage it quotes shown as a quote rather than as "> " lines. */
+function UserPrompt({ text }: { text: string }) {
+  const parts = useMemo(() => messageParts(text), [text]);
+  if (!parts.some((part) => part.kind === "quote")) return <p className="user-prompt">{text}</p>;
+  return <div className="user-prompt">
+    {parts.map((part, index) => part.kind === "quote"
+      ? <blockquote className="user-quote" key={index}>{part.text}</blockquote>
+      : <p key={index}>{part.text}</p>)}
+  </div>;
+}
+
+/** What can be done with a reply's text: copy it as written. Nothing for a reply without text. */
+function ReplyActions({ text, latest }: { text: string; latest: boolean }) {
+  if (text.trim() === "") return null;
+  return <div className="message-actions" data-latest={latest || undefined}>
+    <CopyReplyButton text={text} />
+  </div>;
+}
 
 const ConversationMessages = memo(function ConversationMessages({ messages: allMessages, onOpenInStudio, hideTrailingNotes = false }: {
   messages: ChatMessage[];
@@ -2269,6 +2307,12 @@ const ConversationMessages = memo(function ConversationMessages({ messages: allM
     }
     return undefined;
   }, [messages]);
+  const latestReplyId = useMemo(() => {
+    for (let index = messages.length - 1; index >= 0; index -= 1) {
+      if (messages[index].role === "assistant") return messages[index].id;
+    }
+    return undefined;
+  }, [messages]);
 
   return <>
     {visibleFrom > 0 && <div className="conversation-history">
@@ -2277,7 +2321,7 @@ const ConversationMessages = memo(function ConversationMessages({ messages: allM
       </button>
     </div>}
     {messages.slice(visibleFrom).map((message) => (
-      <ConversationMessageView key={message.id} message={message} latestRun={message.id === latestRunId} arrived={!loadedIds.has(message.id)} onOpenInStudio={onOpenInStudio} />
+      <ConversationMessageView key={message.id} message={message} latestRun={message.id === latestRunId} latestReply={message.id === latestReplyId} arrived={!loadedIds.has(message.id)} onOpenInStudio={onOpenInStudio} />
     ))}
   </>;
 });
