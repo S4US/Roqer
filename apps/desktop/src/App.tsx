@@ -330,7 +330,9 @@ function App() {
   /** Whether the search of all chats is open. */
   const [searching, setSearching] = useState(false);
   /** The message a search opened its chat on, shown and marked once the chat is on screen. */
-  const [foundMessage, setFoundMessage] = useState<{ chatId: string; messageId: string } | null>(null);
+  /** `opened` counts the times a result was opened, so opening the same message again still brings it into view. */
+  const [foundMessage, setFoundMessage] = useState<{ chatId: string; messageId: string; opened: number } | null>(null);
+  const resultsOpened = useRef(0);
   /** Why Send opened Settings, shown at the top of it; null when it was opened by hand. */
   const [settingsNotice, setSettingsNotice] = useState<string | null>(null);
   const [dialog, setDialog] = useState<Dialog | null>(null);
@@ -1236,7 +1238,9 @@ function App() {
     setSearching(false);
     selectChat(result.projectId, result.chatId);
     setExpandedProjects((current) => new Set(current).add(result.projectId));
-    if (result.messageId !== undefined) setFoundMessage({ chatId: result.chatId, messageId: result.messageId });
+    const messageId = result.messageId;
+    resultsOpened.current += 1;
+    if (messageId !== undefined) setFoundMessage({ chatId: result.chatId, messageId, opened: resultsOpened.current });
   };
 
   const selectProject = (projectId: string) => {
@@ -1582,7 +1586,7 @@ function App() {
         event.preventDefault();
         // Not underneath Settings or a dialog: the new chat would open out of
         // sight and take the draft with it.
-        if (showSettings || dialog !== null || trimmingClip !== null) return;
+        if (showSettings || dialog !== null || trimmingClip !== null || searching) return;
         newChat();
       }
       if ((event.ctrlKey || event.metaKey) && !event.shiftKey && !event.altKey && event.key.toLowerCase() === "k") {
@@ -1593,7 +1597,7 @@ function App() {
     };
     window.addEventListener("keydown", handleShortcut);
     return () => window.removeEventListener("keydown", handleShortcut);
-  }, [newChat, showSettings, dialog, trimmingClip, hydrated]);
+  }, [newChat, showSettings, dialog, trimmingClip, hydrated, searching]);
 
   const theme = workspace.preferences.theme;
   const approvalMode = workspace.preferences.approvalMode;
@@ -1963,6 +1967,7 @@ function App() {
               messages={selectedChat.messages}
               onOpenInStudio={openArtifactInStudio}
               foundId={foundMessage?.chatId === selectedChat.id ? foundMessage.messageId : undefined}
+              foundOpened={foundMessage?.opened}
               // The live run shows its own notes, with whether Claude has them yet.
               hideTrailingNotes={runView !== null && runView.outcome === null}
             />
@@ -2358,11 +2363,13 @@ function ReplyActions({ text, latest }: { text: string; latest: boolean }) {
   </div>;
 }
 
-const ConversationMessages = memo(function ConversationMessages({ messages: allMessages, onOpenInStudio, hideTrailingNotes = false, foundId }: {
+const ConversationMessages = memo(function ConversationMessages({ messages: allMessages, onOpenInStudio, hideTrailingNotes = false, foundId, foundOpened }: {
   messages: ChatMessage[];
   onOpenInStudio: OpenInStudio;
   /** The message a search opened this chat on: brought into view and marked for a moment. */
   foundId?: string;
+  /** Changes each time a search result is opened, the same one included. */
+  foundOpened?: number;
   /** Leave out the notes after the last prompt: the live run below shows them. */
   hideTrailingNotes?: boolean;
 }) {
@@ -2386,15 +2393,17 @@ const ConversationMessages = memo(function ConversationMessages({ messages: allM
     const found = messages.findIndex((message) => message.id === foundId);
     if (found === -1) return;
     setVisibleFrom((current) => Math.min(current, found));
-    setMarked(foundId);
+    // Unmarked first, so a message marked again plays its mark again.
+    setMarked(undefined);
     // After the chat has opened and scrolled to its end, which opening one does.
     const show = window.setTimeout(() => {
+      setMarked(foundId);
       document.querySelector(`[data-message-id="${CSS.escape(foundId)}"]`)?.scrollIntoView({ block: "center", behavior: "instant" });
     }, 80);
-    const clear = window.setTimeout(() => setMarked(undefined), 2_600);
+    const clear = window.setTimeout(() => setMarked(undefined), 2_680);
     return () => { window.clearTimeout(show); window.clearTimeout(clear); };
-    // Only a new search result moves the view; messages arriving since do not.
-  }, [foundId]);
+    // Only opening a search result moves the view; messages arriving since do not.
+  }, [foundId, foundOpened]);
   // What the chat held when it opened. Those messages, and earlier ones shown
   // later, appear with the chat; only a message sent since animates in.
   const [loadedIds] = useState(() => new Set(messages.map((message) => message.id)));

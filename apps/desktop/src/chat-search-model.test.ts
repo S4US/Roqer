@@ -87,3 +87,20 @@ test("a long message shows the text around the first word found", () => {
   assert.equal(result.snippet.slice(start, end), "needle");
   assert.equal(searchChats(state, "").length, 0);
 });
+
+test("searching again finds a message's new words, and is quick on a large workspace", () => {
+  let { state } = workspace();
+  const projectId = state.selectedProjectId;
+  const chatId = state.selectedChatId!;
+  for (let index = 0; index < 2_000; index += 1) {
+    state = appendMessage(state, projectId, chatId, { id: `big${index}`, role: "assistant", text: `${"Lorem ipsum dolor sit amet, électricité. ".repeat(12)} n${index}`, createdAt: "2026-04-01T00:00:00.000Z" });
+  }
+  assert.equal(searchChats(state, "n1999").length > 0, true);
+  // The second search over the same messages reuses their folded text.
+  const started = performance.now();
+  for (let index = 0; index < 5; index += 1) searchChats(state, `zzz${index}`);
+  assert.ok(performance.now() - started < 400, "five searches over 2,000 long messages");
+  // A message that changes is a new object, so its new words are found.
+  state = appendMessage(state, projectId, chatId, { id: "late", role: "user", text: "a brand new word: quokka", createdAt: "2026-05-01T00:00:00.000Z" });
+  assert.deepEqual(searchChats(state, "quokka").map((result) => result.messageId), ["late"]);
+});

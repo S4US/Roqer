@@ -37,6 +37,22 @@ export function foldText(text: string): string {
   return folded;
 }
 
+/**
+ * Each message's folded text, kept while the message is: messages are not
+ * changed in place, so a message object always folds to the same text, and a
+ * search that runs on every keystroke folds each message once, not each time.
+ */
+const foldedMessages = new WeakMap<object, string>();
+
+function foldedMessage(message: { text: string }): string {
+  let folded = foldedMessages.get(message);
+  if (folded === undefined) {
+    folded = foldText(message.text);
+    foldedMessages.set(message, folded);
+  }
+  return folded;
+}
+
 /** The words of a search, folded; a search of nothing but spaces has none. */
 export function searchTerms(query: string): string[] {
   return [...new Set(foldText(query).split(/\s+/).filter((term) => term !== ""))];
@@ -97,7 +113,7 @@ export function searchChats(state: WorkspaceState, query: string, limit = 40, pe
       let taken = 0;
       for (let index = chat.messages.length - 1; index >= 0 && taken < perChat; index -= 1) {
         const message = chat.messages[index];
-        const found = positions(foldText(message.text), terms);
+        const found = positions(foldedMessage(message), terms);
         if (found === undefined) continue;
         taken += 1;
         messages.push({ ...place, messageId: message.id, role: message.role, ...snippetOf(message.text, found), at: message.createdAt });
