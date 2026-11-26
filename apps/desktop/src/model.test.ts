@@ -20,6 +20,9 @@ import {
   setProjectInstructions,
   setChatStudioInstance,
   withdrawMessage,
+  rewindChat,
+  rewindableMessage,
+  setChatCompaction,
   chatReasoningEffort,
   setChatReasoningEffort,
   chatModel,
@@ -124,6 +127,54 @@ test("a chat's model survives a save, and a provider that can no longer run is d
   const restored = normalizeWorkspace(saved);
   assert.equal(restored.projects[0].chats[0].model, undefined);
   assert.deepEqual(chatModel(restored, projectId, chatId), { provider: restored.preferences.provider, modelId: selectedModelId(restored.preferences, restored.preferences.provider) });
+});
+
+test("a chat can be taken back to its last prompt, which leaves with everything after it", () => {
+  let state = createChat(createInitialWorkspace());
+  const projectId = state.selectedProjectId;
+  const chatId = state.selectedChatId!;
+  const say = (id: string, role: "user" | "assistant", text: string, note = false) => {
+    state = appendMessage(state, projectId, chatId, { id, role, text, createdAt: "2026-01-01T00:00:00.000Z", ...(note ? { note: true } : {}) });
+  };
+  const chat = () => state.projects.find((project) => project.id === projectId)!.chats.find((entry) => entry.id === chatId)!;
+  assert.equal(rewindableMessage(chat()), undefined, "an empty chat has nothing to take back");
+
+  say("m1", "user", "Build a shop");
+  say("m2", "assistant", "Done.");
+  say("m3", "user", "Make it blue");
+  say("m4", "user", "and bigger", true);
+  say("m5", "assistant", "It is blue.");
+  assert.equal(rewindableMessage(chat())?.id, "m3", "the last prompt, not the note sent while it ran");
+
+  // Only that prompt can be taken out.
+  assert.deepEqual(rewindChat(state, projectId, chatId, "m1").projects, state.projects);
+  assert.deepEqual(rewindChat(state, projectId, chatId, "m5").projects, state.projects);
+
+  state = rewindChat(state, projectId, chatId, "m3");
+  assert.deepEqual(chat().messages.map((message) => message.id), ["m1", "m2"]);
+  assert.equal(rewindableMessage(chat())?.id, "m1");
+
+  // A prompt a compact folded into its record stays where it is.
+  state = setChatCompaction(state, projectId, chatId, { folded: 2, summary: "Built a shop." });
+  assert.equal(rewindableMessage(chat()), undefined);
+  assert.deepEqual(rewindChat(state, projectId, chatId, "m1").projects, state.projects);
+  say("m6", "user", "Add a door");
+  assert.equal(rewindableMessage(chat())?.id, "m6");
+});
+
+test("taking back a chat's only prompt gives the chat its untitled name again, unless it was named", () => {
+  let state = createChat(createInitialWorkspace());
+  const projectId = state.selectedProjectId;
+  const chatId = state.selectedChatId!;
+  const chat = () => state.projects.find((project) => project.id === projectId)!.chats.find((entry) => entry.id === chatId)!;
+  const untitled = chat().title;
+  state = appendMessage(state, projectId, chatId, { id: "m1", role: "user", text: "Build a shop", createdAt: "2026-01-01T00:00:00.000Z" });
+  assert.equal(chat().title, "Build a shop");
+  assert.equal(rewindChat(state, projectId, chatId, "m1").projects.find((project) => project.id === projectId)!.chats[0].title, untitled);
+  state = renameChat(state, projectId, chatId, "Shop");
+  state = rewindChat(state, projectId, chatId, "m1");
+  assert.equal(chat().title, "Shop");
+  assert.equal(chat().messages.length, 0);
 });
 
 test("a new workspace contains no invented projects, chats, or messages", () => {

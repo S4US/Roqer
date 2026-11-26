@@ -1475,7 +1475,9 @@ a.small-button:focus-visible { outline: 2px solid var(--accent); outline-offset:
 /* Under a reply: copy its text. The newest reply keeps the row in view; an
    older one shows it on hover or keyboard focus, so a long chat stays quiet. */
 .message-actions { display: flex; align-items: center; gap: 2px; margin: 6px 0 0 -6px; opacity: 0; transition: opacity .15s ease; }
-.message-actions[data-latest], .assistant-message:hover .message-actions, .message-actions:focus-within { opacity: 1; }
+.message-actions[data-latest], .assistant-message:hover .message-actions, .user-message:hover .message-actions, .message-actions:focus-within { opacity: 1; }
+/* Under the chat's last prompt: its own row, at the bubble's edge. */
+.user-message > .message-actions { margin: 4px -6px 0 0; }
 .message-action { display: inline-flex; align-items: center; gap: 5px; height: 28px; min-width: 28px; padding: 0 7px; color: var(--muted); background: transparent; border: 0; border-radius: 7px; font-size: var(--type-meta); transition: color .15s ease, background .15s ease; }
 .message-action:hover { color: var(--ink); background: var(--surface-sunken); }
 .message-action:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
