@@ -98,6 +98,12 @@ export type Chat = {
    * (`setDefaultModel`), so choosing a model in one chat never changes another.
    */
   model?: ChatModel;
+  /**
+   * True while the chat holds a reply nobody has seen: its run ended while
+   * another chat was open, or while Roqer was not the window in use. Opening
+   * the chat clears it.
+   */
+  unread?: boolean;
   messages: ChatMessage[];
   /**
    * The chat's earlier messages, folded into a record by a manual compact. Only
@@ -401,6 +407,7 @@ export function normalizeWorkspace(value: unknown, themeFallback: Theme = "dark"
         // A provider that can no longer run drops the choice, and the chat
         // follows the workspace preference again.
         ...(isChatModel(chat.model) ? { model: { provider: chat.model.provider, modelId: chat.model.modelId } } : {}),
+        ...(chat.unread === true ? { unread: true } : {}),
         messages,
         ...(compaction === undefined ? {} : { compaction }),
       }];
@@ -972,6 +979,28 @@ export function rewindChat(state: WorkspaceState, projectId: string, chatId: str
         const messages = chat.messages.slice(0, chat.messages.findIndex((message) => message.id === messageId));
         const title = messages.length === 0 && chat.titleSetByUser !== true ? UNTITLED_CHAT : chat.title;
         return { ...chat, title, messages };
+      }),
+    }),
+  };
+}
+
+/**
+ * Mark a chat as holding a reply nobody has seen, or (`unread` false) as seen.
+ * The same state is returned when the chat already says so, so marking the
+ * open chat read on every render saves nothing new.
+ */
+export function setChatUnread(state: WorkspaceState, projectId: string, chatId: string, unread: boolean): WorkspaceState {
+  const chat = state.projects.find((project) => project.id === projectId)?.chats.find((entry) => entry.id === chatId);
+  if (chat === undefined || (chat.unread === true) === unread) return state;
+  return {
+    ...state,
+    projects: state.projects.map((project) => project.id !== projectId ? project : {
+      ...project,
+      chats: project.chats.map((entry) => {
+        if (entry.id !== chatId) return entry;
+        const rest = { ...entry };
+        delete rest.unread;
+        return unread ? { ...rest, unread: true } : rest;
       }),
     }),
   };

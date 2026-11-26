@@ -23,6 +23,7 @@ import {
   rewindChat,
   rewindableMessage,
   setChatCompaction,
+  setChatUnread,
   chatReasoningEffort,
   setChatReasoningEffort,
   chatModel,
@@ -175,6 +176,29 @@ test("taking back a chat's only prompt gives the chat its untitled name again, u
   state = rewindChat(state, projectId, chatId, "m1");
   assert.equal(chat().title, "Shop");
   assert.equal(chat().messages.length, 0);
+});
+
+test("a chat is marked unread and read again, and the mark survives a save", () => {
+  let state = createChat(createInitialWorkspace());
+  const projectId = state.selectedProjectId;
+  const chatId = state.selectedChatId!;
+  const chat = (from = state) => from.projects.find((project) => project.id === projectId)!.chats.find((entry) => entry.id === chatId)!;
+  assert.equal(chat().unread, undefined);
+  assert.equal(setChatUnread(state, projectId, chatId, false), state, "already read: the same state");
+
+  state = setChatUnread(state, projectId, chatId, true);
+  assert.equal(chat().unread, true);
+  assert.equal(setChatUnread(state, projectId, chatId, true), state, "already unread: the same state");
+  assert.equal(chat(normalizeWorkspace(JSON.parse(JSON.stringify(state)))).unread, true);
+
+  state = setChatUnread(state, projectId, chatId, false);
+  assert.equal("unread" in chat(), false, "a read chat carries no mark at all");
+  assert.equal(setChatUnread(state, projectId, "no-such-chat", true), state);
+
+  // Anything but true in a saved file is not a mark.
+  const saved = JSON.parse(JSON.stringify(state));
+  saved.projects[0].chats[0].unread = "yes";
+  assert.equal(chat(normalizeWorkspace(saved)).unread, undefined);
 });
 
 test("a new workspace contains no invented projects, chats, or messages", () => {

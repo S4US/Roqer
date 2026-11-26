@@ -1579,6 +1579,7 @@ def layout_facts():
         return i
 
     touching_objects, attached, overlaps, complete = set(), set(), {}, True
+    links = set()
     for i in range(len(pieces)):
         if time.monotonic() - started > LAYOUT_SECONDS:
             complete = False
@@ -1594,6 +1595,7 @@ def layout_facts():
             touching_objects.update((a.owner, b.owner))
             attached.update((i, j))
             key = tuple(sorted((a.owner, b.owner)))
+            links.add(key)
             if depth > TOUCH and depth > overlaps.get(key, (0,))[0]:
                 overlaps[key] = (depth, a, b)
 
@@ -1625,8 +1627,30 @@ def layout_facts():
             gap, other = nearest([p for p in pieces if p.owner == owner], [p for p in pieces if p.owner != owner])
             isolated.append({"object": owner, "gap": r2(gap), "nearest": other.owner if other is not None else None})
 
+    # Objects that touch, or hang from one another, make one item. A file that
+    # holds several items gets a close-up of each (see render_closeups).
+    sets = []
+    if complete and len(owners) > 1:
+        root = {owner: owner for owner in owners}
+
+        def top(name):
+            while root[name] != name:
+                root[name] = root[root[name]]
+                name = root[name]
+            return name
+
+        hung = [(entry["name"], entry["parent"]) for entry in objects if "parent" in entry]
+        for a, b in list(links) + hung:
+            if a in root and b in root:
+                root[top(a)] = top(b)
+        grouped = {}
+        for owner in owners:
+            grouped.setdefault(top(owner), []).append(owner)
+        sets = list(grouped.values())
+
     crossing = sorted(overlaps.values(), key=lambda entry: entry[0], reverse=True)
     return {
+        "sets": sets,
         "pieces": len(pieces),
         "complete": complete,
         "loose": sorted(loose, key=lambda entry: -entry["gap"])[:8],
@@ -1701,6 +1725,81 @@ def render_views(size, center):
     output.save()
 
 
+# A file that holds several separate items shows each one too small to judge in
+# the four views of the whole. Each item is also rendered alone in frame, from
+# the same two three-quarter corners, two items to a row.
+CLOSE_W, CLOSE_H, MAX_CLOSEUPS, CLOSEUP_SECONDS = 384, 288, 8, 10.0
+CLOSE_VIEWS = [(1.0, -1.2, 0.8), (-1.0, 1.2, 0.8)]
+
+
+def render_closeups(sets, path):
+    import numpy
+    started = time.monotonic()
+    by_name = {item.name: item for item in meshes}
+    wanted = [[by_name[name] for name in names if name in by_name] for names in sets]
+    wanted = [members for members in wanted if members][:MAX_CLOSEUPS]
+    rows = (len(wanted) + 1) // 2
+    sheet = numpy.ones((CLOSE_H * rows, CLOSE_W * 4, 4), dtype=numpy.float32)
+    scene.render.resolution_x, scene.render.resolution_y = CLOSE_W, CLOSE_H
+    camera = scene.camera
+    camera.data.type = "PERSP"
+    # The frame is wider than it is tall: fit the item to the smaller angle.
+    half = math.atan(math.tan(camera.data.angle / 2) * CLOSE_H / CLOSE_W)
+    hidden = {item: item.hide_render for item in meshes}
+    shown = []
+    try:
+        for members in wanted:
+            if time.monotonic() - started > CLOSEUP_SECONDS:
+                break
+            corners = [item.matrix_world @ Vector(corner) for item in members for corner in item.bound_box]
+            lo = Vector(map(min, *corners))
+            hi = Vector(map(max, *corners))
+            center = (lo + hi) / 2
+            radius = max((hi - lo).length / 2, 0.01)
+            alone = set(members)
+            for item in meshes:
+                item.hide_render = item not in alone
+            slot = len(shown)
+            for view, toward in enumerate(CLOSE_VIEWS):
+                direction = Vector(toward).normalized()
+                distance = radius / math.sin(half) * 1.04
+                camera.location = center + direction * distance
+                camera.data.clip_start = max(distance / 200, 0.0005)
+                camera.data.clip_end = distance * 4
+                camera.rotation_euler = (-direction).to_track_quat("-Z", "Y").to_euler()
+                tile = f"{path}.{slot}.{view}.png"
+                scene.render.filepath = tile
+                bpy.ops.render.render(write_still=True)
+                image = bpy.data.images.load(tile)
+                pixels = numpy.empty(CLOSE_W * CLOSE_H * 4, dtype=numpy.float32)
+                image.pixels.foreach_get(pixels)
+                bpy.data.images.remove(image)
+                os.remove(tile)
+                # Image rows run bottom to top: the first row of items sits at the top.
+                row = (rows - 1 - slot // 2) * CLOSE_H
+                column = ((slot % 2) * 2 + view) * CLOSE_W
+                sheet[row:row + CLOSE_H, column:column + CLOSE_W] = pixels.reshape(CLOSE_H, CLOSE_W, 4)
+            shown.append([item.name for item in members])
+    finally:
+        for item, was in hidden.items():
+            item.hide_render = was
+    if not shown:
+        return shown
+    # A thin line between an item's two views, a heavier one between items.
+    for edge in range(1, rows):
+        sheet[edge * CLOSE_H - 1:edge * CLOSE_H + 2, :, :3] = 0.35
+    sheet[:, CLOSE_W - 1:CLOSE_W + 1, :3] = 0.7
+    sheet[:, CLOSE_W * 3 - 1:CLOSE_W * 3 + 1, :3] = 0.7
+    sheet[:, CLOSE_W * 2 - 1:CLOSE_W * 2 + 2, :3] = 0.35
+    sheet[:, :, 3] = 1.0
+    output = bpy.data.images.new("RoqerCloseups", CLOSE_W * 4, CLOSE_H * rows, alpha=True)
+    output.pixels.foreach_set(sheet.ravel())
+    output.filepath_raw = path
+    output.file_format = "PNG"
+    output.save()
+    return shown
+
+
 if meshes:
     size = high - low
     stats["size"] = [round(size.x, 4), round(size.y, 4), round(size.z, 4)]
@@ -1717,11 +1816,20 @@ if meshes:
                 if node.type == "BSDF_PRINCIPLED":
                     material.diffuse_color = tuple(node.inputs["Base Color"].default_value)
                     break
+    sets = stats["layout"].pop("sets", []) if isinstance(stats["layout"], dict) else []
     try:
         render_views(size, (low + high) / 2)
         stats["preview"] = os.path.exists(preview_path)
     except Exception as error:
         stats["previewError"] = str(error)[:200]
+    if stats["preview"] and len(sets) > 1:
+        try:
+            closeup_path = os.path.splitext(preview_path)[0] + "-closeups.png"
+            shown = render_closeups(sets, closeup_path)
+            if shown and os.path.exists(closeup_path):
+                stats["closeups"] = {"items": [names[:6] for names in shown], "count": len(sets)}
+        except Exception as error:
+            stats["closeupsError"] = str(error)[:200]
     # The model as measured, as one self-contained GLB for the 3D view in
     # Roqer's chat: the same meshes, modifiers applied, hidden objects left
     # out, images packed in. Draco stays off, so the viewer needs no decoder.
@@ -1832,6 +1940,12 @@ export type InspectedFile = Readonly<{
   colorSource?: "texture" | "vertex" | "material";
   /** Each mesh object's name and size in studs (Roblox axes), for splitting a kit set. */
   objects?: readonly InspectedObject[];
+  /**
+   * Set when the file holds several separate items and a close-up of each is
+   * attached after its preview: the objects of each item pictured, in the
+   * order pictured, and how many items the file holds in all.
+   */
+  closeups?: ModelCloseups;
   /** For a model whose objects hang from one another: its pieces as `rig` joints, and what would rig badly. */
   articulation?: Articulation;
   /** For a skinned model: its armature's bones and how each mesh that follows them is weighted. */
@@ -2203,6 +2317,12 @@ export class BlenderWorker {
       } catch {
         stats = undefined;
       }
+      // The four views, and the close-ups that follow them when the file holds
+      // several items; close-ups are only attached behind their preview.
+      const withinLimit = (png: Buffer | undefined) => png !== undefined && png.length <= MAX_PREVIEW_BYTES ? png : undefined;
+      const previewPng = stats?.preview === true ? withinLimit(await fs.readFile(preview).catch(() => undefined)) : undefined;
+      const closeups = previewPng === undefined ? undefined : parseCloseups(stats?.closeups);
+      const closeupPng = closeups === undefined ? undefined : withinLimit(await fs.readFile(closeupsFile(preview)).catch(() => undefined));
       if (stats === undefined) {
         files.push({ name, path: filePath, bytes, inspectionError: inspection.timedOut ? "Inspection timed out." : "Roqer could not re-import this file in Blender." });
         if (modelPreview !== undefined) await fs.rm(modelPreview, { force: true }).catch(() => undefined);
@@ -2218,6 +2338,7 @@ export class BlenderWorker {
         size: Array.isArray(stats.size) ? stats.size.filter((entry): entry is number => typeof entry === "number") : undefined,
         colorSource: stats.colorSource === "texture" || stats.colorSource === "vertex" || stats.colorSource === "material" ? stats.colorSource : undefined,
         objects: parseObjects(stats.objects),
+        ...(closeups !== undefined && closeupPng !== undefined ? { closeups } : {}),
         articulation: articulationOf(parseObjects(stats.objects) ?? []),
         skins: parseSkins(stats.skins),
         bottom: Array.isArray(stats.min) && typeof stats.min[2] === "number" ? stats.min[2] : undefined,
@@ -2229,10 +2350,7 @@ export class BlenderWorker {
           : undefined,
         uv: parseUv(stats.uv),
       });
-      if (stats.preview === true) {
-        const png = await fs.readFile(preview).catch(() => undefined);
-        if (png !== undefined && png.length <= MAX_PREVIEW_BYTES) images.push({ data: png.toString("base64"), mediaType: "image/png" });
-      }
+      if (previewPng !== undefined) images.push({ data: previewPng.toString("base64"), mediaType: "image/png" });
       if (modelPreview !== undefined) {
         // Kept only for the model the first preview pictures, and only when it
         // is a self-contained GLB the viewer can show; anything else is
@@ -2242,6 +2360,8 @@ export class BlenderWorker {
         if (!kept) await fs.rm(modelPreview, { force: true }).catch(() => undefined);
         if (shown) pictured = { name, ...(kept ? { modelPreviewId: modelPreviewId(jobId, index) } : {}) };
       }
+      // After the first-preview check above, which counts the images so far.
+      if (closeups !== undefined && closeupPng !== undefined) images.push({ data: closeupPng.toString("base64"), mediaType: "image/png" });
     }
 
     const previews = images.length;
@@ -2560,13 +2680,45 @@ function describeFile(file: InspectedFile): string {
   const pieces = file.objects !== undefined && file.objects.length > 1
     ? `\n  objects, each arriving as its own MeshPart named after it: ${listed.map((object) => `${object.name} ${object.size.map((value) => value.toFixed(2)).join(" × ")}`).join("; ")}${more(listed.length, file.objects.length)}`
     : "";
+  const closeups = file.inspectionError === undefined ? describeCloseups(file.closeups) : "";
   const articulated = file.inspectionError === undefined ? `${describeArticulation(file.articulation)}${describeSkins(file.skins, file.bottom)}` : "";
   const layout = file.inspectionError === undefined ? describeLayout(file.layout, file.bottom, file.articulation) : "";
   const shading = file.smoothShaded !== undefined && file.smoothShaded.length > 0
     ? `\n  shading: smooth across hard edges on ${file.smoothShaded.map((entry) => `${entry.object} (${Math.round(entry.share * 100)}% of corners)`).join(", ")}, which makes boxes and panels look puffy in Roblox. Unless the object is meant to look rounded, remove shade_smooth; roqer.join keeps what it joins flat.`
     : "";
   const uv = file.inspectionError === undefined ? describeUv(file.uv) : "";
-  return `- ${file.path} (${Math.max(1, Math.round(file.bytes / 1024))} KB): ${facts}${file.colorSource === undefined ? "" : `; ${COLOR_SOURCE_NOTES[file.colorSource]}`}${pieces}${layout}${shading}${uv}${articulated}`;
+  return `- ${file.path} (${Math.max(1, Math.round(file.bytes / 1024))} KB): ${facts}${file.colorSource === undefined ? "" : `; ${COLOR_SOURCE_NOTES[file.colorSource]}`}${pieces}${closeups}${layout}${shading}${uv}${articulated}`;
+}
+
+/** The objects of each item a file's close-ups picture, in order, and how many items the file holds. */
+export type ModelCloseups = Readonly<{ items: readonly (readonly string[])[]; count: number }>;
+
+/** Where the inspection writes a preview's close-ups: beside it. */
+export function closeupsFile(preview: string): string {
+  return `${preview.replace(/\.png$/i, "")}-closeups.png`;
+}
+
+/** The inspection's close-up facts, keeping only well-formed entries; undefined unless at least two items are pictured. */
+export function parseCloseups(value: unknown): ModelCloseups | undefined {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
+  const record = value as Record<string, unknown>;
+  if (!Array.isArray(record.items)) return undefined;
+  const items = record.items
+    .map((entry) => Array.isArray(entry) ? entry.filter((name): name is string => typeof name === "string" && name !== "").slice(0, 6) : [])
+    .filter((names) => names.length > 0)
+    .slice(0, 8);
+  if (items.length < 2) return undefined;
+  const total = typeof record.count === "number" && Number.isFinite(record.count) ? Math.floor(record.count) : items.length;
+  return { items, count: Math.max(total, items.length) };
+}
+
+function describeCloseups(closeups: ModelCloseups | undefined): string {
+  if (closeups === undefined) return "";
+  const listed = closeups.items
+    .map((names, index) => `${index + 1} ${names[0]}${names.length > 1 ? ` (with ${names.slice(1).join(", ")})` : ""}`)
+    .join("; ");
+  const cut = closeups.count > closeups.items.length ? `; the first ${closeups.items.length} of ${closeups.count} only` : "";
+  return `\n  close-ups: this file holds ${closeups.count} separate items, each small in the four views of the whole file, so a second image follows its preview with each item alone in frame. Two items to a row, left to right then top to bottom, each seen from the +X -Y corner and then from the -X +Y corner, in this order: ${listed}${cut}. Judge each item's shape, detail and colours there, one item at a time, and fix what falls short before uploading.`;
 }
 
 const MAX_LAYOUT_ENTRIES = 8;

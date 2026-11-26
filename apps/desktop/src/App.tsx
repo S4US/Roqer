@@ -18,7 +18,7 @@ import {
   appendMessage, createChat, createId, createInitialWorkspace, createProject, undeliverNotes, withMessageSelection,
   deleteChat, deleteProject, modelPreference, normalizeWorkspace, renameChat,
   renameProject, projectInstructions, selectedModelId, setProjectInstructions, setChatCompaction, setChatStudioInstance, chatStudioTarget, chatsByActivity, withdrawMessage,
-  chatReasoningEffort, setChatReasoningEffort, setDefaultReasoningEffort, chatModel, setChatModel,
+  chatReasoningEffort, setChatReasoningEffort, setDefaultReasoningEffort, chatModel, setChatModel, setChatUnread,
   rewindableMessage, rewindChat,
   type AssetAttachment, type ChatMessage, type WorkspaceState,
 } from "./model";
@@ -59,7 +59,8 @@ import { compactUsageNote, contextMeterView, nextContextReading, type ContextRea
 import { blockPreview, characterCount, composedMessage, finishBlockEdit, isLongPaste, lineCount, textSize, withBlockText, type PastedBlock } from "./composer-text";
 import { ComposerDrafts, draftKey, type ComposerDraft } from "./composer-drafts";
 import { CopyReplyButton, QuoteSelection } from "./message-actions";
-import { messageParts, quoteMarkdown, withQuote } from "./message-quote";
+import { ComposerQuotes } from "./composer-quotes";
+import { MAX_COMPOSER_QUOTES, messageParts, quotedText, withQuotes, type ComposerQuote } from "./message-quote";
 import { RojoPill } from "./rojo-pill";
 
 /** The key that sends with Enter and makes a new chat with N, named the way this computer's keyboard names it. */
@@ -255,6 +256,12 @@ function App() {
   const [storageBusy, setStorageBusy] = useState(false);
   const [expandedProjects, setExpandedProjects] = useState(() => new Set<string>());
   const [composer, setComposer] = useState("");
+  /** The passages quoted in the message being written, each with its own reply; see message-quote.ts. */
+  const [quotes, setQuotes] = useState<ComposerQuote[]>([]);
+  const quotesNow = useRef(quotes);
+  quotesNow.current = quotes;
+  /** The quote whose reply is being written above the box, if any. */
+  const [editingQuoteId, setEditingQuoteId] = useState<string | null>(null);
   /** Long pastes, folded out of the text so what was typed stays readable. Sent first, in order. */
   const [pastedBlocks, setPastedBlocks] = useState<PastedBlock[]>([]);
   const [composerExpanded, setComposerExpanded] = useState(false);
@@ -279,6 +286,8 @@ function App() {
   const composerRef = useRef<HTMLTextAreaElement>(null);
   const clearComposer = useCallback(() => {
     setComposer("");
+    setQuotes([]);
+    setEditingQuoteId(null);
     setPastedBlocks([]);
     setComposerExpanded(false);
     setEditingBlockId(null);
@@ -357,12 +366,13 @@ function App() {
   /** The drafts of the chats not on screen; see composer-drafts.ts. */
   const drafts = useRef(new ComposerDrafts());
   /** What the box holds as of the latest render, kept as a draft when the person leaves the chat. */
-  const boxNow = useRef<ComposerDraft>({ text: composer, pastedBlocks, attachments });
-  boxNow.current = { text: composer, pastedBlocks, attachments };
+  const boxNow = useRef<ComposerDraft>({ text: composer, pastedBlocks, attachments, quotes });
+  boxNow.current = { text: composer, pastedBlocks, attachments, quotes };
   /** Put a draft in the box, replacing whatever it held without releasing it. */
   const loadDraft = useCallback((draft: ComposerDraft) => {
     clearComposer();
     setComposer(draft.text);
+    setQuotes([...draft.quotes]);
     setPastedBlocks([...draft.pastedBlocks]);
     setAttachments([...draft.attachments]);
     setTrimmingClip(null);
@@ -381,7 +391,7 @@ function App() {
   }, [loadDraft]);
   /** Whether the box holds nothing typed or pasted, as of the latest render. */
   const composerEmpty = useRef(true);
-  composerEmpty.current = composer === "" && pastedBlocks.length === 0;
+  composerEmpty.current = composer === "" && pastedBlocks.length === 0 && quotes.length === 0;
 
   const selectedProject = useMemo(
     () => workspace.projects.find((project) => project.id === workspace.selectedProjectId) ?? workspace.projects[0],
@@ -698,16 +708,23 @@ function App() {
     for (const runId of recordedRuns.current) if (!tracked.has(runId)) recordedRuns.current.delete(runId);
     const finished = [...runs.values()].filter((run) => run.view !== null && run.view.outcome !== null && !recordedRuns.current.has(run.view.runId));
     if (finished.length === 0) return;
+    // A reply that lands while another chat is open, or while Roqer is not the
+    // window in use, is one nobody has seen: its chat says so in the sidebar.
+    const watching = typeof document !== "undefined" && document.hasFocus();
     for (const run of finished) {
       const view = run.view!;
       recordedRuns.current.add(view.runId);
-      setWorkspace((current) => appendMessage(undeliverNotes(current, run.projectId, run.chatId, view.notes.length - view.notesDelivered), run.projectId, run.chatId, {
-        id: createId("message"),
-        role: "assistant",
-        text: view.text.trim() || view.summary,
-        createdAt: new Date().toISOString(),
-        run: toRunRecord(view) ?? undefined,
-      }));
+      setWorkspace((current) => {
+        const recorded = appendMessage(undeliverNotes(current, run.projectId, run.chatId, view.notes.length - view.notesDelivered), run.projectId, run.chatId, {
+          id: createId("message"),
+          role: "assistant",
+          text: view.text.trim() || view.summary,
+          createdAt: new Date().toISOString(),
+          run: toRunRecord(view) ?? undefined,
+        });
+        const seen = watching && current.selectedChatId === run.chatId;
+        return seen ? recorded : setChatUnread(recorded, run.projectId, run.chatId, true);
+      });
     }
     const next = new Map(runsRef.current);
     for (const run of finished) {
@@ -748,6 +765,13 @@ function App() {
       window.removeEventListener("blur", blurred);
     };
   }, []);
+  // The open chat's reply has been seen once Roqer is the window in use.
+  useEffect(() => {
+    if (!windowFocused || selectedChat?.unread !== true) return;
+    setWorkspace((current) => current.selectedChatId === null
+      ? current
+      : setChatUnread(current, current.selectedProjectId, current.selectedChatId, false));
+  }, [windowFocused, selectedChat?.id, selectedChat?.unread, setWorkspace]);
   const selectionPlace = useMemo(() => {
     if (studioStatus.kind !== "connected") return null;
     const target = chatStudioTarget(workspace, workspace.selectedProjectId, workspace.selectedChatId);
@@ -872,7 +896,7 @@ function App() {
    * into carries both.
    */
   const sendSteer = async () => {
-    const text = composer.trim();
+    const text = withQuotes(quotes, composer);
     if (!text || !steering) return;
     if (text.length > MAX_STEER_CHARS) { setAttachmentError(`Shorten the note to ${MAX_STEER_CHARS.toLocaleString()} characters.`); return; }
     if (!selectedRun) return;
@@ -888,6 +912,8 @@ function App() {
       id: createId("message"), role: "user", text, createdAt: new Date().toISOString(), note: true,
     }));
     setComposer("");
+    setQuotes([]);
+    setEditingQuoteId(null);
     const pending = runView?.pendingQuestion;
     if (pending) {
       setExplainingQuestion(null);
@@ -898,7 +924,7 @@ function App() {
 
   const sendPrompt = async () => {
     if (steering) { await sendSteer(); return; }
-    const prompt = composedMessage(pastedBlocks, composer);
+    const prompt = withQuotes(quotes, composedMessage(pastedBlocks, composer));
     if (!prompt || isRunning || !hydrated || !storageAvailable || storageRecovery.required) return;
     // Starting a run would reopen the conversation being compacted; it waits instead.
     if (compacting && workspace.selectedChatId !== null) { setSendAfterCompact(workspace.selectedChatId); return; }
@@ -1508,17 +1534,25 @@ function App() {
    */
   const scrollRef = useRef<HTMLDivElement>(null);
   const conversationRef = useRef<HTMLDivElement>(null);
-  /** Adds text picked out of a reply to the message box as a quote, and puts the caret after it. */
-  const quoteIntoComposer = useCallback((text: string) => {
-    const quote = quoteMarkdown(text);
-    if (quote === "") return;
-    setComposer((current) => withQuote(current, quote));
+  /**
+   * Adds text picked out of a reply to the message being written, as a quote
+   * of its own above the box, and opens it so a reply to that passage can be
+   * typed at once. A message holds several quotes, each with its reply.
+   */
+  const quoteIntoComposer = useCallback((selection: string) => {
+    const text = quotedText(selection);
+    if (text === "" || quotesNow.current.length >= MAX_COMPOSER_QUOTES) return;
+    const id = createId("quote");
+    setQuotes((current) => [...current, { id, text, reply: "" }]);
+    setEditingQuoteId(id);
+  }, []);
+  /** Back to the message box, with the caret where the typing stopped. */
+  const focusComposer = useCallback(() => {
     window.setTimeout(() => {
       const box = composerRef.current;
       if (box === null) return;
       box.focus();
       box.setSelectionRange(box.value.length, box.value.length);
-      box.scrollTop = box.scrollHeight;
     }, 0);
   }, []);
   const following = useRef(true);
@@ -1678,7 +1712,9 @@ function App() {
     { provider, model: selectedModel?.id ?? null },
   );
   /** Exactly what Send would send. */
-  const message = composedMessage(pastedBlocks, composer);
+  const message = withQuotes(quotes, composedMessage(pastedBlocks, composer));
+  /** Whether there is a note to send to the running task: words, or a quote. */
+  const noteReady = composer.trim() !== "" || quotes.length > 0;
   // Offered once there is enough to want more room, and never in the way before.
   // A chat with nothing in it yet: the question, the composer and the starters sit together mid-pane.
   const onHome = !composerExpanded && !showRunControls && (selectedChat?.messages.length ?? 0) === 0;
@@ -1831,6 +1867,9 @@ function App() {
                 <div className={`folder-row ${workspace.selectedProjectId === project.id ? "folder-selected" : ""}`}>
                   <button className="folder-main" onClick={() => selectProject(project.id)}>
                     {expanded ? <ChevronDown size={15} /> : <ChevronRight size={15} />}<Folder size={17} /><span>{project.name}</span>
+                    {/* A folded project still says a reply is waiting in it. */}
+                    {!expanded && project.chats.some((chat) => chat.unread === true && !runs.has(chat.id)) &&
+                      <span className="chat-unread-mark" role="status" aria-label="New reply in this project" title="New reply in this project" />}
                   </button>
                   <RowMenu className="dark" label={`${project.name} options`} items={projectMenuItems} onSelect={(action) => setDialog(action === RENAME_ACTION
                     ? { kind: "rename-project", projectId: project.id }
@@ -1844,7 +1883,8 @@ function App() {
                     const chatRun = runs.get(chat.id) ?? null;
                     const runHere = chatRun !== null;
                     const needsInput = chatRun !== null && runNeedsInputOf(chatRun);
-                    const runState = runHere ? (needsInput ? "chat-needs-input" : "chat-running") : "";
+                    const unread = !runHere && chat.unread === true;
+                    const runState = runHere ? (needsInput ? "chat-needs-input" : "chat-running") : unread ? "chat-unread" : "";
                     return <div className={`chat-row ${workspace.selectedChatId === chat.id ? "chat-selected" : ""} ${runState}`} key={chat.id}>
                       <button className="chat-main" onClick={() => selectChat(project.id, chat.id)}><MessageSquare size={15} /><span className="chat-row-title">{chat.title}</span>
                         {/* While a run is in this chat, its state replaces the
@@ -1853,7 +1893,9 @@ function App() {
                             other chat. */}
                         {runHere
                           ? <span className="chat-run-mark" role="status" aria-label={needsInput ? "Roqer needs your answer" : "Roqer is working"} title={needsInput ? "Roqer needs your answer" : "Roqer is working"}>{needsInput ? <CircleDot size={13} /> : <Loader2 size={13} />}</span>
-                          : null}
+                          : unread
+                            ? <span className="chat-unread-mark" role="status" aria-label="New reply" title="New reply" />
+                            : null}
                       </button>
                       <RowMenu className="dark chat-menu" label={`${chat.title} options`} items={CHAT_MENU_ITEMS} onSelect={(action) => void chatAction(project.id, chat.id, action)} />
                     </div>;
@@ -2091,6 +2133,13 @@ function App() {
                 onConfirm={(selection) => { setTrimmingClip(null); void readClip(trimming.id, selection); }}
               />;
             })()}
+            {!editingBlock && <ComposerQuotes
+              quotes={quotes} editingId={editingQuoteId}
+              onEdit={setEditingQuoteId}
+              onReply={(id, reply) => setQuotes((current) => current.map((quote) => quote.id === id ? { ...quote, reply } : quote))}
+              onRemove={(id) => { setQuotes((current) => current.filter((quote) => quote.id !== id)); setEditingQuoteId((current) => current === id ? null : current); focusComposer(); }}
+              onDone={() => { setEditingQuoteId(null); focusComposer(); }}
+            />}
             {!editingBlock && pastedBlocks.map((block) => <div className="pasted-block" key={block.id}>
               <FileText size={17} aria-hidden="true" />
               <div><strong>Pasted text</strong><span>{textSize(block.text)} · <code>{blockPreview(block.text)}</code></span></div>
@@ -2170,7 +2219,6 @@ function App() {
                 onWebSearch={(on) => updatePreferences({ webSearch: on })}
               />
               <div className="toolbar-spacer" />
-              {composerHint !== null && <span className="composer-hint">{composerHint}</span>}
               <ContextMeter
                 view={contextView}
                 modelName={selectedModel?.displayName ?? null}
@@ -2184,11 +2232,13 @@ function App() {
               />
               {showRunControls && <button className="stop-button" onClick={stopRun}><Square size={11} fill="currentColor" aria-hidden="true" /> Stop</button>}
               {steering
-                ? pendingQuestion && composer.trim()
+                ? pendingQuestion && noteReady
                   ? <button className="send-button answer-send" onClick={() => void sendSteer()}>Send as answer <ArrowUp size={16} aria-hidden="true" /></button>
-                  : <button className="send-button" onClick={() => void sendSteer()} disabled={!composer.trim()} aria-label="Send note to the running task"><ArrowUp size={18} /></button>
+                  : <button className="send-button" onClick={() => void sendSteer()} disabled={!noteReady} aria-label="Send note to the running task"><ArrowUp size={18} /></button>
                 : !showRunControls && <button className="send-button" onClick={() => void sendPrompt()} disabled={!hydrated || !storageAvailable || storageRecovery.required || isRunning || message === "" || sendAfterCompact !== null || (hasDesktopRuntime() && providerStatus.kind === "signed-in" && !selectedModel)} aria-label={compacting ? "Send once compacting finishes" : "Send message"} title={compacting ? "Sends once compacting finishes" : undefined}><ArrowUp size={18} /></button>}
             </div>
+            {/* Under the box, out of the toolbar's way: how to send, or how long the message is. */}
+            {composerHint !== null && <p className="composer-hint">{composerHint}</p>}
           </div>
           {onHome && <Starters onSuggestion={setComposer} />}
         </div>
@@ -2344,7 +2394,7 @@ const ConversationMessageView = memo(function ConversationMessageView({ message,
     <section className={`message user-message${message.note === true ? " note-message" : ""}${arrived ? " message-arrived" : ""}`} key={message.id}>
       {message.note === true && <span className="note-label">Note sent while Roqer was working</span>}
       {message.attachments !== undefined && <MessagePictures attachments={message.attachments} />}
-      <UserPrompt text={message.text} />
+      <QuotedText text={message.text} className="user-prompt" />
       {message.studioSelection !== undefined && message.studioSelection.count > 0 && <div className="message-selection" title={message.studioSelection.items.map((item) => item.path).join("\n")}>
         <MousePointerClick size={12} aria-hidden="true" /> Selected in Studio: <code>{describeSelection(message.studioSelection)}</code>
       </div>}
@@ -2364,11 +2414,15 @@ const ConversationMessageView = memo(function ConversationMessageView({ message,
   );
 });
 
-/** A sent message, with any passage it quotes shown as a quote rather than as "> " lines. */
-function UserPrompt({ text }: { text: string }) {
+/**
+ * What the person wrote, with any passage it quotes shown as a quote rather
+ * than as "> " lines: a sent message (`user-prompt`) or a note sent while a
+ * run worked (`run-note-text`).
+ */
+function QuotedText({ text, className }: { text: string; className: string }) {
   const parts = useMemo(() => messageParts(text), [text]);
-  if (!parts.some((part) => part.kind === "quote")) return <p className="user-prompt">{text}</p>;
-  return <div className="user-prompt">
+  if (!parts.some((part) => part.kind === "quote")) return <p className={className}>{text}</p>;
+  return <div className={`${className} quoted-text`}>
     {parts.map((part, index) => part.kind === "quote"
       ? <blockquote className="user-quote" key={index}>{part.text}</blockquote>
       : <p key={index}>{part.text}</p>)}
@@ -2667,7 +2721,7 @@ function RunNotes({ notes, delivered, running }: { notes: string[]; delivered: n
     {notes.map((note, index) => {
       const sent = index < delivered;
       return <li key={index} className={`run-note${sent ? " sent" : ""}`}>
-        <p className="run-note-text">{note}</p>
+        <QuotedText text={note} className="run-note-text" />
         <span className="run-note-status">
           {sent
             ? <><Check size={12} aria-hidden="true" /> {running ? "Delivered, the model has it" : "Delivered"}</>

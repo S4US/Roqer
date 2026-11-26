@@ -6,6 +6,11 @@ type CopyState = "idle" | "copied" | "failed";
 
 /** Copies a reply's text, as written (Markdown), and says so for a moment. */
 export function CopyReplyButton({ text }: { text: string }) {
+  return <CopyButton text={text} what="the reply" />;
+}
+
+/** Copies `text` and says so for a moment; `what` names it for a screen reader ("the reply", "this code"). */
+export function CopyButton({ text, what, className = "message-action" }: { text: string; what: string; className?: string }) {
   const [state, setState] = useState<CopyState>("idle");
   const reset = useRef<number | undefined>(undefined);
   useEffect(() => () => window.clearTimeout(reset.current), []);
@@ -19,7 +24,7 @@ export function CopyReplyButton({ text }: { text: string }) {
     navigator.clipboard.writeText(text).then(() => settle("copied"), () => settle("failed"));
   };
   const label = state === "copied" ? "Copied" : state === "failed" ? "Could not copy" : "Copy";
-  return <button type="button" className="message-action" onClick={copy} title={label} aria-label={state === "idle" ? "Copy the reply" : label} data-state={state}>
+  return <button type="button" className={className} onClick={copy} title={label} aria-label={state === "idle" ? `Copy ${what}` : label} data-state={state}>
     {state === "copied" ? <Check size={14} aria-hidden="true" /> : <Copy size={14} aria-hidden="true" />}
     <span className="message-action-label" role="status">{state === "idle" ? "" : label}</span>
   </button>;
