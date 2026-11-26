@@ -18,7 +18,7 @@ import {
   appendMessage, createChat, createId, createInitialWorkspace, createProject, undeliverNotes, withMessageSelection,
   deleteChat, deleteProject, modelPreference, normalizeWorkspace, renameChat,
   renameProject, projectInstructions, selectedModelId, setProjectInstructions, setChatCompaction, setChatStudioInstance, chatStudioTarget, chatsByActivity, withdrawMessage,
-  chatReasoningEffort, setChatReasoningEffort, setDefaultReasoningEffort, chatModel, setChatModel,
+  chatReasoningEffort, setChatReasoningEffort, setDefaultReasoningEffort, chatModel, setChatModel, setChatUnread,
   type AssetAttachment, type ChatMessage, type WorkspaceState,
 } from "./model";
 import {
@@ -692,16 +692,23 @@ function App() {
     for (const runId of recordedRuns.current) if (!tracked.has(runId)) recordedRuns.current.delete(runId);
     const finished = [...runs.values()].filter((run) => run.view !== null && run.view.outcome !== null && !recordedRuns.current.has(run.view.runId));
     if (finished.length === 0) return;
+    // A reply that lands while another chat is open, or while Roqer is not the
+    // window in use, is one nobody has seen: its chat says so in the sidebar.
+    const watching = typeof document !== "undefined" && document.hasFocus();
     for (const run of finished) {
       const view = run.view!;
       recordedRuns.current.add(view.runId);
-      setWorkspace((current) => appendMessage(undeliverNotes(current, run.projectId, run.chatId, view.notes.length - view.notesDelivered), run.projectId, run.chatId, {
-        id: createId("message"),
-        role: "assistant",
-        text: view.text.trim() || view.summary,
-        createdAt: new Date().toISOString(),
-        run: toRunRecord(view) ?? undefined,
-      }));
+      setWorkspace((current) => {
+        const recorded = appendMessage(undeliverNotes(current, run.projectId, run.chatId, view.notes.length - view.notesDelivered), run.projectId, run.chatId, {
+          id: createId("message"),
+          role: "assistant",
+          text: view.text.trim() || view.summary,
+          createdAt: new Date().toISOString(),
+          run: toRunRecord(view) ?? undefined,
+        });
+        const seen = watching && current.selectedChatId === run.chatId;
+        return seen ? recorded : setChatUnread(recorded, run.projectId, run.chatId, true);
+      });
     }
     const next = new Map(runsRef.current);
     for (const run of finished) {
@@ -742,6 +749,13 @@ function App() {
       window.removeEventListener("blur", blurred);
     };
   }, []);
+  // The open chat's reply has been seen once Roqer is the window in use.
+  useEffect(() => {
+    if (!windowFocused || selectedChat?.unread !== true) return;
+    setWorkspace((current) => current.selectedChatId === null
+      ? current
+      : setChatUnread(current, current.selectedProjectId, current.selectedChatId, false));
+  }, [windowFocused, selectedChat?.id, selectedChat?.unread, setWorkspace]);
   const selectionPlace = useMemo(() => {
     if (studioStatus.kind !== "connected") return null;
     const target = chatStudioTarget(workspace, workspace.selectedProjectId, workspace.selectedChatId);
@@ -1742,6 +1756,9 @@ function App() {
                 <div className={`folder-row ${workspace.selectedProjectId === project.id ? "folder-selected" : ""}`}>
                   <button className="folder-main" onClick={() => selectProject(project.id)}>
                     {expanded ? <ChevronDown size={15} /> : <ChevronRight size={15} />}<Folder size={17} /><span>{project.name}</span>
+                    {/* A folded project still says a reply is waiting in it. */}
+                    {!expanded && project.chats.some((chat) => chat.unread === true && !runs.has(chat.id)) &&
+                      <span className="chat-unread-mark" role="status" aria-label="New reply in this project" title="New reply in this project" />}
                   </button>
                   <RowMenu className="dark" label={`${project.name} options`} items={projectMenuItems} onSelect={(action) => setDialog(action === RENAME_ACTION
                     ? { kind: "rename-project", projectId: project.id }
@@ -1755,7 +1772,8 @@ function App() {
                     const chatRun = runs.get(chat.id) ?? null;
                     const runHere = chatRun !== null;
                     const needsInput = chatRun !== null && runNeedsInputOf(chatRun);
-                    const runState = runHere ? (needsInput ? "chat-needs-input" : "chat-running") : "";
+                    const unread = !runHere && chat.unread === true;
+                    const runState = runHere ? (needsInput ? "chat-needs-input" : "chat-running") : unread ? "chat-unread" : "";
                     return <div className={`chat-row ${workspace.selectedChatId === chat.id ? "chat-selected" : ""} ${runState}`} key={chat.id}>
                       <button className="chat-main" onClick={() => selectChat(project.id, chat.id)}><MessageSquare size={15} /><span className="chat-row-title">{chat.title}</span>
                         {/* While a run is in this chat, its state replaces the
@@ -1764,7 +1782,9 @@ function App() {
                             other chat. */}
                         {runHere
                           ? <span className="chat-run-mark" role="status" aria-label={needsInput ? "Roqer needs your answer" : "Roqer is working"} title={needsInput ? "Roqer needs your answer" : "Roqer is working"}>{needsInput ? <CircleDot size={13} /> : <Loader2 size={13} />}</span>
-                          : null}
+                          : unread
+                            ? <span className="chat-unread-mark" role="status" aria-label="New reply" title="New reply" />
+                            : null}
                       </button>
                       <RowMenu className="dark chat-menu" label={`${chat.title} options`} items={CHAT_MENU_ITEMS} onSelect={(action) => void chatAction(project.id, chat.id, action)} />
                     </div>;
