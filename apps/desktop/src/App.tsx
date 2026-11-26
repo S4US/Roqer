@@ -318,35 +318,19 @@ function App() {
   const [communityIconArrived, setCommunityIconArrived] = useState(false);
   /** The chat whose message waits for its compaction to finish before it sends. */
   const [sendAfterCompact, setSendAfterCompact] = useState<string | null>(null);
-  // What is said goes after what the box held when the recording started, and
-  // is written there as it is said. A recording thrown away puts the box back.
-  const dictationBase = useRef("");
-  const composerNow = useRef(composer);
-  composerNow.current = composer;
-  const dictation = useDictation(useMemo(() => ({
-    onStart: () => { dictationBase.current = composerNow.current; },
-    onLive: (spoken: string) => setComposer(withDictation(dictationBase.current, spoken)),
-    onText: (spoken: string) => {
-      setComposer(withDictation(dictationBase.current, spoken));
-      window.setTimeout(() => {
-        const box = composerRef.current;
-        if (box === null) return;
-        box.focus();
-        box.setSelectionRange(box.value.length, box.value.length);
-        box.scrollTop = box.scrollHeight;
-      }, 0);
-    },
-    onCancel: () => setComposer(dictationBase.current),
-  }), []));
+  // What is said goes after what is written, in the message box of the chat on screen.
+  const dictation = useDictation(useCallback((spoken: string) => {
+    setComposer((draft) => withDictation(draft, spoken));
+    window.setTimeout(() => {
+      const box = composerRef.current;
+      if (box === null) return;
+      box.focus();
+      box.setSelectionRange(box.value.length, box.value.length);
+      box.scrollTop = box.scrollHeight;
+    }, 0);
+  }, []));
   const dictating = dictation.phase !== "idle";
-  // The newest words stay in view while they arrive.
-  useEffect(() => {
-    if (!dictating) return;
-    const box = composerRef.current;
-    if (box !== null) box.scrollTop = box.scrollHeight;
-  }, [dictating, composer]);
-  // Another chat is opened while recording: the microphone is let go, and what
-  // was heard so far stays in the draft of the chat it was said in.
+  // Another chat is opened while recording: the microphone is let go and the recording dropped.
   const abandonDictation = dictation.abandon;
   useEffect(() => abandonDictation, [workspace.selectedChatId, abandonDictation]);
   /** Why Send opened Settings, shown at the top of it; null when it was opened by hand. */
@@ -2045,7 +2029,7 @@ function App() {
               if (editingBlock) setPastedBlocks((current) => withBlockText(current, editingBlock.id, text));
               else setComposer(text);
             }} readOnly={dictating} onKeyDown={(event) => {
-              // While dictating the box is being written by the voice: Enter keeps what was said, Escape throws it away.
+              // While dictating the box waits for the voice: Enter keeps what was said, Escape throws it away.
               if (dictating) {
                 if (event.key === "Enter") { event.preventDefault(); dictation.toggle(); }
                 else if (event.key === "Escape") { event.preventDefault(); dictation.cancel(); }

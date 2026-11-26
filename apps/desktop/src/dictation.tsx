@@ -7,34 +7,17 @@ import { dictationBridge } from "./platform";
 
 type Phase = "idle" | "recording" | "transcribing";
 
-/** How long after one live transcription the next one starts. */
-const LIVE_PAUSE_MS = 700;
-
-/** The least sound worth transcribing: under half a second there is no word in it. */
-const MIN_LIVE_SECONDS = 0.5;
-
-/** What dictation tells the message box, from the first word to the last. */
-export type DictationEvents = Readonly<{
-  /** Recording has started: what the box holds now is what the words are added to. */
-  onStart: () => void;
-  /** What has been said so far, heard again from the start each time. */
-  onLive: (text: string) => void;
-  /** Recording is over and this is what was said. */
-  onText: (text: string) => void;
-  /** The recording was thrown away, or came to nothing: the box goes back to what it held. */
-  onCancel: () => void;
-}>;
-
 /**
  * Dictation for the message box: record, transcribe on this computer, hand the
- * words over as they come. The speech model is downloaded the first time, once
- * the person has seen what it is and agreed.
+ * words over. The speech model is downloaded the first time, once the person
+ * has seen what it is and agreed.
  *
- * While it records, everything said so far is transcribed again every second
- * or so, which is what makes the words appear as they are spoken: the model
- * takes whole recordings, and is fast enough to take this one many times.
+ * The microphone button starts recording. The recording bar then shows that it
+ * is listening (a clock, and the sound coming in) and offers to keep what was
+ * said or throw it away; the words arrive through `onText` once it is kept.
+ * Recording also stops by itself at the longest dictation.
  */
-export function useDictation(events: DictationEvents) {
+export function useDictation(onText: (text: string) => void) {
   const bridge = dictationBridge();
   const [model, setModel] = useState<DictationModelState>({ kind: "missing" });
   const [phase, setPhase] = useState<Phase>("idle");
@@ -44,10 +27,8 @@ export function useDictation(events: DictationEvents) {
   /** Whether the dialog about the speech model is open. */
   const [asking, setAsking] = useState(false);
   const capture = useRef<DictationCapture | null>(null);
-  /** The live transcription in flight, so the last one can wait for it. */
-  const live = useRef<Promise<void>>(Promise.resolve());
-  const eventsRef = useRef(events);
-  eventsRef.current = events;
+  const onTextRef = useRef(onText);
+  onTextRef.current = onText;
 
   useEffect(() => {
     if (bridge === undefined) return;
@@ -68,54 +49,35 @@ export function useDictation(events: DictationEvents) {
     taken.stop();
     setPhase("transcribing");
     try {
-      // The process takes one recording at a time: the live one in flight goes first.
-      await live.current;
       const samples = taken.samples();
       const result = samples.length === 0
         ? { ok: false as const, message: "Nothing was recorded." }
         : await bridge.transcribe(samples.buffer as ArrayBuffer);
-      if (!result.ok) { setError(result.message); eventsRef.current.onCancel(); }
-      else if (result.text === "") { setError("No words were heard in that recording."); eventsRef.current.onCancel(); }
-      else eventsRef.current.onText(result.text);
+      if (!result.ok) setError(result.message);
+      else if (result.text === "") setError("No words were heard in that recording.");
+      else onTextRef.current(result.text);
     } catch {
       setError("The recording could not be transcribed.");
-      eventsRef.current.onCancel();
     } finally {
       setPhase("idle");
     }
   }, [bridge]);
 
-  // While recording: the clock and the sound level, and the words so far.
+  // While recording: the clock and the sound level.
   useEffect(() => {
-    if (phase !== "recording" || bridge === undefined) return;
+    if (phase !== "recording") return;
+    // The clock is the wall's, not a count of samples: sound can arrive in bursts.
+    const started = Date.now();
     const meter = window.setInterval(() => {
       const taken = capture.current;
       if (taken === null) return;
-      setSeconds(taken.seconds());
+      const elapsed = (Date.now() - started) / 1_000;
+      setSeconds(elapsed);
       setLevels(taken.levels());
-      if (taken.seconds() >= MAX_DICTATION_SECONDS) void finish();
+      if (elapsed >= MAX_DICTATION_SECONDS || taken.seconds() >= MAX_DICTATION_SECONDS) void finish();
     }, 70);
-    let watching = true;
-    let heard = 0;
-    const loop = async () => {
-      while (watching) {
-        await new Promise((resolve) => window.setTimeout(resolve, LIVE_PAUSE_MS));
-        const taken = capture.current;
-        if (!watching || taken === null) return;
-        const samples = taken.samples();
-        // Nothing new since the last pass, or too little to hold a word.
-        if (samples.length === heard || taken.seconds() < MIN_LIVE_SECONDS) continue;
-        heard = samples.length;
-        const pass = bridge.transcribe(samples.buffer as ArrayBuffer).then((result) => {
-          if (watching && capture.current === taken && result.ok && result.text !== "") eventsRef.current.onLive(result.text);
-        }, () => undefined);
-        live.current = pass;
-        await pass;
-      }
-    };
-    void loop();
-    return () => { watching = false; window.clearInterval(meter); };
-  }, [phase, bridge, finish]);
+    return () => window.clearInterval(meter);
+  }, [phase, finish]);
 
   const record = useCallback(async () => {
     if (bridge === undefined) return;
@@ -128,7 +90,6 @@ export function useDictation(events: DictationEvents) {
     }
     setSeconds(0);
     setLevels([]);
-    eventsRef.current.onStart();
     setPhase("recording");
   }, [bridge]);
 
@@ -146,7 +107,6 @@ export function useDictation(events: DictationEvents) {
     capture.current?.stop();
     capture.current = null;
     setPhase("idle");
-    eventsRef.current.onCancel();
   }, [phase]);
 
   /** Let go of the microphone and say nothing about it: what the box holds stays as it is. */
@@ -218,7 +178,7 @@ export function DictationSetup({ dictation }: { dictation: Dictation }) {
     <div className="name-modal dictation-setup" role="dialog" aria-modal="true" aria-label="Set up dictation" onMouseDown={(event) => event.stopPropagation()}>
       <div className="modal-header"><div><h2>{model.kind === "ready" ? "Dictation is ready" : "Set up dictation"}</h2></div><button className="icon-button" onClick={dictation.closeDialog} aria-label="Close"><X size={19} /></button></div>
       {model.kind === "ready"
-        ? <p>The speech model is on this computer. Press the microphone and speak: what you say is written in the message box as you say it.</p>
+        ? <p>The speech model is on this computer. Press the microphone, speak, then keep what you said: it is written in the message box.</p>
         : <p>Dictation turns what you say into text on this computer: your voice is never sent anywhere. It needs a speech model, downloaded once.</p>}
       <dl className="dictation-facts">
         <div><dt>Model</dt><dd>{DICTATION_MODEL.name}, by {DICTATION_MODEL.publisher} ({DICTATION_MODEL.license})</dd></div>
