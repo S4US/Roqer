@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { messageParts, quotedText, quoteMarkdown, withQuotes, type ComposerQuote } from "./message-quote";
+import { messageParts, quotedText, quoteMarkdown, quotesFromMessage, withQuotes, type ComposerQuote } from "./message-quote";
 
 test("a selection becomes a Markdown quote with a blank line after it", () => {
   assert.equal(quoteMarkdown("Use a RemoteEvent."), "> Use a RemoteEvent.\n\n");
@@ -57,6 +57,26 @@ test("a sent message is split into its quotes and its own words", () => {
 test("a quote made from a selection reads back as the selection", () => {
   const selection = "first line\n\nsecond line";
   assert.deepEqual(messageParts(withQuotes([{ id: "q", text: quotedText(selection), reply: "" }], "")), [{ kind: "quote", text: selection }]);
+});
+
+test("a message sent with quotes is taken apart again into the same quotes and words", () => {
+  let next = 0;
+  const id = () => `q${++next}`;
+  const rows = [quote("first part", "Why?"), quote("second\npart"), quote("third\n\npart", "Change this.")];
+  const sent = withQuotes(rows, "And do the rest.");
+  const back = quotesFromMessage(sent, id);
+  assert.ok(back !== undefined);
+  // The last quote's reply and the typed words were sent as one: they come back in the box.
+  assert.deepEqual(back.quotes.map((row) => [row.text, row.reply]), [["first part", "Why?"], ["second\npart", ""], ["third\n\npart", ""]]);
+  assert.equal(back.message, "Change this.\n\nAnd do the rest.");
+  assert.equal(withQuotes(back.quotes, back.message), sent, "sent again, it is the same message");
+  assert.deepEqual(back.quotes.map((row) => row.id), ["q1", "q2", "q3"]);
+
+  assert.deepEqual(quotesFromMessage(withQuotes([quote("only a quote")], ""), id)?.message, "");
+  assert.equal(quotesFromMessage("No quote at all.", id), undefined);
+  assert.equal(quotesFromMessage("Words first.\n\n> then a quote", id), undefined);
+  // A quote typed by hand that would not come back the same is left as text.
+  assert.equal(quotesFromMessage(">no space after the sign", id), undefined);
 });
 
 test("a greater-than sign inside a line is not a quote", () => {

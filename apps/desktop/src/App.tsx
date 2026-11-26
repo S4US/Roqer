@@ -60,7 +60,7 @@ import { blockPreview, characterCount, composedMessage, finishBlockEdit, isLongP
 import { ComposerDrafts, draftKey, type ComposerDraft } from "./composer-drafts";
 import { CopyReplyButton, QuoteSelection } from "./message-actions";
 import { ComposerQuotes } from "./composer-quotes";
-import { MAX_COMPOSER_QUOTES, messageParts, quotedText, withQuotes, type ComposerQuote } from "./message-quote";
+import { MAX_COMPOSER_QUOTES, messageParts, quotedText, quotesFromMessage, withQuotes, type ComposerQuote } from "./message-quote";
 import { RojoPill } from "./rojo-pill";
 
 /** The key that sends with Enter and makes a new chat with N, named the way this computer's keyboard names it. */
@@ -1195,7 +1195,11 @@ function App() {
     forgetContextReading(chatId);
     setCompactNotice(null);
     const boxEmpty = composerEmpty.current;
-    setComposer((draft) => draft.trim() === "" ? message.text : `${message.text}\n\n${draft}`);
+    // A message written with quote rows comes back as those rows, not as "> " lines.
+    const taken = quotesFromMessage(message.text, () => createId("quote"));
+    const words = taken?.message ?? message.text;
+    if (taken !== undefined) setQuotes((current) => [...taken.quotes, ...current].slice(0, MAX_COMPOSER_QUOTES));
+    setComposer((draft) => draft.trim() === "" ? words : words === "" ? draft : `${words}\n\n${draft}`);
     const files = message.attachments?.length ?? 0;
     setAttachmentError(files === 0 ? null : `${countLabel(files, "file")} sent with this message ${files === 1 ? "was" : "were"} not kept. Attach ${files === 1 ? "it" : "them"} again before sending.`);
     if (resend && files === 0 && boxEmpty) {
