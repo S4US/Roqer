@@ -38,6 +38,8 @@ export class DictationTranscriber {
   private readonly setTimer: (callback: () => void, ms: number) => unknown;
   private readonly clearTimer: (handle: unknown) => void;
   private process: DictationProcess | null = null;
+  /** Resolves when the process last started has exited; null before any has started. */
+  private exited: Promise<void> | null = null;
   private readonly pending = new Map<number, Pending>();
   private nextId = 1;
   private idle: unknown = null;
@@ -86,6 +88,18 @@ export class DictationTranscriber {
     process?.kill();
   }
 
+  /**
+   * Stop the transcribing process and wait until it has gone, or `waitMs` has
+   * passed. For what cannot be done while it lives: it keeps the model's file
+   * open, so the file cannot be deleted under it.
+   */
+  async stopAndWait(reason = "Dictation was stopped.", waitMs = 3_000): Promise<void> {
+    const gone = this.exited;
+    this.stop(reason);
+    if (gone === null) return;
+    await Promise.race([gone, new Promise<void>((resolve) => { this.setTimer(resolve, waitMs); })]);
+  }
+
   private ensureProcess(): DictationProcess {
     if (this.process !== null) return this.process;
     const started = this.options.start();
@@ -94,7 +108,10 @@ export class DictationTranscriber {
       if (this.process !== started) return;
       this.settle(message);
     });
+    let markExited: () => void = () => undefined;
+    this.exited = new Promise<void>((resolve) => { markExited = resolve; });
     started.onExit(() => {
+      markExited();
       if (this.process !== started) return;
       this.process = null;
       this.clearIdle();

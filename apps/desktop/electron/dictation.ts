@@ -59,10 +59,10 @@ export function registerDictation(options: Readonly<{
     trusted(event);
     return model().cancel();
   });
-  ipcMain.handle("dictation:remove-model", (event): Promise<DictationModelState> => {
+  ipcMain.handle("dictation:remove-model", async (event): Promise<DictationModelState> => {
     trusted(event);
-    // The process holds the file open (it is memory-mapped), so it goes first.
-    transcriber.stop("The speech model was removed.");
+    // The process holds the file open (it is memory-mapped), so it has to be gone first.
+    await transcriber.stopAndWait("The speech model was removed.");
     return model().remove();
   });
   ipcMain.handle("dictation:transcribe", async (event, payload: unknown): Promise<DictationResult> => {

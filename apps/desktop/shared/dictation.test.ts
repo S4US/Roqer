@@ -30,7 +30,8 @@ test("only well-formed model states and results are taken from the main process"
 });
 
 test("the speech model is pinned to one published file", () => {
-  assert.match(DICTATION_MODEL.url, /^https:\/\/huggingface\.co\//);
+  // A commit, not a branch: the checksum is of one upload.
+  assert.match(DICTATION_MODEL.url, /^https:\/\/huggingface\.co\/[^/]+\/[^/]+\/resolve\/[0-9a-f]{40}\//);
   assert.ok(DICTATION_MODEL.url.endsWith(DICTATION_MODEL.file));
   assert.match(DICTATION_MODEL.sha256, /^[0-9a-f]{64}$/);
   assert.ok(DICTATION_MODEL.bytes > 100_000_000);

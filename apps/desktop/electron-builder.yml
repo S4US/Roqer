@@ -98,6 +98,9 @@ nsis:
 mac:
   target:
     - dmg
+  # macOS ends an app that opens the microphone without saying what for.
+  extendInfo:
+    NSMicrophoneUsageDescription: Roqer listens only while you dictate a message. What you say is turned into text on this Mac and never sent anywhere.
   icon: public/roqer-app-icon.svg
   category: public.app-category.developer-tools
 

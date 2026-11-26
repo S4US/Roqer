@@ -92,12 +92,22 @@ export class DictationModelStore {
     return entry.done;
   }
 
-  /** Delete the model and any partial download. */
+  /**
+   * Delete the model and any partial download. A file still held open for a
+   * moment (Windows refuses to delete one) is tried again a few times; if it
+   * cannot be deleted the model stays, and the state says why.
+   */
   async remove(): Promise<DictationModelState> {
     await this.cancel();
     this.failure = null;
-    await fs.rm(this.modelPath, { force: true });
-    await fs.rm(this.partPath, { force: true });
+    try {
+      await fs.rm(this.modelPath, { force: true, maxRetries: 10, retryDelay: 200 });
+      await fs.rm(this.partPath, { force: true, maxRetries: 10, retryDelay: 200 });
+    } catch (error) {
+      const state: DictationModelState = { kind: "failed", message: `The speech model could not be removed: ${error instanceof Error ? error.message : String(error)}` };
+      this.onChange(state);
+      return state;
+    }
     const state = await this.state();
     this.onChange(state);
     return state;

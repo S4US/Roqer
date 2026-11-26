@@ -42,7 +42,9 @@ export const DICTATION_MODEL: DictationModelSpec = {
   license: "CC BY 4.0",
   source: "huggingface.co/handy-computer/parakeet-tdt-0.6b-v3-gguf",
   file: "parakeet-tdt-0.6b-v3-Q4_K_M.gguf",
-  url: "https://huggingface.co/handy-computer/parakeet-tdt-0.6b-v3-gguf/resolve/main/parakeet-tdt-0.6b-v3-Q4_K_M.gguf",
+  // Pinned to the commit the checksum below was taken from, so a later upload
+  // to the repository cannot make every download fail its check.
+  url: "https://huggingface.co/handy-computer/parakeet-tdt-0.6b-v3-gguf/resolve/d8d8c32cb2017c57e5307767343e97870f8a7f53/parakeet-tdt-0.6b-v3-Q4_K_M.gguf",
   bytes: 485_425_504,
   sha256: "b68557be1e3c40207fd7c4bd9d63f1d3316b963f15325bfb0cc16a8bb0ffd181",
 };

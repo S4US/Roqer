@@ -95,6 +95,30 @@ test("a process that dies or hangs fails the recordings waiting on it", async ()
   assert.deepEqual(timers.pending(), []);
 });
 
+test("stopping and waiting resolves once the process has gone, or after the wait", async () => {
+  const { transcriber, processes, timers } = setup();
+  await transcriber.stopAndWait("removed", 500);
+  assert.equal(processes.length, 0, "nothing was running: nothing to wait for");
+
+  const waiting = transcriber.transcribe("model.gguf", new Float32Array([0.1]));
+  let done = false;
+  const stopped = transcriber.stopAndWait("The speech model was removed.", 500).then(() => { done = true; });
+  assert.deepEqual(await waiting, { ok: false, message: "The speech model was removed." });
+  assert.equal(processes[0].killed, true);
+  await Promise.resolve();
+  assert.equal(done, false, "still waiting for the process to go");
+  processes[0].die();
+  await stopped;
+  assert.equal(done, true);
+
+  // A process that never reports its exit does not hold the caller for ever.
+  void transcriber.transcribe("model.gguf", new Float32Array([0.1]));
+  const stuck = transcriber.stopAndWait("removed", 500);
+  timers.fire(500);
+  await stuck;
+  assert.equal(processes[1].killed, true);
+});
+
 test("nothing recorded, too much recorded, and a process that cannot start are refused plainly", async () => {
   const { transcriber, processes } = setup();
   assert.deepEqual(await transcriber.transcribe("model.gguf", new Float32Array(0)), { ok: false, message: "Nothing was recorded." });
