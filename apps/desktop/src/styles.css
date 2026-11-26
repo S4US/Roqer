@@ -1098,9 +1098,14 @@ a.small-button:focus-visible { outline: 2px solid var(--accent); outline-offset:
 .markdown blockquote { padding-left: 12px; color: var(--muted); border-left: 2px solid var(--border-strong); }
 .markdown hr { margin: 18px 0; border: 0; border-top: 1px solid var(--border); }
 .md-inline-code { padding: 1px 5px; color: var(--ink); background: var(--surface-sunken); border: 1px solid var(--border-subtle); border-radius: 5px; font: var(--weight-regular) .92em/1.4 "Geist Mono Variable", monospace; overflow-wrap: anywhere; }
-.md-code { position: relative; overflow-x: auto; margin: 0 0 14px; padding: 13px 14px; color: var(--ink); background: var(--surface-sunken); border: 1px solid var(--border-subtle); border-radius: 11px; }
+/* A code block and, over its top right corner, its language and a button to copy it. */
+.md-code-block { position: relative; margin: 0 0 14px; }
+.md-code-tools { position: absolute; top: 1px; right: 1px; z-index: 1; display: flex; align-items: center; gap: 4px; padding: 5px 5px 5px 10px; background: var(--surface-sunken); border-radius: 0 10px 0 8px; }
+.md-code-copy { height: 26px; min-width: 26px; padding: 0 6px; }
+.md-code-copy:hover { background: var(--surface-raised); }
+.md-code { position: relative; overflow-x: auto; margin: 0; padding: 13px 14px; color: var(--ink); background: var(--surface-sunken); border: 1px solid var(--border-subtle); border-radius: 11px; }
 .md-code code { font: var(--weight-regular) var(--type-meta)/1.65 "Geist Mono Variable", monospace; white-space: pre; }
-.md-code-language { position: absolute; top: 8px; right: 11px; color: var(--faint); font: var(--weight-medium) 11px "Geist Mono Variable", monospace; letter-spacing: .4px; text-transform: uppercase; }
+.md-code-language { color: var(--faint); font: var(--weight-medium) 11px "Geist Mono Variable", monospace; letter-spacing: .4px; text-transform: uppercase; }
 /* Not an anchor: a reply is untrusted content, so the target is shown, not followed. */
 .md-link { color: var(--accent); cursor: help; text-decoration: underline; text-decoration-style: dotted; text-underline-offset: 2px; }
 
