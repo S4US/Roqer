@@ -264,6 +264,9 @@ button:focus-visible, textarea:focus-visible, select:focus-visible, input:focus-
 .chat-run-mark { display: inline-flex; align-items: center; color: var(--muted); }
 .chat-running .chat-run-mark > svg { animation: spin .9s linear infinite; }
 .chat-needs-input .chat-run-mark { color: var(--warning); }
+/* A reply nobody has seen yet: a dot where the run's mark was, and the title at full strength. */
+.chat-unread-mark { flex: none; width: 8px; height: 8px; margin-left: auto; background: var(--accent); border-radius: 50%; }
+.chat-unread .chat-row-title { color: var(--ink); font-weight: var(--weight-medium); }
 .chat-needs-input .chat-run-mark > svg { animation: pulse 1.2s ease-in-out infinite; }
 .empty-folder { margin: 8px 10px 13px; color: var(--faint); font-size: var(--type-label); }
 .subscription-card { display: grid; grid-template-columns: 27px 1fr auto; align-items: center; padding: 10px 11px; color: var(--ink-secondary); background: var(--surface); border: 1px solid var(--border-subtle); border-radius: 10px; }
