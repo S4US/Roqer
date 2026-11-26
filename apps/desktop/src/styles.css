@@ -593,8 +593,10 @@ button:focus-visible, textarea:focus-visible, select:focus-visible, input:focus-
 .composer-expanded-head > strong { color: var(--ink); font-size: var(--type-label); font-weight: var(--weight-semibold); }
 .composer-expanded-head > span { color: var(--faint); font-size: var(--type-meta); }
 .composer-expanded-head > .text-button { margin-left: auto; color: var(--ink-secondary); }
-.composer-hint { flex: none; margin-right: 10px; color: var(--faint); font-size: var(--type-meta); white-space: nowrap; }
-.composer-hint kbd { padding: 1px 5px; color: var(--muted); border: 1px solid var(--border); border-radius: 4px; font: var(--weight-regular) 11px/1.4 "Geist Mono Variable", monospace; }
+/* Small, under the box at its right edge, in the room the dock leaves below it:
+   it comes and goes with the typing without moving anything. */
+.composer-hint { position: absolute; top: calc(100% + 2px); right: 12px; margin: 0; color: var(--faint); font-size: 10.5px; line-height: 13px; white-space: nowrap; pointer-events: none; }
+.composer-hint kbd { padding: 0 4px; color: var(--muted); border: 1px solid var(--border); border-radius: 4px; font: var(--weight-regular) 10px/1.2 "Geist Mono Variable", monospace; }
 /* The context meter: a ring that fills as the model's context does, grey until
    it is worth noticing. It opens details, not a choice, so it has no chevron. */
 .context-menu { flex: none; margin-right: 6px; }
@@ -1510,7 +1512,6 @@ a.small-button:focus-visible { outline: 2px solid var(--accent); outline-offset:
 
 @media (max-width: 1050px) {
   .connection-detail { display: none; }
-  .composer-hint { display: none; }
 }
 
 @media (max-width: 840px) {

@@ -2079,7 +2079,6 @@ function App() {
                 onWebSearch={(on) => updatePreferences({ webSearch: on })}
               />
               <div className="toolbar-spacer" />
-              {composerHint !== null && <span className="composer-hint">{composerHint}</span>}
               <ContextMeter
                 view={contextView}
                 modelName={selectedModel?.displayName ?? null}
@@ -2098,6 +2097,8 @@ function App() {
                   : <button className="send-button" onClick={() => void sendSteer()} disabled={!composer.trim()} aria-label="Send note to the running task"><ArrowUp size={18} /></button>
                 : !showRunControls && <button className="send-button" onClick={() => void sendPrompt()} disabled={!hydrated || !storageAvailable || storageRecovery.required || isRunning || message === "" || sendAfterCompact !== null || (hasDesktopRuntime() && providerStatus.kind === "signed-in" && !selectedModel)} aria-label={compacting ? "Send once compacting finishes" : "Send message"} title={compacting ? "Sends once compacting finishes" : undefined}><ArrowUp size={18} /></button>}
             </div>
+            {/* Under the box, out of the toolbar's way: how to send, or how long the message is. */}
+            {composerHint !== null && <p className="composer-hint">{composerHint}</p>}
           </div>
           {onHome && <Starters onSuggestion={setComposer} />}
         </div>
