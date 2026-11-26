@@ -9,11 +9,30 @@ export function quoteMarkdown(text: string): string {
   return `${lines.map((line) => line.trim() === "" ? ">" : `> ${line.trimEnd()}`).join("\n")}\n\n`;
 }
 
-/** A draft with a quote added at its end, a blank line apart from what is already written. */
-export function withQuote(draft: string, quote: string): string {
-  if (quote === "") return draft;
-  const kept = draft.replace(/\s+$/, "");
-  return kept === "" ? quote : `${kept}\n\n${quote}`;
+/**
+ * A passage quoted in the message being written, and what is said in answer
+ * to that passage alone. A message can hold several, each with its own reply.
+ */
+export type ComposerQuote = Readonly<{ id: string; text: string; reply: string }>;
+
+/** The most quotes one message holds. */
+export const MAX_COMPOSER_QUOTES = 12;
+
+/** A selection as a quote keeps it: line ends made plain, runs of blank lines folded to one, no space around it. */
+export function quotedText(selection: string): string {
+  return selection.replace(/\r\n?/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
+}
+
+/**
+ * The message as it is sent: each quote as a Markdown quote with its reply
+ * under it, in the order they were picked, then what was typed in the box.
+ */
+export function withQuotes(quotes: readonly ComposerQuote[], message: string): string {
+  const quoted = quotes.map((quote) => {
+    const reply = quote.reply.trim();
+    return `${quoteMarkdown(quote.text)}${reply === "" ? "" : `${reply}\n\n`}`;
+  }).join("");
+  return `${quoted}${message.trim()}`.trimEnd();
 }
 
 /** A sent message's text in order: quoted passages (without their "> ") and the words around them. */
