@@ -318,17 +318,37 @@ function App() {
   const [communityIconArrived, setCommunityIconArrived] = useState(false);
   /** The chat whose message waits for its compaction to finish before it sends. */
   const [sendAfterCompact, setSendAfterCompact] = useState<string | null>(null);
-  // What is said goes after what is written, in the message box of the chat on screen.
-  const dictation = useDictation(useCallback((spoken: string) => {
-    setComposer((draft) => withDictation(draft, spoken));
-    window.setTimeout(() => {
-      const box = composerRef.current;
-      if (box === null) return;
-      box.focus();
-      box.setSelectionRange(box.value.length, box.value.length);
-      box.scrollTop = box.scrollHeight;
-    }, 0);
-  }, []));
+  // What is said goes after what the box held when the recording started, and
+  // is written there as it is said. A recording thrown away puts the box back.
+  const dictationBase = useRef("");
+  const composerNow = useRef(composer);
+  composerNow.current = composer;
+  const dictation = useDictation(useMemo(() => ({
+    onStart: () => { dictationBase.current = composerNow.current; },
+    onLive: (spoken: string) => setComposer(withDictation(dictationBase.current, spoken)),
+    onText: (spoken: string) => {
+      setComposer(withDictation(dictationBase.current, spoken));
+      window.setTimeout(() => {
+        const box = composerRef.current;
+        if (box === null) return;
+        box.focus();
+        box.setSelectionRange(box.value.length, box.value.length);
+        box.scrollTop = box.scrollHeight;
+      }, 0);
+    },
+    onCancel: () => setComposer(dictationBase.current),
+  }), []));
+  const dictating = dictation.phase !== "idle";
+  // The newest words stay in view while they arrive.
+  useEffect(() => {
+    if (!dictating) return;
+    const box = composerRef.current;
+    if (box !== null) box.scrollTop = box.scrollHeight;
+  }, [dictating, composer]);
+  // Another chat is opened while recording: the microphone is let go, and what
+  // was heard so far stays in the draft of the chat it was said in.
+  const abandonDictation = dictation.abandon;
+  useEffect(() => abandonDictation, [workspace.selectedChatId, abandonDictation]);
   /** Why Send opened Settings, shown at the top of it; null when it was opened by hand. */
   const [settingsNotice, setSettingsNotice] = useState<string | null>(null);
   const [dialog, setDialog] = useState<Dialog | null>(null);
@@ -2024,7 +2044,13 @@ function App() {
               const text = event.target.value;
               if (editingBlock) setPastedBlocks((current) => withBlockText(current, editingBlock.id, text));
               else setComposer(text);
-            }} onKeyDown={(event) => {
+            }} readOnly={dictating} onKeyDown={(event) => {
+              // While dictating the box is being written by the voice: Enter keeps what was said, Escape throws it away.
+              if (dictating) {
+                if (event.key === "Enter") { event.preventDefault(); dictation.toggle(); }
+                else if (event.key === "Escape") { event.preventDefault(); dictation.cancel(); }
+                return;
+              }
               if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) { event.preventDefault(); void sendPrompt(); }
               // A word still being composed (an input method) is confirmed with Enter, not sent.
               else if (event.key === "Enter" && enterSends && !event.shiftKey && !event.altKey && !event.nativeEvent.isComposing) {
@@ -2108,7 +2134,8 @@ function App() {
               {/* Between the context meter and Send: speaking a message, or a note to the running task. Not while a pasted block is being edited in the box. */}
               <DictationButton dictation={dictation} disabled={editingBlock !== undefined} />
               {showRunControls && <button className="stop-button" onClick={stopRun}><Square size={11} fill="currentColor" aria-hidden="true" /> Stop</button>}
-              {steering
+              {/* While recording, the bar's own button takes Send's place: nothing is sent mid-sentence. */}
+              {dictation.phase === "recording" ? null : steering
                 ? pendingQuestion && composer.trim()
                   ? <button className="send-button answer-send" onClick={() => void sendSteer()}>Send as answer <ArrowUp size={16} aria-hidden="true" /></button>
                   : <button className="send-button" onClick={() => void sendSteer()} disabled={!composer.trim()} aria-label="Send note to the running task"><ArrowUp size={18} /></button>
