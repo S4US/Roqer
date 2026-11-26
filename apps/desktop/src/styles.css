@@ -524,6 +524,29 @@ button:focus-visible, textarea:focus-visible, select:focus-visible, input:focus-
 .composer-toolbar { display: flex; align-items: center; gap: 4px; }
 .attach-button { display: grid; place-items: center; width: 31px; height: 31px; color: var(--muted); background: transparent; border: 0; border-radius: 8px; }
 .attach-button:hover { color: var(--ink); background: var(--surface-sunken); }
+/* Dictation, between the context meter and Send: a microphone at rest, a red stop with a
+   clock while it records, a spinner while what was said is being written. */
+.dictation-button { display: grid; flex: none; place-items: center; width: 31px; height: 31px; margin: 0 4px; color: var(--muted); background: transparent; border: 0; border-radius: 8px; }
+.dictation-button:hover:not(:disabled) { color: var(--ink); background: var(--surface-sunken); }
+.dictation-button:disabled { opacity: .45; }
+.dictation-button.busy { color: var(--accent); }
+.dictation-button.recording { width: 26px; height: 26px; color: #fff; background: var(--danger); border-radius: 50%; animation: dictation-pulse 1.4s ease-in-out infinite; }
+.dictation-button.recording:hover { color: #fff; background: var(--danger); filter: brightness(1.1); }
+.dictation-recording { display: inline-flex; flex: none; align-items: center; gap: 7px; padding: 0 2px 0 4px; }
+.dictation-clock { min-width: 30px; color: var(--ink); font: var(--weight-medium) var(--type-meta) "Geist Mono Variable", monospace; font-variant-numeric: tabular-nums; }
+.dictation-discard { width: 24px; height: 24px; }
+@keyframes dictation-pulse { 0%, 100% { box-shadow: 0 0 0 0 var(--danger-soft); } 50% { box-shadow: 0 0 0 5px var(--danger-soft); } }
+@media (prefers-reduced-motion: reduce) { .dictation-button.recording { animation: none; } }
+/* The first dictation: what the speech model is, then its download. */
+.dictation-setup { width: min(500px, calc(100% - 40px)); }
+.dictation-facts { display: grid; gap: 8px; margin: 0 0 16px; padding: 12px 14px; background: var(--surface-sunken); border: 1px solid var(--border-subtle); border-radius: 10px; }
+.dictation-facts > div { display: grid; grid-template-columns: 86px 1fr; gap: 10px; }
+.dictation-facts dt { color: var(--muted); font-size: var(--type-label); }
+.dictation-facts dd { margin: 0; color: var(--ink-secondary); font-size: var(--type-label); line-height: 1.45; overflow-wrap: anywhere; }
+.dictation-progress { height: 6px; overflow: hidden; background: var(--surface-sunken); border-radius: 999px; }
+.dictation-progress > span { display: block; height: 100%; background: var(--accent); border-radius: 999px; transition: width .25s linear; }
+.name-modal > .dictation-progress-note { margin: 7px 0 14px; color: var(--muted); font-size: var(--type-meta); font-variant-numeric: tabular-nums; }
+.name-modal > .dictation-problem { margin: 0 0 14px; color: var(--danger); font-size: var(--type-label); }
 /* The composer's two menus: which model answers, and how the run behaves. Each
    button shows its current answer; the panel opens above the composer. */
 .composer-menu { position: relative; flex: 0 1 auto; min-width: 0; }

@@ -58,6 +58,8 @@ import { compactUsageNote, contextMeterView, nextContextReading, type ContextRea
 import { blockPreview, characterCount, composedMessage, finishBlockEdit, isLongPaste, lineCount, textSize, withBlockText, type PastedBlock } from "./composer-text";
 import { ComposerDrafts, draftKey, type ComposerDraft } from "./composer-drafts";
 import { CopyReplyButton, QuoteSelection } from "./message-actions";
+import { DictationButton, DictationSetup, useDictation } from "./dictation";
+import { withDictation } from "../shared/dictation";
 import { messageParts, quoteMarkdown, withQuote } from "./message-quote";
 import { RojoPill } from "./rojo-pill";
 
@@ -316,6 +318,17 @@ function App() {
   const [communityIconArrived, setCommunityIconArrived] = useState(false);
   /** The chat whose message waits for its compaction to finish before it sends. */
   const [sendAfterCompact, setSendAfterCompact] = useState<string | null>(null);
+  // What is said goes after what is written, in the message box of the chat on screen.
+  const dictation = useDictation(useCallback((spoken: string) => {
+    setComposer((draft) => withDictation(draft, spoken));
+    window.setTimeout(() => {
+      const box = composerRef.current;
+      if (box === null) return;
+      box.focus();
+      box.setSelectionRange(box.value.length, box.value.length);
+      box.scrollTop = box.scrollHeight;
+    }, 0);
+  }, []));
   /** Why Send opened Settings, shown at the top of it; null when it was opened by hand. */
   const [settingsNotice, setSettingsNotice] = useState<string | null>(null);
   const [dialog, setDialog] = useState<Dialog | null>(null);
@@ -1957,6 +1970,7 @@ function App() {
               <span><Loader2 size={13} className="spin" aria-hidden="true" /> Queued: your message sends as soon as compacting finishes. You can keep editing it.</span>
               <button onClick={() => setSendAfterCompact(null)}>Cancel</button>
             </div>}
+            {dictation.error && <div className="attachment-notice" role="alert"><AlertTriangle size={14} aria-hidden="true" /><span>{dictation.error}</span><button onClick={dictation.dismissError} aria-label="Dismiss"><X size={14} /></button></div>}
             {attachmentError && <div className="attachment-notice" role="alert"><AlertTriangle size={14} aria-hidden="true" /><span>{attachmentError}</span><button onClick={() => setAttachmentError(null)} aria-label="Dismiss"><X size={14} /></button></div>}
             {(() => {
               // Every run in this project sends these, so the composer says so
@@ -2091,6 +2105,8 @@ function App() {
                 compacting={compacting}
                 modelWritten={modelCompact}
               />
+              {/* Between the context meter and Send: speaking a message, or a note to the running task. Not while a pasted block is being edited in the box. */}
+              <DictationButton dictation={dictation} disabled={editingBlock !== undefined} />
               {showRunControls && <button className="stop-button" onClick={stopRun}><Square size={11} fill="currentColor" aria-hidden="true" /> Stop</button>}
               {steering
                 ? pendingQuestion && composer.trim()
@@ -2107,6 +2123,7 @@ function App() {
 
       {settingsPage.present && <SettingsPage leaving={settingsPage.leaving} preferences={workspace.preferences} studioStatus={studioStatus} updateState={updateState} onPreferences={updatePreferences} onStudioRefresh={() => void refreshStudioStatus()} onProviderChanged={() => { void refreshProviderStatus(); void refreshProviderModels(); }} onExport={() => void exportChats(storageRecovery.required ? undefined : workspace)} notice={settingsNotice ?? undefined} onClose={() => { setShowSettings(false); setSettingsNotice(null); }} />}
       {renderDialog()}
+      <DictationSetup dictation={dictation} />
       {!hydrated && <div className="loading-overlay"><div><span /><strong>Opening your workspace…</strong></div></div>}
     </div>
     </RunDeckProvider>

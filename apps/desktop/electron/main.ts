@@ -3,6 +3,7 @@ import {
   type IpcMainEvent, type IpcMainInvokeEvent, type MessageBoxOptions, type WebContents,
 } from "electron";
 import { autoUpdater } from "electron-updater";
+import { registerDictation } from "./dictation";
 import { spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
@@ -317,6 +318,8 @@ let claudeCode: ClaudeCodeClient | null = null;
 let antigravityLimits: AntigravityLimitsTracker | null = null;
 let antigravityCli: AntigravityClient | null = null;
 const clientInstalls = new ClientInstallRunner();
+/** Dictation's transcribing process, stopped with the application; null until the application is ready. */
+let dictation: { stop: () => void } | null = null;
 const clientVersions = new ClientVersionReader();
 /** A ChatGPT sign-in waiting in the browser, and how it ends. */
 let pendingChatGptLogin: { loginId: string; done: Promise<ProviderLoginResult> } | null = null;
@@ -3205,6 +3208,7 @@ app.whenReady().then(async () => {
   // A frozen main process stops answering the window manager, which dims the
   // window; this says afterwards how long it was frozen.
   watchEventLoop({ onStall: (blockedMs) => void appLog().write(`[main] the main process was blocked for ${Math.round(blockedMs)} ms`) });
+  dictation = registerDictation({ userData: () => app.getPath("userData"), isTrusted });
   ipcMain.handle("workspace:load", (event) => {
     if (!isTrusted(event.sender)) throw new Error("This window may not load the workspace.");
     return loadState();
@@ -3360,6 +3364,7 @@ app.on("before-quit", () => {
   attachments.clear();
   void clipDecoder.close(true);
   clientInstalls.stop();
+  dictation?.stop();
   void claudeSessions.closeAll();
   compactionStop.abort();
   void antigravitySessions.closeAll();

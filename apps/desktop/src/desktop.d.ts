@@ -4,6 +4,7 @@ import type { OpenStudioScriptRequest, StudioActionResult, StudioStatus } from "
 import type { StudioSelection, StudioSelectionRequest, StudioSelectionResult } from "../shared/studio-selection";
 import type { ProviderInstallResult, ProviderLoginResult, ProviderModelCatalog, ProviderStatus } from "../shared/provider";
 import type { ProviderLimits } from "../shared/provider-limits";
+import type { DictationModelState, DictationResult } from "../shared/dictation";
 import type { StorageStatus } from "../shared/workspace-storage";
 import type { McpServerState } from "../shared/mcp-server";
 import type { AppUpdateState } from "../shared/app-update";
@@ -53,6 +54,14 @@ declare global {
         clipFrame(id: string, time: number): Promise<string>;
         selectClip(id: string, selection: ClipSelection): Promise<AssetAttachment>;
         release(ids: string[]): Promise<void>;
+      };
+      dictation: {
+        model(): Promise<DictationModelState>;
+        download(): Promise<DictationModelState>;
+        cancelDownload(): Promise<DictationModelState>;
+        removeModel(): Promise<DictationModelState>;
+        transcribe(samples: ArrayBuffer): Promise<DictationResult>;
+        subscribe(listener: (state: DictationModelState) => void): () => void;
       };
       updates: {
         state(): Promise<AppUpdateState>;

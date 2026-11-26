@@ -577,6 +577,11 @@ export async function getAppVersion(): Promise<string | null> {
   return window.workbenchDesktop?.app.version() ?? null;
 }
 
+/** The window's access to dictation, or undefined outside the desktop app. */
+export function dictationBridge(): NonNullable<Window["workbenchDesktop"]>["dictation"] | undefined {
+  return window.workbenchDesktop?.dictation;
+}
+
 /** Restart into a downloaded update. Resolves false when none is staged. */
 export async function installUpdate(): Promise<boolean> {
   return window.workbenchDesktop?.updates.install() ?? false;
