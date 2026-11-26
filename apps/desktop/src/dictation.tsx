@@ -7,6 +7,17 @@ import { dictationBridge } from "./platform";
 
 type Phase = "idle" | "recording" | "transcribing";
 
+/** What to check when the microphone cannot be opened, in the words of the system it runs on. */
+const MICROPHONE_REFUSED = (() => {
+  const agent = typeof navigator === "undefined" ? "" : navigator.userAgent;
+  const where = /Windows/.test(agent)
+    ? "that Windows lets desktop apps use it (Settings, Privacy & security, Microphone)"
+    : /Mac/.test(agent)
+      ? "that Roqer may use it (System Settings, Privacy & Security, Microphone)"
+      : "that the system lets Roqer use it";
+  return `Roqer could not use the microphone. Check that one is plugged in and ${where}.`;
+})();
+
 /**
  * Dictation for the message box: record, transcribe on this computer, hand the
  * words over. The speech model is downloaded the first time, once the person
@@ -85,7 +96,7 @@ export function useDictation(onText: (text: string) => void) {
     try {
       capture.current = await startCapture();
     } catch {
-      setError("Roqer could not use the microphone. Check that one is plugged in and that Windows lets desktop apps use it.");
+      setError(MICROPHONE_REFUSED);
       return;
     }
     setSeconds(0);

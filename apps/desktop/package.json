@@ -4,6 +4,9 @@
   "desktopName": "roqer.desktop",
   "version": "0.3.0",
   "private": true,
+  "engines": {
+    "node": ">=22"
+  },
   "description": "Roqer, a local desktop agent for Roblox Studio.",
   "license": "AGPL-3.0-or-later",
   "author": "S4US",

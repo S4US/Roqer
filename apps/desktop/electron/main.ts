@@ -1,9 +1,10 @@
 import {
-  app, BrowserWindow, clipboard, dialog, ipcMain, Menu, nativeTheme, Notification, protocol, shell,
+  app, BrowserWindow, clipboard, dialog, ipcMain, Menu, nativeTheme, Notification, protocol, session as electronSession, shell,
   type IpcMainEvent, type IpcMainInvokeEvent, type MessageBoxOptions, type WebContents,
 } from "electron";
 import { autoUpdater } from "electron-updater";
 import { registerDictation } from "./dictation";
+import { restrictWindowPermissions } from "./window-permissions";
 import { spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
@@ -3208,6 +3209,8 @@ app.whenReady().then(async () => {
   // A frozen main process stops answering the window manager, which dims the
   // window; this says afterwards how long it was frozen.
   watchEventLoop({ onStall: (blockedMs) => void appLog().write(`[main] the main process was blocked for ${Math.round(blockedMs)} ms`) });
+  // Before any window opens: Electron would otherwise grant every permission a page asks for.
+  restrictWindowPermissions(electronSession.defaultSession, isTrusted);
   dictation = registerDictation({ userData: () => app.getPath("userData"), isTrusted });
   ipcMain.handle("workspace:load", (event) => {
     if (!isTrusted(event.sender)) throw new Error("This window may not load the workspace.");
