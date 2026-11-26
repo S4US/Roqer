@@ -58,6 +58,8 @@ import { compactUsageNote, contextMeterView, nextContextReading, type ContextRea
 import { blockPreview, characterCount, composedMessage, finishBlockEdit, isLongPaste, lineCount, textSize, withBlockText, type PastedBlock } from "./composer-text";
 import { ComposerDrafts, draftKey, type ComposerDraft } from "./composer-drafts";
 import { CopyReplyButton, QuoteSelection } from "./message-actions";
+import { DictationButton, DictationSetup, useDictation } from "./dictation";
+import { withDictation } from "../shared/dictation";
 import { ComposerQuotes } from "./composer-quotes";
 import { MAX_COMPOSER_QUOTES, messageParts, quotedText, withQuotes, type ComposerQuote } from "./message-quote";
 import { RojoPill } from "./rojo-pill";
@@ -326,6 +328,21 @@ function App() {
   const [communityIconArrived, setCommunityIconArrived] = useState(false);
   /** The chat whose message waits for its compaction to finish before it sends. */
   const [sendAfterCompact, setSendAfterCompact] = useState<string | null>(null);
+  // What is said goes after what is written, in the message box of the chat on screen.
+  const dictation = useDictation(useCallback((spoken: string) => {
+    setComposer((draft) => withDictation(draft, spoken));
+    window.setTimeout(() => {
+      const box = composerRef.current;
+      if (box === null) return;
+      box.focus();
+      box.setSelectionRange(box.value.length, box.value.length);
+      box.scrollTop = box.scrollHeight;
+    }, 0);
+  }, []));
+  const dictating = dictation.phase !== "idle";
+  // Another chat is opened while recording: the microphone is let go and the recording dropped.
+  const abandonDictation = dictation.abandon;
+  useEffect(() => abandonDictation, [workspace.selectedChatId, abandonDictation]);
   /** Why Send opened Settings, shown at the top of it; null when it was opened by hand. */
   const [settingsNotice, setSettingsNotice] = useState<string | null>(null);
   const [dialog, setDialog] = useState<Dialog | null>(null);
@@ -2000,6 +2017,7 @@ function App() {
               <span><Loader2 size={13} className="spin" aria-hidden="true" /> Queued: your message sends as soon as compacting finishes. You can keep editing it.</span>
               <button onClick={() => setSendAfterCompact(null)}>Cancel</button>
             </div>}
+            {dictation.error && <div className="attachment-notice" role="alert"><AlertTriangle size={14} aria-hidden="true" /><span>{dictation.error}</span><button onClick={dictation.dismissError} aria-label="Dismiss"><X size={14} /></button></div>}
             {attachmentError && <div className="attachment-notice" role="alert"><AlertTriangle size={14} aria-hidden="true" /><span>{attachmentError}</span><button onClick={() => setAttachmentError(null)} aria-label="Dismiss"><X size={14} /></button></div>}
             {(() => {
               // Every run in this project sends these, so the composer says so
@@ -2060,7 +2078,13 @@ function App() {
               const text = event.target.value;
               if (editingBlock) setPastedBlocks((current) => withBlockText(current, editingBlock.id, text));
               else setComposer(text);
-            }} onKeyDown={(event) => {
+            }} readOnly={dictating} onKeyDown={(event) => {
+              // While dictating the box waits for the voice: Enter keeps what was said, Escape throws it away.
+              if (dictating) {
+                if (event.key === "Enter") { event.preventDefault(); dictation.toggle(); }
+                else if (event.key === "Escape") { event.preventDefault(); dictation.cancel(); }
+                return;
+              }
               if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) { event.preventDefault(); void sendPrompt(); }
               // A word still being composed (an input method) is confirmed with Enter, not sent.
               else if (event.key === "Enter" && enterSends && !event.shiftKey && !event.altKey && !event.nativeEvent.isComposing) {
@@ -2140,8 +2164,11 @@ function App() {
                 compacting={compacting}
                 modelWritten={modelCompact}
               />
+              {/* Between the context meter and Send: speaking a message, or a note to the running task. Not while a pasted block is being edited in the box. */}
+              <DictationButton dictation={dictation} disabled={editingBlock !== undefined} />
               {showRunControls && <button className="stop-button" onClick={stopRun}><Square size={11} fill="currentColor" aria-hidden="true" /> Stop</button>}
-              {steering
+              {/* While recording, the bar's own button takes Send's place: nothing is sent mid-sentence. */}
+              {dictation.phase === "recording" ? null : steering
                 ? pendingQuestion && noteReady
                   ? <button className="send-button answer-send" onClick={() => void sendSteer()}>Send as answer <ArrowUp size={16} aria-hidden="true" /></button>
                   : <button className="send-button" onClick={() => void sendSteer()} disabled={!noteReady} aria-label="Send note to the running task"><ArrowUp size={18} /></button>
@@ -2158,6 +2185,7 @@ function App() {
 
       {settingsPage.present && <SettingsPage leaving={settingsPage.leaving} preferences={workspace.preferences} studioStatus={studioStatus} updateState={updateState} onPreferences={updatePreferences} onStudioRefresh={() => void refreshStudioStatus()} onProviderChanged={() => { void refreshProviderStatus(); void refreshProviderModels(); }} onExport={() => void exportChats(storageRecovery.required ? undefined : workspace)} notice={settingsNotice ?? undefined} onClose={() => { setShowSettings(false); setSettingsNotice(null); }} />}
       {renderDialog()}
+      <DictationSetup dictation={dictation} />
       {!hydrated && <div className="loading-overlay"><div><span /><strong>Opening your workspace…</strong></div></div>}
     </div>
     </RunDeckProvider>

@@ -22,6 +22,7 @@ import {
 import { planUsageView, USAGE_SCOPES } from "./plan-usage";
 import { PlanUsageList } from "./plan-usage-list";
 import { SettingsGroup, SettingsRow, SettingsSwitch } from "./settings-parts";
+import { DictationSettings } from "./dictation-settings";
 
 /**
  * Settings, as a page of the app rather than a dialog over it.
@@ -248,6 +249,7 @@ export function SettingsPage({ leaving = false, preferences, studioStatus, updat
             <SettingsRow title={`${SEND_KEYS} to send`} detail={`On, Enter starts a new line and ${SEND_KEYS} sends. Off, Enter sends and Shift+Enter starts a new line.`}>
               <SettingsSwitch label={`${SEND_KEYS} to send`} checked={preferences.ctrlEnterToSend} onChange={(ctrlEnterToSend) => onPreferences({ ctrlEnterToSend })} />
             </SettingsRow>
+            <DictationSettings />
             <SettingsRow title="Show Roqer on Discord" detail="Your profile shows that Roqer is open and whether it is busy. Never your place, scripts, or tasks.">
               <SettingsSwitch label="Show Roqer on Discord" checked={preferences.discordPresence} onChange={(discordPresence) => onPreferences({ discordPresence })} />
             </SettingsRow>

@@ -34,6 +34,17 @@ export async function buildDesktopRuntime() {
   await Promise.all([
     build({ ...shared, entryPoints: ["electron/main.ts"], outfile: "dist-electron/main.cjs" }),
     build({ ...shared, entryPoints: ["electron/preload.ts"], outfile: "dist-electron/preload.cjs" }),
+    // Dictation's transcribing process. An ES module, because the speech
+    // library is one, and that library stays outside the bundle: it loads
+    // native files that have to exist on disk beside it.
+    build({
+      ...shared,
+      format: "esm",
+      target: "node22",
+      external: ["electron", "transcribe-cpp"],
+      entryPoints: ["electron/dictation-worker.ts"],
+      outfile: "dist-electron/dictation-worker.mjs",
+    }),
     // The hidden clip decoder's page runs in a sandboxed renderer, not in
     // Node, so its script is built for the browser, and its HTML travels
     // beside it: the main process loads both from here in development and

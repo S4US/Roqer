@@ -538,6 +538,35 @@ div.run-note-text > p, div.run-note-text > .user-quote { white-space: pre-wrap; 
 .composer-toolbar { display: flex; align-items: center; gap: 4px; }
 .attach-button { display: grid; place-items: center; width: 31px; height: 31px; color: var(--muted); background: transparent; border: 0; border-radius: 8px; }
 .attach-button:hover { color: var(--ink); background: var(--surface-sunken); }
+/* Dictation, between the context meter and Send: a microphone at rest, a red stop with a
+   clock while it records, a spinner while what was said is being written. */
+.dictation-button { display: grid; flex: none; place-items: center; width: 31px; height: 31px; margin: 0 4px; color: var(--muted); background: transparent; border: 0; border-radius: 8px; }
+.dictation-button:hover:not(:disabled) { color: var(--ink); background: var(--surface-sunken); }
+.dictation-button:disabled { opacity: .45; }
+.dictation-button.busy { color: var(--accent); }
+/* The recording bar, left to right: discard, a red dot, the clock, the sound
+   coming in as bars that move with the voice, and the button that keeps it. */
+.dictation-recording { display: inline-flex; flex: none; align-items: center; gap: 9px; margin-left: 4px; }
+.dictation-discard { width: 28px; height: 28px; }
+.dictation-dot { flex: none; width: 9px; height: 9px; background: var(--danger); border-radius: 50%; animation: dictation-pulse 1.4s ease-in-out infinite; }
+.dictation-clock { min-width: 30px; color: var(--ink); font: var(--weight-medium) var(--type-label) "Geist Mono Variable", monospace; font-variant-numeric: tabular-nums; }
+.dictation-levels { display: inline-flex; flex: none; align-items: center; gap: 2px; height: 20px; }
+.dictation-levels > i { display: block; width: 2px; min-height: 3px; background: var(--muted); border-radius: 1px; transition: height .07s linear; }
+.dictation-confirm { display: grid; flex: none; place-items: center; width: 34px; height: 34px; color: var(--action-ink); background: var(--action); border: 0; border-radius: 50%; transition: .18s ease; }
+.dictation-confirm:hover { background: var(--action-hover); }
+.dictation-confirm:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+@keyframes dictation-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .45; } }
+@media (prefers-reduced-motion: reduce) { .dictation-dot { animation: none; } .dictation-levels > i { transition: none; } }
+/* The first dictation: what the speech model is, then its download. */
+.dictation-setup { width: min(500px, calc(100% - 40px)); }
+.dictation-facts { display: grid; gap: 8px; margin: 0 0 16px; padding: 12px 14px; background: var(--surface-sunken); border: 1px solid var(--border-subtle); border-radius: 10px; }
+.dictation-facts > div { display: grid; grid-template-columns: 86px 1fr; gap: 10px; }
+.dictation-facts dt { color: var(--muted); font-size: var(--type-label); }
+.dictation-facts dd { margin: 0; color: var(--ink-secondary); font-size: var(--type-label); line-height: 1.45; overflow-wrap: anywhere; }
+.dictation-progress { height: 6px; overflow: hidden; background: var(--surface-sunken); border-radius: 999px; }
+.dictation-progress > span { display: block; height: 100%; background: var(--accent); border-radius: 999px; transition: width .25s linear; }
+.name-modal > .dictation-progress-note { margin: 7px 0 14px; color: var(--muted); font-size: var(--type-meta); font-variant-numeric: tabular-nums; }
+.name-modal > .dictation-problem { margin: 0 0 14px; color: var(--danger); font-size: var(--type-label); }
 /* The composer's two menus: which model answers, and how the run behaves. Each
    button shows its current answer; the panel opens above the composer. */
 .composer-menu { position: relative; flex: 0 1 auto; min-width: 0; }
