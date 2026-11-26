@@ -58,6 +58,8 @@ import { compactUsageNote, contextMeterView, nextContextReading, type ContextRea
 import { blockPreview, characterCount, composedMessage, finishBlockEdit, isLongPaste, lineCount, textSize, withBlockText, type PastedBlock } from "./composer-text";
 import { ComposerDrafts, draftKey, type ComposerDraft } from "./composer-drafts";
 import { CopyReplyButton, QuoteSelection } from "./message-actions";
+import { ChatSearch } from "./chat-search";
+import type { ChatSearchResult } from "./chat-search-model";
 import { messageParts, quoteMarkdown, withQuote } from "./message-quote";
 import { RojoPill } from "./rojo-pill";
 
@@ -316,6 +318,10 @@ function App() {
   const [communityIconArrived, setCommunityIconArrived] = useState(false);
   /** The chat whose message waits for its compaction to finish before it sends. */
   const [sendAfterCompact, setSendAfterCompact] = useState<string | null>(null);
+  /** Whether the search of all chats is open. */
+  const [searching, setSearching] = useState(false);
+  /** The message a search opened its chat on, shown and marked once the chat is on screen. */
+  const [foundMessage, setFoundMessage] = useState<{ chatId: string; messageId: string } | null>(null);
   /** Why Send opened Settings, shown at the top of it; null when it was opened by hand. */
   const [settingsNotice, setSettingsNotice] = useState<string | null>(null);
   const [dialog, setDialog] = useState<Dialog | null>(null);
@@ -1196,7 +1202,15 @@ function App() {
   const selectChat = (projectId: string, chatId: string) => {
     switchDraft(draftKey(projectId, chatId));
     setWorkspace((current) => ({ ...current, selectedProjectId: projectId, selectedChatId: chatId }));
+    setFoundMessage(null);
     dismissOverlaySidebar();
+  };
+  /** Open what a search found: its chat, on the message found when there is one. */
+  const openSearchResult = (result: ChatSearchResult) => {
+    setSearching(false);
+    selectChat(result.projectId, result.chatId);
+    setExpandedProjects((current) => new Set(current).add(result.projectId));
+    if (result.messageId !== undefined) setFoundMessage({ chatId: result.chatId, messageId: result.messageId });
   };
 
   const selectProject = (projectId: string) => {
@@ -1537,10 +1551,15 @@ function App() {
         if (showSettings || dialog !== null || trimmingClip !== null) return;
         newChat();
       }
+      if ((event.ctrlKey || event.metaKey) && !event.shiftKey && !event.altKey && event.key.toLowerCase() === "k") {
+        event.preventDefault();
+        if (showSettings || dialog !== null || trimmingClip !== null || !hydrated) return;
+        setSearching((open) => !open);
+      }
     };
     window.addEventListener("keydown", handleShortcut);
     return () => window.removeEventListener("keydown", handleShortcut);
-  }, [newChat, showSettings, dialog, trimmingClip]);
+  }, [newChat, showSettings, dialog, trimmingClip, hydrated]);
 
   const theme = workspace.preferences.theme;
   const approvalMode = workspace.preferences.approvalMode;
@@ -1718,6 +1737,7 @@ function App() {
 
   return (
     <RunDeckProvider deck={deck}>
+    {searching && <ChatSearch workspace={workspace} onOpen={openSearchResult} onClose={() => setSearching(false)} />}
     <div className="app-shell" data-theme={theme} data-sidebar={sidebarShown ? "shown" : "hidden"} data-deck={deck.target === null ? "closed" : "open"} aria-busy={!hydrated}>
       {/* Settings covers the chat rather than replacing it, so a run keeps
           streaming underneath; while it is open the chat is unreachable. */}
@@ -1730,6 +1750,7 @@ function App() {
           <button className="icon-button sidebar-close" onClick={() => setSidebarShown(false)} aria-label="Hide sidebar" title="Hide sidebar" aria-controls="sidebar" aria-expanded={sidebarShown}><PanelLeftClose size={18} /></button>
         </div>
         <button className="new-chat-button" onClick={newChat}><Plus size={18} /> New chat <span className="shortcut">{SEND_MODIFIER} N</span></button>
+        <button className="new-chat-button search-chats-button" onClick={() => setSearching(true)} disabled={!hydrated}><Search size={17} /> Search chats <span className="shortcut">{SEND_MODIFIER} K</span></button>
         <div className="sidebar-section-heading">
           <span>Projects</span>
           <button className="icon-button dark" title="Create project" onClick={() => setDialog({ kind: "create-project" })}><FolderPlus size={17} /></button>
@@ -1899,6 +1920,7 @@ function App() {
               key={selectedChat.id}
               messages={selectedChat.messages}
               onOpenInStudio={openArtifactInStudio}
+              foundId={foundMessage?.chatId === selectedChat.id ? foundMessage.messageId : undefined}
               // The live run shows its own notes, with whether Claude has them yet.
               hideTrailingNotes={runView !== null && runView.outcome === null}
             />
@@ -2231,8 +2253,10 @@ function RowMenu({ label, items, onSelect, className = "", iconSize = 16, disabl
 
 type OpenInStudio = (target: string, instanceId?: string) => Promise<{ ok: boolean; message: string }>;
 
-const ConversationMessageView = memo(function ConversationMessageView({ message, latestRun, latestReply = false, arrived = false, onOpenInStudio }: {
+const ConversationMessageView = memo(function ConversationMessageView({ message, latestRun, latestReply = false, arrived = false, found = false, onOpenInStudio }: {
   message: ChatMessage;
+  /** A search just opened the chat on this message. */
+  found?: boolean;
   /** The chat's newest reply: its actions stay in view, an older one's show on hover. */
   latestReply?: boolean;
   /** Sent while this chat was open, rather than loaded with it: only such a message animates in. */
@@ -2242,7 +2266,7 @@ const ConversationMessageView = memo(function ConversationMessageView({ message,
   onOpenInStudio: OpenInStudio;
 }) {
   return message.role === "user" ? (
-    <section className={`message user-message${message.note === true ? " note-message" : ""}${arrived ? " message-arrived" : ""}`} key={message.id}>
+    <section className={`message user-message${message.note === true ? " note-message" : ""}${arrived ? " message-arrived" : ""}${found ? " message-found" : ""}`} data-message-id={message.id} key={message.id}>
       {message.note === true && <span className="note-label">Note sent while Roqer was working</span>}
       {message.attachments !== undefined && <MessagePictures attachments={message.attachments} />}
       <UserPrompt text={message.text} />
@@ -2252,7 +2276,7 @@ const ConversationMessageView = memo(function ConversationMessageView({ message,
       {message.attachments !== undefined && <MessageFiles attachments={message.attachments} />}
     </section>
   ) : (
-    <section className="message assistant-message" key={message.id}><div className="message-content">
+    <section className={`message assistant-message${found ? " message-found" : ""}`} data-message-id={message.id} key={message.id}><div className="message-content">
       {message.run
         ? <RunRecordView record={message.run} text={message.text} latest={latestRun} onOpenInStudio={onOpenInStudio} />
         : <Markdown text={message.text} className="result-copy" />}
@@ -2280,9 +2304,11 @@ function ReplyActions({ text, latest }: { text: string; latest: boolean }) {
   </div>;
 }
 
-const ConversationMessages = memo(function ConversationMessages({ messages: allMessages, onOpenInStudio, hideTrailingNotes = false }: {
+const ConversationMessages = memo(function ConversationMessages({ messages: allMessages, onOpenInStudio, hideTrailingNotes = false, foundId }: {
   messages: ChatMessage[];
   onOpenInStudio: OpenInStudio;
+  /** The message a search opened this chat on: brought into view and marked for a moment. */
+  foundId?: string;
   /** Leave out the notes after the last prompt: the live run below shows them. */
   hideTrailingNotes?: boolean;
 }) {
@@ -2294,7 +2320,27 @@ const ConversationMessages = memo(function ConversationMessages({ messages: allM
   }, [allMessages, hideTrailingNotes]);
   // The component is keyed by chat, so this index belongs to one transcript.
   // Appended messages leave it untouched and remain visible at the bottom.
-  const [visibleFrom, setVisibleFrom] = useState(() => initialConversationWindowStart(messages.length));
+  const [visibleFrom, setVisibleFrom] = useState(() => {
+    const start = initialConversationWindowStart(messages.length);
+    const found = foundId === undefined ? -1 : messages.findIndex((message) => message.id === foundId);
+    // A message found by a search is shown even when it is older than the window.
+    return found === -1 ? start : Math.min(start, found);
+  });
+  const [marked, setMarked] = useState<string | undefined>(undefined);
+  useEffect(() => {
+    if (foundId === undefined) return;
+    const found = messages.findIndex((message) => message.id === foundId);
+    if (found === -1) return;
+    setVisibleFrom((current) => Math.min(current, found));
+    setMarked(foundId);
+    // After the chat has opened and scrolled to its end, which opening one does.
+    const show = window.setTimeout(() => {
+      document.querySelector(`[data-message-id="${CSS.escape(foundId)}"]`)?.scrollIntoView({ block: "center", behavior: "instant" });
+    }, 80);
+    const clear = window.setTimeout(() => setMarked(undefined), 2_600);
+    return () => { window.clearTimeout(show); window.clearTimeout(clear); };
+    // Only a new search result moves the view; messages arriving since do not.
+  }, [foundId]);
   // What the chat held when it opened. Those messages, and earlier ones shown
   // later, appear with the chat; only a message sent since animates in.
   const [loadedIds] = useState(() => new Set(messages.map((message) => message.id)));
@@ -2321,7 +2367,7 @@ const ConversationMessages = memo(function ConversationMessages({ messages: allM
       </button>
     </div>}
     {messages.slice(visibleFrom).map((message) => (
-      <ConversationMessageView key={message.id} message={message} latestRun={message.id === latestRunId} latestReply={message.id === latestReplyId} arrived={!loadedIds.has(message.id)} onOpenInStudio={onOpenInStudio} />
+      <ConversationMessageView key={message.id} message={message} latestRun={message.id === latestRunId} latestReply={message.id === latestReplyId} arrived={!loadedIds.has(message.id)} found={message.id === marked} onOpenInStudio={onOpenInStudio} />
     ))}
   </>;
 });
