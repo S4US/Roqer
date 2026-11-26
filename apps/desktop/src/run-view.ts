@@ -102,11 +102,35 @@ export type RunView = {
   approvalMode: ApprovalMode;
   status: { label: string; detail?: string } | null;
   /**
+   * What the provider itself is doing now ("Thinking with Opus 5.5"), from
+   * transient statuses only, for the Thinking card. A note Roqer adds -- a
+   * usage warning, a note sent -- goes to the timeline and never replaces it.
+   */
+  progress: { label: string; detail?: string } | null;
+  /**
    * How much the model has written in the response it is producing now. Live
    * state for the waiting line: anything that hands the turn to a tool, an
    * approval, or the user clears it, since the next response counts afresh.
    */
   outputTokens: { tokens: number; exact: boolean } | null;
+  /**
+   * How many tokens the model has spent reasoning in this run so far, for the
+   * Thinking card. A run total, so nothing in the run clears it.
+   */
+  reasoningTokens: { tokens: number; exact: boolean } | null;
+  /**
+   * The model's reasoning in the response it is producing now, as the
+   * provider summarises it, for the waiting card. Live state cleared with
+   * `outputTokens`, and bounded to the last `MAX_LIVE_THINKING_CHARS`.
+   */
+  thinking: string;
+  /**
+   * Every piece of reasoning the run has shown so far, one per response, in
+   * order, with how many activity steps came before it. Live state for the
+   * Reasoning section under Activity: never a step, never kept in the record.
+   * Bounded to the latest `MAX_RUN_REASONING_CHARS` in all.
+   */
+  reasoning: readonly ReasoningBlock[];
   /**
    * How full the model's context window was at its latest response, as the
    * provider reported it. Null until the run's first report. Unlike
@@ -152,6 +176,39 @@ export type RunView = {
   desynchronized: boolean;
 };
 
+/** The most reasoning the waiting card keeps for one response: its latest part. */
+export const MAX_LIVE_THINKING_CHARS = 40_000;
+/** The most reasoning a run's Reasoning section keeps in all; the oldest goes first. */
+export const MAX_RUN_REASONING_CHARS = 200_000;
+
+/** One response's reasoning, and how many activity steps the run had made before it. */
+export type ReasoningBlock = Readonly<{ text: string; afterSteps: number }>;
+
+/**
+ * Add streamed reasoning to the run's chain: to the response in progress, or,
+ * when it is the first reasoning of a new response, as a block of its own.
+ */
+export function withReasoning(
+  blocks: readonly ReasoningBlock[], text: string, newResponse: boolean, afterSteps: number,
+): readonly ReasoningBlock[] {
+  const last = blocks[blocks.length - 1];
+  const next = newResponse || last === undefined
+    ? [...blocks, { text, afterSteps }]
+    : [...blocks.slice(0, -1), { ...last, text: `${last.text}${text}` }];
+  let total = next.reduce((sum, block) => sum + block.text.length, 0);
+  let start = 0;
+  while (total > MAX_RUN_REASONING_CHARS && start < next.length - 1) {
+    total -= next[start].text.length;
+    start += 1;
+  }
+  const kept = next.slice(start);
+  if (total > MAX_RUN_REASONING_CHARS) {
+    const only = kept[0];
+    return [{ ...only, text: only.text.slice(-MAX_RUN_REASONING_CHARS) }];
+  }
+  return kept;
+}
+
 export function createRunView(runId: string, prompt: string, approvalMode: ApprovalMode): RunView {
   return {
     runId,
@@ -159,7 +216,11 @@ export function createRunView(runId: string, prompt: string, approvalMode: Appro
     planner: "",
     approvalMode,
     status: null,
+    progress: null,
     outputTokens: null,
+    reasoningTokens: null,
+    thinking: "",
+    reasoning: [],
     contextUsage: null,
     text: "",
     activities: [],
@@ -217,6 +278,7 @@ export function applyRunEvent(view: RunView, event: RunEvent): RunView {
       return {
         ...base,
         status: { label: event.label, detail: event.detail },
+        progress: event.transient ? { label: event.label, detail: event.detail } : base.progress,
         timeline: event.transient ? base.timeline : [...base.timeline, {
           type: "note",
           key: `note-${event.seq}`,
@@ -226,6 +288,15 @@ export function applyRunEvent(view: RunView, event: RunEvent): RunView {
       };
     case "output-tokens":
       return { ...base, outputTokens: { tokens: event.tokens, exact: event.exact } };
+    case "reasoning-tokens":
+      return { ...base, reasoningTokens: { tokens: event.tokens, exact: event.exact } };
+    case "thinking-delta":
+      return {
+        ...base,
+        thinking: `${base.thinking}${event.text}`.slice(-MAX_LIVE_THINKING_CHARS),
+        // A response that had shown no reasoning yet starts a block of its own.
+        reasoning: withReasoning(base.reasoning, event.text, base.thinking === "", base.activities.length),
+      };
     case "context-usage":
       return { ...base, contextUsage: { usedTokens: event.usedTokens, windowTokens: event.windowTokens } };
     case "message-delta": {
@@ -245,6 +316,7 @@ export function applyRunEvent(view: RunView, event: RunEvent): RunView {
       return {
         ...base,
         outputTokens: null,
+        thinking: "",
         activities: [...base.activities, {
           callId: event.proposal.callId,
           tool: event.proposal.tool,
@@ -263,6 +335,7 @@ export function applyRunEvent(view: RunView, event: RunEvent): RunView {
         ...base,
         pendingApproval: { callId: event.callId, proposal: event.proposal, reason: event.reason },
         outputTokens: null,
+        thinking: "",
         activities: updateActivity(base, event.callId, { state: "awaiting-approval" }),
       };
     case "approval-resolved":
@@ -279,6 +352,7 @@ export function applyRunEvent(view: RunView, event: RunEvent): RunView {
       return {
         ...base,
         outputTokens: null,
+        thinking: "",
         activities: updateActivity(base, event.callId, {
           state: event.ok ? "done" : "failed",
           durationMs: event.durationMs,
@@ -320,6 +394,7 @@ export function applyRunEvent(view: RunView, event: RunEvent): RunView {
         ...base,
         pendingQuestion: event.question,
         outputTokens: null,
+        thinking: "",
         timeline: [...base.timeline, {
           type: "note",
           key: `note-${event.seq}`,
@@ -355,6 +430,7 @@ export function applyRunEvent(view: RunView, event: RunEvent): RunView {
         finishedAt: event.at,
         status: null,
         outputTokens: null,
+        thinking: "",
         // A finished run has nothing left to approve or ask.
         pendingApproval: null,
         pendingQuestion: null,

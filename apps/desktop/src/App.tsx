@@ -1,5 +1,5 @@
 import {
-  AlertCircle, AlertTriangle, Archive, Boxes, Check, ChevronDown, ChevronRight, Circle, Download,
+  AlertCircle, AlertTriangle, Archive, Boxes, Brain, Check, ChevronDown, ChevronRight, Circle, Download,
   CircleDot, ExternalLink, FileBox, FileCode2, FileText, Folder, FolderPlus, Gamepad2,
   HelpCircle, Info, Loader2, MessageSquare, MinusCircle, MoreHorizontal,
   ArrowUp, Maximize2, Minimize2, PanelLeftClose, PanelLeftOpen, Paperclip, Pencil, Play, Plus, RotateCw, ScrollText, Search, Settings, Square,
@@ -36,7 +36,7 @@ import {
   activitySteps, applyRunEvent, createRunView, describeOutcome, recordAppliedAndVerified,
   latestProse, recordGateIssues, recordHasWarnings, recordOnlyAnswered, recordReply, recordSteps, runAppliedAndVerified,
   runGateIssues, runHasWarnings, runOnlyAnswered, toRunRecord, hasPicture,
-  type ActivityStep, type PendingApproval, type RunView,
+  type ActivityStep, type PendingApproval, type ReasoningBlock, type RunView,
 } from "./run-view";
 import { EvidencePicture, rememberEvidencePicture } from "./evidence-picture";
 import { EvidenceSound } from "./evidence-sound";
@@ -1947,7 +1947,7 @@ function App() {
             />
             : <EmptyConversation place={targetStudio?.name} />}
           {runView
-            ? <LiveRun view={runView} steps={runSteps} nodes={runActivityNodes} thinking={thinking} onOpenInStudio={openArtifactInStudio} />
+            ? <LiveRun view={runView} steps={runSteps} nodes={runActivityNodes} thinking={thinking} showReasoning={workspace.preferences.showReasoning} onOpenInStudio={openArtifactInStudio} />
             // The run is still being started, so the dots stand in for the
             // assistant block that is about to exist.
             : runStarting && <div className="mock-run"><section className="message assistant-message"><div className="message-content">
@@ -2517,7 +2517,16 @@ const WAITING_REASSURANCE_AFTER_MS = 30_000;
  * Deliberately not a live region. The composer already announces "Thinking…",
  * and one announcement is enough.
  */
-function WaitingNotice({ label, detail, output }: { label: string; detail?: string; output: RunView["outputTokens"] }) {
+function WaitingNotice({ label, detail, output, reasoningTokens, reasoning, chain, chainOpen, onToggleChain }: {
+  label: string; detail?: string; output: RunView["outputTokens"];
+  /** The run's reasoning tokens so far; null when the provider reports none. */
+  reasoningTokens: RunView["reasoningTokens"];
+  /** The model's summarised reasoning in this response so far; empty when the provider shows none or the user hid it. */
+  reasoning: string;
+  /** Every piece of reasoning in the run so far, one per response; empty when hidden. */
+  chain: readonly ReasoningBlock[];
+  chainOpen: boolean; onToggleChain: () => void;
+}) {
   const startedAt = useRef(Date.now());
   const [elapsedMs, setElapsedMs] = useState(0);
   useEffect(() => {
@@ -2525,28 +2534,85 @@ function WaitingNotice({ label, detail, output }: { label: string; detail?: stri
     return () => window.clearInterval(timer);
   }, []);
 
-  return <div className="waiting-notice">
-    <p className="waiting-line">
-      <span>{label}</span>
-      {elapsedMs >= WAITING_ELAPSED_AFTER_MS && <span className="waiting-elapsed">{elapsedLabel(elapsedMs)}</span>}
-      {/* Only once something has streamed: a count sitting at zero reads as
-          more stuck than no count at all, and a model that hides its
-          reasoning sends nothing to count until it answers. */}
-      {output !== null && output.tokens > 0 && <span
-        className="waiting-elapsed"
-        title={output.exact
-          ? "Tokens the model reported for this response."
-          : "Estimated from what the model has streamed so far. Reasoning a model does not show is not counted until it reports its own total."}
-      >{outputTokensLabel(output.tokens, output.exact)}</span>}
-    </p>
+  // A status card rather than a line of muted text: plain text under the
+  // prompt reads as the model's own first words, which is exactly what this
+  // is not. The bar moves while the model works, so a long think never looks
+  // like a frozen screen even before the first count arrives.
+  const thoughts = reasoning.trim();
+  // While a summary of the reasoning streams, the live estimate counts the
+  // summary rather than the thinking behind it, which runs several times
+  // longer, so only the provider's own figure is shown then. The reasoning
+  // itself says the model is working.
+  const counted = output !== null && output.tokens > 0 && (output.exact || thoughts === "");
+  const thoughtsInRun = useMemo(() => chain
+    .map((block, index) => ({ ...block, index, text: block.text.trim() }))
+    .filter((block) => block.text !== ""), [chain]);
+  const chainLength = thoughtsInRun.reduce((total, block) => total + block.text.length, 0);
+  // The open chain follows new reasoning, unless the reader scrolled up to read.
+  const chainRef = useRef<HTMLOListElement>(null);
+  const followChain = useRef(true);
+  useLayoutEffect(() => {
+    const list = chainRef.current;
+    if (list !== null && followChain.current) list.scrollTop = list.scrollHeight;
+  }, [chainLength, chainOpen]);
+  return <div className="waiting-notice" role="status" aria-live="off">
+    <div className="waiting-head">
+      <span className="waiting-icon" aria-hidden="true"><Brain size={15} /></span>
+      <span className="waiting-label">{label}</span>
+      {elapsedMs >= WAITING_ELAPSED_AFTER_MS && <span className="waiting-clock" title="Time since the model last did something you can see">{elapsedLabel(elapsedMs)}</span>}
+    </div>
+    <span className="waiting-bar" aria-hidden="true"><span /></span>
+    {/* Only once something has streamed: a count sitting at zero reads as
+        more stuck than no count at all. */}
+    {/* The run's reasoning in all when the provider reports it; otherwise
+        what this response has written. */}
+    {reasoningTokens !== null && reasoningTokens.tokens > 0
+      ? <p className="waiting-count" title={reasoningTokens.exact
+        ? "Tokens the model spent reasoning in this run, as Claude reported them."
+        : "Tokens the model spent reasoning in this run: Claude's figures for finished responses, and an estimate for the one in progress."}
+      >{outputTokensLabel(reasoningTokens.tokens, reasoningTokens.exact)} of reasoning in this run</p>
+      : counted && <p className="waiting-count" title={output.exact
+        ? "Tokens the model reported for this response."
+        : "Estimated while the model works, from what it has streamed and the thinking Claude Code reports."}
+      >{outputTokensLabel(output.tokens, output.exact)} so far</p>}
     {detail !== undefined && detail !== "" && <p className="waiting-detail">{detail}</p>}
     {elapsedMs >= WAITING_REASSURANCE_AFTER_MS && <p className="waiting-detail">
-      Some models work for a minute or more before their first word.
+      {counted
+        ? "Still working. On a big request the model can plan for several minutes before its first step."
+        : "Some models work for a minute or more before their first word."}
     </p>}
+    {thoughtsInRun.length > 0 && <div className="waiting-reasoning">
+      <button type="button" className="waiting-reasoning-toggle" aria-expanded={chainOpen} onClick={onToggleChain}>
+        {chainOpen ? <ChevronDown size={13} aria-hidden="true" /> : <ChevronRight size={13} aria-hidden="true" />}
+        {chainOpen ? "Hide reasoning" : "Show reasoning"}
+        <span className="waiting-reasoning-count">{thoughtsInRun.length} {thoughtsInRun.length === 1 ? "thought" : "thoughts"} in this run</span>
+      </button>
+      {chainOpen
+        ? <ol className="waiting-reasoning-chain" ref={chainRef} onScroll={(event) => {
+          const list = event.currentTarget;
+          followChain.current = list.scrollHeight - list.scrollTop - list.clientHeight < 24;
+        }}>
+          {thoughtsInRun.map((block, position) => <li key={block.index}>
+            <span className="waiting-reasoning-label">
+              Thought {position + 1}
+              {block.afterSteps > 0 && <em>after {block.afterSteps} tool {block.afterSteps === 1 ? "call" : "calls"}</em>}
+            </span>
+            <p>{block.text}</p>
+          </li>)}
+        </ol>
+        : thoughts !== "" && <p className="waiting-reasoning-preview">{latestThought(thoughts)}</p>}
+    </div>}
   </div>;
 }
 
-function LiveRun({ view, steps, nodes, thinking, onOpenInStudio }: { view: RunView; steps: ActivityStep[]; nodes: ActivityNode[]; thinking: boolean; onOpenInStudio: OpenInStudio }) {
+/** The last thing the model said it was doing: its latest paragraph, cut to a line. */
+function latestThought(text: string): string {
+  const paragraphs = text.split(/\n\s*\n/).map((part) => part.trim()).filter((part) => part !== "");
+  const latest = paragraphs[paragraphs.length - 1] ?? "";
+  return latest.length > 180 ? `…${latest.slice(latest.length - 179)}` : latest;
+}
+
+function LiveRun({ view, steps, nodes, thinking, showReasoning, onOpenInStudio }: { view: RunView; steps: ActivityStep[]; nodes: ActivityNode[]; thinking: boolean; showReasoning: boolean; onOpenInStudio: OpenInStudio }) {
   const answered = view.text.trim() !== "";
   const running = view.outcome === null;
   const appliedAndVerified = runAppliedAndVerified(view);
@@ -2565,17 +2631,28 @@ function LiveRun({ view, steps, nodes, thinking, onOpenInStudio }: { view: RunVi
   // about who is working. A run waiting on Studio or on the user is not
   // thinking, and both of those already say so elsewhere.
   const renderFiles = useCallback((files: ChangeGroup[], expansion: FileExpansion) => <ChangeSet groups={files} expansion={expansion} onOpenInStudio={onOpenInStudio} />, [onOpenInStudio]);
+  // Kept for the whole run, so a reader who opened the chain keeps it open
+  // through every think between tool calls.
+  const [chainOpen, setChainOpen] = useState(false);
   return <div className="mock-run"><section className="message assistant-message"><div className="message-content">
     {view.planner === DEMO_PLANNER && <p className="run-tag"><span className="run-badge">Demo</span></p>}
-    {running && <TypingIndicator done={produced} />}
+    {running && <TypingIndicator done={produced || thinking} />}
+    <RunStrip tasks={view.tasks} steps={steps} nodes={nodes} running={running} runId={view.runId} changes={view.changes} evidence={view.evidence} latest renderFiles={renderFiles} />
+    {/* Under Plan and Activity: what the model is doing now comes after what it has done. */}
     {thinking && <WaitingNotice
       // Every turn opens with a progress label, so this is normally the
       // planner's own words; the fallback is for a planner that sends none.
-      label={view.status?.label ?? "Working"}
-      {...(view.status?.detail === undefined ? {} : { detail: view.status.detail })}
+      // The provider's own progress only: a usage warning or a note Roqer
+      // adds belongs to the run's Activity, not to what the model is doing.
+      label={view.progress?.label ?? "Working"}
+      {...(view.progress?.detail === undefined ? {} : { detail: view.progress.detail })}
       output={view.outputTokens}
+      reasoningTokens={view.reasoningTokens}
+      reasoning={showReasoning ? view.thinking : ""}
+      chain={showReasoning ? view.reasoning : []}
+      chainOpen={chainOpen}
+      onToggleChain={() => setChainOpen((open) => !open)}
     />}
-    <RunStrip tasks={view.tasks} steps={steps} nodes={nodes} running={running} runId={view.runId} changes={view.changes} evidence={view.evidence} latest renderFiles={renderFiles} />
     {/* Formatted and revealed smoothly as it streams. When the run ends, the
         saved reply takes over from the same point, keyed by the run. */}
     {answered && <StreamingMarkdown text={latestProse(view)} live done={!running} handoffKey={view.runId} className={running ? "result-copy streaming-copy" : "result-copy"} />}

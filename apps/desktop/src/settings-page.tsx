@@ -242,6 +242,9 @@ export function SettingsPage({ leaving = false, preferences, studioStatus, updat
                 <button type="button" aria-pressed={preferences.theme === "light"} onClick={() => onPreferences({ theme: "light" })}><Sun size={14} aria-hidden="true" />Light</button>
               </div>
             </SettingsRow>
+            <SettingsRow title="Show the model's reasoning" detail="While the model thinks, the Thinking card shows what it is working out, and opens on the run's whole chain of reasoning. Takes effect at once, also during a run. Claude only.">
+              <SettingsSwitch label="Show the model's reasoning" checked={preferences.showReasoning} onChange={(showReasoning) => onPreferences({ showReasoning })} />
+            </SettingsRow>
             <SettingsRow title={`${SEND_KEYS} to send`} detail={`On, Enter starts a new line and ${SEND_KEYS} sends. Off, Enter sends and Shift+Enter starts a new line.`}>
               <SettingsSwitch label={`${SEND_KEYS} to send`} checked={preferences.ctrlEnterToSend} onChange={(ctrlEnterToSend) => onPreferences({ ctrlEnterToSend })} />
             </SettingsRow>
