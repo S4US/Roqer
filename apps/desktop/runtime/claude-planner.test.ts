@@ -8,7 +8,8 @@ import os from "node:os";
 
 import {
   CLAUDE_TOOL_CALL_TIMEOUT_MS, claudeContextUsage, claudeContextWindow, claudeResultUsage, ClaudeRunUsage, claudeSessionFile,
-  compactClaudeChat, createClaudePlanner, streamedOutput, streamedReasoning, thinkingTokensDelta, responseThinkingTotal, type ClaudeSession,
+  compactClaudeChat, createClaudePlanner, streamedOutput, streamedReasoning, thinkingTokensDelta, responseThinkingTotal,
+  compactionUpdate, compactedDetail, COMPACTING_LABEL, type ClaudeSession,
 } from "./claude-planner";
 import { ClaudeSessionRegistry } from "./claude-session-registry";
 import { timeoutForTool } from "../shared/mcp-tools";
@@ -667,6 +668,28 @@ test("Claude gets each note at its next step, and it counts as delivered once Cl
   }
 });
 
+test("a compaction shows on the run while it works, and is noted once it is done", { timeout: 3000 }, async () => {
+  const progress: string[] = [];
+  const run = await noteRun({}, () => ({ progress: (label: string) => progress.push(label) }));
+  try {
+    run.echo(0);
+    // The messages Claude Code 2.1.325 sends around a compaction, as captured from a real one.
+    run.child.writeLine({ type: "system", subtype: "status", status: "compacting" });
+    run.child.writeLine({ type: "system", subtype: "status", status: null, compact_result: "success" });
+    run.child.writeLine({
+      type: "system", subtype: "compact_boundary",
+      compact_metadata: { trigger: "auto", pre_tokens: 182_400, post_tokens: 21_000, duration_ms: 48_200 },
+    });
+    run.child.writeLine({ type: "result", subtype: "success", result: "Done." });
+    assert.equal(await run.running, "Done.");
+    assert.ok(progress.includes(COMPACTING_LABEL), "the run says it is compacting while it does");
+    assert.equal(progress[progress.length - 1], "Thinking with Claude", "and goes back to thinking after");
+    assert.ok(run.statuses.includes("Compacted the conversation"), "the compaction is noted in the run");
+  } finally {
+    await run.cleanup();
+  }
+});
+
 test("Claude hands over the explanation behind \"none of these\" with the answer, not after the turn", { timeout: 3000 }, async () => {
   const run = await noteRun({}, (notes) => ({
     askUser: async () => {
@@ -1251,6 +1274,21 @@ test("summarised reasoning is passed on from the main agent's thinking blocks, e
   assert.equal(event({ type: "content_block_delta", index: 1, delta: { type: "text_delta", text: "Done." } }), null);
   assert.equal(event({ type: "content_block_start", index: 1, content_block: { type: "text", text: "" } }), null);
   assert.equal(event({ type: "content_block_delta", index: 0, delta: { type: "thinking_delta", thinking: "Sub" } }, "toolu_1"), null);
+});
+
+test("a compaction is read from Claude Code's status and boundary messages, nothing else", () => {
+  assert.deepEqual(compactionUpdate({ type: "system", subtype: "status", status: "compacting" }), { kind: "started" });
+  assert.deepEqual(compactionUpdate({ type: "system", subtype: "status", status: null, compact_result: "success" }), { kind: "finished" });
+  assert.deepEqual(compactionUpdate({ type: "system", subtype: "status", status: null, compact_result: "error" }), { kind: "failed" });
+  assert.equal(compactionUpdate({ type: "system", subtype: "status", status: "requesting" }), null);
+  const boundary = compactionUpdate({
+    type: "system", subtype: "compact_boundary",
+    compact_metadata: { trigger: "auto", pre_tokens: 182_400, post_tokens: 21_000, duration_ms: 48_200 },
+  });
+  assert.deepEqual(boundary, { kind: "compacted", preTokens: 182_400, postTokens: 21_000, durationMs: 48_200 });
+  assert.equal(compactedDetail(boundary as Extract<typeof boundary, { kind: "compacted" }>), "182k tokens of earlier work summarized in 48 s.");
+  assert.equal(compactedDetail({ kind: "compacted", preTokens: null, postTokens: null, durationMs: null }), "Earlier work summarized.");
+  assert.equal(compactionUpdate({ type: "assistant" }), null);
 });
 
 test("Claude Code's context is what the main agent's response read and wrote, against the window its result names", () => {

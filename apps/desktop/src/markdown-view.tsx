@@ -1,5 +1,6 @@
 import { Fragment, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { parseMarkdown, type InlineNode, type ListBlock, type MarkdownBlock } from "./markdown";
+import { CopyButton } from "./message-actions";
 import { nextReveal, noteReveal, resumeReveal, revealEnd } from "./streaming-reveal";
 
 /**
@@ -61,10 +62,15 @@ function Block({ block }: { block: MarkdownBlock }) {
         </tr>)}</tbody>
       </table></div>;
     case "code":
-      return <pre className="md-code">
-        {block.language && <span className="md-code-language">{block.language}</span>}
-        <code>{block.value}</code>
-      </pre>;
+      // The label and the copy button sit outside the <pre>, so they stay in
+      // the corner while a long line scrolls sideways under them.
+      return <div className="md-code-block">
+        <div className="md-code-tools">
+          {block.language && <span className="md-code-language">{block.language}</span>}
+          <CopyButton text={block.value} what="this code" className="message-action md-code-copy" />
+        </div>
+        <pre className="md-code"><code>{block.value}</code></pre>
+      </div>;
     case "list":
       return <List list={block} />;
     case "quote":
