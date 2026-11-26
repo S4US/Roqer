@@ -18,7 +18,7 @@ const LIMITS_FRESH_MS = 15_000;
  * usage: the same meters as the account row in Settings, read again each time
  * it opens. A click keeps it open until another click, Escape, or a click
  * elsewhere; a hover keeps it only while the pointer is on the card or the
- * popover.
+ * popover. A provider that reports no usage (Custom) keeps the plain card.
  */
 export function SubscriptionCard({ card, provider, signedIn }: {
   card: ProviderCard;
@@ -31,19 +31,26 @@ export function SubscriptionCard({ card, provider, signedIn }: {
   const [limits, setLimits] = useState<ProviderLimits>(NO_LIMITS);
   const [loading, setLoading] = useState(false);
   const readAt = useRef(0);
+  /** Which account a read belongs to: a read that answers after the account changed is dropped. */
+  const generation = useRef(0);
   const hoverTimer = useRef<number | null>(null);
   const root = useRef<HTMLDivElement>(null);
-  const open = signedIn && (hovered || pinned);
+  // Only providers that report usage have any to show (the Custom provider never does), as in Settings.
+  const reportsUsage = USAGE_SCOPES[provider] !== undefined;
+  const open = signedIn && reportsUsage && (hovered || pinned);
   const name = providerLabel(provider);
 
   const read = useCallback(async () => {
     if (Date.now() - readAt.current < LIMITS_FRESH_MS) return;
+    const asked = generation.current;
     setLoading(true);
     try {
-      setLimits(await getProviderLimits(provider));
+      const read = await getProviderLimits(provider);
+      if (asked !== generation.current) return;
+      setLimits(read);
       readAt.current = Date.now();
     } finally {
-      setLoading(false);
+      if (asked === generation.current) setLoading(false);
     }
   }, [provider]);
 
@@ -53,8 +60,10 @@ export function SubscriptionCard({ card, provider, signedIn }: {
 
   // Another account's numbers are not this one's.
   useEffect(() => {
+    generation.current += 1;
     readAt.current = 0;
     setLimits(NO_LIMITS);
+    setLoading(false);
   }, [provider, signedIn]);
 
   useEffect(() => {
@@ -86,7 +95,7 @@ export function SubscriptionCard({ card, provider, signedIn }: {
   const usage = planUsageView(limits, USAGE_SCOPES[provider] ?? name, Date.now());
   const body = <><Sparkles size={16} /><div><strong>{card.title}</strong><span>{card.detail}</span></div>{card.badge !== undefined && <span className="runtime-badge">{card.badge}</span>}</>;
 
-  if (!signedIn) return <div className="subscription-card">{body}</div>;
+  if (!signedIn || !reportsUsage) return <div className="subscription-card">{body}</div>;
   return <div className="subscription-wrap" ref={root} onMouseEnter={enter} onMouseLeave={leave}>
     {open && <div className="subscription-usage" role="dialog" aria-label={`${name} usage`}>
       <p className="subscription-usage-title">{card.title} usage</p>
