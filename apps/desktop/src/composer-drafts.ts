@@ -1,9 +1,11 @@
 import type { PastedBlock } from "./composer-text";
+import type { ComposerQuote } from "./message-quote";
 import type { AssetAttachment } from "./model";
 
 /**
  * What was being written in a chat when the person left it: the typed text,
- * the long pastes folded out of it, and the files attached to it.
+ * the long pastes folded out of it, the files attached to it, and the passages
+ * quoted in it with their replies.
  *
  * Moving to another chat used to clear the box and let go of the attached
  * files, so a half-written message, and any screenshot pasted into it, was
@@ -15,9 +17,10 @@ export type ComposerDraft = Readonly<{
   text: string;
   pastedBlocks: readonly PastedBlock[];
   attachments: readonly AssetAttachment[];
+  quotes: readonly ComposerQuote[];
 }>;
 
-export const EMPTY_DRAFT: ComposerDraft = { text: "", pastedBlocks: [], attachments: [] };
+export const EMPTY_DRAFT: ComposerDraft = { text: "", pastedBlocks: [], attachments: [], quotes: [] };
 
 /** A chat's key, or, before a chat exists, its project's. */
 export function draftKey(projectId: string, chatId: string | null): string {
@@ -25,7 +28,7 @@ export function draftKey(projectId: string, chatId: string | null): string {
 }
 
 export function isEmptyDraft(draft: ComposerDraft): boolean {
-  return draft.text.trim() === "" && draft.pastedBlocks.length === 0 && draft.attachments.length === 0;
+  return draft.text.trim() === "" && draft.pastedBlocks.length === 0 && draft.attachments.length === 0 && draft.quotes.length === 0;
 }
 
 export class ComposerDrafts {

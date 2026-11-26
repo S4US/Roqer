@@ -290,6 +290,9 @@ button:focus-visible, textarea:focus-visible, select:focus-visible, input:focus-
 .chat-run-mark { display: inline-flex; align-items: center; color: var(--muted); }
 .chat-running .chat-run-mark > svg { animation: spin .9s linear infinite; }
 .chat-needs-input .chat-run-mark { color: var(--warning); }
+/* A reply nobody has seen yet: a dot where the run's mark was, and the title at full strength. */
+.chat-unread-mark { flex: none; width: 8px; height: 8px; margin-left: auto; background: var(--accent); border-radius: 50%; }
+.chat-unread .chat-row-title { color: var(--ink); font-weight: var(--weight-medium); }
 .chat-needs-input .chat-run-mark > svg { animation: pulse 1.2s ease-in-out infinite; }
 .empty-folder { margin: 8px 10px 13px; color: var(--faint); font-size: var(--type-label); }
 .subscription-card { display: grid; grid-template-columns: 27px 1fr auto; align-items: center; padding: 10px 11px; color: var(--ink-secondary); background: var(--surface); border: 1px solid var(--border-subtle); border-radius: 10px; }
@@ -462,6 +465,8 @@ button:focus-visible, textarea:focus-visible, select:focus-visible, input:focus-
 .note-message .user-prompt { border-style: dashed; }
 .run-notes { display: flex; flex-direction: column; align-items: flex-end; gap: 8px; margin: 14px 0 4px; padding: 0; list-style: none; }
 .run-note { display: flex; flex-direction: column; align-items: flex-end; max-width: 640px; }
+div.run-note-text { white-space: normal; }
+div.run-note-text > p, div.run-note-text > .user-quote { white-space: pre-wrap; }
 .run-note-text { margin: 0; padding: 9px 13px; color: var(--ink-secondary); background: var(--surface-raised); border: 1px dashed var(--border-strong); border-radius: 14px 14px 4px 14px; font-size: var(--type-body); line-height: 1.55; white-space: pre-wrap; overflow-wrap: anywhere; }
 .run-note.sent .run-note-text { border-style: solid; border-color: var(--border-subtle); }
 .run-note-status { display: inline-flex; align-items: center; gap: 5px; margin: 4px 4px 0 0; color: var(--faint); font-size: 11.5px; }
@@ -619,8 +624,10 @@ button:focus-visible, textarea:focus-visible, select:focus-visible, input:focus-
 .composer-expanded-head > strong { color: var(--ink); font-size: var(--type-label); font-weight: var(--weight-semibold); }
 .composer-expanded-head > span { color: var(--faint); font-size: var(--type-meta); }
 .composer-expanded-head > .text-button { margin-left: auto; color: var(--ink-secondary); }
-.composer-hint { flex: none; margin-right: 10px; color: var(--faint); font-size: var(--type-meta); white-space: nowrap; }
-.composer-hint kbd { padding: 1px 5px; color: var(--muted); border: 1px solid var(--border); border-radius: 4px; font: var(--weight-regular) 11px/1.4 "Geist Mono Variable", monospace; }
+/* Small, under the box at its right edge, in the room the dock leaves below it:
+   it comes and goes with the typing without moving anything. */
+.composer-hint { position: absolute; top: calc(100% + 2px); right: 12px; margin: 0; color: var(--faint); font-size: 10.5px; line-height: 13px; white-space: nowrap; pointer-events: none; }
+.composer-hint kbd { padding: 0 4px; color: var(--muted); border: 1px solid var(--border); border-radius: 4px; font: var(--weight-regular) 10px/1.2 "Geist Mono Variable", monospace; }
 /* The context meter: a ring that fills as the model's context does, grey until
    it is worth noticing. It opens details, not a choice, so it has no chevron. */
 .context-menu { flex: none; margin-right: 6px; }
@@ -1122,9 +1129,14 @@ a.small-button:focus-visible { outline: 2px solid var(--accent); outline-offset:
 .markdown blockquote { padding-left: 12px; color: var(--muted); border-left: 2px solid var(--border-strong); }
 .markdown hr { margin: 18px 0; border: 0; border-top: 1px solid var(--border); }
 .md-inline-code { padding: 1px 5px; color: var(--ink); background: var(--surface-sunken); border: 1px solid var(--border-subtle); border-radius: 5px; font: var(--weight-regular) .92em/1.4 "Geist Mono Variable", monospace; overflow-wrap: anywhere; }
-.md-code { position: relative; overflow-x: auto; margin: 0 0 14px; padding: 13px 14px; color: var(--ink); background: var(--surface-sunken); border: 1px solid var(--border-subtle); border-radius: 11px; }
+/* A code block and, over its top right corner, its language and a button to copy it. */
+.md-code-block { position: relative; margin: 0 0 14px; }
+.md-code-tools { position: absolute; top: 1px; right: 1px; z-index: 1; display: flex; align-items: center; gap: 4px; padding: 5px 5px 5px 10px; background: var(--surface-sunken); border-radius: 0 10px 0 8px; }
+.md-code-copy { height: 26px; min-width: 26px; padding: 0 6px; }
+.md-code-copy:hover { background: var(--surface-raised); }
+.md-code { position: relative; overflow-x: auto; margin: 0; padding: 13px 14px; color: var(--ink); background: var(--surface-sunken); border: 1px solid var(--border-subtle); border-radius: 11px; }
 .md-code code { font: var(--weight-regular) var(--type-meta)/1.65 "Geist Mono Variable", monospace; white-space: pre; }
-.md-code-language { position: absolute; top: 8px; right: 11px; color: var(--faint); font: var(--weight-medium) 11px "Geist Mono Variable", monospace; letter-spacing: .4px; text-transform: uppercase; }
+.md-code-language { color: var(--faint); font: var(--weight-medium) 11px "Geist Mono Variable", monospace; letter-spacing: .4px; text-transform: uppercase; }
 /* Not an anchor: a reply is untrusted content, so the target is shown, not followed. */
 .md-link { color: var(--accent); cursor: help; text-decoration: underline; text-decoration-style: dotted; text-underline-offset: 2px; }
 
@@ -1508,9 +1520,31 @@ a.small-button:focus-visible { outline: 2px solid var(--accent); outline-offset:
 .message-action[data-state="copied"] { color: var(--ink); }
 .message-action-label:empty { display: none; }
 /* A passage of a reply quoted in a sent message. */
-.user-prompt > p { margin: 0; }
+.quoted-text > p { margin: 0; }
 .user-quote { margin: 0; padding: 1px 0 1px 10px; color: var(--ink-secondary); border-left: 2px solid var(--border-strong); white-space: pre-wrap; }
-.user-prompt > :not(:first-child) { margin-top: 10px; }
+.quoted-text > :not(:first-child) { margin-top: 10px; }
+/* A reply sits close under the passage it answers; the next passage stands apart. */
+.quoted-text > .user-quote + p { margin-top: 6px; }
+.quoted-text > p + .user-quote { margin-top: 14px; }
+/* The passages quoted in the message being written, above the box: one row
+   each, saying whether it has a reply of its own. An open row shows the whole
+   passage over a field for that reply. */
+.composer-quotes { display: flex; flex-direction: column; gap: 6px; margin: 12px 14px 0; }
+.composer-quote { display: flex; align-items: center; gap: 4px; min-width: 0; color: var(--muted); background: var(--surface-sunken); border: 1px solid var(--border-subtle); border-radius: 11px; }
+.composer-quote .icon-button { flex: none; width: 28px; height: 28px; margin-right: 4px; }
+.composer-quote-main { display: flex; flex: 1; align-items: center; gap: 9px; min-width: 0; padding: 8px 4px 8px 11px; color: inherit; text-align: left; background: transparent; border: 0; border-radius: 10px; }
+.composer-quote-main > svg, .composer-quote-open > svg { flex: none; }
+.composer-quote-main:hover .composer-quote-text { color: var(--ink); }
+.composer-quote-main:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.composer-quote-text { flex: 0 1 auto; min-width: 0; overflow: hidden; color: var(--ink-secondary); font-size: var(--type-label); text-overflow: ellipsis; white-space: nowrap; }
+.composer-quote-badge { flex: none; padding: 2px 8px; color: var(--muted); border: 1px solid var(--border); border-radius: 999px; font-size: var(--type-meta); font-weight: var(--weight-medium); }
+.composer-quote-badge[data-replied] { color: var(--ink); background: var(--surface-raised); }
+.composer-quote-open { align-items: flex-start; gap: 9px; padding: 10px 6px 10px 11px; }
+.composer-quote-open > svg { margin-top: 2px; }
+.composer-quote-body { display: flex; flex: 1; flex-direction: column; gap: 8px; min-width: 0; }
+.composer-quote-body blockquote { max-height: 96px; margin: 0; padding: 1px 0 1px 10px; overflow-y: auto; color: var(--ink-secondary); border-left: 2px solid var(--border-strong); font-size: var(--type-label); line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }
+.composer-quote-body textarea { width: 100%; min-height: 0; max-height: 140px; padding: 7px 10px; box-sizing: border-box; color: var(--ink); background: var(--surface); border: 1px solid var(--border); border-radius: 8px; outline: 0; resize: none; font: inherit; font-size: var(--type-body); line-height: 1.5; }
+.composer-quote-body textarea:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
 /* Over text selected in a reply: quote it in the message box. */
 .quote-selection { position: fixed; z-index: 130; display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 11px; color: var(--ink); background: var(--surface-raised); border: 1px solid var(--border); border-radius: 8px; box-shadow: var(--shadow-lg); font-size: var(--type-label); font-weight: var(--weight-medium); transform: translate(-50%, -100%); animation: quote-selection-in .12s ease-out; }
 .quote-selection[data-placement="below"] { transform: translate(-50%, 0); }
@@ -1536,7 +1570,6 @@ a.small-button:focus-visible { outline: 2px solid var(--accent); outline-offset:
 
 @media (max-width: 1050px) {
   .connection-detail { display: none; }
-  .composer-hint { display: none; }
 }
 
 @media (max-width: 840px) {

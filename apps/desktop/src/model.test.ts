@@ -20,6 +20,7 @@ import {
   setProjectInstructions,
   setChatStudioInstance,
   withdrawMessage,
+  setChatUnread,
   chatReasoningEffort,
   setChatReasoningEffort,
   chatModel,
@@ -124,6 +125,29 @@ test("a chat's model survives a save, and a provider that can no longer run is d
   const restored = normalizeWorkspace(saved);
   assert.equal(restored.projects[0].chats[0].model, undefined);
   assert.deepEqual(chatModel(restored, projectId, chatId), { provider: restored.preferences.provider, modelId: selectedModelId(restored.preferences, restored.preferences.provider) });
+});
+
+test("a chat is marked unread and read again, and the mark survives a save", () => {
+  let state = createChat(createInitialWorkspace());
+  const projectId = state.selectedProjectId;
+  const chatId = state.selectedChatId!;
+  const chat = (from = state) => from.projects.find((project) => project.id === projectId)!.chats.find((entry) => entry.id === chatId)!;
+  assert.equal(chat().unread, undefined);
+  assert.equal(setChatUnread(state, projectId, chatId, false), state, "already read: the same state");
+
+  state = setChatUnread(state, projectId, chatId, true);
+  assert.equal(chat().unread, true);
+  assert.equal(setChatUnread(state, projectId, chatId, true), state, "already unread: the same state");
+  assert.equal(chat(normalizeWorkspace(JSON.parse(JSON.stringify(state)))).unread, true);
+
+  state = setChatUnread(state, projectId, chatId, false);
+  assert.equal("unread" in chat(), false, "a read chat carries no mark at all");
+  assert.equal(setChatUnread(state, projectId, "no-such-chat", true), state);
+
+  // Anything but true in a saved file is not a mark.
+  const saved = JSON.parse(JSON.stringify(state));
+  saved.projects[0].chats[0].unread = "yes";
+  assert.equal(chat(normalizeWorkspace(saved)).unread, undefined);
 });
 
 test("a new workspace contains no invented projects, chats, or messages", () => {
