@@ -2090,6 +2090,12 @@ async function resolveCustomRun(modelKey: string | null): Promise<CustomRun | { 
   return { connection: resolved.connection, model, apiKey: resolved.apiKey };
 }
 
+/**
+ * The Claude Code version that refused `--thinking-display`, if one did since
+ * Roqer started. Its runs go without the flag; an update is asked again.
+ */
+let thinkingDisplayRefusedBy: string | null = null;
+
 /** The agent that drives a run, chosen by the provider the user connected. */
 function plannerFor(
   request: RunStartRequest, agentRuntime: AgentRuntime, runId: string, modelName: string | undefined, custom?: CustomRun, blender = false, referenceClips = false,
@@ -2154,6 +2160,10 @@ function plannerFor(
       externalMcp,
       imageGeneration,
       thinkingSummaries,
+      onThinkingDisplayRefused: () => {
+        void appLog().write("[claude] Claude Code refused --thinking-display; running without reasoning summaries");
+        void readClientVersion("claude").then((version) => { thinkingDisplayRefusedBy = version; });
+      },
     });
   }
   if (request.provider === "antigravity") {
@@ -2575,8 +2585,10 @@ async function startRun(event: IpcMainInvokeEvent, payload: unknown): Promise<Ru
     // Always asked for, whatever Settings says: the switch only shows or hides
     // it, so turning it on in the middle of a run shows what the run has
     // already thought rather than nothing until the next run.
-    const thinkingSummaries = !smokeTest && resolvedRequest.provider === "claude" &&
-      claudeTakesThinkingDisplay(await readClientVersion("claude"));
+    const claudeVersion = !smokeTest && resolvedRequest.provider === "claude" ? await readClientVersion("claude") : null;
+    // Not asked of a version that has refused it once (see onThinkingDisplayRefused).
+    const thinkingSummaries = claudeVersion !== null && claudeVersion !== thinkingDisplayRefusedBy &&
+      claudeTakesThinkingDisplay(claudeVersion);
     if (cancelled()) return stopped;
     const planner = smokeTest
       ? createInspectionPlanner()

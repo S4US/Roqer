@@ -9,7 +9,7 @@ import os from "node:os";
 import {
   CLAUDE_TOOL_CALL_TIMEOUT_MS, claudeContextUsage, claudeContextWindow, claudeResultUsage, ClaudeRunUsage, claudeSessionFile,
   compactClaudeChat, createClaudePlanner, streamedOutput, streamedReasoning, thinkingTokensDelta, responseThinkingTotal,
-  compactionUpdate, compactedDetail, COMPACTING_LABEL, type ClaudeSession,
+  compactionUpdate, compactedDetail, COMPACTING_LABEL, refusedThinkingDisplay, type ClaudeSession,
 } from "./claude-planner";
 import { ClaudeSessionRegistry } from "./claude-session-registry";
 import { timeoutForTool } from "../shared/mcp-tools";
@@ -1897,4 +1897,83 @@ test("Claude's system prompt carries the project's instructions, and editing the
   assert.match(provider.launches[1].systemPrompt, /Use Nevermore\./);
   assert.doesNotMatch(provider.launches[1].systemPrompt, /Use Knit/);
   await sessions.closeAll();
+});
+
+test("a Claude Code that refuses --thinking-display is run again once without it, and says so", { timeout: 5000 }, async () => {
+  const controller = new AbortController();
+  const { context } = makeContext(controller);
+  const launches: string[][] = [];
+  let refused = 0;
+  const planner = createClaudePlanner({
+    ...PLANNER_DEFAULTS,
+    thinkingSummaries: true,
+    onThinkingDisplayRefused: () => { refused += 1; },
+    launcher: { launch: async (args) => {
+      launches.push(args);
+      const child = new FakeChildProcess();
+      if (args.includes("--thinking-display")) {
+        // What commander prints for an option it does not know, before any output.
+        child.stderr.write("error: unknown option '--thinking-display'\n");
+        setImmediate(() => child.finish(1));
+      } else {
+        setImmediate(() => {
+          child.writeLine({ type: "system", subtype: "init", tools: PROVIDER_TOOLS });
+          child.writeLine({ type: "result", subtype: "success", result: "Done without summaries." });
+        });
+      }
+      return child.asChild();
+    } },
+  });
+  assert.equal(await planner.run(context), "Done without summaries.");
+  assert.equal(launches.length, 2);
+  assert.ok(launches[0].includes("--thinking-display"));
+  assert.ok(!launches[1].includes("--thinking-display"));
+  assert.equal(refused, 1);
+});
+
+test("only a refusal of --thinking-display counts as one; another failure is not retried", { timeout: 5000 }, async () => {
+  assert.equal(refusedThinkingDisplay(new Error("Claude Code exited (1). error: unknown option '--thinking-display'")), true);
+  assert.equal(refusedThinkingDisplay(new Error("Claude Code exited (1). error: option '--thinking-display <mode>' argument 'summarized' is invalid.")), true);
+  assert.equal(refusedThinkingDisplay(new Error("Claude Code exited (1). error: unknown option '--frobnicate'")), false);
+  assert.equal(refusedThinkingDisplay(new Error("Claude Code exited (1). Not logged in")), false);
+
+  const controller = new AbortController();
+  const { context } = makeContext(controller);
+  let launches = 0;
+  const planner = createClaudePlanner({
+    ...PLANNER_DEFAULTS,
+    thinkingSummaries: true,
+    launcher: { launch: async () => {
+      launches += 1;
+      const child = new FakeChildProcess();
+      child.stderr.write("Not logged in\n");
+      setImmediate(() => child.finish(1));
+      return child.asChild();
+    } },
+  });
+  await assert.rejects(planner.run(context), /Not logged in/);
+  assert.equal(launches, 1);
+});
+
+test("on a Claude Code without reasoning summaries, the run's reasoning total never drops between responses", { timeout: 5000 }, async () => {
+  const totals: number[] = [];
+  const run = await noteRun({}, () => ({ reasoningTokens: (tokens: number) => totals.push(tokens) }));
+  try {
+    run.echo(0);
+    const event = (value: Record<string, unknown>) => run.child.writeLine({ type: "stream_event", parent_tool_use_id: null, event: value });
+    // First response: estimates only, and it ends without its own figure.
+    event({ type: "message_start", message: { usage: {} } });
+    run.child.writeLine({ type: "system", subtype: "thinking_tokens", estimated_tokens: 120, estimated_tokens_delta: 120 });
+    event({ type: "message_delta", usage: { output_tokens: 140 } });
+    // Second response: a new estimate, then its own figure.
+    event({ type: "message_start", message: { usage: {} } });
+    run.child.writeLine({ type: "system", subtype: "thinking_tokens", estimated_tokens: 50, estimated_tokens_delta: 50 });
+    event({ type: "message_delta", usage: { output_tokens: 90, output_tokens_details: { thinking_tokens: 60 } } });
+    run.child.writeLine({ type: "result", subtype: "success", result: "Done." });
+    assert.equal(await run.running, "Done.");
+    assert.deepEqual(totals, [120, 170, 180]);
+    for (let index = 1; index < totals.length; index += 1) assert.ok(totals[index] >= totals[index - 1], `${totals.join(", ")}`);
+  } finally {
+    await run.cleanup();
+  }
 });

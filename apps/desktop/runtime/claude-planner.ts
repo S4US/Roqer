@@ -105,7 +105,23 @@ export type ClaudePlannerOptions = {
    * `claudeTakesThinkingDisplay`.
    */
   thinkingSummaries?: boolean;
+  /**
+   * Told when this Claude Code refused `--thinking-display`. The run is then
+   * tried once more without it, and the caller can stop asking for it.
+   */
+  onThinkingDisplayRefused?: () => void;
 };
+
+/**
+ * Whether a run failed because Claude Code refused `--thinking-display`. The
+ * flag is hidden from its help, so a later release may drop or rename it, and
+ * Claude Code then exits before the run starts, naming the option it does not
+ * take.
+ */
+export function refusedThinkingDisplay(error: unknown): boolean {
+  const text = error instanceof Error ? error.message : String(error);
+  return /thinking-display/i.test(text) && /unknown|unrecogni[sz]ed|invalid|not (?:a )?valid|not allowed|unexpected/i.test(text);
+}
 
 const isRecord = (value: unknown): value is JsonRecord =>
   typeof value === "object" && value !== null && !Array.isArray(value);
@@ -952,6 +968,25 @@ const MISSING_SESSION = /no conversation found/i;
  * next message instead of being stopped when the run ends.
  */
 export function createClaudePlanner(options: ClaudePlannerOptions): Planner {
+  const planner = createClaudePlannerWith(options);
+  if (options.thinkingSummaries !== true) return planner;
+  return {
+    ...planner,
+    async run(context: PlannerContext): Promise<string> {
+      try {
+        return await planner.run(context);
+      } catch (error) {
+        // Refused at start-up, before the model saw anything: tried once more
+        // without the flag, so a Claude Code that drops it still runs.
+        if (context.signal.aborted || !refusedThinkingDisplay(error)) throw error;
+        options.onThinkingDisplayRefused?.();
+        return createClaudePlannerWith({ ...options, thinkingSummaries: false }).run(context);
+      }
+    },
+  };
+}
+
+function createClaudePlannerWith(options: ClaudePlannerOptions): Planner {
   return {
     id: "claude-code",
     async run(context: PlannerContext): Promise<string> {
@@ -1149,6 +1184,9 @@ export function createClaudePlanner(options: ClaudePlannerOptions): Planner {
           const output = streamedOutput(message);
           if (output?.start) {
             responseCharacters = 0;
+            // A response that ended without its own thinking figure keeps its
+            // estimate, so the run's total never goes down between responses.
+            runThinkingTokens += responseThinkingTokens;
             responseThinkingTokens = 0;
           }
           const reasoning = streamedReasoning(message);
