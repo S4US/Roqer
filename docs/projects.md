@@ -43,6 +43,9 @@ A Claude Code process is reused while the chat's model, effort, place and
 tools stay the same. Otherwise the process is closed, and the next run resumes
 the saved session under the new settings.
 
+Each chat keeps its own thinking effort. Choosing one in a chat changes only
+that chat, and a new chat starts with the last effort chosen.
+
 ## Notes while Claude works
 
 A note you send while a Claude run works reaches Claude at its next step,

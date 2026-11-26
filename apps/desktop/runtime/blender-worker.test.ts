@@ -8,7 +8,7 @@ import { PassThrough } from "node:stream";
 import test from "node:test";
 
 import {
-  BlenderWorker, HELPERS_SCRIPT, otherSideName, readSceneContents, RUNNER_SCRIPT, scriptEnvironment, type SpawnProcess,
+  BlenderWorker, closeupsFile, HELPERS_SCRIPT, otherSideName, parseCloseups, readSceneContents, RUNNER_SCRIPT, scriptEnvironment, type SpawnProcess,
 } from "./blender-worker";
 import { decodePng } from "./flipbook-sheet";
 import { VIEW_GROUND } from "./png-view";
@@ -449,6 +449,59 @@ test("model previews come before rendered images in what the model sees", async 
     // A kit set in one file lists each piece, so the pieces can be split into templates after upload.
     assert.match(outcome.text, /its own MeshPart named after it: KitTree 4\.00 × 9\.25 × 4\.00; KitRock 2\.50 × 2\.50 × 2\.50/);
   });
+});
+
+test("a file of several separate items gets a close-up of each, attached after its preview", async () => {
+  await withJobs(async (jobsRoot) => {
+    const preview = pngHeader(1024, 768);
+    const closeups = pngHeader(1536, 576);
+    const icon = pngHeader(256, 256);
+    const job = (stats: Record<string, unknown>, writeCloseups: boolean) => fakeBlender(async (args) => {
+      if (args.some((arg) => arg.endsWith("roqer_runner.py"))) {
+        const output = path.join(argAfterDashes(args), "output");
+        await fs.writeFile(path.join(output, "lots.glb"), Buffer.alloc(1024));
+        await fs.writeFile(path.join(output, "lots-icon.png"), icon);
+        return { output: "ROQER_SCRIPT_DONE\n" };
+      }
+      await fs.writeFile(argAfterDashes(args, 1), preview);
+      if (writeCloseups) await fs.writeFile(closeupsFile(argAfterDashes(args, 1)), closeups);
+      return { output: `ROQER_INSPECT ${JSON.stringify({ meshes: 5, triangles: 1640, materials: ["VertexColour"], size: [13, 2, 4], preview: true, ...stats })}\n` };
+    });
+    const run = async (stats: Record<string, unknown>, writeCloseups = true) => {
+      const blender = job(stats, writeCloseups);
+      return new BlenderWorker({ executable: EXECUTABLE, jobsRoot, spawn: blender.spawn, killTree: blender.killTree, env: {} }).run({ script: "import bpy" });
+    };
+    const items = [["Sock"], ["Mustache", "Cushion"], ["Crate"], ["Flask"]];
+
+    const outcome = await run({ closeups: { items, count: 11 } });
+    assert.equal(outcome.ok, true, outcome.text);
+    // The preview, then its close-ups, then what the script rendered itself.
+    assert.deepEqual(outcome.images?.map((image) => image.data), [preview, closeups, icon].map((bytes) => bytes.toString("base64")));
+    assert.match(outcome.text, /close-ups: this file holds 11 separate items/);
+    assert.match(outcome.text, /in this order: 1 Sock; 2 Mustache \(with Cushion\); 3 Crate; 4 Flask; the first 4 of 11 only\./);
+    assert.deepEqual((outcome.data as { files: Array<{ closeups?: unknown }> }).files[0].closeups, { items, count: 11 });
+
+    // One item, a malformed report, or a sheet that was never written: the preview alone, and no word of close-ups.
+    for (const [stats, written] of [
+      [{ closeups: { items: [["Kart", "Wheel"]], count: 1 } }, true],
+      [{ closeups: { items: "Sock", count: 4 } }, true],
+      [{ closeups: { items, count: 4 } }, false],
+      [{}, true],
+    ] as const) {
+      const plain = await run(stats, written);
+      assert.deepEqual(plain.images?.map((image) => image.data), [preview, icon].map((bytes) => bytes.toString("base64")));
+      assert.doesNotMatch(plain.text, /close-ups/);
+      assert.equal((plain.data as { files: Array<{ closeups?: unknown }> }).files[0].closeups, undefined);
+    }
+  });
+});
+
+test("close-up facts keep only well-formed items", () => {
+  assert.deepEqual(parseCloseups({ items: [["A", 3, ""], [], ["B"], "C"], count: 2.9 }), { items: [["A"], ["B"]], count: 2 });
+  assert.deepEqual(parseCloseups({ items: [["A"], ["B"]], count: "many" }), { items: [["A"], ["B"]], count: 2 });
+  assert.equal(parseCloseups({ items: [["A"]], count: 1 }), undefined);
+  assert.equal(parseCloseups(null), undefined);
+  assert.equal(closeupsFile(path.join("job", "preview-lots.png")), path.join("job", "preview-lots-closeups.png"));
 });
 
 /**

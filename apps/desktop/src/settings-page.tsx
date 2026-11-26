@@ -53,6 +53,9 @@ const ACCOUNT_CLIENTS: Partial<Record<ProviderId, string>> = {
   chatgpt: "Codex", claude: "Claude Code", antigravity: "Antigravity CLI",
 };
 
+/** The keys that send a message while Enter starts a new line, as this platform names them. */
+const SEND_KEYS = typeof navigator !== "undefined" && /Mac/.test(navigator.userAgent) ? "⌘+Enter" : "Ctrl+Enter";
+
 /**
  * What a plan's limits cover: ChatGPT meters Codex apart from chat, while
  * Claude's limits are shared by every Claude app. Antigravity meters groups of
@@ -244,6 +247,9 @@ export function SettingsPage({ leaving = false, preferences, studioStatus, updat
                 <button type="button" aria-pressed={preferences.theme === "dark"} onClick={() => onPreferences({ theme: "dark" })}><Moon size={14} aria-hidden="true" />Dark</button>
                 <button type="button" aria-pressed={preferences.theme === "light"} onClick={() => onPreferences({ theme: "light" })}><Sun size={14} aria-hidden="true" />Light</button>
               </div>
+            </SettingsRow>
+            <SettingsRow title={`${SEND_KEYS} to send`} detail={`On, Enter starts a new line and ${SEND_KEYS} sends. Off, Enter sends and Shift+Enter starts a new line.`}>
+              <SettingsSwitch label={`${SEND_KEYS} to send`} checked={preferences.ctrlEnterToSend} onChange={(ctrlEnterToSend) => onPreferences({ ctrlEnterToSend })} />
             </SettingsRow>
             <SettingsRow title="Show Roqer on Discord" detail="Your profile shows that Roqer is open and whether it is busy. Never your place, scripts, or tasks.">
               <SettingsSwitch label="Show Roqer on Discord" checked={preferences.discordPresence} onChange={(discordPresence) => onPreferences({ discordPresence })} />

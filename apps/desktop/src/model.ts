@@ -5,6 +5,7 @@ import { isStudioSelection, type StudioSelection } from "../shared/studio-select
 import {
   DEFAULT_PROVIDER_ID,
   enabledProviderOr,
+  isEnabledProvider,
   isReasoningEffort,
   type ProviderId,
   type ReasoningEffort,
@@ -81,6 +82,28 @@ export type Chat = {
    * the same game does not have to be pointed at it again.
    */
   studioInstanceId?: string;
+  /**
+   * The reasoning effort this chat's runs ask for, chosen in this chat.
+   *
+   * Absent means the chat has never had one of its own, which falls back to
+   * the workspace preference. A chat without one is given the preference's
+   * value before the preference changes (`setDefaultReasoningEffort`), so a
+   * choice made in one chat never changes the effort of another.
+   */
+  reasoningEffort?: ReasoningEffort;
+  /**
+   * The provider and model this chat's runs use, chosen in this chat. Absent
+   * means the chat follows the workspace preference; like the effort, a chat
+   * without one is given the preference's value before the preference changes
+   * (`setDefaultModel`), so choosing a model in one chat never changes another.
+   */
+  model?: ChatModel;
+  /**
+   * True while the chat holds a reply nobody has seen: its run ended while
+   * another chat was open, or while Roqer was not the window in use. Opening
+   * the chat clears it.
+   */
+  unread?: boolean;
   messages: ChatMessage[];
   /**
    * The chat's earlier messages, folded into a record by a manual compact. Only
@@ -139,6 +162,12 @@ export type Preferences = {
    * reaches the model only once they choose to send it.
    */
   useStudioSelection: boolean;
+  /**
+   * Whether a message is sent with Ctrl+Enter (Cmd+Enter on a Mac), leaving
+   * Enter for a new line. On by default. Off, Enter sends and Shift+Enter
+   * starts a new line; Ctrl+Enter still sends either way.
+   */
+  ctrlEnterToSend: boolean;
   /** Whether the community invite card was dismissed, leaving only its icon. */
   communityInviteDismissed: boolean;
   /** Which managed sign-in drives runs. */
@@ -244,6 +273,7 @@ export function createInitialWorkspace(theme: Theme = "dark"): WorkspaceState {
       studioInstanceId: null,
       discordPresence: true,
       useStudioSelection: false,
+      ctrlEnterToSend: true,
       communityInviteDismissed: false,
       provider: DEFAULT_PROVIDER_ID,
       chatGptModelId: null,
@@ -371,6 +401,13 @@ export function normalizeWorkspace(value: unknown, themeFallback: Theme = "dark"
         studioInstanceId: typeof chat.studioInstanceId === "string" && chat.studioInstanceId !== ""
           ? chat.studioInstanceId
           : undefined,
+        // Additive: a chat saved before efforts were kept per chat has none,
+        // and follows the workspace preference as it did then.
+        ...(isReasoningEffort(chat.reasoningEffort) ? { reasoningEffort: chat.reasoningEffort } : {}),
+        // A provider that can no longer run drops the choice, and the chat
+        // follows the workspace preference again.
+        ...(isChatModel(chat.model) ? { model: { provider: chat.model.provider, modelId: chat.model.modelId } } : {}),
+        ...(chat.unread === true ? { unread: true } : {}),
         messages,
         ...(compaction === undefined ? {} : { compaction }),
       }];
@@ -414,6 +451,9 @@ export function normalizeWorkspace(value: unknown, themeFallback: Theme = "dark"
     // Off unless the user turned it on: a workspace saved before this existed
     // gets the same answer a new install does.
     useStudioSelection: rawPreferences.useStudioSelection === true,
+    // On unless the user turned it off: a workspace saved before the switch
+    // existed keeps sending the way it always did.
+    ctrlEnterToSend: rawPreferences.ctrlEnterToSend !== false,
     // Additive: a workspace saved before the invite existed has not seen it,
     // so it is offered once to people who were already using Roqer too.
     communityInviteDismissed: rawPreferences.communityInviteDismissed === true,
@@ -661,6 +701,124 @@ export function setChatStudioInstance(
   };
 }
 
+/** The reasoning effort a chat's next run asks for: its own choice, else the workspace default. */
+export function chatReasoningEffort(
+  state: WorkspaceState,
+  projectId: string,
+  chatId: string | null,
+): ReasoningEffort {
+  if (chatId === null) return state.preferences.reasoningEffort;
+  const chat = state.projects.find((project) => project.id === projectId)?.chats
+    .find((candidate) => candidate.id === chatId);
+  return chat?.reasoningEffort ?? state.preferences.reasoningEffort;
+}
+
+/**
+ * Change the effort new chats start with.
+ *
+ * Every chat that has none of its own follows this default, so before it
+ * changes each such chat is given the value it has been using. Changing the
+ * default therefore never changes what any existing chat asks for.
+ */
+/** A chat's provider and model; `modelId` null means the provider's default. */
+export type ChatModel = Readonly<{ provider: ProviderId; modelId: string | null }>;
+
+function isChatModel(value: unknown): value is ChatModel {
+  if (typeof value !== "object" || value === null) return false;
+  const record = value as Record<string, unknown>;
+  return isEnabledProvider(record.provider) &&
+    (record.modelId === null || (typeof record.modelId === "string" && record.modelId !== "" && record.modelId.length <= 200));
+}
+
+/** The provider and model the workspace preference names: what a chat without its own uses. */
+export function defaultChatModel(state: WorkspaceState): ChatModel {
+  return { provider: state.preferences.provider, modelId: selectedModelId(state.preferences, state.preferences.provider) };
+}
+
+/** The provider and model a chat's next run uses: its own choice, else the workspace default. */
+export function chatModel(state: WorkspaceState, projectId: string, chatId: string | null): ChatModel {
+  if (chatId === null) return defaultChatModel(state);
+  const chat = state.projects.find((project) => project.id === projectId)?.chats
+    .find((candidate) => candidate.id === chatId);
+  return chat?.model ?? defaultChatModel(state);
+}
+
+/**
+ * Change the provider and model new chats start with. Every chat that has
+ * none of its own is first given the one it has been using, so changing the
+ * default never changes what an existing chat runs on.
+ */
+export function setDefaultModel(state: WorkspaceState, provider: ProviderId, modelId: string): WorkspaceState {
+  const previous = defaultChatModel(state);
+  if (previous.provider === provider && previous.modelId === modelId) return state;
+  return {
+    ...state,
+    preferences: { ...state.preferences, provider, ...modelPreference(provider, modelId) },
+    projects: state.projects.map((project) => project.chats.some((chat) => chat.model === undefined)
+      ? { ...project, chats: project.chats.map((chat) => chat.model === undefined ? { ...chat, model: previous } : chat) }
+      : project),
+  };
+}
+
+/**
+ * Record the provider and model chosen in a chat: kept on the chat, so only its
+ * runs change, and made the default the next new chat starts with. With no chat
+ * open only the default changes.
+ */
+export function setChatModel(
+  state: WorkspaceState, projectId: string, chatId: string | null, provider: ProviderId, modelId: string,
+): WorkspaceState {
+  const next = setDefaultModel(state, provider, modelId);
+  if (chatId === null) return next;
+  return {
+    ...next,
+    projects: next.projects.map((project) => project.id === projectId
+      ? { ...project, chats: project.chats.map((chat) => chat.id === chatId ? { ...chat, model: { provider, modelId } } : chat) }
+      : project),
+  };
+}
+
+export function setDefaultReasoningEffort(state: WorkspaceState, effort: ReasoningEffort): WorkspaceState {
+  const previous = state.preferences.reasoningEffort;
+  if (previous === effort) return state;
+  return {
+    ...state,
+    preferences: { ...state.preferences, reasoningEffort: effort },
+    projects: state.projects.map((project) => project.chats.some((chat) => chat.reasoningEffort === undefined)
+      ? {
+        ...project,
+        chats: project.chats.map((chat) => chat.reasoningEffort === undefined ? { ...chat, reasoningEffort: previous } : chat),
+      }
+      : project),
+  };
+}
+
+/**
+ * Record the reasoning effort chosen in a chat.
+ *
+ * It is kept on the chat, so only that chat's runs change, and becomes the
+ * default the next new chat starts with, the way the Studio place does. With
+ * no chat open only the default changes.
+ */
+export function setChatReasoningEffort(
+  state: WorkspaceState,
+  projectId: string,
+  chatId: string | null,
+  effort: ReasoningEffort,
+): WorkspaceState {
+  const next = setDefaultReasoningEffort(state, effort);
+  if (chatId === null) return next;
+  return {
+    ...next,
+    projects: next.projects.map((project) => project.id === projectId
+      ? {
+        ...project,
+        chats: project.chats.map((chat) => chat.id === chatId ? { ...chat, reasoningEffort: effort } : chat),
+      }
+      : project),
+  };
+}
+
 /** Rename a chat, and stop its first message from overwriting the new title. */
 export function renameChat(state: WorkspaceState, projectId: string, chatId: string, title: string): WorkspaceState {
   const trimmed = title.trim();
@@ -786,6 +944,28 @@ export function withdrawMessage(state: WorkspaceState, projectId: string, chatId
         const messages = chat.messages.filter((message) => message.id !== messageId);
         const title = messages.length === 0 && chat.titleSetByUser !== true ? UNTITLED_CHAT : chat.title;
         return { ...chat, title, messages };
+      }),
+    }),
+  };
+}
+
+/**
+ * Mark a chat as holding a reply nobody has seen, or (`unread` false) as seen.
+ * The same state is returned when the chat already says so, so marking the
+ * open chat read on every render saves nothing new.
+ */
+export function setChatUnread(state: WorkspaceState, projectId: string, chatId: string, unread: boolean): WorkspaceState {
+  const chat = state.projects.find((project) => project.id === projectId)?.chats.find((entry) => entry.id === chatId);
+  if (chat === undefined || (chat.unread === true) === unread) return state;
+  return {
+    ...state,
+    projects: state.projects.map((project) => project.id !== projectId ? project : {
+      ...project,
+      chats: project.chats.map((entry) => {
+        if (entry.id !== chatId) return entry;
+        const rest = { ...entry };
+        delete rest.unread;
+        return unread ? { ...rest, unread: true } : rest;
       }),
     }),
   };

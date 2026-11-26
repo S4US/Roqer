@@ -787,6 +787,52 @@ export class ClaudeSession {
   }
 }
 
+/** What the run says while Claude Code compacts the conversation. */
+export const COMPACTING_LABEL = "Compacting the conversation";
+const COMPACTING_DETAIL = "Claude Code is summarizing earlier work to make room in the context. This can take a minute or two.";
+
+export type CompactionUpdate =
+  | { kind: "started" }
+  | { kind: "finished" }
+  | { kind: "failed" }
+  | { kind: "compacted"; preTokens: number | null; postTokens: number | null; durationMs: number | null };
+
+const count = (value: unknown): number | null =>
+  typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : null;
+
+/**
+ * What a Claude Code message says about compaction, or null for any other
+ * message: `status: "compacting"` when it starts, a status carrying
+ * `compact_result` when it ends, and `compact_boundary` with its figures.
+ */
+export function compactionUpdate(message: JsonRecord): CompactionUpdate | null {
+  if (message.type !== "system") return null;
+  if (message.subtype === "status") {
+    if (message.status === "compacting") return { kind: "started" };
+    if (typeof message.compact_result === "string") return message.compact_result === "success" ? { kind: "finished" } : { kind: "failed" };
+    return null;
+  }
+  if (message.subtype === "compact_boundary") {
+    const metadata = isRecord(message.compact_metadata) ? message.compact_metadata : {};
+    return {
+      kind: "compacted",
+      preTokens: count(metadata.pre_tokens),
+      postTokens: count(metadata.post_tokens),
+      durationMs: count(metadata.duration_ms),
+    };
+  }
+  return null;
+}
+
+/** "180k tokens of earlier work summarized in 48 s", with whatever Claude Code reported. */
+export function compactedDetail(update: Extract<CompactionUpdate, { kind: "compacted" }>): string {
+  const tokens = update.preTokens === null
+    ? "Earlier work"
+    : `${update.preTokens >= 1_000 ? `${Math.round(update.preTokens / 1_000)}k` : update.preTokens} tokens of earlier work`;
+  const time = update.durationMs === null ? "" : ` in ${Math.max(1, Math.round(update.durationMs / 1_000))} s`;
+  return `${tokens} summarized${time}.`;
+}
+
 /**
  * Every setting baked into a Claude Code process when it starts. The Studio
  * place is part of it: a conversation that read one place's scripts and parts
@@ -1000,6 +1046,23 @@ export function createClaudePlanner(options: ClaudePlannerOptions): Planner {
           // which says when it resets; this is only the warning before it.
           const warning = claudeLimitWarning(message.rate_limit_info);
           if (warning !== null) limitWarnings.warn(warning);
+          return;
+        }
+
+        // Claude Code compacting the conversation says "compacting" when it
+        // starts (and every 30 s while it works), then reports how it went.
+        // Without this the run looks stuck for as long as it takes.
+        const compaction = compactionUpdate(message);
+        if (compaction !== null) {
+          if (compaction.kind === "started") {
+            context.progress(COMPACTING_LABEL, COMPACTING_DETAIL);
+          } else if (compaction.kind === "failed") {
+            context.status("Compacting the conversation did not finish", "Claude Code carries on with the conversation as it was.");
+            context.progress(waitingLabel);
+          } else if (compaction.kind === "compacted") {
+            context.status("Compacted the conversation", compactedDetail(compaction));
+            context.progress(waitingLabel);
+          }
           return;
         }
 
