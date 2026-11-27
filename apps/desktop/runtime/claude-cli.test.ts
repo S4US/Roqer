@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { claudeChildEnvironment, ClaudeCodeClient, parseClaudeModels } from "./claude-cli";
+import { claudeChildEnvironment, ClaudeCodeClient, claudeTakesThinkingDisplay, parseClaudeModels } from "./claude-cli";
 import { ClientNotInstalledError } from "./client-not-installed";
 import { FakeChildProcess } from "./test-child-process";
 
@@ -499,4 +499,15 @@ test("signing out of Claude stops a sign-in that was waiting", async () => {
   assert.equal((await client.logout()).ok, true);
   assert.equal(client.pendingLoginUrl(), null);
   assert.ok(loginChild !== null && (loginChild as FakeChildProcess).killed, "the waiting sign-in process was stopped");
+});
+
+test("reasoning summaries are asked for only from a Claude Code known to take --thinking-display", () => {
+  assert.equal(claudeTakesThinkingDisplay("2.1.325"), true);
+  assert.equal(claudeTakesThinkingDisplay("2.1.330"), true);
+  assert.equal(claudeTakesThinkingDisplay("2.2.0"), true);
+  assert.equal(claudeTakesThinkingDisplay("3.0.0"), true);
+  assert.equal(claudeTakesThinkingDisplay("2.1.324"), false);
+  assert.equal(claudeTakesThinkingDisplay("1.9.999"), false);
+  assert.equal(claudeTakesThinkingDisplay(null), false, "an unknown version goes without the flag");
+  assert.equal(claudeTakesThinkingDisplay("next"), false);
 });
