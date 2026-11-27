@@ -38,6 +38,14 @@ export function normalizeSteer(value: unknown): string | null {
   return text;
 }
 
+/**
+ * A note's text when the person sent pictures with nothing written: what the
+ * chat shows for it, and what the model reads beside the pictures.
+ */
+export function pictureNoteText(count: number): string {
+  return count === 1 ? "[1 picture attached]" : `[${count} pictures attached]`;
+}
+
 /** Whether a stored note is one the engine could have queued, unchanged. */
 export function isSteerNote(value: unknown): value is string {
   return typeof value === "string" && normalizeSteer(value) === value;

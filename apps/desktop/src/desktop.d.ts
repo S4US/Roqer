@@ -142,7 +142,7 @@ declare global {
         start(request: RunStartRequest): Promise<{ ok: true; runId: string; selection?: StudioSelection } | { ok: false; message: string }>;
         respond(runId: string, callId: string, decision: "approved" | "rejected"): Promise<boolean>;
         answer(runId: string, callId: string, answerIndex: number): Promise<boolean>;
-        steer(runId: string, text: string): Promise<boolean>;
+        steer(runId: string, text: string, attachmentIds?: string[]): Promise<boolean | string>;
         cancel(runId: string, discard?: boolean): Promise<void>;
         cancelStart(startId: string): Promise<void>;
         subscribe(listener: (event: RunEvent) => void): () => void;

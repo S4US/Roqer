@@ -319,6 +319,55 @@ test("a note is queued for the planner, recorded as an event, and refused once t
   for (const event of events) assert.ok(isRunEvent(event), JSON.stringify(event));
 });
 
+test("a note's pictures are queued with its words, only for a planner that can show them", async () => {
+  const picture = { name: "shot.png", mediaType: "image/png", data: "iVBORw0KGgo=" };
+  const events: RunEvent[] = [];
+  let taken: unknown[] = [];
+  let accepted: boolean[] = [];
+  const showing = new RunSession({
+    caller: caller(),
+    planner: { ...planner(async (context) => {
+      accepted = [
+        showing.steer("Like this one.", { images: [picture] }),
+        // Pictures with nothing written are a note of their own.
+        showing.steer("   ", { images: [picture, picture] }),
+        showing.steer("", { images: [] }),
+      ];
+      taken = context.takeNotes?.() ?? [];
+      return "done";
+    }), notePictures: true },
+    request: request(),
+    emit: (event) => events.push(event),
+  });
+  await showing.execute();
+  assert.deepEqual(accepted, [true, true, false]);
+  assert.deepEqual(taken, [
+    { text: "Like this one.", images: [picture] },
+    { text: "[2 pictures attached]", images: [picture, picture] },
+  ]);
+  assert.deepEqual(events.filter((event) => event.type === "steer").map((event) => event.type === "steer" && event.text), ["Like this one.", "[2 pictures attached]"]);
+  for (const event of events) assert.ok(isRunEvent(event), JSON.stringify(event));
+
+  // A planner that cannot show them refuses the note rather than dropping its pictures.
+  let refused: boolean[] = [];
+  const blind = new RunSession({
+    caller: caller(),
+    planner: planner(async (context) => {
+      refused = [showingNote(blind, picture), blind.steer("Words only still work.")];
+      assert.deepEqual(context.takeSteers(), ["Words only still work."]);
+      return "done";
+    }),
+    request: request(),
+    emit: () => undefined,
+  });
+  await blind.execute();
+  assert.deepEqual(refused, [false, true]);
+});
+
+function showingNote(session: RunSession, picture: { name: string; mediaType: string; data: string }): boolean {
+  return session.steer("Look at this.", { images: [picture] });
+}
+
 test("an out-of-range or non-integer answer is refused and does not resume the run", async () => {
   const events: RunEvent[] = [];
   const rejected: boolean[] = [];

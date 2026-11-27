@@ -66,8 +66,9 @@ export async function answerRunQuestion(runId: string, callId: string, answerInd
  * Add a note for the running agent's next turn. False when the run has already
  * ended, in which case the words should go out as a new prompt instead.
  */
-export async function steerRun(runId: string, text: string): Promise<boolean> {
-  return window.workbenchDesktop?.runs.steer(runId, text) ?? false;
+/** True when the note was queued; false when the run had ended; a message when its files could not be read. */
+export async function steerRun(runId: string, text: string, attachmentIds?: string[]): Promise<boolean | string> {
+  return window.workbenchDesktop?.runs.steer(runId, text, attachmentIds) ?? false;
 }
 
 export async function cancelRun(runId: string, discard = false): Promise<void> {

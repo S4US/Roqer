@@ -16,7 +16,7 @@ import { timeoutForTool } from "../shared/mcp-tools";
 import type { RunUsage } from "../shared/run-events";
 import type { AgentDefinition } from "./agent-definition";
 import type { McpToolOutcome } from "./mcp-types";
-import type { PlannerContext } from "./run-engine";
+import type { PlannerContext, SteerNote } from "./run-engine";
 import type { RunTask } from "../shared/tasks";
 import { QUESTION_ESCAPE_OPTION } from "../shared/question";
 import type { SkillLibrary } from "./skill-library";
@@ -663,6 +663,31 @@ test("Claude gets each note at its next step, and it counts as delivered once Cl
     run.child.writeLine({ type: "result", subtype: "success", result: "Made it green." });
     assert.equal(await run.running, "Made it green.");
     assert.equal(run.kept(), true, "a run whose notes were all read keeps its process");
+  } finally {
+    await run.cleanup();
+  }
+});
+
+test("a note's pictures reach Claude Code in the same message as its words", { timeout: 3000 }, async () => {
+  const queued: SteerNote[] = [];
+  const run = await noteRun({}, () => ({
+    takeNotes: () => queued.splice(0),
+  }));
+  try {
+    assert.equal(createClaudePlanner({ ...PLANNER_DEFAULTS, launcher: { launch: async () => new FakeChildProcess().asChild() } }).notePictures, true);
+    run.echo(0);
+    queued.push({ text: "Make it look like this.", images: [{ name: "shot.png", mediaType: "image/png", data: "iVBORw0KGgo=" }], context: "<attachment_context>notes.txt</attachment_context>" });
+    await callTool(run.target(), { operation: "get_script_source", arguments: { instancePath: "game.ServerScriptService.Main" } });
+    assert.equal(run.inputs.length, 2);
+    const content = run.inputs[1].message.content as Array<Record<string, unknown>>;
+    assert.equal(content[0].type, "text");
+    assert.match(String(content[0].text), /Make it look like this\.[\s\S]*notes\.txt/);
+    assert.deepEqual(content[1], { type: "image", source: { type: "base64", media_type: "image/png", data: "iVBORw0KGgo=" } });
+    assert.deepEqual(run.statuses, ["Sent your note to Claude with a picture"]);
+    // Read once Claude Code echoes the words, pictures or not.
+    run.echo(1);
+    await nextTick();
+    assert.deepEqual(run.read, [1]);
   } finally {
     await run.cleanup();
   }

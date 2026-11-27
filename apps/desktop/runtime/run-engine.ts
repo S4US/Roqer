@@ -39,7 +39,7 @@ import {
 } from "../shared/completion";
 import { isAnswerIndex, isEscapeAnswer, MAX_QUESTIONS_PER_RUN, QUESTION_ESCAPE_OPTION } from "../shared/question";
 import type { RunDecision } from "../shared/run-digest";
-import { MAX_STEERS_PER_RUN, normalizeSteer } from "../shared/steer";
+import { MAX_STEERS_PER_RUN, normalizeSteer, pictureNoteText } from "../shared/steer";
 import type { RunTask } from "../shared/tasks";
 import { summarizeToolOutcome } from "./result-summary";
 
@@ -95,6 +95,13 @@ export interface BridgeRecoveryHost {
  * run does not re-send it.
  */
 export type PlannerImage = Readonly<{ name: string; mediaType: string; data: string }>;
+
+/**
+ * A note as a planner hands it to the model: the person's words, the pictures
+ * they sent with it, and the text Roqer read from any other file they attached.
+ * Like `PlannerImage`, the pictures are run-scoped and never journaled.
+ */
+export type SteerNote = Readonly<{ text: string; images: readonly PlannerImage[]; context?: string }>;
 
 export type PlannerContext = {
   prompt: string;
@@ -214,6 +221,12 @@ export type PlannerContext = {
    * so a note the run ended before reading is not shown as delivered.
    */
   takeSteers(options?: { confirmLater?: boolean }): string[];
+  /**
+   * The same queue as `takeSteers`, with each note's pictures: for a planner
+   * that declares `notePictures`, which is the only kind the engine queues
+   * pictures for.
+   */
+  takeNotes?(options?: { confirmLater?: boolean }): SteerNote[];
   /** How many notes taken with `confirmLater` the model has now read. */
   steersRead?(count: number): void;
   /**
@@ -233,6 +246,8 @@ export type PlannerContext = {
 
 export interface Planner {
   readonly id: string;
+  /** Whether a note sent mid-run may carry pictures: the planner can put them in front of the model with its words. */
+  readonly notePictures?: boolean;
   run(context: PlannerContext): Promise<string>;
 }
 
@@ -457,7 +472,7 @@ export class RunSession {
   }>();
   private questionsAsked = 0;
   private readonly recordedDecisions: RunDecision[] = [];
-  private readonly pendingSteers: string[] = [];
+  private readonly pendingSteers: SteerNote[] = [];
   private steersAccepted = 0;
 
   constructor(options: RunEngineOptions) {
@@ -623,11 +638,8 @@ export class RunSession {
       ...(this.storeModelPreview === undefined ? {} : { storeModelPreview: this.storeModelPreview }),
       ...(this.storeSound === undefined ? {} : { storeSound: this.storeSound }),
       ...(this.storeSoundFile === undefined ? {} : { storeSoundFile: this.storeSoundFile }),
-      takeSteers: (options) => {
-        const taken = this.pendingSteers.splice(0);
-        if (taken.length > 0 && options?.confirmLater !== true) this.emit({ type: "steers-delivered", count: taken.length });
-        return taken;
-      },
+      takeSteers: (options) => this.takeNotes(options).map((note) => note.text),
+      takeNotes: (options) => this.takeNotes(options),
       steersRead: (count) => {
         if (count > 0) this.emit({ type: "steers-delivered", count });
       },
@@ -708,14 +720,27 @@ export class RunSession {
    * run's budget of notes is spent. A refusal after the run ended is what lets
    * the renderer offer the same words as a fresh prompt instead of losing them.
    */
-  steer(text: unknown): boolean {
+  steer(text: unknown, attached: Readonly<{ images: readonly PlannerImage[]; context?: string }> = { images: [] }): boolean {
     if (this.completed || this.cancelled) return false;
-    const normalized = normalizeSteer(text);
+    const pictures = attached.images.length;
+    // Pictures go only to a planner that can show them; a picture dropped on
+    // the way would be a note the person believes was seen.
+    if ((pictures > 0 || (attached.context ?? "") !== "") && this.planner.notePictures !== true) return false;
+    // Pictures sent with nothing written are a note of their own.
+    const written = typeof text === "string" && text.trim() === "" && pictures > 0 ? pictureNoteText(pictures) : text;
+    const normalized = normalizeSteer(written);
     if (normalized === null || this.steersAccepted >= MAX_STEERS_PER_RUN) return false;
     this.steersAccepted += 1;
-    this.pendingSteers.push(normalized);
+    const context = attached.context?.trim();
+    this.pendingSteers.push({ text: normalized, images: [...attached.images], ...(context ? { context } : {}) });
     this.emit({ type: "steer", text: normalized });
     return true;
+  }
+
+  private takeNotes(options?: { confirmLater?: boolean }): SteerNote[] {
+    const taken = this.pendingSteers.splice(0);
+    if (taken.length > 0 && options?.confirmLater !== true) this.emit({ type: "steers-delivered", count: taken.length });
+    return taken;
   }
 
   /**

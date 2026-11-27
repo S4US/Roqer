@@ -89,7 +89,7 @@ import { evidenceDetailLabel, type ActivityKind } from "../shared/activity";
 import { boundConversation, MAX_MESSAGE_ATTACHMENTS, type ConversationMessage } from "../shared/conversation";
 import { compactChatSummary } from "../shared/chat-compaction";
 import { digestIsEmpty, digestRun } from "../shared/run-digest";
-import { MAX_STEER_CHARS } from "../shared/steer";
+import { MAX_STEER_CHARS, pictureNoteText } from "../shared/steer";
 import { describePolicyReason } from "../shared/policy";
 import { mcpServerMessage } from "../shared/mcp-server";
 import { appUpdateMessage, canInstallUpdate, updateInProgress } from "../shared/app-update";
@@ -885,6 +885,23 @@ function App() {
   /** The composer addresses the running agent rather than starting a run. */
   const steering = isRunning && !runStarting;
   /**
+   * The files sent with each note of the run on screen, in the order sent:
+   * every note the window sends is saved to the chat with its files as it is
+   * accepted, in the same order as the run's notes, so the live notes can show
+   * their pictures before the run's record takes their place.
+   */
+  const liveNotePictures = useMemo(() => {
+    const startedAt = runView?.startedAt ?? "";
+    if (selectedChat === undefined || startedAt === "") return [];
+    return selectedChat.messages
+      .filter((message) => message.note === true && message.createdAt >= startedAt)
+      .map((message) => message.attachments ?? []);
+  }, [selectedChat, runView?.startedAt]);
+  /** Whether a note to the run on screen may carry pictures: only a provider that can show them takes them. */
+  const notesTakePictures = steering && selectedRun !== null && selectedRun.demo === null && selectedRun.contextTarget.provider === "claude";
+  /** Whether files can be added now: before a run, or to a note that can carry them. */
+  const canAttach = !isRunning || notesTakePictures;
+  /**
    * The pending question the person chose to answer in their own words. The
    * question stays pending -- the run stays paused -- until the note is sent,
    * because resuming the model before its answer exists would have it proceed
@@ -909,21 +926,37 @@ function App() {
    */
   const sendSteer = async () => {
     const text = withQuotes(quotes, composer);
-    if (!text || !steering) return;
+    // Pictures pasted, dropped or attached go with the note; on their own they are a note too.
+    const sent = attachments;
+    if ((!text && sent.length === 0) || !steering) return;
     if (text.length > MAX_STEER_CHARS) { setAttachmentError(`Shorten the note to ${MAX_STEER_CHARS.toLocaleString()} characters.`); return; }
     if (!selectedRun) return;
+    if (sent.length > 0 && !notesTakePictures) {
+      setAttachmentError(`Pictures can't go with a note to ${providerLabel(selectedRun.contextTarget.provider)}. Send them with your next message.`);
+      return;
+    }
+    const unread = sent.find((attachment) => attachment.clip !== undefined && (attachment.clip.id === undefined || readingClips.has(attachment.id)));
+    if (unread !== undefined) {
+      setAttachmentError(readingClips.has(unread.id)
+        ? `Roqer is still reading “${unread.name}”. Send once it has finished.`
+        : `Choose the part of “${unread.name}” to send first.`);
+      return;
+    }
     const target = { projectId: selectedRun.projectId, chatId: selectedRun.chatId };
-    const accepted = selectedRun.demo
+    const result = selectedRun.demo
       ? selectedRun.demo.steer(text)
-      : selectedRun.runId !== null && await steerRun(selectedRun.runId, text);
-    if (!accepted) {
-      setAttachmentError("Roqer had already finished. Send it as a new message.");
+      : selectedRun.runId !== null && await steerRun(selectedRun.runId, text, sent.length === 0 ? undefined : sent.map((attachment) => attachment.id));
+    if (result !== true) {
+      setAttachmentError(typeof result === "string" ? result : "Roqer had already finished. Send it as a new message.");
       return;
     }
     setWorkspace((current) => appendMessage(current, target.projectId, target.chatId, {
-      id: createId("message"), role: "user", text, createdAt: new Date().toISOString(), note: true,
+      id: createId("message"), role: "user", text: text || pictureNoteText(sent.length), createdAt: new Date().toISOString(), note: true,
+      ...(sent.length === 0 ? {} : { attachments: sent }),
     }));
     setComposer("");
+    // Released by the main process with the note, as a message's files are with its run.
+    if (sent.length > 0) setAttachments([]);
     setQuotes([]);
     setEditingQuoteId(null);
     const pending = runView?.pendingQuestion;
@@ -1964,7 +1997,7 @@ function App() {
             />
             : <EmptyConversation place={targetStudio?.name} />}
           {runView
-            ? <LiveRun view={runView} steps={runSteps} nodes={runActivityNodes} thinking={thinking} showReasoning={workspace.preferences.showReasoning} onOpenInStudio={openArtifactInStudio} />
+            ? <LiveRun view={runView} steps={runSteps} nodes={runActivityNodes} thinking={thinking} showReasoning={workspace.preferences.showReasoning} notePictures={liveNotePictures} onOpenInStudio={openArtifactInStudio} />
             // The run is still being started, so the dots stand in for the
             // assistant block that is about to exist.
             : runStarting && <div className="mock-run"><section className="message assistant-message"><div className="message-content">
@@ -1980,14 +2013,14 @@ function App() {
           <div
             className={`composer-card${draggingImage ? " dropping" : ""}`}
             onDragOver={(event) => {
-              if (isRunning || !Array.from(event.dataTransfer.items).some((item) => item.kind === "file")) return;
+              if (!canAttach || !Array.from(event.dataTransfer.items).some((item) => item.kind === "file")) return;
               event.preventDefault();
               setDraggingImage(true);
             }}
             onDragLeave={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setDraggingImage(false); }}
             onDrop={(event) => {
               setDraggingImage(false);
-              if (isRunning) return;
+              if (!canAttach) return;
               const images = droppedImages(event.dataTransfer.files);
               if (images.length === 0) return;
               event.preventDefault();
@@ -2109,9 +2142,9 @@ function App() {
               setPastedBlocks((current) => [...current, { id: createId("paste"), text }]);
             }} placeholder={explaining ? "Your answer, in your own words" : pendingQuestion ? "Or write your own answer…" : steering ? "Add a note. Roqer reads it at its next step." : editingBlock ? "Pasted text" : "Describe what you want to build or change…"} aria-label={editingBlock ? "Pasted text" : "Message"} disabled={isRunning && !steering} />
             <div className="composer-toolbar">
-              {/* A note carries words only; a picture cannot be attached to a
-                  turn that is already in progress. */}
-              <button className="attach-button" onClick={() => void attachAsset()} title="Attach an asset pack" aria-label="Attach an asset pack" disabled={isRunning}><Paperclip size={17} /></button>
+              {/* While a run works, files go with a note, and only to a
+                  provider that can show the model pictures mid-run. */}
+              <button className="attach-button" onClick={() => void attachAsset()} title={steering ? "Attach a picture to your note" : "Attach an asset pack"} aria-label={steering ? "Attach a picture to your note" : "Attach an asset pack"} disabled={!canAttach}><Paperclip size={17} /></button>
               <ModelMenu
                 provider={provider}
                 status={providerStatus}
@@ -2171,7 +2204,7 @@ function App() {
               {dictation.phase === "recording" ? null : steering
                 ? pendingQuestion && noteReady
                   ? <button className="send-button answer-send" onClick={() => void sendSteer()}>Send as answer <ArrowUp size={16} aria-hidden="true" /></button>
-                  : <button className="send-button" onClick={() => void sendSteer()} disabled={!noteReady} aria-label="Send note to the running task"><ArrowUp size={18} /></button>
+                  : <button className="send-button" onClick={() => void sendSteer()} disabled={!noteReady && attachments.length === 0} aria-label="Send note to the running task"><ArrowUp size={18} /></button>
                 : !showRunControls && <button className="send-button" onClick={() => void sendPrompt()} disabled={!hydrated || !storageAvailable || storageRecovery.required || isRunning || message === "" || sendAfterCompact !== null || (hasDesktopRuntime() && providerStatus.kind === "signed-in" && !selectedModel)} aria-label={compacting ? "Send once compacting finishes" : "Send message"} title={compacting ? "Sends once compacting finishes" : undefined}><ArrowUp size={18} /></button>}
             </div>
             {/* Under the box, out of the toolbar's way: how to send, or how long the message is. */}
@@ -2640,7 +2673,12 @@ function latestThought(text: string): string {
   return latest.length > 180 ? `…${latest.slice(latest.length - 179)}` : latest;
 }
 
-function LiveRun({ view, steps, nodes, thinking, showReasoning, onOpenInStudio }: { view: RunView; steps: ActivityStep[]; nodes: ActivityNode[]; thinking: boolean; showReasoning: boolean; onOpenInStudio: OpenInStudio }) {
+function LiveRun({ view, steps, nodes, thinking, showReasoning, notePictures, onOpenInStudio }: {
+  view: RunView; steps: ActivityStep[]; nodes: ActivityNode[]; thinking: boolean; showReasoning: boolean;
+  /** The files sent with each of this run's notes, in the order the notes were sent. */
+  notePictures: readonly (readonly AssetAttachment[])[];
+  onOpenInStudio: OpenInStudio;
+}) {
   const answered = view.text.trim() !== "";
   const running = view.outcome === null;
   const appliedAndVerified = runAppliedAndVerified(view);
@@ -2693,7 +2731,7 @@ function LiveRun({ view, steps, nodes, thinking, showReasoning, onOpenInStudio }
       issues={runGateIssues(view)}
     />}
     {!running && <CompletionLine metadata={completionNote} usage={view.usage ?? undefined} />}
-    <RunNotes notes={view.notes} delivered={view.notesDelivered} running={running} />
+    <RunNotes notes={view.notes} delivered={view.notesDelivered} running={running} pictures={notePictures} />
     {view.desynchronized && <p className="run-warning"><AlertCircle size={14} /> Some updates were missed, so this timeline may be incomplete.</p>}
   </div></section></div>;
 }
@@ -2703,12 +2741,18 @@ function LiveRun({ view, steps, nodes, thinking, showReasoning, onOpenInStudio }
  * in Roqer, or with the model. Claude reads a note at its next step; a
  * provider that cannot take one mid-turn gets it when its turn ends.
  */
-function RunNotes({ notes, delivered, running }: { notes: string[]; delivered: number; running: boolean }) {
+function RunNotes({ notes, delivered, running, pictures = [] }: {
+  notes: string[]; delivered: number; running: boolean;
+  /** The files sent with each note, by the note's position; a saved run's notes have none here. */
+  pictures?: readonly (readonly AssetAttachment[])[];
+}) {
   if (notes.length === 0) return null;
   return <ul className="run-notes" aria-label="Your notes">
     {notes.map((note, index) => {
       const sent = index < delivered;
+      const attached = pictures[index] ?? [];
       return <li key={index} className={`run-note${sent ? " sent" : ""}`}>
+        {attached.length > 0 && <MessagePictures attachments={attached} />}
         <QuotedText text={note} className="run-note-text" />
         <span className="run-note-status">
           {sent

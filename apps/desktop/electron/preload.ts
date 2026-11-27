@@ -88,8 +88,8 @@ const runs = {
    * the run has already ended, so the renderer can send the same words as a
    * new prompt instead.
    */
-  steer: (runId: string, text: string): Promise<boolean> =>
-    ipcRenderer.invoke("run:steer", { runId, text }),
+  steer: (runId: string, text: string, attachmentIds?: string[]): Promise<boolean | string> =>
+    ipcRenderer.invoke("run:steer", attachmentIds === undefined ? { runId, text } : { runId, text, attachmentIds }),
   cancel: (runId: string, discard = false): Promise<void> =>
     ipcRenderer.invoke("run:cancel", { runId, discard }),
   cancelStart: (startId: string): Promise<void> => ipcRenderer.invoke("run:cancel-start", startId),
