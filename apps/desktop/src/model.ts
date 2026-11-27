@@ -961,6 +961,41 @@ export function withdrawMessage(state: WorkspaceState, projectId: string, chatId
 }
 
 /**
+ * The prompt a chat can be taken back to, to be written again or sent again:
+ * its last one, which only replies and notes come after. Undefined when the
+ * chat has none, or when a compact has already folded that prompt into its
+ * record, where it can no longer be taken out of what the model is told.
+ */
+export function rewindableMessage(chat: Chat): ChatMessage | undefined {
+  for (let index = chat.messages.length - 1; index >= 0; index -= 1) {
+    const message = chat.messages[index];
+    if (message.role !== "user" || message.note === true) continue;
+    return index >= (chat.compaction?.folded ?? 0) ? message : undefined;
+  }
+  return undefined;
+}
+
+/**
+ * Take a chat back to just before one of its prompts: that prompt and
+ * everything after it leave the chat. Only `rewindableMessage` can be taken
+ * out; any other id leaves the chat as it is.
+ */
+export function rewindChat(state: WorkspaceState, projectId: string, chatId: string, messageId: string): WorkspaceState {
+  return {
+    ...state,
+    projects: state.projects.map((project) => project.id !== projectId ? project : {
+      ...project,
+      chats: project.chats.map((chat) => {
+        if (chat.id !== chatId || rewindableMessage(chat)?.id !== messageId) return chat;
+        const messages = chat.messages.slice(0, chat.messages.findIndex((message) => message.id === messageId));
+        const title = messages.length === 0 && chat.titleSetByUser !== true ? UNTITLED_CHAT : chat.title;
+        return { ...chat, title, messages };
+      }),
+    }),
+  };
+}
+
+/**
  * Mark a chat as holding a reply nobody has seen, or (`unread` false) as seen.
  * The same state is returned when the chat already says so, so marking the
  * open chat read on every render saves nothing new.

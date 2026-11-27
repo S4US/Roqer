@@ -35,6 +35,28 @@ export function withQuotes(quotes: readonly ComposerQuote[], message: string): s
   return `${quoted}${message.trim()}`.trimEnd();
 }
 
+/**
+ * A sent message taken apart again into the quote rows and the typed words it
+ * was sent from, so a message written with quotes can be edited with them.
+ * Each quote takes the words under it as its reply, except the last, whose
+ * words go back in the box: sent again, that is the same message either way.
+ * Undefined for a message with no quote, or one that does not come back
+ * exactly as it was (words before the first quote, a quote written by hand).
+ */
+export function quotesFromMessage(text: string, newId: () => string): { quotes: ComposerQuote[]; message: string } | undefined {
+  const parts = messageParts(text);
+  if (parts.length === 0 || parts[0].kind !== "quote") return undefined;
+  const quotes: ComposerQuote[] = [];
+  let message = "";
+  parts.forEach((part, index) => {
+    if (part.kind === "quote") quotes.push({ id: newId(), text: part.text, reply: "" });
+    else if (index === parts.length - 1) message = part.text;
+    else quotes[quotes.length - 1] = { ...quotes[quotes.length - 1], reply: part.text };
+  });
+  if (quotes.length > MAX_COMPOSER_QUOTES) return undefined;
+  return withQuotes(quotes, message) === text.replace(/\r\n?/g, "\n").trim() ? { quotes, message } : undefined;
+}
+
 /** A sent message's text in order: quoted passages (without their "> ") and the words around them. */
 export type MessagePart = Readonly<{ kind: "quote" | "text"; text: string }>;
 

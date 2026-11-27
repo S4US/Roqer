@@ -19,6 +19,7 @@ import {
   deleteChat, deleteProject, modelPreference, normalizeWorkspace, renameChat,
   renameProject, projectInstructions, selectedModelId, setProjectInstructions, setChatCompaction, setChatStudioInstance, chatStudioTarget, chatsByActivity, withdrawMessage,
   chatReasoningEffort, setChatReasoningEffort, setDefaultReasoningEffort, chatModel, setChatModel, setChatUnread,
+  rewindableMessage, rewindChat,
   type AssetAttachment, type ChatMessage, type WorkspaceState,
 } from "./model";
 import {
@@ -61,7 +62,7 @@ import { CopyReplyButton, QuoteSelection } from "./message-actions";
 import { DictationButton, DictationSetup, useDictation } from "./dictation";
 import { withDictation } from "../shared/dictation";
 import { ComposerQuotes } from "./composer-quotes";
-import { MAX_COMPOSER_QUOTES, messageParts, quotedText, withQuotes, type ComposerQuote } from "./message-quote";
+import { MAX_COMPOSER_QUOTES, messageParts, quotedText, quotesFromMessage, withQuotes, type ComposerQuote } from "./message-quote";
 import { RojoPill } from "./rojo-pill";
 
 /** The key that sends with Enter and makes a new chat with N, named the way this computer's keyboard names it. */
@@ -113,7 +114,9 @@ type Dialog =
   | { kind: "project-instructions"; projectId: string }
   | { kind: "delete-project"; projectId: string }
   | { kind: "rename-chat"; projectId: string; chatId: string }
-  | { kind: "delete-chat"; projectId: string; chatId: string };
+  | { kind: "delete-chat"; projectId: string; chatId: string }
+  /** Take the chat back to before `messageId`, to write that prompt again or (`resend`) send it again as it is. */
+  | { kind: "rewind-chat"; projectId: string; chatId: string; messageId: string; resend: boolean };
 
 const RENAME_ACTION = "rename";
 const DELETE_ACTION = "delete";
@@ -328,6 +331,9 @@ function App() {
   const [communityIconArrived, setCommunityIconArrived] = useState(false);
   /** The chat whose message waits for its compaction to finish before it sends. */
   const [sendAfterCompact, setSendAfterCompact] = useState<string | null>(null);
+  /** The chat whose last prompt is being sent again, until it has gone. */
+  const [sendAfterRewind, setSendAfterRewind] = useState<string | null>(null);
+  const rewindRef = useRef<(projectId: string, chatId: string, messageId: string, resend: boolean) => Promise<void>>(async () => undefined);
   // What is said goes after what is written, in the message box of the chat on screen.
   const dictation = useDictation(useCallback((spoken: string) => {
     setComposer((draft) => withDictation(draft, spoken));
@@ -1165,6 +1171,83 @@ function App() {
     if (workspace.selectedChatId === chatId) void sendPromptRef.current();
   }, [compactingChatId, sendAfterCompact, workspace.selectedChatId]);
 
+  // A retry sends the prompt again once the chat has been taken back and the
+  // words are in the box, which is one render after it was asked for.
+  useEffect(() => {
+    if (sendAfterRewind === null) return;
+    const chatId = sendAfterRewind;
+    setSendAfterRewind(null);
+    if (workspace.selectedChatId === chatId) void sendPromptRef.current();
+  }, [sendAfterRewind, workspace.selectedChatId]);
+
+  /**
+   * Take the open chat back to before its last prompt. The prompt and the
+   * reply after it leave the chat, and the prompt's words go back in the box:
+   * to be changed and sent, or (`resend`) sent again as they are.
+   *
+   * The providers still hold the exchange being taken back, so their
+   * conversations for the chat are dropped, as a compact drops them: the next
+   * run starts from what the chat now says. What the reply changed in Studio is
+   * not undone. Files sent with the prompt were released when it was sent, so
+   * they have to be attached again, and a prompt that had any is never sent
+   * again on its own.
+   */
+  const rewindToMessage = async (projectId: string, chatId: string, messageId: string, resend: boolean) => {
+    closeDialog();
+    const openChat = () => {
+      const current = latestWorkspace.current;
+      if (current.selectedProjectId !== projectId || current.selectedChatId !== chatId) return undefined;
+      return current.projects.find((project) => project.id === projectId)?.chats.find((chat) => chat.id === chatId);
+    };
+    const before = openChat();
+    const message = before === undefined ? undefined : rewindableMessage(before);
+    if (message === undefined || message.id !== messageId || runsRef.current.get(chatId)?.view?.outcome === null) return;
+    if (hasDesktopRuntime() && !(await compactChatSessions(chatId))) {
+      setCompactNotice({ chatId, text: "This message can't be taken back while a run is working on the chat." });
+      return;
+    }
+    // The chat was left, or changed, while the providers were told: nothing is taken out.
+    const chat = openChat();
+    if (chat === undefined || rewindableMessage(chat)?.id !== messageId) return;
+    setWorkspace((state) => rewindChat(state, projectId, chatId, messageId));
+    forgetContextReading(chatId);
+    setCompactNotice(null);
+    const boxEmpty = composerEmpty.current;
+    // A message written with quote rows comes back as those rows, not as "> " lines.
+    const taken = quotesFromMessage(message.text, () => createId("quote"));
+    const words = taken?.message ?? message.text;
+    if (taken !== undefined) setQuotes((current) => [...taken.quotes, ...current].slice(0, MAX_COMPOSER_QUOTES));
+    setComposer((draft) => draft.trim() === "" ? words : words === "" ? draft : `${words}\n\n${draft}`);
+    const files = message.attachments?.length ?? 0;
+    setAttachmentError(files === 0 ? null : `${countLabel(files, "file")} sent with this message ${files === 1 ? "was" : "were"} not kept. Attach ${files === 1 ? "it" : "them"} again before sending.`);
+    if (resend && files === 0 && boxEmpty) {
+      setSendAfterRewind(chatId);
+      return;
+    }
+    window.setTimeout(() => {
+      const box = composerRef.current;
+      if (box === null) return;
+      box.focus();
+      box.setSelectionRange(box.value.length, box.value.length);
+    }, 0);
+  };
+  /** Asks first when a reply would leave the chat with the prompt; a prompt nothing came after is taken back at once. */
+  const askRewind = useCallback((messageId: string, resend: boolean) => {
+    const current = latestWorkspace.current;
+    const chat = current.projects.find((project) => project.id === current.selectedProjectId)?.chats.find((entry) => entry.id === current.selectedChatId);
+    if (chat === undefined || rewindableMessage(chat)?.id !== messageId) return;
+    if (chat.messages[chat.messages.length - 1].id === messageId) {
+      void rewindRef.current(current.selectedProjectId, chat.id, messageId, resend);
+      return;
+    }
+    setDialog({ kind: "rewind-chat", projectId: current.selectedProjectId, chatId: chat.id, messageId, resend });
+  }, []);
+  rewindRef.current = rewindToMessage;
+  // The prompt the open chat can be taken back to, offered only while nothing runs on the chat or compacts it.
+  const rewindId = selectedChat === undefined || isRunning || compacting || !hydrated || !storageAvailable || storageRecovery.required
+    ? undefined
+    : rewindableMessage(selectedChat)?.id;
+
   const newChat = useCallback(() => {
     if (!hydrated || !storageAvailable || storageRecovery.required) return;
     const next = createChat(workspace);
@@ -1751,6 +1834,16 @@ function App() {
     const chat = project.chats.find((candidate) => candidate.id === dialog.chatId);
     if (!chat) return null;
 
+    if (dialog.kind === "rewind-chat") {
+      const { messageId, resend } = dialog;
+      return <ConfirmModal
+        heading={resend ? "Send this message again?" : "Edit this message?"}
+        description="The message and the reply after it leave this chat. What that reply changed in Studio stays as it is, and the model starts again from Roqer's record of the chat."
+        confirmLabel={resend ? "Send again" : "Edit message"}
+        confirmIcon={resend ? <RotateCw size={15} /> : <Pencil size={15} />}
+        onConfirm={() => void rewindToMessage(project.id, chat.id, messageId, resend)} onClose={closeDialog}
+      />;
+    }
     if (dialog.kind === "rename-chat") {
       return <NameModal
         heading="Rename chat" description="A chat you name keeps that name when you send your next message."
@@ -1959,6 +2052,8 @@ function App() {
               key={selectedChat.id}
               messages={selectedChat.messages}
               onOpenInStudio={openArtifactInStudio}
+              rewindId={rewindId}
+              onRewind={askRewind}
               // The live run shows its own notes, with whether Claude has them yet.
               hideTrailingNotes={runView !== null && runView.outcome === null}
             />
@@ -2310,8 +2405,16 @@ function RowMenu({ label, items, onSelect, className = "", iconSize = 16, disabl
 
 type OpenInStudio = (target: string, instanceId?: string) => Promise<{ ok: boolean; message: string }>;
 
-const ConversationMessageView = memo(function ConversationMessageView({ message, latestRun, latestReply = false, arrived = false, onOpenInStudio }: {
+/** Take the chat back to before a prompt: to write it again, or (`resend`) to send it again as it is. */
+type Rewind = (messageId: string, resend: boolean) => void;
+
+const ConversationMessageView = memo(function ConversationMessageView({ message, latestRun, latestReply = false, arrived = false, onOpenInStudio, rewind, rewindId, onRewind }: {
   message: ChatMessage;
+  /** What this message offers: "edit" on the prompt the chat can be taken back to, "retry" on the reply to it. */
+  rewind?: "edit" | "retry";
+  /** The prompt a retry sends again. */
+  rewindId?: string;
+  onRewind: Rewind;
   /** The chat's newest reply: its actions stay in view, an older one's show on hover. */
   latestReply?: boolean;
   /** Sent while this chat was open, rather than loaded with it: only such a message animates in. */
@@ -2329,13 +2432,17 @@ const ConversationMessageView = memo(function ConversationMessageView({ message,
         <MousePointerClick size={12} aria-hidden="true" /> Selected in Studio: <code>{describeSelection(message.studioSelection)}</code>
       </div>}
       {message.attachments !== undefined && <MessageFiles attachments={message.attachments} />}
+      {rewind === "edit" && <div className="message-actions">
+        <button type="button" className="message-action" onClick={() => onRewind(message.id, false)} title="Edit this message" aria-label="Edit this message"><Pencil size={14} aria-hidden="true" /></button>
+      </div>}
     </section>
   ) : (
     <section className="message assistant-message" key={message.id}><div className="message-content">
       {message.run
         ? <RunRecordView record={message.run} text={message.text} latest={latestRun} onOpenInStudio={onOpenInStudio} />
         : <Markdown text={message.text} className="result-copy" />}
-      <ReplyActions text={message.run ? recordReply(message.run, message.text) : message.text} latest={latestReply} />
+      <ReplyActions text={message.run ? recordReply(message.run, message.text) : message.text} latest={latestReply}
+        onRetry={rewind === "retry" && rewindId !== undefined ? () => onRewind(rewindId, true) : undefined} />
     </div></section>
   );
 });
@@ -2356,16 +2463,24 @@ function QuotedText({ text, className }: { text: string; className: string }) {
 }
 
 /** What can be done with a reply's text: copy it as written. Nothing for a reply without text. */
-function ReplyActions({ text, latest }: { text: string; latest: boolean }) {
-  if (text.trim() === "") return null;
+function ReplyActions({ text, latest, onRetry }: {
+  text: string; latest: boolean;
+  /** Sends the prompt this reply answered again, for a new reply in its place. */
+  onRetry?: () => void;
+}) {
+  if (text.trim() === "" && onRetry === undefined) return null;
   return <div className="message-actions" data-latest={latest || undefined}>
-    <CopyReplyButton text={text} />
+    {text.trim() !== "" && <CopyReplyButton text={text} />}
+    {onRetry !== undefined && <button type="button" className="message-action" onClick={onRetry} title="Send the message again for a new reply" aria-label="Retry"><RotateCw size={14} aria-hidden="true" /></button>}
   </div>;
 }
 
-const ConversationMessages = memo(function ConversationMessages({ messages: allMessages, onOpenInStudio, hideTrailingNotes = false }: {
+const ConversationMessages = memo(function ConversationMessages({ messages: allMessages, onOpenInStudio, hideTrailingNotes = false, rewindId, onRewind }: {
   messages: ChatMessage[];
   onOpenInStudio: OpenInStudio;
+  /** The prompt the chat can be taken back to right now (`rewindableMessage`), when nothing is running on it. */
+  rewindId?: string;
+  onRewind: Rewind;
   /** Leave out the notes after the last prompt: the live run below shows them. */
   hideTrailingNotes?: boolean;
 }) {
@@ -2396,6 +2511,12 @@ const ConversationMessages = memo(function ConversationMessages({ messages: allM
     }
     return undefined;
   }, [messages]);
+  // Retry belongs to the reply to that prompt: a newest reply that came before it answers something else.
+  const retryId = useMemo(() => {
+    if (rewindId === undefined || latestReplyId === undefined) return undefined;
+    const ids = messages.map((message) => message.id);
+    return ids.indexOf(latestReplyId) > ids.indexOf(rewindId) ? latestReplyId : undefined;
+  }, [messages, rewindId, latestReplyId]);
 
   return <>
     {visibleFrom > 0 && <div className="conversation-history">
@@ -2404,7 +2525,8 @@ const ConversationMessages = memo(function ConversationMessages({ messages: allM
       </button>
     </div>}
     {messages.slice(visibleFrom).map((message) => (
-      <ConversationMessageView key={message.id} message={message} latestRun={message.id === latestRunId} latestReply={message.id === latestReplyId} arrived={!loadedIds.has(message.id)} onOpenInStudio={onOpenInStudio} />
+      <ConversationMessageView key={message.id} message={message} latestRun={message.id === latestRunId} latestReply={message.id === latestReplyId} arrived={!loadedIds.has(message.id)} onOpenInStudio={onOpenInStudio}
+        rewind={message.id === rewindId ? "edit" : message.id === retryId ? "retry" : undefined} rewindId={rewindId} onRewind={onRewind} />
     ))}
   </>;
 });
@@ -3413,10 +3535,12 @@ function InstructionsModal({ projectName, initialValue, onSubmit, onClose }: {
  * dialog says what is about to be lost in the same terms the sidebar uses, and
  * Cancel keeps the focus so that leaning on Enter cannot delete anything.
  */
-function ConfirmModal({ heading, description, confirmLabel, onConfirm, onClose }: {
+function ConfirmModal({ heading, description, confirmLabel, confirmIcon = <Trash2 size={15} />, onConfirm, onClose }: {
   heading: string;
   description: string;
   confirmLabel: string;
+  /** The icon on the confirm button; a bin unless the action is not a deletion. */
+  confirmIcon?: ReactNode;
   onConfirm: () => void;
   onClose: () => void;
 }) {
@@ -3424,7 +3548,7 @@ function ConfirmModal({ heading, description, confirmLabel, onConfirm, onClose }
   return <div className="modal-backdrop" role="presentation" onMouseDown={onClose}><div className="name-modal" role="dialog" aria-modal="true" aria-label={heading} onMouseDown={(event) => event.stopPropagation()}>
     <div className="modal-header"><div><h2>{heading}</h2></div><button className="icon-button" onClick={onClose} aria-label="Close"><X size={19} /></button></div>
     <p>{description}</p>
-    <div className="modal-actions"><button className="secondary-action" autoFocus onClick={onClose}>Cancel</button><button className="danger-action" onClick={onConfirm}><Trash2 size={15} /> {confirmLabel}</button></div>
+    <div className="modal-actions"><button className="secondary-action" autoFocus onClick={onClose}>Cancel</button><button className="danger-action" onClick={onConfirm}>{confirmIcon} {confirmLabel}</button></div>
   </div></div>;
 }
 

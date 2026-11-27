@@ -77,6 +77,27 @@ Under the run, each note shows where it is:
 
 Other providers take notes when their turn ends, as before.
 
+## Editing or sending a message again
+
+The chat's last message can be taken back while nothing runs on the chat:
+
+- **Edit**, under that message, puts its words back in the message box, with
+  its quotes as quote rows, to be changed and sent.
+- **Send again**, the arrow beside Copy under the reply to it, sends the same
+  words again for a new reply.
+
+Either way the message and the reply after it leave the chat, after a
+confirmation when a reply would be lost. What that reply changed in Studio is
+not undone, and files sent with the message are not kept: attach them again
+before sending.
+
+Taking a message back also forgets the chat's saved Claude Code conversation,
+since it still holds the exchange being taken back, and with it any summary
+Claude's `/compact` wrote there. The next run starts a new conversation from
+what the chat now says, and from Roqer's own record of it when it was
+compacted that way. A message a compact has already folded
+into that record can no longer be taken back.
+
 ## Compacting
 
 Claude Code compacts the conversation by itself when its context fills. To do
