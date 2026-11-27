@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 
 import {
-  DEFAULT_IMAGE_BASE_URL, DEFAULT_IMAGE_MODEL, isImageQuality, isImageSourceKind, MAX_IMAGE_KEY_CHARACTERS, MAX_IMAGE_MODEL_CHARS,
+  DEFAULT_IMAGE_BASE_URL, DEFAULT_IMAGE_MODEL, isImageAccountId, isImageQuality, isImageSourceKind, MAX_IMAGE_KEY_CHARACTERS, MAX_IMAGE_MODEL_CHARS,
   type ImageQuality, type ImageSettingsSave, type ImageSettingsView, type ImageSourceKind, defaultImageBaseUrl, imageSourceLabel, imageSourceNeedsKey,
 } from "../shared/image-generation";
 import type { SecretProtector } from "./secret-protector";
@@ -35,6 +35,8 @@ type StoredFile = Readonly<{
   source: ImageSourceKind;
   baseUrl: string;
   model: string;
+  /** Cloudflare's account id; empty for sources that do not use one, and for files saved before it existed. */
+  accountId: string;
   quality: ImageQuality;
   encryptedApiKey?: string;
 }>;
@@ -44,13 +46,16 @@ export type ImageSourceSettings = Readonly<{
   source: ImageSourceKind;
   baseUrl: string;
   model: string;
+  accountId: string;
   quality: ImageQuality;
   apiKey: string | null;
 }>;
 
 const MAX_FILE_BYTES = 32 * 1_024;
 const MAX_ENCRYPTED_BYTES = 12 * 1_024;
-const EMPTY: StoredFile = { schemaVersion: 1, enabled: false, source: "openai", baseUrl: DEFAULT_IMAGE_BASE_URL, model: DEFAULT_IMAGE_MODEL, quality: "medium" };
+const EMPTY: StoredFile = {
+  schemaVersion: 1, enabled: false, source: "openai", baseUrl: DEFAULT_IMAGE_BASE_URL, model: DEFAULT_IMAGE_MODEL, accountId: "", quality: "medium",
+};
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
@@ -81,9 +86,12 @@ function parseStoredFile(value: unknown): StoredFile | undefined {
   if (typeof value.enabled !== "boolean" || !isImageSourceKind(value.source) || !isImageQuality(value.quality)) return undefined;
   if (typeof value.baseUrl !== "string" || normalizeImageBaseUrl(value.baseUrl) !== value.baseUrl) return undefined;
   if (typeof value.model !== "string" || value.model === "" || value.model.length > MAX_IMAGE_MODEL_CHARS) return undefined;
+  // Files saved before Cloudflare existed have no account id; they keep working with an empty one.
+  const accountId = value.accountId === undefined ? "" : value.accountId;
+  if (!isImageAccountId(accountId)) return undefined;
   if (value.encryptedApiKey !== undefined && decodeCiphertext(value.encryptedApiKey) === undefined) return undefined;
   return {
-    schemaVersion: 1, enabled: value.enabled, source: value.source, baseUrl: value.baseUrl, model: value.model, quality: value.quality,
+    schemaVersion: 1, enabled: value.enabled, source: value.source, baseUrl: value.baseUrl, model: value.model, accountId, quality: value.quality,
     ...(value.encryptedApiKey === undefined ? {} : { encryptedApiKey: value.encryptedApiKey as string }),
   };
 }
@@ -91,15 +99,21 @@ function parseStoredFile(value: unknown): StoredFile | undefined {
 function view(file: StoredFile, damagedNotice?: string): ImageSettingsView {
   const hasKey = file.encryptedApiKey !== undefined;
   const needsKey = imageSourceNeedsKey(file.source) && !hasKey;
-  const state = needsKey ? "missing" : file.enabled ? "ready" : "off";
+  const needsAccount = file.source === "cloudflare" && file.accountId === "";
+  const state = needsKey || needsAccount ? "missing" : file.enabled ? "ready" : "off";
   const where = file.source === "openai-compatible" ? `the server at ${file.baseUrl}` : imageSourceLabel(file.source);
   const message = state === "missing"
-    ? `${imageSourceLabel(file.source)} needs an API key${file.source === "openai" ? " with image access" : ""}; save one to turn the tool on.`
+    ? needsAccount
+      ? needsKey
+        ? "Cloudflare needs your account ID and an API token; save both to turn the tool on."
+        : "Cloudflare needs your account ID; save it to turn the tool on."
+      : `${imageSourceLabel(file.source)} needs an API key${file.source === "openai" ? " with image access" : ""}; save one to turn the tool on.`
     : state === "ready"
       ? `On: the agent can ask ${where} for images with ${file.model}, after an approval outside Full auto.`
       : `Off. When on, the agent can ask ${where} for images with ${file.model}.`;
   return {
-    enabled: file.enabled && !needsKey, source: file.source, baseUrl: file.baseUrl, model: file.model, hasKey, quality: file.quality, state, message,
+    enabled: file.enabled && !needsKey && !needsAccount, source: file.source, baseUrl: file.baseUrl, model: file.model, accountId: file.accountId,
+    hasKey, quality: file.quality, state, message,
     ...(damagedNotice === undefined ? {} : { damagedNotice }),
   };
 }
@@ -224,6 +238,8 @@ export class ImageSettings {
       if (baseUrl === undefined) throw new ImageSettingsError("The server address must be an http or https address, such as https://api.openai.com/v1.");
       const model = (save.model ?? current.model).trim();
       if (model === "" || model.length > MAX_IMAGE_MODEL_CHARS) throw new ImageSettingsError("Name the image model, such as gpt-image-1.");
+      const accountId = (save.accountId ?? current.accountId).trim();
+      if (!isImageAccountId(accountId)) throw new ImageSettingsError("The Cloudflare account ID is not valid.");
       const encryptedApiKey = save.apiKey === undefined
         ? current.encryptedApiKey
         : save.apiKey === null ? undefined : this.encrypt(save.apiKey);
@@ -233,6 +249,7 @@ export class ImageSettings {
         source,
         baseUrl,
         model,
+        accountId,
         quality: save.quality ?? current.quality,
         ...(encryptedApiKey === undefined ? {} : { encryptedApiKey }),
       };
@@ -255,7 +272,7 @@ export class ImageSettings {
           throw new ImageSettingsError("The saved API key could not be decrypted; enter it again.");
         }
       }
-      return { source: current.source, baseUrl: current.baseUrl, model: current.model, quality: current.quality, apiKey };
+      return { source: current.source, baseUrl: current.baseUrl, model: current.model, accountId: current.accountId, quality: current.quality, apiKey };
     });
   }
 

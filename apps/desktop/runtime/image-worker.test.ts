@@ -118,9 +118,25 @@ test("a source that fails, a stopped run, and bytes that are not a PNG are each 
   const junk = fakeSource(async () => ({ images: [Buffer.from("not a png")], model: "m" }));
   const unreadable = new ImageWorker({ source: junk, jobsRoot: root, scope: "s", defaultQuality: "low", studioContentDirectories: async () => [] });
   const result = await unreadable.run(args, {});
-  assert.equal(result.ok, true);
-  assert.match(result.text, /could not be read as a PNG/);
+  assert.equal(result.ok, false);
+  assert.equal(result.errorCode, "image_format_failed");
+  assert.match(result.text, /could not turn into a PNG: it is not a PNG or a JPEG\. No picture was kept\./);
   assert.equal(result.images, undefined);
+}));
+
+test("a JPEG answer is turned into a PNG before it is kept", async () => withRoot(async (root) => {
+  const jpeg = Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), Buffer.from("JFIF", "ascii"), Buffer.alloc(16)]);
+  const source = fakeSource(async () => ({ images: [jpeg], model: "flux-2-klein-4b" }));
+  const worker = new ImageWorker({
+    source, jobsRoot: root, scope: "chat-a", defaultQuality: "medium", studioContentDirectories: async () => [],
+    toPng: async (bytes) => { assert.ok(bytes.equals(jpeg), "the worker hands the source's bytes to the converter"); return glow; },
+  });
+  const outcome = await worker.run(args, {});
+  assert.equal(outcome.ok, true, outcome.text);
+  const folders = await readdir(root);
+  assert.deepEqual((await readdir(join(root, folders[0]))).sort(), ["glow.json", "glow.png", "job.json"]);
+  assert.ok((await readFile(join(root, folders[0], "glow.png"))).equals(glow), "the file is the converted PNG");
+  assert.match(outcome.text, /family: soft light/);
 }));
 
 test("with preview_in_studio the pictures are staged into Studio's content folder and their addresses returned", async () => withRoot(async (root) => {

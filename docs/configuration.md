@@ -325,12 +325,15 @@ and checks, and where Roqer keeps its files.
 ### Image generation in Roqer
 
 Settings → Images turns on the opt-in `image` tool, with an OpenAI key, an
-OpenRouter key and model, or an OpenAI-compatible server's address and model. The key is encrypted with the
-operating system's credential store in `image-generation.json` in Roqer's
-data folder and never reaches the renderer or the model. Each call is
-irreversible, asks outside Full auto, and counts against a budget of 24
-pictures a run. [Image generation](images.md) covers what a call makes, what
-Roqer measures, previewing in Studio, and where the files go.
+OpenRouter key and model, a Google AI Studio key with a Gemini or Imagen
+model, a Cloudflare account ID and Workers AI token with a Workers AI image
+model, or an OpenAI-compatible server's address and model. The key and token
+are encrypted with the operating system's credential store in
+`image-generation.json` in Roqer's data folder and never reaches the renderer
+or the model. Each call is irreversible, asks outside Full auto, and counts
+against a budget of 24 pictures a run. [Image generation](images.md) covers
+what a call makes, what Roqer measures, previewing in Studio, and where the
+files go.
 
 ### Web search
 

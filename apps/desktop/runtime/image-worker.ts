@@ -40,6 +40,8 @@ export type ImageWorkerOptions = Readonly<{
   env?: NodeJS.ProcessEnv;
   /** How long one call may wait on the source. */
   timeoutMs?: number;
+  /** Turns a source's picture into a PNG; tests inject one, the app uses Electron's decoder. */
+  toPng?: (bytes: Buffer) => Promise<Buffer>;
 }>;
 
 /** Four pictures at high quality from a slow server; the operation's own budget is a little above this. */
@@ -49,6 +51,23 @@ const MAX_PREVIEW_BYTES = 6 * 1024 * 1024;
 /** A reference picture a job varies; an earlier output is never near this. */
 const MAX_REFERENCE_BYTES = 20 * 1024 * 1024;
 const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+const JPEG_SIGNATURE = Buffer.from([0xff, 0xd8, 0xff]);
+
+/**
+ * Cloudflare's image models answer JSON or bytes, and most of them send JPEG
+ * while the job keeps PNG. Electron's own image support decodes one and writes
+ * it back as PNG; a PNG already is returned as it came.
+ */
+async function pngFrom(bytes: Buffer): Promise<Buffer> {
+  if (bytes.subarray(0, 8).equals(PNG_SIGNATURE)) return bytes;
+  if (bytes.length < 3 || !bytes.subarray(0, 3).equals(JPEG_SIGNATURE)) throw new Error("it is not a PNG or a JPEG");
+  const { nativeImage } = await import("electron");
+  const image = nativeImage.createFromBuffer(bytes);
+  if (image.isEmpty()) throw new Error("the JPEG could not be decoded");
+  const png = image.toPNG();
+  if (png.length === 0) throw new Error("the JPEG could not be re-encoded as a PNG");
+  return png;
+}
 
 export type GeneratedFile = Readonly<{
   name: string;
@@ -121,9 +140,20 @@ export class ImageWorker {
       return failure(error instanceof Error ? error.message : String(error), "image_source_failed", started, this.now, { jobId, jobDirectory });
     }
 
+    const toPng = this.options.toPng ?? pngFrom;
+    const pictures: Buffer[] = [];
+    try {
+      for (const bytes of generated.images.slice(0, count)) pictures.push(await toPng(bytes));
+    } catch (error) {
+      return failure(
+        `${this.options.source.label} sent a picture Roqer could not turn into a PNG: ${error instanceof Error ? error.message : String(error)}. No picture was kept.`,
+        "image_format_failed", started, this.now, { jobId, jobDirectory },
+      );
+    }
+
     const files: GeneratedFile[] = [];
     const readable: Buffer[] = [];
-    for (const [index, bytes] of generated.images.slice(0, count).entries()) {
+    for (const [index, bytes] of pictures.entries()) {
       const fileName = index === 0 ? `${name}.png` : `${name}_${index + 1}.png`;
       const filePath = path.join(jobDirectory, fileName);
       try {
