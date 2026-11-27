@@ -238,6 +238,32 @@ button:focus-visible, textarea:focus-visible, select:focus-visible, input:focus-
 .new-chat-button { display: flex; align-items: center; gap: 9px; border: 1px solid var(--border-subtle); transition: .18s ease; }
 .new-chat-button:hover { color: var(--ink); }
 .shortcut { margin-left: auto; color: var(--muted); font-size: var(--type-meta); font-weight: var(--weight-regular); }
+/* Under New chat, and quieter than it: the search of every chat. */
+.search-chats-button { margin-top: 6px; color: var(--muted); background: transparent; border-color: transparent; }
+.search-chats-button:hover { background: var(--surface-sunken); }
+.search-chats-button:disabled { opacity: .5; }
+/* The search itself: a field over its results, near the top of the window. */
+.chat-search-backdrop { place-items: start center; padding-top: min(16vh, 140px); }
+.chat-search { display: flex; flex-direction: column; width: min(640px, calc(100% - 40px)); max-height: min(70vh, 620px); color: var(--ink); background: var(--surface-raised); border: 1px solid var(--border-subtle); border-radius: 14px; box-shadow: var(--shadow-lg); overflow: hidden; }
+.chat-search-field { display: flex; align-items: center; gap: 10px; padding: 0 16px; color: var(--muted); border-bottom: 1px solid var(--border-subtle); }
+.chat-search-field input { flex: 1; min-width: 0; height: 50px; padding: 0; color: var(--ink); background: transparent; border: 0; outline: 0; font-size: var(--type-body); }
+.chat-search-results { flex: 1; min-height: 0; padding: 6px; overflow-y: auto; }
+.chat-search-note { margin: 0; padding: 18px 12px; color: var(--muted); font-size: var(--type-label); }
+.chat-search-result { display: flex; flex-direction: column; gap: 4px; width: 100%; padding: 9px 11px; color: var(--ink); text-align: left; background: transparent; border: 0; border-radius: 9px; }
+.chat-search-result[aria-selected="true"] { background: var(--surface-sunken); }
+.chat-search-where { display: flex; align-items: center; gap: 7px; min-width: 0; color: var(--muted); font-size: var(--type-label); }
+.chat-search-where > svg { flex: none; }
+.chat-search-where strong { min-width: 0; overflow: hidden; color: var(--ink); font-weight: var(--weight-medium); text-overflow: ellipsis; white-space: nowrap; }
+.chat-search-where > span { flex: none; margin-left: auto; font-size: var(--type-meta); }
+.chat-search-snippet { display: -webkit-box; padding-left: 20px; overflow: hidden; color: var(--ink-secondary); font-size: var(--type-label); line-height: 1.5; overflow-wrap: anywhere; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
+.chat-search-snippet em { margin-right: 7px; color: var(--muted); font-size: var(--type-meta); font-style: normal; }
+.chat-search mark { color: var(--ink); background: var(--accent-soft); border-radius: 3px; box-shadow: 0 0 0 1px var(--accent-soft); }
+.chat-search-keys { display: flex; gap: 16px; margin: 0; padding: 9px 16px; color: var(--muted); border-top: 1px solid var(--border-subtle); font-size: var(--type-meta); }
+.chat-search-keys kbd { display: inline-flex; align-items: center; padding: 1px 5px; border: 1px solid var(--border); border-radius: 4px; font: var(--weight-regular) 11px/1.4 "Geist Mono Variable", monospace; }
+/* The message a search opened the chat on, marked for a moment. */
+.message-found { border-radius: 12px; animation: message-found 2.4s ease-out; }
+@keyframes message-found { 0%, 45% { background: var(--accent-soft); box-shadow: 0 0 0 8px var(--accent-soft); } 100% { background: transparent; box-shadow: 0 0 0 8px transparent; } }
+@media (prefers-reduced-motion: reduce) { .message-found { animation-duration: 1ms; } }
 
 .folder-list { flex: 1; overflow-y: auto; }
 .folder-group + .folder-group { margin-top: 7px; }
