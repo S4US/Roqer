@@ -19,8 +19,10 @@ import {
   cancelProviderLogin, getAppVersion, getProviderLimits, getProviderStatus, installProviderClient, loginProvider, logoutProvider, openProviderLogin, submitProviderCode,
   waitForProviderLogin,
 } from "./platform";
-import { planUsageView } from "./plan-usage";
+import { planUsageView, USAGE_SCOPES } from "./plan-usage";
+import { PlanUsageList } from "./plan-usage-list";
 import { SettingsGroup, SettingsRow, SettingsSwitch } from "./settings-parts";
+import { DictationSettings } from "./dictation-settings";
 
 /**
  * Settings, as a page of the app rather than a dialog over it.
@@ -55,13 +57,6 @@ const ACCOUNT_CLIENTS: Partial<Record<ProviderId, string>> = {
 
 /** The keys that send a message while Enter starts a new line, as this platform names them. */
 const SEND_KEYS = typeof navigator !== "undefined" && /Mac/.test(navigator.userAgent) ? "⌘+Enter" : "Ctrl+Enter";
-
-/**
- * What a plan's limits cover: ChatGPT meters Codex apart from chat, while
- * Claude's limits are shared by every Claude app. Antigravity meters groups of
- * models apart, and the meter shows its Gemini group.
- */
-const USAGE_SCOPES: Partial<Record<ProviderId, string>> = { chatgpt: "Codex", claude: "Claude", antigravity: "Gemini models" };
 
 /**
  * Where Roqer's source and licence are published. The About group shows them
@@ -248,9 +243,13 @@ export function SettingsPage({ leaving = false, preferences, studioStatus, updat
                 <button type="button" aria-pressed={preferences.theme === "light"} onClick={() => onPreferences({ theme: "light" })}><Sun size={14} aria-hidden="true" />Light</button>
               </div>
             </SettingsRow>
+            <SettingsRow title="Show the model's reasoning" detail="While the model thinks, the Thinking card shows what it is working out, and opens on the run's whole chain of reasoning. Takes effect at once, also during a run. Claude only.">
+              <SettingsSwitch label="Show the model's reasoning" checked={preferences.showReasoning} onChange={(showReasoning) => onPreferences({ showReasoning })} />
+            </SettingsRow>
             <SettingsRow title={`${SEND_KEYS} to send`} detail={`On, Enter starts a new line and ${SEND_KEYS} sends. Off, Enter sends and Shift+Enter starts a new line.`}>
               <SettingsSwitch label={`${SEND_KEYS} to send`} checked={preferences.ctrlEnterToSend} onChange={(ctrlEnterToSend) => onPreferences({ ctrlEnterToSend })} />
             </SettingsRow>
+            <DictationSettings />
             <SettingsRow title="Show Roqer on Discord" detail="Your profile shows that Roqer is open and whether it is busy. Never your place, scripts, or tasks.">
               <SettingsSwitch label="Show Roqer on Discord" checked={preferences.discordPresence} onChange={(discordPresence) => onPreferences({ discordPresence })} />
             </SettingsRow>
@@ -460,17 +459,7 @@ function AccountRow({ provider, onChanged }: { provider: ProviderId; onChanged: 
           </>
           : <button type="button" className="small-button" disabled={pending || status.kind === "checking"} onClick={() => void connect()}>{pending ? "Opening…" : "Connect"}</button>}
     </SettingsRow>
-    {usage !== null && <div className="plan-usage">
-      {usage.reached && <p className="plan-usage-reached">{name} reports this plan's usage limit is reached.</p>}
-      {usage.rows.map((row) => <div key={row.label} className={`plan-usage-row ${row.tone}`}>
-        <span className="plan-usage-label">{row.label}</span>
-        <span className="plan-usage-track" role="meter" aria-label={row.label} aria-valuemin={0} aria-valuemax={100} aria-valuenow={row.percent}>
-          <span style={{ width: `${row.percent}%` }} />
-        </span>
-        <span className="plan-usage-detail">{row.detail}</span>
-      </div>)}
-      <p className="plan-usage-note">{usage.footnote}</p>
-    </div>}
+    {usage !== null && <div className="plan-usage"><PlanUsageList usage={usage} name={name} /></div>}
     {signOutError !== null && <p className="custom-message error">{signOutError}</p>}
     {/* A failed install says why and gives the vendor's command to run by hand;
         a declined one just says so. */}

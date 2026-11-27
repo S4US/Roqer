@@ -8,7 +8,8 @@ import os from "node:os";
 
 import {
   CLAUDE_TOOL_CALL_TIMEOUT_MS, claudeContextUsage, claudeContextWindow, claudeResultUsage, ClaudeRunUsage, claudeSessionFile,
-  compactClaudeChat, createClaudePlanner, streamedOutput, compactionUpdate, compactedDetail, COMPACTING_LABEL, type ClaudeSession,
+  compactClaudeChat, createClaudePlanner, streamedOutput, streamedReasoning, thinkingTokensDelta, responseThinkingTotal,
+  compactionUpdate, compactedDetail, COMPACTING_LABEL, refusedThinkingDisplay, type ClaudeSession,
 } from "./claude-planner";
 import { ClaudeSessionRegistry } from "./claude-session-registry";
 import { timeoutForTool } from "../shared/mcp-tools";
@@ -1266,6 +1267,40 @@ test("Claude Code's stream is counted for the waiting line: what streamed, then 
   assert.equal(event({ type: "message_delta", usage: { output_tokens: -1 } }), null);
 });
 
+test("hidden thinking is counted from Claude Code's thinking_tokens reports, the main agent's only", () => {
+  // Opus 5.5 streams its thinking as empty deltas; this report is the only sign of a long think.
+  const report = (extra: Record<string, unknown>) => thinkingTokensDelta({ type: "system", subtype: "thinking_tokens", ...extra });
+  assert.equal(report({ estimated_tokens: 150, estimated_tokens_delta: 100 }), 100);
+  assert.equal(report({ estimated_tokens: 150, estimated_tokens_delta: 100, parent_tool_use_id: "toolu_1" }), null);
+  assert.equal(report({ estimated_tokens_delta: -5 }), null);
+  assert.equal(report({ estimated_tokens_delta: "12" }), null);
+  assert.equal(thinkingTokensDelta({ type: "system", subtype: "status", estimated_tokens_delta: 10 }), null);
+  assert.equal(streamedOutput({ type: "stream_event", parent_tool_use_id: null, event: { type: "content_block_delta", delta: { type: "thinking_delta", thinking: "" } } }), null);
+});
+
+test("a finished response's thinking tokens are Claude's own count, the main agent's only", () => {
+  const delta = (usage: Record<string, unknown>, parent: string | null = null) =>
+    responseThinkingTotal({ type: "stream_event", parent_tool_use_id: parent, event: { type: "message_delta", usage } });
+  assert.equal(delta({ output_tokens: 653, output_tokens_details: { thinking_tokens: 446 } }), 446);
+  assert.equal(delta({ output_tokens: 12 }), null, "no figure, no count");
+  assert.equal(delta({ output_tokens_details: { thinking_tokens: 30 } }, "toolu_1"), null, "a sub-agent's thinking is not the run's");
+  assert.equal(delta({ output_tokens_details: { thinking_tokens: -1 } }), null);
+  assert.equal(responseThinkingTotal({ type: "stream_event", event: { type: "message_start" } }), null);
+});
+
+test("summarised reasoning is passed on from the main agent's thinking blocks, each opening a paragraph", () => {
+  const event = (value: Record<string, unknown>, parent: string | null = null) =>
+    streamedReasoning({ type: "stream_event", parent_tool_use_id: parent, event: value });
+  assert.equal(event({ type: "content_block_start", index: 0, content_block: { type: "thinking", thinking: "" } }), "\n\n");
+  assert.equal(event({ type: "content_block_delta", index: 0, delta: { type: "thinking_delta", thinking: "I'm multiplying" } }), "I'm multiplying");
+  // Hidden thinking streams empty deltas; a signature, text, a sub-agent and other block starts are not reasoning.
+  assert.equal(event({ type: "content_block_delta", index: 0, delta: { type: "thinking_delta", thinking: "" } }), null);
+  assert.equal(event({ type: "content_block_delta", index: 0, delta: { type: "signature_delta", signature: "sig" } }), null);
+  assert.equal(event({ type: "content_block_delta", index: 1, delta: { type: "text_delta", text: "Done." } }), null);
+  assert.equal(event({ type: "content_block_start", index: 1, content_block: { type: "text", text: "" } }), null);
+  assert.equal(event({ type: "content_block_delta", index: 0, delta: { type: "thinking_delta", thinking: "Sub" } }, "toolu_1"), null);
+});
+
 test("a compaction is read from Claude Code's status and boundary messages, nothing else", () => {
   assert.deepEqual(compactionUpdate({ type: "system", subtype: "status", status: "compacting" }), { kind: "started" });
   assert.deepEqual(compactionUpdate({ type: "system", subtype: "status", status: null, compact_result: "success" }), { kind: "finished" });
@@ -1887,4 +1922,83 @@ test("Claude's system prompt carries the project's instructions, and editing the
   assert.match(provider.launches[1].systemPrompt, /Use Nevermore\./);
   assert.doesNotMatch(provider.launches[1].systemPrompt, /Use Knit/);
   await sessions.closeAll();
+});
+
+test("a Claude Code that refuses --thinking-display is run again once without it, and says so", { timeout: 5000 }, async () => {
+  const controller = new AbortController();
+  const { context } = makeContext(controller);
+  const launches: string[][] = [];
+  let refused = 0;
+  const planner = createClaudePlanner({
+    ...PLANNER_DEFAULTS,
+    thinkingSummaries: true,
+    onThinkingDisplayRefused: () => { refused += 1; },
+    launcher: { launch: async (args) => {
+      launches.push(args);
+      const child = new FakeChildProcess();
+      if (args.includes("--thinking-display")) {
+        // What commander prints for an option it does not know, before any output.
+        child.stderr.write("error: unknown option '--thinking-display'\n");
+        setImmediate(() => child.finish(1));
+      } else {
+        setImmediate(() => {
+          child.writeLine({ type: "system", subtype: "init", tools: PROVIDER_TOOLS });
+          child.writeLine({ type: "result", subtype: "success", result: "Done without summaries." });
+        });
+      }
+      return child.asChild();
+    } },
+  });
+  assert.equal(await planner.run(context), "Done without summaries.");
+  assert.equal(launches.length, 2);
+  assert.ok(launches[0].includes("--thinking-display"));
+  assert.ok(!launches[1].includes("--thinking-display"));
+  assert.equal(refused, 1);
+});
+
+test("only a refusal of --thinking-display counts as one; another failure is not retried", { timeout: 5000 }, async () => {
+  assert.equal(refusedThinkingDisplay(new Error("Claude Code exited (1). error: unknown option '--thinking-display'")), true);
+  assert.equal(refusedThinkingDisplay(new Error("Claude Code exited (1). error: option '--thinking-display <mode>' argument 'summarized' is invalid.")), true);
+  assert.equal(refusedThinkingDisplay(new Error("Claude Code exited (1). error: unknown option '--frobnicate'")), false);
+  assert.equal(refusedThinkingDisplay(new Error("Claude Code exited (1). Not logged in")), false);
+
+  const controller = new AbortController();
+  const { context } = makeContext(controller);
+  let launches = 0;
+  const planner = createClaudePlanner({
+    ...PLANNER_DEFAULTS,
+    thinkingSummaries: true,
+    launcher: { launch: async () => {
+      launches += 1;
+      const child = new FakeChildProcess();
+      child.stderr.write("Not logged in\n");
+      setImmediate(() => child.finish(1));
+      return child.asChild();
+    } },
+  });
+  await assert.rejects(planner.run(context), /Not logged in/);
+  assert.equal(launches, 1);
+});
+
+test("on a Claude Code without reasoning summaries, the run's reasoning total never drops between responses", { timeout: 5000 }, async () => {
+  const totals: number[] = [];
+  const run = await noteRun({}, () => ({ reasoningTokens: (tokens: number) => totals.push(tokens) }));
+  try {
+    run.echo(0);
+    const event = (value: Record<string, unknown>) => run.child.writeLine({ type: "stream_event", parent_tool_use_id: null, event: value });
+    // First response: estimates only, and it ends without its own figure.
+    event({ type: "message_start", message: { usage: {} } });
+    run.child.writeLine({ type: "system", subtype: "thinking_tokens", estimated_tokens: 120, estimated_tokens_delta: 120 });
+    event({ type: "message_delta", usage: { output_tokens: 140 } });
+    // Second response: a new estimate, then its own figure.
+    event({ type: "message_start", message: { usage: {} } });
+    run.child.writeLine({ type: "system", subtype: "thinking_tokens", estimated_tokens: 50, estimated_tokens_delta: 50 });
+    event({ type: "message_delta", usage: { output_tokens: 90, output_tokens_details: { thinking_tokens: 60 } } });
+    run.child.writeLine({ type: "result", subtype: "success", result: "Done." });
+    assert.equal(await run.running, "Done.");
+    assert.deepEqual(totals, [120, 170, 180]);
+    for (let index = 1; index < totals.length; index += 1) assert.ok(totals[index] >= totals[index - 1], `${totals.join(", ")}`);
+  } finally {
+    await run.cleanup();
+  }
 });

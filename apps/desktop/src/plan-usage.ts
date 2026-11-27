@@ -1,4 +1,12 @@
 import { formatResetTime, LIMIT_WARNING_PERCENT, usageWindowLabel, type ProviderLimits } from "../shared/provider-limits";
+import type { ProviderId } from "../shared/provider";
+
+/**
+ * What a plan's limits cover: ChatGPT meters Codex apart from chat, while
+ * Claude's limits are shared by every Claude app. Antigravity meters groups of
+ * models apart, and the meter shows its Gemini group.
+ */
+export const USAGE_SCOPES: Partial<Record<ProviderId, string>> = { chatgpt: "Codex", claude: "Claude", antigravity: "Gemini models" };
 
 export type PlanUsageRow = Readonly<{
   label: string;

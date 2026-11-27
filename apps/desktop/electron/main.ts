@@ -1,8 +1,10 @@
 import {
-  app, BrowserWindow, clipboard, dialog, ipcMain, Menu, nativeTheme, Notification, protocol, shell,
+  app, BrowserWindow, clipboard, dialog, ipcMain, Menu, nativeTheme, Notification, protocol, session as electronSession, shell,
   type IpcMainEvent, type IpcMainInvokeEvent, type MessageBoxOptions, type WebContents,
 } from "electron";
 import { autoUpdater } from "electron-updater";
+import { registerDictation } from "./dictation";
+import { restrictWindowPermissions } from "./window-permissions";
 import { spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
@@ -94,7 +96,7 @@ import {
   type CustomModelImportResult,
   type CustomModelTestResult,
 } from "../shared/custom-providers";
-import { ClaudeCodeClient } from "../runtime/claude-cli";
+import { ClaudeCodeClient, claudeTakesThinkingDisplay } from "../runtime/claude-cli";
 import { resolveClaudeExecutable } from "../runtime/claude-executable";
 import { ClaudeLimitsTracker } from "../runtime/claude-limits";
 import {
@@ -319,6 +321,8 @@ let claudeCode: ClaudeCodeClient | null = null;
 let antigravityLimits: AntigravityLimitsTracker | null = null;
 let antigravityCli: AntigravityClient | null = null;
 const clientInstalls = new ClientInstallRunner();
+/** Dictation's transcribing process, stopped with the application; null until the application is ready. */
+let dictation: { stop: () => void } | null = null;
 const clientVersions = new ClientVersionReader();
 /** A ChatGPT sign-in waiting in the browser, and how it ends. */
 let pendingChatGptLogin: { loginId: string; done: Promise<ProviderLoginResult> } | null = null;
@@ -2092,10 +2096,16 @@ async function resolveCustomRun(modelKey: string | null): Promise<CustomRun | { 
   return { connection: resolved.connection, model, apiKey: resolved.apiKey };
 }
 
+/**
+ * The Claude Code version that refused `--thinking-display`, if one did since
+ * Roqer started. Its runs go without the flag; an update is asked again.
+ */
+let thinkingDisplayRefusedBy: string | null = null;
+
 /** The agent that drives a run, chosen by the provider the user connected. */
 function plannerFor(
   request: RunStartRequest, agentRuntime: AgentRuntime, runId: string, modelName: string | undefined, custom?: CustomRun, blender = false, referenceClips = false,
-  externalMcp = false, imageGeneration = false,
+  externalMcp = false, imageGeneration = false, thinkingSummaries = false,
 ): Planner {
   const cwd = app.getPath("userData");
   // A conversation kept by one provider has not seen what another provider
@@ -2155,6 +2165,11 @@ function plannerFor(
       referenceClips,
       externalMcp,
       imageGeneration,
+      thinkingSummaries,
+      onThinkingDisplayRefused: () => {
+        void appLog().write("[claude] Claude Code refused --thinking-display; running without reasoning summaries");
+        void readClientVersion("claude").then((version) => { thinkingDisplayRefusedBy = version; });
+      },
     });
   }
   if (request.provider === "antigravity") {
@@ -2570,9 +2585,20 @@ async function startRun(event: IpcMainInvokeEvent, payload: unknown): Promise<Ru
     /** How many pictures this run's image calls have made, against the run's budget. */
     const imageBudget = { made: 0 };
     if (cancelled()) return stopped;
+    // Reasoning summaries are asked for only from a Claude Code known to take
+    // the flag; the version is cached per executable, so this costs nothing
+    // after the first run.
+    // Always asked for, whatever Settings says: the switch only shows or hides
+    // it, so turning it on in the middle of a run shows what the run has
+    // already thought rather than nothing until the next run.
+    const claudeVersion = !smokeTest && resolvedRequest.provider === "claude" ? await readClientVersion("claude") : null;
+    // Not asked of a version that has refused it once (see onThinkingDisplayRefused).
+    const thinkingSummaries = claudeVersion !== null && claudeVersion !== thinkingDisplayRefusedBy &&
+      claudeTakesThinkingDisplay(claudeVersion);
+    if (cancelled()) return stopped;
     const planner = smokeTest
       ? createInspectionPlanner()
-      : plannerFor(resolvedRequest, agentRuntime, runId, modelName, customRun, blender, clips, externalMcp, imageGeneration);
+      : plannerFor(resolvedRequest, agentRuntime, runId, modelName, customRun, blender, clips, externalMcp, imageGeneration, thinkingSummaries);
     journalId = runId;
     await runJournal().start(runId, request, request.prompt, request.approvalMode);
     if (cancelled()) return stopped;
@@ -3229,6 +3255,9 @@ app.whenReady().then(async () => {
   // A frozen main process stops answering the window manager, which dims the
   // window; this says afterwards how long it was frozen.
   watchEventLoop({ onStall: (blockedMs) => void appLog().write(`[main] the main process was blocked for ${Math.round(blockedMs)} ms`) });
+  // Before any window opens: Electron would otherwise grant every permission a page asks for.
+  restrictWindowPermissions(electronSession.defaultSession, isTrusted);
+  dictation = registerDictation({ userData: () => app.getPath("userData"), isTrusted });
   ipcMain.handle("workspace:load", (event) => {
     if (!isTrusted(event.sender)) throw new Error("This window may not load the workspace.");
     return loadState();
@@ -3384,6 +3413,7 @@ app.on("before-quit", () => {
   attachments.clear();
   void clipDecoder.close(true);
   clientInstalls.stop();
+  dictation?.stop();
   void claudeSessions.closeAll();
   compactionStop.abort();
   void antigravitySessions.closeAll();

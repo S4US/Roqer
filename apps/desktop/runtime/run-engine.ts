@@ -31,7 +31,7 @@ import type {
   ToolProposal,
 } from "../shared/run-events";
 import {
-  isEvidenceImage, isEvidencePictureRef, isEvidenceSoundRef, isRunUsage, MAX_RECORDED_EVIDENCE_SOUNDS,
+  isEvidenceImage, isEvidencePictureRef, isEvidenceSoundRef, isRunUsage, MAX_RECORDED_EVIDENCE_SOUNDS, MAX_THINKING_DELTA_CHARS,
 } from "../shared/run-events";
 import type { ConversationContext } from "../shared/conversation";
 import {
@@ -143,6 +143,18 @@ export type PlannerContext = {
    * second.
    */
   outputTokens(tokens: number, exact: boolean): void;
+  /**
+   * How many tokens the model has spent reasoning in this run so far: the
+   * provider's figures for finished responses plus an estimate for the one in
+   * progress. Optional: only a planner that learns it reports it.
+   */
+  reasoningTokens?(tokens: number, exact: boolean): void;
+  /**
+   * A piece of the model's reasoning, as the provider summarises it, for the
+   * waiting card. Live only: never a step, never kept. Optional because most
+   * providers show no reasoning.
+   */
+  thinking?(text: string): void;
   /**
    * How full the model's context window was at its latest response, as the
    * provider reported it, and the window's size when the provider said it
@@ -424,6 +436,7 @@ export class RunSession {
 
   private readonly abortController = new AbortController();
   private readonly outputMeter = new OutputTokenMeter();
+  private readonly reasoningMeter = new OutputTokenMeter();
   /** The last context reading passed on, so a repeat is not sent again. */
   private lastContextUsage: { usedTokens: number; windowTokens: number | null } | null = null;
   /** The latest usage the planner reported, recorded with `run-completed`. */
@@ -534,6 +547,17 @@ export class RunSession {
         if (!Number.isSafeInteger(tokens) || tokens < 0) return;
         if (!this.outputMeter.admit(tokens, exact, Date.now())) return;
         this.emit({ type: "output-tokens", tokens, exact });
+      },
+      reasoningTokens: (tokens, exact) => {
+        if (!Number.isSafeInteger(tokens) || tokens < 0) return;
+        if (!this.reasoningMeter.admit(tokens, exact, Date.now())) return;
+        this.emit({ type: "reasoning-tokens", tokens, exact });
+      },
+      thinking: (text) => {
+        if (typeof text !== "string" || text === "") return;
+        for (let at = 0; at < text.length; at += MAX_THINKING_DELTA_CHARS) {
+          this.emit({ type: "thinking-delta", text: text.slice(at, at + MAX_THINKING_DELTA_CHARS) });
+        }
       },
       contextUsage: (usedTokens, windowTokens) => {
         if (!Number.isSafeInteger(usedTokens) || usedTokens < 0) return;

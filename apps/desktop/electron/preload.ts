@@ -13,6 +13,7 @@ import {
 } from "../shared/provider";
 import { isProviderLimits, NO_LIMITS, type ProviderLimits } from "../shared/provider-limits";
 import { isAppUpdateState, isAppVersion, type AppUpdateState } from "../shared/app-update";
+import { isDictationModelState, isDictationResult, type DictationModelState, type DictationResult } from "../shared/dictation";
 import { isMcpServerState, type McpServerState } from "../shared/mcp-server";
 import { isEvidencePictureRef, isRunEvent, type RunEvent, type RunStartRequest } from "../shared/run-events";
 import {
@@ -334,6 +335,10 @@ const chats = {
   },
 };
 
+function dictationModelState(value: unknown): DictationModelState {
+  return isDictationModelState(value) ? value : { kind: "failed", message: "Roqer returned an invalid speech model state." };
+}
+
 contextBridge.exposeInMainWorld("workbenchDesktop", {
   storage: {
     load: () => ipcRenderer.invoke("workspace:load"),
@@ -365,6 +370,28 @@ contextBridge.exposeInMainWorld("workbenchDesktop", {
     selectClip: (id: string, selection: { start: number; end: number; slow: number }) =>
       ipcRenderer.invoke("assets:clip-select", { id, selection }),
     release: (ids: string[]): Promise<void> => ipcRenderer.invoke("assets:release", ids),
+  },
+  dictation: {
+    /** Where the speech model stands on this computer. */
+    model: async (): Promise<DictationModelState> => dictationModelState(await ipcRenderer.invoke("dictation:model")),
+    /** Start (or carry on) downloading the speech model. Progress arrives through `subscribe`. */
+    download: async (): Promise<DictationModelState> => dictationModelState(await ipcRenderer.invoke("dictation:download")),
+    cancelDownload: async (): Promise<DictationModelState> => dictationModelState(await ipcRenderer.invoke("dictation:cancel-download")),
+    removeModel: async (): Promise<DictationModelState> => dictationModelState(await ipcRenderer.invoke("dictation:remove-model")),
+    /** Turn 16 kHz mono 32-bit float samples into text, on this computer. */
+    transcribe: async (samples: ArrayBuffer): Promise<DictationResult> => {
+      const value: unknown = await ipcRenderer.invoke("dictation:transcribe", samples);
+      return isDictationResult(value) ? value : { ok: false, message: "Roqer returned an invalid transcription." };
+    },
+    subscribe: (listener: (state: DictationModelState) => void): (() => void) => {
+      const forward = (_event: IpcRendererEvent, payload: unknown) => {
+        if (isDictationModelState(payload)) listener(payload);
+      };
+      ipcRenderer.on("dictation:model", forward);
+      return () => {
+        ipcRenderer.off("dictation:model", forward);
+      };
+    },
   },
   updates: {
     state: async (): Promise<AppUpdateState> => {
