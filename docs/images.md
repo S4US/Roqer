@@ -2,11 +2,13 @@
 
 Roqer can ask an image model for the flat pictures an effect or an interface
 needs: particle sprites and light textures, UI icons and item art, decals and
-signs, and tileable surface textures. You bring the model: OpenAI's image API
-with your own key, or any server that speaks the same `/images/generations`
-API, such as a local one. The agent writes the prompt, Roqer makes the call,
-measures what comes back, shows it to the agent and to you, and the agent
-then previews it in Studio and uploads it when it is right.
+signs, and tileable surface textures. You bring the model: OpenAI's image API,
+OpenRouter's image list, Google's Gemini API, Cloudflare's Workers AI, or any
+server that speaks OpenAI's `/images/generations` API, such as a local one. The
+agent writes the
+prompt, Roqer makes the call, measures what comes back, shows it to the agent
+and to you, and the agent then previews it in Studio and uploads it when it is
+right.
 
 The integration is off until you turn it on. Flipbooks (anything that plays
 across frames) and effect meshes still come from
@@ -20,11 +22,22 @@ across frames) and effect meshes still come from
   - an OpenRouter key, with any model in OpenRouter's image list (the
     default is `openai/gpt-image-1`). OpenRouter has its own image API, not
     OpenAI's, so choose **OpenRouter** rather than the compatible server;
+  - a Google AI Studio key, with a Gemini image model (the default is
+    `gemini-2.5-flash-image`) or an Imagen model such as
+    `imagen-4.0-generate-001`. This is the Gemini API, not a Google
+    subscription and not Vertex AI;
+  - a Cloudflare account ID and a Workers AI API token with Workers AI Read
+    and Edit, with one of Cloudflare's image models. Roqer starts from
+    `@cf/black-forest-labs/flux-2-klein-4b` (the default), FLUX.2 Klein 9B,
+    FLUX.2 Dev, Leonardo Lucid Origin, Leonardo Phoenix and FLUX.1 Schnell;
+    **Custom model…** names any other Workers AI image model;
   - an OpenAI-compatible server's address and, if it needs one, a key.
 
-  The source must return PNG files: OpenAI does when asked, OpenRouter is
-  asked for PNG from models that offer it, and a compatible server has to be
-  set to PNG.
+  The image source must return PNG files, except Cloudflare: OpenAI does when
+  asked, OpenRouter and Google return PNG from their image models, and a
+  compatible server has to be set to PNG. Cloudflare's image models often
+  return JPEG, which Roqer converts to PNG before measuring or keeping it; any
+  other format is refused.
 - **A Roblox Open Cloud API key**, to upload the pictures into your place.
   Without one, the agent can still generate, measure and preview, but cannot
   upload. See [Roblox Open Cloud in Roqer](configuration.md#roblox-open-cloud-in-roqer).
@@ -32,12 +45,18 @@ across frames) and effect meshes still come from
 ## Turn it on
 
 1. Open **Settings → Images** in Roqer.
-2. Click **Change**, choose **OpenAI**, **OpenRouter** or **OpenAI-compatible
-   server**, name the model, paste the key, and pick a default quality.
+2. Click **Change**, choose **OpenAI**, **OpenRouter**, **Google**,
+   **Cloudflare** or an **OpenAI-compatible server**, name the model, paste the
+   key, and pick a default quality. Cloudflare also asks for the account ID;
+   pick one of its listed models or **Custom model…** to type another id.
    **Save**.
 3. **Test** asks the server about the model without making a picture. For
    OpenRouter it also says what the model takes: a transparent background, a
-   quality, how many pictures a call, reference pictures.
+   quality, how many pictures a call, reference pictures. For Google it asks
+   the models endpoint directly and, when the model is not listed, says which
+   image models the key can see. For Cloudflare it asks the Workers AI model
+   list for the account and names the image models there when the model is not
+   among them.
 4. Turn on **Generate images**.
 
 While it is on with what it needs, the agent is offered an `image` tool.
@@ -134,12 +153,14 @@ in a `.json` file, so an upload can say where its picture came from.
 
 ## Limits
 
-- The server must answer with PNG files. JPEG or WebP output is refused with
-  a message saying so.
+- The source must answer with PNG files or, on Cloudflare, JPEG, which Roqer
+  converts; WebP or another format is refused with a message saying so.
 - A reference may be an earlier output of the same chat only, named as the
   result named it (`jobId/file.png`). An edit needs a server with an
-  `/images/edits` route (OpenAI has one) or, on OpenRouter, a model that
-  takes reference pictures.
+  `/images/edits` route (OpenAI has one), an OpenRouter model that takes
+  reference pictures, or a Google Gemini image model. Google's Imagen models
+  make a picture from the prompt alone, and Cloudflare's image models take the
+  prompt alone.
 - On OpenRouter, Roqer reads the model's capabilities first and sends only
   the fields it takes. A model with no transparent background gets the
   background asked for in words and returns an opaque picture, which the
@@ -150,6 +171,31 @@ in a `.json` file, so an upload can say where its picture came from.
   model lists them, a resolution tier. A model with no tiers chooses its own
   pixel size, so a `512x512` request can come back larger. The result reports
   the size Roqer measured.
+- On Google, Gemini image models make one picture a call, so a request for
+  four is four calls; an Imagen model makes up to four in one `predict` call.
+  Roqer uses the Gemini API with a Google AI Studio key, not Vertex AI.
+- On Google, a size reaches the model as an aspect ratio: `1:1` for square,
+  `3:2` or `2:3` on a Gemini model, `4:3` or `3:4` on Imagen. Google chooses
+  the pixels, and the result reports the size Roqer measured.
+- Google has no transparent-background or quality field. Roqer asks for the
+  background in words and does not send its quality setting; a light or matter
+  texture may come back opaque, which the result's family line says.
+- On Cloudflare, the Run API makes one picture a call, so a request for four is
+  four calls. FLUX.2 and Leonardo models take the width and height from the
+  size; FLUX.2 Klein and Dev accept 256 to 1920 pixels, so a `1536x1024`
+  request fits, and `flux-1-schnell` takes no size at all. Cloudflare chooses
+  the pixels when it is not given a size, and the result reports the size
+  Roqer measured.
+- A Cloudflare custom model id is sent the prompt with the width and height
+  taken from the size, except FLUX.2 ids, which go as multipart form fields,
+  and `flux-1-schnell`, which takes the prompt alone. A model that expects a
+  different request shape fails with Cloudflare's own message.
+- Cloudflare has no transparent-background or quality field. Roqer asks for the
+  background in words and does not send its quality setting; a light or matter
+  texture may come back opaque, which the result's family line says.
+- Cloudflare image models are sent the prompt alone: a reference picture is
+  refused before spending anything, so an earlier output cannot be varied
+  through Cloudflare. Choose OpenAI or a Google Gemini model for that.
 - Roqer sends the prompt as the agent wrote it, with the background added in
   words for servers that take no background field. The provider's own
   rewording, when it reports one, is shown to the agent.
