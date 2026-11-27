@@ -268,6 +268,8 @@ export const MAX_RECORDED_REQUESTS = 400;
  */
 export const MAX_REQUEST_TOOLS = 16;
 export const MAX_REQUEST_TOOL_CHARS = 120;
+/** The most reasoning text one `thinking-delta` event carries. */
+export const MAX_THINKING_DELTA_CHARS = 4_000;
 
 /**
  * One model request's usage, split as `RunUsage` splits a run's. Carries names
@@ -324,6 +326,19 @@ export type RunEvent =
    * reasoning a model does not show. A later response starts again from zero.
    */
   | (RunEventBase & { type: "output-tokens"; tokens: number; exact: boolean })
+  /**
+   * How many tokens the model has spent reasoning in this run so far, for the
+   * Thinking card: the provider's own figures for finished responses plus an
+   * estimate for the one in progress (`exact` false while there is one). Live
+   * state like `output-tokens`: never a step, never kept.
+   */
+  | (RunEventBase & { type: "reasoning-tokens"; tokens: number; exact: boolean })
+  /**
+   * A piece of the model's reasoning, as the provider summarises it, for the
+   * waiting card's "Show reasoning". Live state like `output-tokens`: never a
+   * step, never kept in the chat's record. Bounded by `MAX_THINKING_DELTA_CHARS`.
+   */
+  | (RunEventBase & { type: "thinking-delta"; text: string })
   /**
    * How full the model's context window was at its latest response, as the
    * provider itself reported it: what that response read plus what it wrote.
@@ -848,8 +863,11 @@ export function isRunEvent(value: unknown): value is RunEvent {
       return isString(value.label) &&
         (value.transient === undefined || typeof value.transient === "boolean");
     case "output-tokens":
+    case "reasoning-tokens":
       return typeof value.tokens === "number" && Number.isSafeInteger(value.tokens) && value.tokens >= 0 &&
         typeof value.exact === "boolean";
+    case "thinking-delta":
+      return isString(value.text) && value.text.length <= MAX_THINKING_DELTA_CHARS;
     case "context-usage":
       return isTokenCount(value.usedTokens) &&
         (value.windowTokens === null || (isTokenCount(value.windowTokens) && value.windowTokens > 0));

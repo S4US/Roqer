@@ -98,7 +98,30 @@ export type ClaudePlannerOptions = {
   imageGeneration?: boolean;
   /** Where each chat's saved Claude Code session is recorded. Without it, sessions are not saved. */
   registry?: ClaudeSessionRegistry;
+  /**
+   * Ask Claude Code for summaries of the model's reasoning
+   * (`--thinking-display summarized`), shown under "Show reasoning" while it
+   * works. Only for a Claude Code known to take the flag; see
+   * `claudeTakesThinkingDisplay`.
+   */
+  thinkingSummaries?: boolean;
+  /**
+   * Told when this Claude Code refused `--thinking-display`. The run is then
+   * tried once more without it, and the caller can stop asking for it.
+   */
+  onThinkingDisplayRefused?: () => void;
 };
+
+/**
+ * Whether a run failed because Claude Code refused `--thinking-display`. The
+ * flag is hidden from its help, so a later release may drop or rename it, and
+ * Claude Code then exits before the run starts, naming the option it does not
+ * take.
+ */
+export function refusedThinkingDisplay(error: unknown): boolean {
+  const text = error instanceof Error ? error.message : String(error);
+  return /thinking-display/i.test(text) && /unknown|unrecogni[sz]ed|invalid|not (?:a )?valid|not allowed|unexpected/i.test(text);
+}
 
 const isRecord = (value: unknown): value is JsonRecord =>
   typeof value === "object" && value !== null && !Array.isArray(value);
@@ -242,6 +265,9 @@ function buildArguments(
     "--allowedTools", [...qualifiedToolNames(options), ...(webSearch ? CLAUDE_WEB_TOOLS : [])].join(","),
   ];
   if (options.supportsEffort) args.push("--effort", options.effort);
+  // Without it a model that hides its reasoning streams empty thinking blocks;
+  // summarized, it streams a readable account of what it is working out.
+  if (options.thinkingSummaries === true) args.push("--thinking-display", "summarized");
   return args;
 }
 
@@ -295,6 +321,54 @@ export function streamedOutput(message: JsonRecord): { start?: true; characters?
       : delta.type === "input_json_delta" ? delta.partial_json
         : undefined;
   return typeof streamed === "string" && streamed.length > 0 ? { characters: streamed.length } : null;
+}
+
+/**
+ * The main agent's reasoning text in one `stream_event`, or null. A new
+ * thinking block opens with a paragraph break, so the summaries Claude Code
+ * streams block by block read as separate paragraphs.
+ */
+export function streamedReasoning(message: JsonRecord): string | null {
+  if (message.type !== "stream_event" || message.parent_tool_use_id != null) return null;
+  const event = message.event;
+  if (!isRecord(event)) return null;
+  if (event.type === "content_block_start") {
+    return isRecord(event.content_block) && event.content_block.type === "thinking" ? "\n\n" : null;
+  }
+  if (event.type !== "content_block_delta" || !isRecord(event.delta)) return null;
+  const delta = event.delta;
+  return delta.type === "thinking_delta" && typeof delta.thinking === "string" && delta.thinking !== ""
+    ? delta.thinking
+    : null;
+}
+
+/**
+ * The thinking tokens a finished main-agent response used, from the usage on
+ * its `message_delta`, or null for any other message. Unlike the live
+ * reports, this is the API's own count, including thinking never shown.
+ */
+export function responseThinkingTotal(message: JsonRecord): number | null {
+  if (message.type !== "stream_event" || message.parent_tool_use_id != null) return null;
+  const event = message.event;
+  if (!isRecord(event) || event.type !== "message_delta" || !isRecord(event.usage)) return null;
+  const details = event.usage.output_tokens_details;
+  const tokens = isRecord(details) ? details.thinking_tokens : undefined;
+  return typeof tokens === "number" && Number.isSafeInteger(tokens) && tokens >= 0 ? tokens : null;
+}
+
+/**
+ * How many tokens the main agent just thought, from Claude Code's
+ * `system/thinking_tokens` report, or null for any other message.
+ *
+ * A model that keeps its thinking hidden streams empty thinking deltas, so
+ * this report is the only sign it is working. One response can think for many
+ * minutes (up to the whole output limit) before its first word or tool call.
+ */
+export function thinkingTokensDelta(message: JsonRecord): number | null {
+  if (message.type !== "system" || message.subtype !== "thinking_tokens") return null;
+  if (message.parent_tool_use_id != null) return null;
+  const delta = message.estimated_tokens_delta;
+  return typeof delta === "number" && Number.isSafeInteger(delta) && delta > 0 ? delta : null;
 }
 
 const tokenCount = (value: unknown): number | undefined =>
@@ -846,7 +920,7 @@ function sessionKey(
     instanceId,
     options.model, options.supportsEffort ? options.effort : null, autoPlaytest,
     options.agent.id, options.agent.version, options.blender === true, options.referenceClips === true,
-    options.externalMcp === true, webSearch === true, options.imageGeneration === true,
+    options.externalMcp === true, webSearch === true, options.imageGeneration === true, options.thinkingSummaries === true,
     // The project's instructions are fixed when the session starts, so an
     // edit starts a new one. None adds nothing, so a key from before they
     // existed still matches.
@@ -894,6 +968,25 @@ const MISSING_SESSION = /no conversation found/i;
  * next message instead of being stopped when the run ends.
  */
 export function createClaudePlanner(options: ClaudePlannerOptions): Planner {
+  const planner = createClaudePlannerWith(options);
+  if (options.thinkingSummaries !== true) return planner;
+  return {
+    ...planner,
+    async run(context: PlannerContext): Promise<string> {
+      try {
+        return await planner.run(context);
+      } catch (error) {
+        // Refused at start-up, before the model saw anything: tried once more
+        // without the flag, so a Claude Code that drops it still runs.
+        if (context.signal.aborted || !refusedThinkingDisplay(error)) throw error;
+        options.onThinkingDisplayRefused?.();
+        return createClaudePlannerWith({ ...options, thinkingSummaries: false }).run(context);
+      }
+    },
+  };
+}
+
+function createClaudePlannerWith(options: ClaudePlannerOptions): Planner {
   return {
     id: "claude-code",
     async run(context: PlannerContext): Promise<string> {
@@ -916,6 +1009,14 @@ export function createClaudePlanner(options: ClaudePlannerOptions): Planner {
       let turnProseStart = 0;
       /** What the API response in progress has streamed, for the waiting line's count. */
       let responseCharacters = 0;
+      /**
+       * The thinking the API response in progress has done, as Claude Code
+       * estimates it. A model whose thinking is not shown streams none of it
+       * as text, so without this a long think reads as no progress at all.
+       */
+      let responseThinkingTokens = 0;
+      /** The thinking tokens Claude reported for this run's finished responses. */
+      let runThinkingTokens = 0;
       /** The latest main-agent response's context, as Claude Code reported it. */
       let contextReading: { usedTokens: number; model: string | null } | null = null;
       /** This run's share of the session's usage, from the moment the session is bound. */
@@ -1066,15 +1167,43 @@ export function createClaudePlanner(options: ClaudePlannerOptions): Planner {
           return;
         }
 
+        const thinking = thinkingTokensDelta(message);
+        if (thinking !== null) {
+          // With reasoning summaries on, Claude Code estimates the summary,
+          // not the thinking behind it, which runs many times longer: only
+          // Claude's own figure at the end of each response is counted then.
+          if (options.thinkingSummaries === true) return;
+          responseThinkingTokens += thinking;
+          context.outputTokens(estimateTurnOutputTokens(responseCharacters) + responseThinkingTokens, false);
+          context.reasoningTokens?.(runThinkingTokens + responseThinkingTokens, false);
+          return;
+        }
+
         if (message.type === "stream_event") {
           requestLog.observe(message);
           const output = streamedOutput(message);
-          if (output?.start) responseCharacters = 0;
-          if (output?.characters !== undefined) {
+          if (output?.start) {
+            responseCharacters = 0;
+            // A response that ended without its own thinking figure keeps its
+            // estimate, so the run's total never goes down between responses.
+            runThinkingTokens += responseThinkingTokens;
+            responseThinkingTokens = 0;
+          }
+          const reasoning = streamedReasoning(message);
+          // A summary of the reasoning is not output the model wrote.
+          if (output?.characters !== undefined && !(options.thinkingSummaries === true && reasoning !== null)) {
             responseCharacters += output.characters;
-            context.outputTokens(estimateTurnOutputTokens(responseCharacters), false);
+            context.outputTokens(estimateTurnOutputTokens(responseCharacters) + responseThinkingTokens, false);
           }
           if (output?.exact !== undefined) context.outputTokens(output.exact, true);
+          // A finished response's own figure replaces the estimate for it.
+          const thought = responseThinkingTotal(message);
+          if (thought !== null) {
+            runThinkingTokens += thought;
+            responseThinkingTokens = 0;
+            context.reasoningTokens?.(runThinkingTokens, true);
+          }
+          if (reasoning !== null) context.thinking?.(reasoning);
           const chunk = streamedProse(message);
           if (chunk === null) return;
           streaming = true;

@@ -684,3 +684,12 @@ test("a workspace from before project instructions loads with none, and a damage
   assert.equal(malformedWorkspace(tooLong), true);
   assert.equal(malformedWorkspace({ ...initial, projects: [{ ...initial.projects[0], instructions: "Use Knit." }] }), false);
 });
+
+test("the model's reasoning shows unless the user turned it off, and a saved choice is kept", () => {
+  assert.equal(createInitialWorkspace().preferences.showReasoning, true);
+  const saved = JSON.parse(JSON.stringify(createInitialWorkspace()));
+  delete saved.preferences.showReasoning;
+  assert.equal(normalizeWorkspace(saved).preferences.showReasoning, true, "a workspace from before the switch shows it");
+  saved.preferences.showReasoning = false;
+  assert.equal(normalizeWorkspace(saved).preferences.showReasoning, false);
+});
